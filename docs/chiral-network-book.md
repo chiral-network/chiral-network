@@ -77,17 +77,17 @@ The fundamental innovation of Chiral Network is the **complete decoupling of pay
 | **Economic Incentives** | Seeders earn cryptocurrency for sharing files                       |
 | **Privacy-First**       | AutoNAT v2, UPnP, SOCKS5 proxy support                             |
 | **Legitimate Use**      | Designed for personal, educational, and organizational file sharing |
-| **Non-Commercial**      | No marketplace, pricing, or trading features                        |
+| **Token Economy**       | Chiral token-based download speed tiers; no external marketplaces or advertising |
 
 ### 1.4 What Chiral Network is NOT
 
 To maintain focus and legal compliance, Chiral Network explicitly does not implement:
 
-- ❌ Global file search/discovery (could enable piracy)
-- ❌ Marketplace or trading features
-- ❌ VPN or general anonymity network functionality
-- ❌ Content recommendations or social features
-- ❌ Exit node functionality for non-P2P traffic
+- [X] Global file search/discovery (could enable piracy)
+- [X] External payment systems, advertising, or third-party marketplaces
+- [X] VPN or general anonymity network functionality
+- [X] Content recommendations or social features
+- [X] Exit node functionality for non-P2P traffic
 
 ---
 
@@ -185,11 +185,11 @@ All nodes are equal peers. There are no special roles:
                               │
         ┌─────────────────────┴─────────────────────┐
         │                                           │
-┌───────▼──────────────┐              ┌────────────▼────────┐
+┌───────[v]──────────────┐              ┌────────────[v]────────┐
 │  Payment Layer       │              │ Data Transfer Layer │
 │  (Blockchain)        │              │  (Protocols)        │
 │                      │              │                     │
-│  • ETH-compatible    │◄─────────────┤  • HTTP             │
+│  • ETH-compatible    │[<]─────────────┤  • HTTP             │
 │  • Payment contracts │  Settlement  │  • WebRTC           │
 │  • Mining rewards    │              │  • BitTorrent       │
 │  • Gas fees          │              │  • ed2k             │
@@ -313,12 +313,12 @@ The ProtocolManager orchestrates protocol interactions and delegates to register
 ### 6.3 Default Protocol Selection
 
 ```
-Network Capability              → Default Seeding Protocol
+Network Capability              -> Default Seeding Protocol
 ───────────────────────────────────────────────────────────
-Public IP                       → HTTP
-Behind NAT + UPnP Available     → HTTP (auto port forward)
-Behind NAT + UPnP Failed        → WebTorrent
-Browser Only                    → WebTorrent (only option)
+Public IP                       -> HTTP
+Behind NAT + UPnP Available     -> HTTP (auto port forward)
+Behind NAT + UPnP Failed        -> WebTorrent
+Browser Only                    -> WebTorrent (only option)
 ```
 
 ---
@@ -458,8 +458,8 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 **Connection Priority**:
 
 ```
-1. Try UPnP → Direct connection if successful
-2. If failed → SOCKS5 proxy (if configured)
+1. Try UPnP -> Direct connection if successful
+2. If failed -> SOCKS5 proxy (if configured)
 ```
 
 ### 8.5 DHT Peer Cache Warm-Start
@@ -598,15 +598,15 @@ Example Multi-Protocol Transfer:
 
 ```
 1. File Input
-   ↓
+   v
 2. Generate SHA-256 Hash (CID)
-   ↓
+   v
 3. Optional: Encrypt with AES-256-GCM
-   ↓
+   v
 4. Publish minimal DHT record and announce seeder info via GossipSub
-   ↓
+   v
 5. Start serving via configured protocols
-   ↓
+   v
 6. Continuous seeding (while online)
 ```
 
@@ -614,19 +614,19 @@ Example Multi-Protocol Transfer:
 
 ```
 1. Input Hash (CID)
-   ↓
+   v
 2. Query DHT for metadata and seeders
-   ↓
+   v
 3. Subscribe to GossipSub for seeder general + file info
-   ↓
+   v
 4. Auto or Manually Select protocol(s) & Peers based on availability and pricing 
-   ↓
+   v
 5. Download chunks (possibly multi-source)
-   ↓
+   v
 6. Optional: Decrypt chunks
-   ↓
+   v
 7. Reassemble file
-   ↓
+   v
 8. Settlement: Pay seeders on blockchain
 ```
 
@@ -901,9 +901,9 @@ sequenceDiagram
 **Incremental Payments**:
 
 - Serve first 10 MB as initial handshake segment
-- If no payment after 10 MB → stop serving
-- If payment received → continue serving
-- Exponential scaling: 1→2→4→8 MB payment intervals
+- If no payment after 10 MB -> stop serving
+- If payment received -> continue serving
+- Exponential scaling: 1->2->4->8 MB payment intervals
 
 **Payment Options**:
 | Mode | Description | Recommended For |
@@ -982,11 +982,11 @@ value(bad) = 0.0
 
 ### 17.3 Key Properties
 
-- ✅ **Unforgeable**: Requires downloader's private key
-- ✅ **Non-repudiable**: Signature proves authenticity
-- ✅ **Verifiable**: Any peer can validate signature
-- ✅ **Unique**: Nonce + file_hash prevent reuse
-- ✅ **Off-chain**: No blockchain delay during transfer
+- [OK] **Unforgeable**: Requires downloader's private key
+- [OK] **Non-repudiable**: Signature proves authenticity
+- [OK] **Verifiable**: Any peer can validate signature
+- [OK] **Unique**: Nonce + file_hash prevent reuse
+- [OK] **Off-chain**: No blockchain delay during transfer
 
 ### 17.4 Complete Transaction Flow
 
@@ -1042,7 +1042,7 @@ When honest downloader is falsely accused:
 3. Any peer can verify on blockchain
 4. False complaint dismissed
 5. Seeder receives severe reputation penalty
-6. Repeated false complaints → automatic blacklist
+6. Repeated false complaints -> automatic blacklist
 
 ### 18.3 Trust Hierarchy
 
@@ -1113,18 +1113,18 @@ When honest downloader is falsely accused:
 
 ```
 1. File Input
-   ↓
+   v
 2. Generate Random AES-256 Key
-   ↓
+   v
 3. Chunk File (256KB pieces)
-   ↓
+   v
 4. For Each Chunk:
    a. Hash original chunk (for Merkle tree)
    b. Encrypt with AES-256-GCM + unique nonce
    c. Hash encrypted chunk (for retrieval)
-   ↓
+   v
 5. Encrypt AES Key with Recipient's Public Key
-   ↓
+   v
 6. Store encrypted chunks across network
 ```
 
@@ -1137,7 +1137,7 @@ Verification Steps:
 3. Decrypt each chunk
 4. Hash decrypted chunk
 5. Verify against Merkle proof
-6. If pass → chunk valid; if fail → corrupt/tampered
+6. If pass -> chunk valid; if fail -> corrupt/tampered
 ```
 
 ### 20.3 Access Control
@@ -1159,8 +1159,8 @@ Verification Steps:
 **Onion Routing**:
 
 ```
-Client → Proxy 1 → Proxy 2 → Proxy 3 → Destination
-  ↓         ↓         ↓         ↓
+Client -> Proxy 1 -> Proxy 2 -> Proxy 3 -> Destination
+  v         v         v         v
 Encrypted Encrypted Encrypted Plain
   (3x)      (2x)      (1x)     text
 ```
@@ -1227,8 +1227,8 @@ When enabled:
 
 The sidebar contains navigation to all pages. Status indicators show:
 
-- 🟢 **Connected** - DHT network active
-- 🔴 **Disconnected** - No network connection
+- [GREEN] **Connected** - DHT network active
+- [!] **Disconnected** - No network connection
 
 ### 22.3 Internationalization
 
@@ -1454,7 +1454,7 @@ On first launch, the application will:
 
 ### 27.1 Built-in Diagnostics
 
-**Location**: Settings → Diagnostics
+**Location**: Settings -> Diagnostics
 
 **Categories**:
 
@@ -1466,10 +1466,10 @@ On first launch, the application will:
 
 **Status Indicators**:
 
-- ✓ Green - Test passed
-- ⚠ Yellow - Needs attention
-- ✗ Red - Test failed
-- ℹ Blue - Informational
+- [OK] Green - Test passed
+- [WARN] Yellow - Needs attention
+- [X] Red - Test failed
+- [INFO] Blue - Informational
 
 ### 27.2 Common Issues
 

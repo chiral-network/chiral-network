@@ -693,14 +693,14 @@ let rateLimitStatus: RateLimitStatus = reputationRateLimiter.getStatus()
             {#each Array(5) as _, i}
     <span class="relative inline-block leading-none align-middle" style="width: 1em">
       <!-- empty star -->
-      <span class="text-yellow-500 opacity-30 select-none">★</span>
+      <span class="text-yellow-500 opacity-30 select-none">*</span>
 
       <!-- filled portion (handles full and partial stars without special glyphs) -->
       <span
               class="absolute inset-0 overflow-hidden"
               style="width: {Math.max(0, Math.min(1, (($wallet.reputation ?? 4.5) - i))) * 100}%"
       >
-        <span class="text-yellow-500 select-none">★</span>
+        <span class="text-yellow-500 select-none">*</span>
       </span>
     </span>
             {/each}

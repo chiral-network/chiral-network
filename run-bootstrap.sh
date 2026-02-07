@@ -2,7 +2,7 @@
 # Chiral Network Bootstrap Node Runner
 # Run this script on a server to act as a bootstrap node
 
-echo "🚀 Chiral Network Bootstrap Node"
+echo "[START] Chiral Network Bootstrap Node"
 echo "================================"
 
 # Default values
@@ -124,7 +124,7 @@ fi
 
 # Build the application if needed
 if [ ! -f "target/release/chiral-network" ]; then
-    echo "📦 Building Chiral Network..."
+    echo "[PKG] Building Chiral Network..."
     cargo build --release
 fi
 
@@ -186,8 +186,8 @@ if [ "$SHOW_DOWNLOADS" = true ]; then
     CMD="$CMD --show-downloads"
 fi
 
-echo "📍 Starting bootstrap node on port $DHT_PORT"
-echo "📊 Log level: $LOG_LEVEL"
+echo "[LOC] Starting bootstrap node on port $DHT_PORT"
+echo "[STATS] Log level: $LOG_LEVEL"
 echo ""
 
 # Run the bootstrap node

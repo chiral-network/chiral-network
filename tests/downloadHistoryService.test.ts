@@ -211,7 +211,7 @@ describe("DownloadHistoryService", () => {
         
         const updatedHistory = downloadHistoryService.getHistory();
         
-        // ⚠️ CRITICAL: Does the new entry get a NEW timestamp, or keep the old one?
+        // [WARN] CRITICAL: Does the new entry get a NEW timestamp, or keep the old one?
         // Current implementation creates a new timestamp (Date.now())
         expect(updatedHistory[0].downloadDate).toBeGreaterThan(originalDate);
       });

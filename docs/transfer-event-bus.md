@@ -12,47 +12,47 @@ The Transfer Event Bus is a typed, protocol-agnostic event system for communicat
 │                                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
 │  │ HTTP Handler │  │ FTP Handler  │  │  BitTorrent  │           │
-│  │✅Integrated  │  │ ✅Integrated│  │  Handler ✅  │          │
+│  │[OK]Integrated  │  │ [OK]Integrated│  │  Handler [OK]  │          │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘           │
 │         │                  │                  │                 │
 │  ┌──────┴───────┐  ┌──────┴───────┐  ┌──────┴───────┐           │
 │  │HttpDownload  │  │  download_   │  │bittorrent_   │           │
-│  │Client ✅    │  │  restart ✅  │  │  │handler ✅ │           │
+│  │Client [OK]    │  │  restart [OK]  │  │  │handler [OK] │           │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘           │
 │         │                  │                  │                 │
 │         └──────────────────┴──────────────────┘                 │
 │                            │                                    │
-│                  ┌─────────▼──────────┐                         │
+│                  ┌─────────[v]──────────┐                         │
 │                  │ TransferEventBus   │                         │
 │                  │  (transfer_events) │                         │
 │                  └─────────┬──────────┘                         │
 │                            │                                    │
 │              ┌─────────────┼─────────────┐                      │
 │              │             │             │                      │
-│    ┌─────────▼───┐  ┌─────▼─────┐  ┌────▼────────┐              │
+│    ┌─────────[v]───┐  ┌─────[v]─────┐  ┌────[v]────────┐              │
 │    │Tauri Emitter│  │Analytics  │  │MultiSource  │              │
-│    │             │  │Service ✅ │  │Download ✅ │              │
+│    │             │  │Service [OK] │  │Download [OK] │              │
 │    └─────────┬───┘  └───────────┘  └─────────────┘              │
 └──────────────┼──────────────────────────────────────────────────┘
                │
       IPC Event Channel
                │
-┌──────────────▼──────────────────────────────────────────────────┐
+┌──────────────[v]──────────────────────────────────────────────────┐
 │                  Frontend (Svelte)                              │
 │                                                                 │
 │                  ┌──────────────────┐                           │
 │                  │  Tauri Listener  │                           │
-│                  │  (App.svelte) ✅ │                          │
+│                  │  (App.svelte) [OK] │                          │
 │                  └────────┬─────────┘                           │
 │                           │                                     │
-│                  ┌────────▼─────────┐                           │
+│                  ┌────────[v]─────────┐                           │
 │                  │transferEventsStore│                          │
 │                  │ (Svelte Writable)│                           │
 │                  └────────┬─────────┘                           │
 │                           │                                     │
 │         ┌─────────────────┼─────────────────┐                   │
 │         │                 │                 │                   │
-│    ┌────▼────┐     ┌─────▼──────┐    ┌────▼─────┐               │
+│    ┌────[v]────┐     ┌─────[v]──────┐    ┌────[v]─────┐               │
 │    │Download │     │  Progress  │    │Analytics │               │
 │    │  Page   │     │    Bar     │    │   Page   │               │
 │    └─────────┘     └────────────┘    └──────────┘               │
@@ -65,15 +65,15 @@ The Transfer Event Bus is now fully integrated across all major protocol handler
 
 | Protocol Handler | File | Status | Events Emitted |
 |-----------------|------|--------|----------------|
-| HTTP Protocol | `protocols/http.rs` | ✅ Integrated | Full lifecycle |
-| FTP Protocol | `protocols/ftp.rs` | ✅ Integrated | Full lifecycle |
-| BitTorrent Protocol | `protocols/bittorrent.rs` | ✅ Integrated | Full lifecycle |
-| HTTP Download Client | `http_download.rs` | ✅ Integrated | Full lifecycle + ChunkFailed |
-| Download Restart | `download_restart.rs` | ✅ Integrated | Queue/Pause/Resume/Progress |
-| File Transfer | `file_transfer.rs` | ✅ Integrated | Start/Complete/Failed |
-| BitTorrent Handler | `bittorrent_handler.rs` | ✅ Integrated | Progress/Pause/Resume |
-| Multi-Source Download | `multi_source_download.rs` | ✅ Integrated | Full lifecycle |
-| Analytics Service | `analytics.rs` | ✅ Integrated | Event subscriber |
+| HTTP Protocol | `protocols/http.rs` | [OK] Integrated | Full lifecycle |
+| FTP Protocol | `protocols/ftp.rs` | [OK] Integrated | Full lifecycle |
+| BitTorrent Protocol | `protocols/bittorrent.rs` | [OK] Integrated | Full lifecycle |
+| HTTP Download Client | `http_download.rs` | [OK] Integrated | Full lifecycle + ChunkFailed |
+| Download Restart | `download_restart.rs` | [OK] Integrated | Queue/Pause/Resume/Progress |
+| File Transfer | `file_transfer.rs` | [OK] Integrated | Start/Complete/Failed |
+| BitTorrent Handler | `bittorrent_handler.rs` | [OK] Integrated | Progress/Pause/Resume |
+| Multi-Source Download | `multi_source_download.rs` | [OK] Integrated | Full lifecycle |
+| Analytics Service | `analytics.rs` | [OK] Integrated | Event subscriber |
 
 ## Event Types
 
@@ -171,7 +171,7 @@ let handler = HttpProtocolHandler::with_timeout_and_event_bus(60, app_handle.clo
 
 | Method | Events |
 |--------|--------|
-| `download_with_progress()` | TransferStarted → SourceConnected → TransferProgress (throttled) → TransferCompleted/TransferFailed |
+| `download_with_progress()` | TransferStarted -> SourceConnected -> TransferProgress (throttled) -> TransferCompleted/TransferFailed |
 | `cancel_download()` | TransferCanceled |
 
 #### FTP Protocol Handler
@@ -193,7 +193,7 @@ let handler = FtpProtocolHandler::with_config_and_event_bus(config, app_handle.c
 
 | Method | Events |
 |--------|--------|
-| `download()` | TransferStarted → SourceConnected → ChunkCompleted → SourceDisconnected → TransferCompleted/TransferFailed |
+| `download()` | TransferStarted -> SourceConnected -> ChunkCompleted -> SourceDisconnected -> TransferCompleted/TransferFailed |
 | `pause_download()` | TransferPaused |
 | `cancel_download()` | TransferCanceled |
 
@@ -219,11 +219,11 @@ let handler = BitTorrentProtocolHandler::with_download_directory_and_event_bus(
 
 | Method | Events |
 |--------|--------|
-| `download()` | TransferStarted → SourceConnected → TransferFailed (if start fails) |
+| `download()` | TransferStarted -> SourceConnected -> TransferFailed (if start fails) |
 | `pause_download()` | TransferPaused |
 | `resume_download()` | TransferResumed |
 | `cancel_download()` | TransferCanceled |
-| `get_download_progress()` | TransferProgress (throttled) → TransferCompleted/TransferFailed |
+| `get_download_progress()` | TransferProgress (throttled) -> TransferCompleted/TransferFailed |
 
 #### HTTP Download Client
 
@@ -661,7 +661,7 @@ This allows components to subscribe to specific event types or all events.
 ### Backend
 
 1. **Always use transfer_id**: Generate unique IDs for each transfer (UUID recommended)
-2. **Emit events in order**: Follow the lifecycle: queued → started → progress... → completed/failed
+2. **Emit events in order**: Follow the lifecycle: queued -> started -> progress... -> completed/failed
 3. **Include context**: Always populate relevant fields (file_hash, file_name, etc.)
 4. **Progress updates**: Emit progress every 2 seconds (use throttling)
 5. **Speed updates**: Can emit more frequently (every 100-500ms) for smooth UI

@@ -15,15 +15,15 @@
  * - Methods that REQUIRE Tauri: sendTransaction(), refreshBalance(), refreshTransactions()
  *
  * WHAT THESE TESTS VERIFY:
- * ✅ Account creation (demo accounts in test environment)
- * ✅ Account import with private key validation
- * ✅ Wallet state management via Svelte stores
- * ✅ Export/snapshot functionality
- * ✅ Error handling for missing accounts or invalid inputs
+ * [OK] Account creation (demo accounts in test environment)
+ * [OK] Account import with private key validation
+ * [OK] Wallet state management via Svelte stores
+ * [OK] Export/snapshot functionality
+ * [OK] Error handling for missing accounts or invalid inputs
  *
  * SKIPPED TESTS:
- * ⏭️ Balance refresh from geth (requires Tauri + running geth node)
- * ⏭️ Transaction refresh from blockchain (requires Tauri + geth)
+ * [SKIP] Balance refresh from geth (requires Tauri + running geth node)
+ * [SKIP] Transaction refresh from blockchain (requires Tauri + geth)
  *
  * These tests run in Node.js environment and test the demo/mock account functionality
  * that developers and web users interact with before the desktop app is built.

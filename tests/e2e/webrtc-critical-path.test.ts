@@ -1,6 +1,6 @@
 /**
  * @fileoverview WebRTC Critical Path E2E Test
- * Tests the complete flow: Locating → Handshake → Download(WebRTC) → Pay
+ * Tests the complete flow: Locating -> Handshake -> Download(WebRTC) -> Pay
  * 
  * This test simulates the full lifecycle of a WebRTC P2P file transfer:
  * 1. Locating: Search for file metadata and discover WebRTC-capable peers
@@ -69,7 +69,7 @@ describe("WebRTC Critical Path E2E", () => {
     webrtcHandshake.clear();
   });
 
-  describe("Complete Flow: Locate → Handshake → Download → Pay", () => {
+  describe("Complete Flow: Locate -> Handshake -> Download -> Pay", () => {
     it("should successfully complete full WebRTC download flow", async () => {
       // Setup test data
       const testFile = TestDataFactory.createMockFile("video.mp4", 5 * 1024 * 1024); // 5MB

@@ -47,20 +47,20 @@ The network ensures both confidentiality and availability using encryption and r
 
 ```
 1. File Input
-    ↓
+    v
 2. Generate Random AES-256 Key for the file
-    ↓
+    v
 3. Chunk File (e.g., into 256KB pieces)
-    ↓
+    v
 4. For Each Original Chunk:
    a. Hash the original chunk to get its unique identifier (used for the Merkle tree)
    b. Encrypt and chunk file into 256 KB pieces
    c. For Each Chunk:
       - Encrypt the chunk with AES-256-GCM using a unique nonce
       - Hash the *encrypted* chunk to get its storage hash (used for retrieval)
-    ↓
+    v
 5. Encrypt the file's AES Key with the Recipient's Public Key
-    ↓
+    v
 6. Store the individually encrypted chunks across the network
 ```
 
@@ -123,10 +123,10 @@ interface AccessControl {
 
 ```
 Handshake Protocol:
-1. Client → Server: Hello + Public Key
-2. Server → Client: Challenge Nonce
-3. Client → Server: Signed Challenge
-4. Server → Client: Session Key (encrypted)
+1. Client -> Server: Hello + Public Key
+2. Server -> Client: Challenge Nonce
+3. Client -> Server: Signed Challenge
+4. Server -> Client: Session Key (encrypted)
 5. Both: Derive shared secret
 ```
 
@@ -234,8 +234,8 @@ Validation Steps:
 #### Onion Routing
 
 ```
-Client → Proxy 1 → Proxy 2 → Proxy 3 → Destination
-  ↓         ↓         ↓         ↓
+Client -> Proxy 1 -> Proxy 2 -> Proxy 3 -> Destination
+  v         v         v         v
 Encrypted Encrypted Encrypted Plain
   (3x)      (2x)      (1x)     text
 ```
@@ -563,11 +563,11 @@ PGP Key: https://chiralnetwork.org/security/pgp
 
 ### Current Implementation
 
-- ✅ AES-256 file encryption
-- ✅ TLS 1.3 transport security
-- ✅ Basic access control
-- ✅ Rate limiting
-- ✅ Input validation
+- [OK] AES-256 file encryption
+- [OK] TLS 1.3 transport security
+- [OK] Basic access control
+- [OK] Rate limiting
+- [OK] Input validation
 
 ### Phase 1: Enhanced Privacy (Q1 2025)
 

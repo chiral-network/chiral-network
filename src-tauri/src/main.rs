@@ -38,8 +38,9 @@ pub mod webhook_manager;
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source, ed2k_client,
     encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore, logger, manager,
-    multi_source_download, p2p_chunk_network, p2p_download_recovery, peer_cache,
-    peer_cache_runtime, peer_selection, protocols, reputation, stream_auth, webrtc_service,
+    multi_source_download, p2p_chunk_network, p2p_download_recovery, peer_selection, protocols,
+    reputation, stream_auth,
+    webrtc_service,
 };
 use headless::create_dht_config_from_args;
 
@@ -57,13 +58,11 @@ use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
-    proxy_echo, proxy_remove, proxy_self_test, proxy_self_test_all, proxy_self_test_report,
-    ProxyNode,
+    proxy_echo, proxy_remove, ProxyNode,
 };
 use bandwidth::BandwidthController;
 use chiral_network::download_paths;
 use chiral_network::payment_checkpoint::PaymentCheckpointService;
-use chiral_network::proxy_latency::{ProxyLatencyInfo, ProxyLatencyService, ProxyStatus};
 use chiral_network::transfer_events::{
     current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
     TransferEventBus, TransferFailedEvent, TransferStartedEvent,
@@ -93,14 +92,11 @@ use ethereum::{
     get_txpool_content,
     get_txpool_status,
     reconnect_to_bootstrap_if_needed,
-    reconnect_to_bootstrap_with_snapshot,
-    reset_peer_recovery_state,
     start_mining,
     stop_mining,
     EthAccount,
     GethProcess,
     MinedBlock,
-    PeerRecoverySnapshot,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -114,7 +110,6 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
@@ -358,8 +353,6 @@ struct AppState {
     keystore: Arc<Mutex<Keystore>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     privacy_proxies: Arc<Mutex<Vec<String>>>,
-    proxy_latency: Arc<Mutex<ProxyLatencyService>>,
-    proxy_self_test_epoch: Arc<std::sync::atomic::AtomicU64>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
@@ -413,403 +406,6 @@ struct AppState {
 
     // FTP server for serving uploaded files
     ftp_server: Arc<chiral_network::ftp_server::FtpServer>,
-
-    // DHT lifecycle and peer-cache warm-start state
-    dht_lifecycle: Arc<Mutex<peer_cache_runtime::DhtLifecycleState>>,
-    dht_run_counter: Arc<AtomicU64>,
-    peer_cache_status: Arc<Mutex<peer_cache_runtime::PeerCacheStatus>>,
-    peer_cache_namespace: Arc<Mutex<Option<peer_cache_runtime::NamespaceContext>>>,
-    peer_cache_last_cache: Arc<Mutex<Option<peer_cache::PeerCache>>>,
-    peer_cache_last_success: Arc<Mutex<HashMap<String, u64>>>,
-    peer_cache_warmstart_task: Arc<Mutex<Option<JoinHandle<()>>>>,
-    peer_cache_cancel_run: Arc<AtomicU64>,
-}
-
-async fn sync_lifecycle_status(state: &AppState) {
-    let lifecycle = state.dht_lifecycle.lock().await.clone();
-    let mut status = state.peer_cache_status.lock().await;
-    status.lifecycle = lifecycle;
-}
-
-async fn cancel_peer_cache_warmstart_task(state: &AppState, run_id: u64) {
-    state.peer_cache_cancel_run.store(run_id, Ordering::SeqCst);
-
-    let handle = {
-        let mut guard = state.peer_cache_warmstart_task.lock().await;
-        guard.take()
-    };
-
-    if let Some(handle) = handle {
-        handle.abort();
-        let _ = timeout(Duration::from_secs(1), handle).await;
-    }
-
-    let mut status = state.peer_cache_status.lock().await;
-    status.warmstart_task_running = false;
-    status.warmstart_cancelled = true;
-    status.warmstart_last_reason = Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
-    status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-}
-
-async fn snapshot_and_save_peer_cache_from_dht(
-    state: &AppState,
-    dht: &Arc<DhtService>,
-    run_id: u64,
-) -> Result<(), String> {
-    let peers = dht.get_connected_peers().await;
-    let peers_with_addresses = dht.get_peer_addresses(peers).await?;
-    let now = peer_cache_runtime::now_secs();
-    let (cache, success_map) = peer_cache_runtime::build_snapshot_cache(&peers_with_addresses, now);
-
-    {
-        let mut last_cache = state.peer_cache_last_cache.lock().await;
-        *last_cache = Some(cache.clone());
-    }
-    {
-        let mut last_success = state.peer_cache_last_success.lock().await;
-        *last_success = success_map.clone();
-    }
-
-    let namespace_ctx = {
-        let guard = state.peer_cache_namespace.lock().await;
-        guard.clone()
-    };
-
-    if let Some(ctx) = namespace_ctx {
-        peer_cache_runtime::save_namespaced_cache(&ctx, cache, success_map).await?;
-        info!(
-            "peer_cache.save phase=save run_id={} namespace={} peers={}",
-            run_id,
-            ctx.namespace_key,
-            peers_with_addresses.len()
-        );
-        let mut status = state.peer_cache_status.lock().await;
-        status.namespace_key = Some(ctx.namespace_key.clone());
-        status.namespace_file_path = Some(ctx.namespace_file.to_string_lossy().to_string());
-        status.last_saved_at = Some(now);
-        status.last_error = None;
-    }
-
-    Ok(())
-}
-
-async fn spawn_peer_cache_warmstart_task(
-    state: &AppState,
-    dht: Arc<DhtService>,
-    run_id: u64,
-    loaded_cache: peer_cache_runtime::LoadedPeerCache,
-) {
-    let old_handle = {
-        let mut guard = state.peer_cache_warmstart_task.lock().await;
-        guard.take()
-    };
-    if let Some(handle) = old_handle {
-        handle.abort();
-    }
-
-    {
-        let now = peer_cache_runtime::now_secs();
-        let mut status = state.peer_cache_status.lock().await;
-        status.warmstart_task_running = true;
-        status.warmstart_cancelled = false;
-        status.warmstart_attempted = 0;
-        status.warmstart_succeeded = 0;
-        status.warmstart_skipped = 0;
-        status.peers_selected_for_warmstart = 0;
-        status.warmstart_last_reason = None;
-        status.warmstart_policy_mode = if peer_cache_runtime::warmstart_allow_lan() {
-            peer_cache_runtime::WarmstartPolicyMode::Lan
-        } else {
-            peer_cache_runtime::WarmstartPolicyMode::Wan
-        };
-        status.warmstart_total_ms = 0;
-        status.warmstart_plan_ms = 0;
-        status.warmstart_execute_ms = 0;
-        status.dns_resolve_calls = 0;
-        status.dns_resolve_ms_total = 0;
-        status.dns_cache_hits = 0;
-        status.dns_cache_misses = 0;
-        status.addr_validation_calls = 0;
-        status.addr_filtered_count = 0;
-        status.dial_timed_out = 0;
-        status.dial_failed_fast = 0;
-        status.time_to_first_success_ms = None;
-        status.last_warmstart_started_at = Some(now);
-        status.last_warmstart_completed_at = None;
-    }
-
-    let status_arc = state.peer_cache_status.clone();
-    let lifecycle_arc = state.dht_lifecycle.clone();
-    let cancel_run = state.peer_cache_cancel_run.clone();
-    let last_success_arc = state.peer_cache_last_success.clone();
-
-    let handle = tokio::spawn(async move {
-        use futures::future::join_all;
-
-        let allow_lan = peer_cache_runtime::warmstart_allow_lan();
-        let max_candidates = peer_cache_runtime::DEFAULT_MAX_WARMSTART_CANDIDATES;
-        let max_attempts = peer_cache_runtime::DEFAULT_MAX_WARMSTART_ATTEMPTS;
-        let max_concurrency = peer_cache_runtime::DEFAULT_MAX_WARMSTART_CONCURRENCY;
-        let attempt_timeout_ms = peer_cache_runtime::DEFAULT_WARMSTART_ATTEMPT_TIMEOUT_MS;
-        let budget_ms = peer_cache_runtime::DEFAULT_WARMSTART_BUDGET_MS;
-        let warmstart_started = Instant::now();
-        let plan_started = Instant::now();
-        let mut validation_metrics = peer_cache_runtime::AddressValidationMetrics::default();
-        let mut validation_cache = peer_cache_runtime::AddressValidationCache::default();
-        if !peer_cache_runtime::warmstart_enabled() {
-            let mut status = status_arc.lock().await;
-            status.warmstart_task_running = false;
-            status.warmstart_last_reason =
-                Some(peer_cache_runtime::WarmstartReasonCode::WarmstartDisabled);
-            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-            info!(
-                "peer_cache.warmstart phase=plan run_id={} reason=warmstart_disabled",
-                run_id
-            );
-            return;
-        }
-
-        if loaded_cache.namespace_mismatch {
-            let mut status = status_arc.lock().await;
-            status.namespace_mismatch = true;
-            status.warmstart_task_running = false;
-            status.warmstart_cancelled = false;
-            status.warmstart_last_reason =
-                Some(peer_cache_runtime::WarmstartReasonCode::NamespaceMismatch);
-            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-            info!(
-                "peer_cache.warmstart phase=plan run_id={} reason=namespace_mismatch",
-                run_id
-            );
-            return;
-        }
-
-        let candidates = peer_cache_runtime::build_warmstart_candidates(
-            &loaded_cache.cache,
-            &loaded_cache.last_successful_connect_at,
-            max_candidates,
-        );
-
-        {
-            let mut status = status_arc.lock().await;
-            status.peers_selected_for_warmstart = candidates.len();
-        }
-        if candidates.is_empty() {
-            let mut status = status_arc.lock().await;
-            status.warmstart_task_running = false;
-            status.warmstart_last_reason =
-                Some(peer_cache_runtime::WarmstartReasonCode::EmptyCache);
-            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-            info!(
-                "peer_cache.warmstart phase=plan run_id={} reason=empty_cache",
-                run_id
-            );
-            return;
-        }
-
-        let mut filtered = Vec::new();
-        let mut skipped = 0usize;
-        let mut budget_expired = false;
-        for candidate in candidates {
-            if peer_cache_runtime::warmstart_should_cancel(
-                cancel_run.load(Ordering::SeqCst),
-                run_id,
-            ) {
-                let mut status = status_arc.lock().await;
-                status.warmstart_cancelled = true;
-                status.warmstart_task_running = false;
-                status.warmstart_skipped += skipped;
-                status.warmstart_last_reason =
-                    Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
-                status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-                return;
-            }
-
-            if warmstart_started.elapsed().as_millis() as u64 >= budget_ms {
-                budget_expired = true;
-                break;
-            }
-
-            if let Some(parsed_addr) = peer_cache_runtime::parse_warmstart_dial_target_cached(
-                &candidate.address,
-                allow_lan,
-                &mut validation_cache,
-                &mut validation_metrics,
-            )
-            .await
-            {
-                filtered.push((candidate, parsed_addr));
-            } else {
-                skipped += 1;
-            }
-        }
-        info!(
-            "peer_cache.warmstart phase=plan run_id={} candidates={} filtered={} skipped={} budget_ms={}",
-            run_id,
-            filtered.len() + skipped,
-            filtered.len(),
-            skipped,
-            budget_ms
-        );
-        if filtered.is_empty() {
-            let mut status = status_arc.lock().await;
-            status.warmstart_skipped += skipped;
-            status.warmstart_task_running = false;
-            status.warmstart_plan_ms = plan_started.elapsed().as_millis() as u64;
-            status.warmstart_total_ms = warmstart_started.elapsed().as_millis() as u64;
-            status.dns_resolve_calls = validation_metrics.dns_resolve_calls;
-            status.dns_resolve_ms_total = validation_metrics.dns_resolve_ms_total;
-            status.dns_cache_hits = validation_metrics.dns_cache_hits;
-            status.dns_cache_misses = validation_metrics.dns_cache_misses;
-            status.addr_validation_calls = validation_metrics.addr_validation_calls;
-            status.addr_filtered_count = validation_metrics.addr_filtered_count + skipped as u64;
-            status.warmstart_last_reason = if budget_expired {
-                Some(peer_cache_runtime::WarmstartReasonCode::BudgetExpired)
-            } else {
-                Some(peer_cache_runtime::WarmstartReasonCode::AllFiltered)
-            };
-            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-            return;
-        }
-        let plan_ms = plan_started.elapsed().as_millis() as u64;
-
-        let mut attempted = 0usize;
-        let mut succeeded = 0usize;
-        let mut dial_timed_out = 0u64;
-        let mut dial_failed_fast = 0u64;
-        let mut time_to_first_success_ms = None;
-        let execute_started = Instant::now();
-        let mut cursor = 0usize;
-        while cursor < filtered.len()
-            && attempted < max_attempts
-            && (warmstart_started.elapsed().as_millis() as u64) < budget_ms
-        {
-            if peer_cache_runtime::warmstart_should_cancel(
-                cancel_run.load(Ordering::SeqCst),
-                run_id,
-            ) {
-                let mut status = status_arc.lock().await;
-                status.warmstart_cancelled = true;
-                status.warmstart_last_reason =
-                    Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
-                break;
-            }
-
-            let lifecycle = lifecycle_arc.lock().await.clone();
-            if !peer_cache_runtime::warmstart_run_active(&lifecycle, run_id) {
-                let mut status = status_arc.lock().await;
-                status.warmstart_cancelled = true;
-                status.warmstart_last_reason =
-                    Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
-                break;
-            }
-
-            let take = std::cmp::min(max_concurrency, filtered.len() - cursor);
-            let mut batch = Vec::with_capacity(take);
-            for _ in 0..take {
-                if attempted + batch.len() >= max_attempts {
-                    break;
-                }
-                batch.push(filtered[cursor].clone());
-                cursor += 1;
-            }
-
-            if batch.is_empty() {
-                break;
-            }
-
-            let jobs = batch.into_iter().map(|(candidate, parsed_addr)| {
-                let dht = dht.clone();
-                async move {
-                    let result = tokio::time::timeout(
-                        Duration::from_millis(attempt_timeout_ms),
-                        dht.connect_peer_multiaddr(parsed_addr.clone()),
-                    )
-                    .await;
-                    (candidate, result)
-                }
-            });
-
-            for (candidate, result) in join_all(jobs).await {
-                attempted += 1;
-                match result {
-                    Ok(Ok(())) => {
-                        succeeded += 1;
-                        if time_to_first_success_ms.is_none() {
-                            time_to_first_success_ms =
-                                Some(warmstart_started.elapsed().as_millis() as u64);
-                        }
-                        let mut success = last_success_arc.lock().await;
-                        success.insert(candidate.peer_id, peer_cache_runtime::now_secs());
-                    }
-                    Ok(Err(_)) => {
-                        dial_failed_fast += 1;
-                    }
-                    Err(_) => {
-                        dial_timed_out += 1;
-                    }
-                }
-            }
-        }
-
-        let lifecycle = lifecycle_arc.lock().await.clone();
-        if !peer_cache_runtime::warmstart_run_active(&lifecycle, run_id) {
-            info!(
-                "peer_cache.warmstart phase=execute run_id={} reason=stale_completion_ignored",
-                run_id
-            );
-            return;
-        }
-
-        let mut status = status_arc.lock().await;
-        status.warmstart_attempted = attempted;
-        status.warmstart_succeeded = succeeded;
-        status.warmstart_skipped += skipped;
-        status.warmstart_task_running = false;
-        status.warmstart_plan_ms = plan_ms;
-        status.warmstart_execute_ms = execute_started.elapsed().as_millis() as u64;
-        status.warmstart_total_ms = warmstart_started.elapsed().as_millis() as u64;
-        status.dns_resolve_calls = validation_metrics.dns_resolve_calls;
-        status.dns_resolve_ms_total = validation_metrics.dns_resolve_ms_total;
-        status.dns_cache_hits = validation_metrics.dns_cache_hits;
-        status.dns_cache_misses = validation_metrics.dns_cache_misses;
-        status.addr_validation_calls = validation_metrics.addr_validation_calls;
-        status.addr_filtered_count = validation_metrics.addr_filtered_count;
-        status.dial_timed_out = dial_timed_out;
-        status.dial_failed_fast = dial_failed_fast;
-        status.time_to_first_success_ms = time_to_first_success_ms;
-        status.warmstart_last_reason = if status.warmstart_cancelled {
-            Some(peer_cache_runtime::WarmstartReasonCode::Cancelled)
-        } else if succeeded > 0 {
-            Some(peer_cache_runtime::WarmstartReasonCode::Success)
-        } else if (warmstart_started.elapsed().as_millis() as u64) >= budget_ms || budget_expired {
-            Some(peer_cache_runtime::WarmstartReasonCode::BudgetExpired)
-        } else {
-            Some(peer_cache_runtime::WarmstartReasonCode::NoSuccess)
-        };
-        status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-        status.last_error = None;
-        info!(
-            "peer_cache.warmstart phase=execute run_id={} attempted={} succeeded={} skipped={} timed_out={} failed_fast={} total_ms={} plan_ms={} execute_ms={} dns_calls={} dns_hits={} dns_misses={} first_success_ms={:?} reason={:?}",
-            run_id,
-            attempted,
-            succeeded,
-            status.warmstart_skipped,
-            status.dial_timed_out,
-            status.dial_failed_fast,
-            status.warmstart_total_ms,
-            status.warmstart_plan_ms,
-            status.warmstart_execute_ms,
-            status.dns_resolve_calls,
-            status.dns_cache_hits,
-            status.dns_cache_misses,
-            status.time_to_first_success_ms,
-            status.warmstart_last_reason
-        );
-    });
-
-    let mut guard = state.peer_cache_warmstart_task.lock().await;
-    *guard = Some(handle);
 }
 
 /// Tauri command to create a new Chiral account
@@ -865,7 +461,6 @@ async fn start_geth_node(
     let miner_address = state.miner_address.lock().await;
     let rpc_url = rpc_url.unwrap_or_else(|| crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone());
     *state.rpc_url.lock().await = rpc_url.clone();
-    reset_peer_recovery_state().await;
 
     geth.start(
         &data_dir,
@@ -1021,9 +616,7 @@ async fn bittorrent_post_download_publish(
 #[tauri::command]
 async fn stop_geth_node(state: State<'_, AppState>) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
-    let stop_res = geth.stop();
-    reset_peer_recovery_state().await;
-    stop_res
+    geth.stop()
 }
 
 #[tauri::command]
@@ -1230,7 +823,7 @@ async fn record_download_payment(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     println!(
-        "📝 Download payment recorded: {} Chiral to wallet {} (peer: {}) from {} (peer: {}) tx: {}",
+        "[NOTE] Download payment recorded: {} Chiral to wallet {} (peer: {}) from {} (peer: {}) tx: {}",
         amount,
         seeder_wallet_address,
         seeder_peer_id,
@@ -1239,10 +832,10 @@ async fn record_download_payment(
         transaction_hash
     );
     println!(
-        "🔍 IMPORTANT: downloader_peer_id value: '{}'",
+        "[SEARCH] IMPORTANT: downloader_peer_id value: '{}'",
         downloader_peer_id
     );
-    println!("🔍 IMPORTANT: seeder_peer_id value: '{}'", seeder_peer_id);
+    println!("[SEARCH] IMPORTANT: seeder_peer_id value: '{}'", seeder_peer_id);
 
     // Send P2P payment notification message to the seeder's peer
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -1279,7 +872,7 @@ async fn record_download_payment(
         .map_err(|e| format!("Failed to emit payment notification: {}", e))?;
 
     println!(
-        "✅ Payment notification emitted locally for seeder: {}",
+        "[OK] Payment notification emitted locally for seeder: {}",
         seeder_wallet_address
     );
 
@@ -1292,7 +885,7 @@ async fn record_download_payment(
             dht.record_transfer_success(&seeder_peer_id, file_size, 0)
                 .await;
             println!(
-                "✅ Updated reputation for seeder peer {} after successful payment of {} Chiral",
+                "[OK] Updated reputation for seeder peer {} after successful payment of {} Chiral",
                 seeder_peer_id, amount
             );
         }
@@ -1313,7 +906,7 @@ async fn record_seeder_payment(
 ) -> Result<(), String> {
     // Log the seeder payment receipt for analytics/audit purposes
     println!(
-        "💰 Seeder payment received: {} Chiral from {}",
+        "[PAY] Seeder payment received: {} Chiral from {}",
         _amount, _downloader_address
     );
     Ok(())
@@ -1409,14 +1002,14 @@ async fn set_miner_address(state: State<'_, AppState>, address: String) -> Resul
 
 #[tauri::command]
 async fn test_backend_connection(state: State<'_, AppState>) -> Result<String, String> {
-    info!("🧪 Testing backend connection...");
+    info!("[TEST] Testing backend connection...");
 
     let dht = { state.dht.lock().await.as_ref().cloned() };
     if let Some(dht) = dht {
-        info!("✅ DHT service is available");
+        info!("[OK] DHT service is available");
         Ok("DHT service is running".to_string())
     } else {
-        info!("❌ DHT service is not available");
+        info!("[X] DHT service is not available");
         Err("DHT not running".into())
     }
 }
@@ -1527,7 +1120,6 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
 
     // Stop Geth
     state.geth.lock().await.stop()?;
-    reset_peer_recovery_state().await;
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await; // Brief pause for shutdown
 
     // Restart with the stored miner address
@@ -1847,14 +1439,14 @@ async fn start_mining_monitor(app: tauri::AppHandle, data_dir: String) -> Result
                             // Check if this line indicates a block was mined
                             // Only trigger on "Successfully sealed new block" to avoid duplicate events
                             if line.contains("Successfully sealed new block") {
-                                // 🎉 WE MINED A BLOCK! 🎉
+                                // [DONE] WE MINED A BLOCK! [DONE]
                                 // Get the current mining address and increment the counter for that address
                                 if let Some(miner_address) =
                                     CURRENT_MINER_ADDRESS.lock().await.clone()
                                 {
                                     increment_mined_blocks(miner_address).await;
                                 } else {
-                                    println!("⚠️  Block mined but no current miner address set!");
+                                    println!("[WARN]  Block mined but no current miner address set!");
                                 }
 
                                 // Emit event to frontend - that's it!
@@ -1905,7 +1497,7 @@ async fn increment_mined_blocks(miner_address: String) {
     let count = counts.entry(normalized_address.clone()).or_insert(0);
     *count += 1;
     println!(
-        "🎉 Block mined by {}! Total blocks mined by this address: {}",
+        "[DONE] Block mined by {}! Total blocks mined by this address: {}",
         normalized_address, *count
     );
 }
@@ -1924,7 +1516,7 @@ pub async fn set_mined_blocks_count(miner_address: &str, count: u64) {
     let mut counts = TOTAL_MINED_BLOCKS.lock().await;
     counts.insert(normalized_address.clone(), count);
     println!(
-        "📊 Initialized mined blocks count for {}: {}",
+        "[STATS] Initialized mined blocks count for {}: {}",
         normalized_address, count
     );
 }
@@ -2035,33 +1627,14 @@ async fn start_dht_node(
     // pure_client_mode: Option<bool>, false
     // force_server_mode: Option<bool>, false
 ) -> Result<String, String> {
-    let run_id = state.dht_run_counter.fetch_add(1, Ordering::SeqCst) + 1;
     {
-        let mut lifecycle = state.dht_lifecycle.lock().await;
-        lifecycle.try_begin_start(run_id)?;
-    }
-    sync_lifecycle_status(&state).await;
-    state.peer_cache_cancel_run.store(0, Ordering::SeqCst);
-    {
-        let mut status = state.peer_cache_status.lock().await;
-        status.namespace_chain_id_missing = false;
-        status.namespace_mismatch = false;
-        status.legacy_migrated = false;
-        status.peers_loaded = 0;
-        status.peers_selected_for_warmstart = 0;
-        status.warmstart_attempted = 0;
-        status.warmstart_succeeded = 0;
-        status.warmstart_skipped = 0;
-        status.warmstart_cancelled = false;
-        status.warmstart_task_running = false;
-        status.warmstart_last_reason = None;
-        status.last_warmstart_started_at = None;
-        status.last_warmstart_completed_at = None;
-        status.last_error = None;
+        let dht_guard = state.dht.lock().await;
+        if dht_guard.is_some() {
+            return Err("DHT node is already running".to_string());
+        }
     }
 
     let autonat_server_list = autonat_servers.unwrap_or(bootstrap_nodes.clone());
-    let result: Result<String, String> = async {
 
     // Get the proxy from the command line, if it was provided at launch
     let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
@@ -2127,7 +1700,6 @@ async fn start_dht_node(
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
-    let proxy_latency_arc = state.proxy_latency.clone();
     let dht_clone_for_pump = dht_arc.clone();
     let analytics_arc = state.analytics.clone();
 
@@ -2205,17 +1777,6 @@ async fn start_dht_node(
                             }
                         };
 
-                        {
-                            let mut svc = proxy_latency_arc.lock().await;
-                            let status_kind = match to_emit.status.as_str() {
-                                "online" => ProxyStatus::Online,
-                                "offline" => ProxyStatus::Offline,
-                                "connecting" => ProxyStatus::Connecting,
-                                _ => ProxyStatus::Error,
-                            };
-                            svc.update_proxy_latency(to_emit.id.clone(), latency_ms, status_kind);
-                        }
-
                         let _ = app_handle.emit("proxy_status_update", to_emit);
                     }
                     DhtEvent::NatStatus {
@@ -2246,9 +1807,6 @@ async fn start_dht_node(
                             p.latency = rtt_ms as u32;
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         }
-                        drop(proxies);
-                        let mut svc = proxy_latency_arc.lock().await;
-                        svc.update_ping_rtt(peer, Some(rtt_ms), ProxyStatus::Online);
                     }
                     DhtEvent::DownloadedFile(metadata) => {
                         info!(
@@ -2278,10 +1836,10 @@ async fn start_dht_node(
                         analytics_arc.decrement_active_downloads().await;
                     }
                     DhtEvent::PublishedFile(metadata) => {
-                        println!("🔍 DEBUG MAIN: PublishedFile event received");
-                        println!("🔍 DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
+                        println!("[SEARCH] DEBUG MAIN: PublishedFile event received");
+                        println!("[SEARCH] DEBUG MAIN: metadata.seeders = {:?}", metadata.seeders);
                         let payload = serde_json::json!(metadata);
-                        println!("🔍 DEBUG MAIN: Emitting published_file event to frontend");
+                        println!("[SEARCH] DEBUG MAIN: Emitting published_file event to frontend");
                         let _ = app_handle.emit("published_file", payload);
                         // Update analytics: record upload completion
                         analytics_arc.record_upload_completed().await;
@@ -2289,7 +1847,7 @@ async fn start_dht_node(
                     }
                     DhtEvent::FileDiscovered(metadata) => {
                         info!(
-                            "📡 Emitting found_file event to frontend for: {}",
+                            "[NET] Emitting found_file event to frontend for: {}",
                             metadata.file_name
                         );
                         let payload = serde_json::json!(metadata);
@@ -2325,7 +1883,7 @@ async fn start_dht_node(
                     }
                     DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
                         println!(
-                            "💰 Payment notification received from peer {}: {:?}",
+                            "[PAY] Payment notification received from peer {}: {:?}",
                             from_peer, payload
                         );
                         // Convert payload to match the expected format for seeder_payment_received
@@ -2345,7 +1903,7 @@ async fn start_dht_node(
                             });
                             // Emit the same event that local payments use
                             let _ = app_handle.emit("seeder_payment_received", formatted_payload);
-                            println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
+                            println!("[OK] Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
                     }
                     _ => {}
@@ -2367,66 +1925,6 @@ async fn start_dht_node(
 
     // Also attach DHT to HTTP server state for provider-side metrics
     state.http_server_state.set_dht(dht_arc.clone()).await;
-
-    let chain_id_for_namespace = Some(get_chain_id());
-    let namespace_result = peer_cache_runtime::build_namespace_context(
-        &bootstrap_nodes_for_monitor,
-        port,
-        chain_id_for_namespace,
-    );
-    match namespace_result {
-        Ok(namespace_ctx) => {
-            {
-                let mut ns_guard = state.peer_cache_namespace.lock().await;
-                *ns_guard = Some(namespace_ctx.clone());
-            }
-            let loaded = peer_cache_runtime::load_or_migrate_peer_cache(&namespace_ctx).await;
-            match loaded {
-                Ok(loaded_cache) => {
-                    info!(
-                        "peer_cache.load phase=load run_id={} namespace={} peers={} mismatch={} migrated={}",
-                        run_id,
-                        namespace_ctx.namespace_key,
-                        loaded_cache.cache.peers.len(),
-                        loaded_cache.namespace_mismatch,
-                        loaded_cache.legacy_migrated
-                    );
-                    {
-                        let mut cache_guard = state.peer_cache_last_cache.lock().await;
-                        *cache_guard = Some(loaded_cache.cache.clone());
-                    }
-                    {
-                        let mut success_guard = state.peer_cache_last_success.lock().await;
-                        *success_guard = loaded_cache.last_successful_connect_at.clone();
-                    }
-                    {
-                        let mut status = state.peer_cache_status.lock().await;
-                        status.namespace_key = Some(namespace_ctx.namespace_key.clone());
-                        status.namespace_file_path =
-                            Some(namespace_ctx.namespace_file.to_string_lossy().to_string());
-                        status.legacy_file_path =
-                            Some(namespace_ctx.legacy_file.to_string_lossy().to_string());
-                        status.namespace_chain_id_missing = namespace_ctx.namespace_meta.chain_id.is_none();
-                        status.namespace_mismatch = loaded_cache.namespace_mismatch;
-                        status.legacy_migrated = loaded_cache.legacy_migrated;
-                        status.peers_loaded = loaded_cache.cache.peers.len();
-                        status.last_loaded_at = Some(peer_cache_runtime::now_secs());
-                        status.last_error = None;
-                    }
-                    spawn_peer_cache_warmstart_task(&state, dht_arc.clone(), run_id, loaded_cache)
-                        .await;
-                }
-                Err(err) => {
-                    let mut status = state.peer_cache_status.lock().await;
-                    status.last_error = Some(format!("Failed to load peer cache: {}", err));
-                }
-            }
-        }
-        Err(err) => {
-            let mut status = state.peer_cache_status.lock().await;
-            status.last_error = Some(format!("Failed to build peer cache namespace: {}", err));
-        }
-    }
 
     // Monitor peer health and auto-reconnect to bootstrap when needed
     let dht_for_monitor = dht_arc.clone();
@@ -2456,7 +1954,7 @@ async fn start_dht_node(
 
             if peer_count < MINIMUM_PEERS {
                 tracing::warn!(
-                    "⚠️ Low peer count: {} (minimum: {}). Attempting to reconnect to bootstrap nodes...",
+                    "[WARN] Low peer count: {} (minimum: {}). Attempting to reconnect to bootstrap nodes...",
                     peer_count,
                     MINIMUM_PEERS
                 );
@@ -2465,7 +1963,7 @@ async fn start_dht_node(
                 for bootstrap_node in &bootstrap_nodes_for_monitor {
                     match dht_for_monitor.connect_peer(bootstrap_node.clone()).await {
                         Ok(_) => {
-                            tracing::info!("📡 Reconnected to bootstrap node: {}", bootstrap_node);
+                            tracing::info!("[NET] Reconnected to bootstrap node: {}", bootstrap_node);
                         }
                         Err(e) => {
                             tracing::debug!("Failed to reconnect to {}: {}", bootstrap_node, e);
@@ -2480,72 +1978,26 @@ async fn start_dht_node(
                     "message": format!("DHT has only {} peers. Reconnecting to bootstrap nodes...", peer_count)
                 }));
             } else {
-                tracing::debug!("✅ DHT peer count healthy: {}", peer_count);
+                tracing::debug!("[OK] DHT peer count healthy: {}", peer_count);
             }
         }
     });
 
     Ok(peer_id)
-    }
-    .await;
-
-    match &result {
-        Ok(_) => {
-            {
-                let mut lifecycle = state.dht_lifecycle.lock().await;
-                lifecycle.mark_running(run_id);
-            }
-            sync_lifecycle_status(&state).await;
-        }
-        Err(err) => {
-            {
-                let mut lifecycle = state.dht_lifecycle.lock().await;
-                lifecycle.mark_stopped();
-            }
-            sync_lifecycle_status(&state).await;
-            let mut status = state.peer_cache_status.lock().await;
-            status.last_error = Some(err.clone());
-            status.warmstart_task_running = false;
-        }
-    }
-
-    result
 }
 
 #[tauri::command]
 async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let current_run_id = {
-        let lifecycle = state.dht_lifecycle.lock().await;
-        lifecycle.run_id
-    };
-
-    {
-        let mut lifecycle = state.dht_lifecycle.lock().await;
-        lifecycle.try_begin_stop(current_run_id)?;
-    }
-    sync_lifecycle_status(&state).await;
-    cancel_peer_cache_warmstart_task(&state, current_run_id).await;
-
     let dht = {
         let mut dht_guard = state.dht.lock().await;
         dht_guard.take()
     };
+
     if let Some(dht) = dht {
-        let dht_for_snapshot = dht.clone();
-        peer_cache_runtime::run_snapshot_then_teardown(
-            async {
-                snapshot_and_save_peer_cache_from_dht(&state, &dht_for_snapshot, current_run_id)
-                    .await
-                    .map_err(|err| format!("Failed to save peer cache on stop: {}", err))
-            },
-            async {
-                (*dht)
-                    .shutdown()
-                    .await
-                    .map_err(|e| format!("Failed to stop DHT: {}", e))
-            },
-        )
-        .await?;
+        (*dht)
+            .shutdown()
+            .await
+            .map_err(|e| format!("Failed to stop DHT: {}", e))?;
     }
 
     // Proxy reset
@@ -2554,12 +2006,6 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
         proxies.clear();
     }
     let _ = app.emit("proxy_reset", ());
-
-    {
-        let mut lifecycle = state.dht_lifecycle.lock().await;
-        lifecycle.mark_stopped();
-    }
-    sync_lifecycle_status(&state).await;
 
     Ok(())
 }
@@ -2579,21 +2025,6 @@ async fn stop_publishing_file(state: State<'_, AppState>, file_hash: String) -> 
 
 #[tauri::command]
 async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Result<(), String> {
-    if std::env::var("CHIRAL_ENABLE_PEER_DIAL")
-        .ok()
-        .map(|v| v == "1")
-        .unwrap_or(false)
-        == false
-    {
-        return Err(
-            "Manual peer dial is disabled. Set CHIRAL_ENABLE_PEER_DIAL=1 to enable.".to_string(),
-        );
-    }
-    let allow_lan = peer_cache_runtime::warmstart_allow_lan();
-    if !peer_cache_runtime::is_address_allowed_for_warmstart(&peer_address, allow_lan).await {
-        return Err("Peer address failed dial safety policy validation".to_string());
-    }
-
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -2627,25 +2058,6 @@ async fn get_dht_peer_count(state: State<'_, AppState>) -> Result<usize, String>
 }
 
 #[tauri::command]
-async fn get_peer_cache_status(
-    state: State<'_, AppState>,
-) -> Result<peer_cache_runtime::PeerCacheStatus, String> {
-    Ok(state.peer_cache_status.lock().await.clone())
-}
-
-#[tauri::command]
-async fn get_peer_cache_stats(
-    state: State<'_, AppState>,
-) -> Result<peer_cache::PeerCacheStats, String> {
-    let cache = {
-        let guard = state.peer_cache_last_cache.lock().await;
-        guard.clone()
-    }
-    .unwrap_or_default();
-    Ok(peer_cache_runtime::extract_cache_stats(&cache))
-}
-
-#[tauri::command]
 async fn get_dht_peer_id(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -2670,10 +2082,10 @@ async fn get_peer_id(state: State<'_, AppState>) -> Result<String, String> {
 
     if let Some(dht) = dht {
         let peer_id = dht.get_peer_id().await;
-        println!("🔍 get_peer_id() called -> returning: {}", peer_id);
+        println!("[SEARCH] get_peer_id() called -> returning: {}", peer_id);
         Ok(peer_id)
     } else {
-        println!("❌ get_peer_id() called but DHT is not running");
+        println!("[X] get_peer_id() called but DHT is not running");
         Err("DHT is not running. Cannot get peer ID.".to_string())
     }
 }
@@ -4039,7 +3451,7 @@ fn get_windows_temperature() -> Option<f32> {
     let log_state = LAST_LOG_STATE.get_or_init(|| std::sync::Mutex::new(false));
     if let Ok(mut logged) = log_state.lock() {
         if !*logged {
-            info!("⚠️ No WMI temperature sensors detected. Temperature monitoring disabled.");
+            info!("[WARN] No WMI temperature sensors detected. Temperature monitoring disabled.");
             *logged = true;
         }
     }
@@ -4311,7 +3723,11 @@ async fn upload_file_to_network(
         .len();
 
     // Normalize protocol for robust matching (tests/users may send different casing like "Bitswap", "BitSwap", "BITSWAP").
-    let protocol_upper = protocol.as_deref().unwrap_or("").trim().to_uppercase();
+    let protocol_upper = protocol
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_uppercase();
     let dont_need_to_copy_protocols = vec!["BITSWAP", "WEBRTC"];
     let mut file_path = file_path.clone();
 
@@ -4544,14 +3960,14 @@ async fn upload_file_to_network(
                         return Ok(());
                     }
                     Err(e) => {
-                        println!("❌ ED2K seeding failed: {}", e);
+                        println!("[X] ED2K seeding failed: {}", e);
                         return Err(format!("ED2K seeding failed: {}", e));
                     }
                 }
             }
             "FTP" => {
                 // FTP upload uses the built-in FTP server
-                println!("📡 FTP upload: Using built-in FTP server");
+                println!("[NET] FTP upload: Using built-in FTP server");
 
                 // Ensure FTP server is running
                 if !state.ftp_server.is_running().await {
@@ -4616,7 +4032,7 @@ async fn upload_file_to_network(
                     .await
                     .map_err(|e| format!("Failed to add file to FTP server: {}", e))?;
 
-                println!("✅ File added to FTP server: {}", ftp_url);
+                println!("[OK] File added to FTP server: {}", ftp_url);
 
                 let metadata = FileMetadata {
                     merkle_root: file_hash.clone(),
@@ -4671,13 +4087,13 @@ async fn upload_file_to_network(
                     }
                 }
 
-                println!("✅ FTP upload complete - file available at: {}", ftp_url);
+                println!("[OK] FTP upload complete - file available at: {}", ftp_url);
                 return Ok(());
             }
             "BITSWAP" => {
                 // Use streaming upload for Bitswap to handle large files
                 println!(
-                    "📡 Using streaming Bitswap upload for protocol: {}",
+                    "[NET] Using streaming Bitswap upload for protocol: {}",
                     protocol_name
                 );
 
@@ -4692,7 +4108,7 @@ async fn upload_file_to_network(
                 let total_chunks = ((file_size + chunk_size - 1) / chunk_size) as usize;
 
                 println!(
-                    "📡 Starting Bitswap streaming upload: {} chunks of {} bytes each",
+                    "[NET] Starting Bitswap streaming upload: {} chunks of {} bytes each",
                     total_chunks, chunk_size
                 );
 
@@ -4745,7 +4161,7 @@ async fn upload_file_to_network(
                     // Progress logging for large files
                     if chunk_index % 100 == 0 || is_last_chunk {
                         println!(
-                            "📊 Upload progress: {}/{} chunks ({:.1}%)",
+                            "[STATS] Upload progress: {}/{} chunks ({:.1}%)",
                             chunk_index + 1,
                             total_chunks,
                             (chunk_index + 1) as f64 / total_chunks as f64 * 100.0
@@ -4881,7 +4297,7 @@ async fn upload_file_to_network(
                         };
 
                         info!(
-                            "📡 Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
+                            "[NET] Bitswap publish metadata: merkle_root={} root_cid={} cids={:?} seeders={:?}",
                             merkle_root,
                             root_cid,
                             metadata.cids,
@@ -4896,7 +4312,7 @@ async fn upload_file_to_network(
                         }
 
                         let file_hash = root_cid.to_string();
-                        println!("✅ Bitswap streaming upload completed: {}", file_hash);
+                        println!("[OK] Bitswap streaming upload completed: {}", file_hash);
 
                         // Clean up session
                         upload_sessions.remove(&upload_id);
@@ -4910,7 +4326,7 @@ async fn upload_file_to_network(
                 // WebRTC and other protocols use the default Chiral flow
                 // Spawn in background task to avoid callback timeout issues
                 println!(
-                    "📡 Using Chiral network upload for protocol: {}",
+                    "[NET] Using Chiral network upload for protocol: {}",
                     protocol_name
                 );
 
@@ -5269,8 +4685,8 @@ async fn test_ftp_connection(
 
     // Connect based on FTPS setting
     if use_ftps {
-        use std::sync::Arc;
         use suppaftp::{RustlsConnector, RustlsFtpStream};
+        use std::sync::Arc;
 
         // Create TLS connector with rustls
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -5281,7 +4697,7 @@ async fn test_ftp_connection(
                 .add(&rustls::Certificate(cert.0))
                 .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
         }
-
+        
         let tls_config = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_cert_store)
@@ -5395,8 +4811,8 @@ async fn upload_to_external_ftp(
 
     // Upload based on FTPS setting
     if use_ftps {
-        use std::sync::Arc;
         use suppaftp::{RustlsConnector, RustlsFtpStream};
+        use std::sync::Arc;
 
         // Create TLS connector with rustls
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -5407,7 +4823,7 @@ async fn upload_to_external_ftp(
                 .add(&rustls::Certificate(cert.0))
                 .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
         }
-
+        
         let tls_config = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_cert_store)
@@ -5804,11 +5220,11 @@ async fn download_blocks_from_network(
     download_path: String,
 ) -> Result<(), String> {
     info!(
-        "🔽 download_blocks_from_network called for file: {} to path: {}",
+        "[DL] download_blocks_from_network called for file: {} to path: {}",
         file_metadata.file_name, download_path
     );
     info!(
-        "🔽 file has {} seeders, cids: {:?}",
+        "[DL] file has {} seeders, cids: {:?}",
         file_metadata.seeders.len(),
         file_metadata.cids
     );
@@ -5829,19 +5245,14 @@ async fn download_blocks_from_network(
             .unwrap_or(false);
         if !has_cids {
             for _ in 0..10 {
-                if let Ok(Some(refreshed)) = dht
-                    .synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500)
-                    .await
+                if let Ok(Some(refreshed)) =
+                    dht.synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500).await
                 {
-                    if refreshed
-                        .cids
-                        .as_ref()
-                        .map(|c| !c.is_empty())
-                        .unwrap_or(false)
-                    {
+                    if refreshed.cids.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
                         info!(
-                            "🔽 Refreshed metadata now has cids for {}: {:?}",
-                            file_metadata.merkle_root, refreshed.cids
+                            "[DL] Refreshed metadata now has cids for {}: {:?}",
+                            file_metadata.merkle_root,
+                            refreshed.cids
                         );
                         file_metadata.cids = refreshed.cids;
                         break;
@@ -5869,7 +5280,7 @@ async fn download_blocks_from_network(
             let providers = dht.get_seeders_for_file(&file_metadata.merkle_root).await;
             if !providers.is_empty() {
                 info!(
-                    "🔽 Bitswap metadata had 0 seeders; using {} providers for {}",
+                    "[DL] Bitswap metadata had 0 seeders; using {} providers for {}",
                     providers.len(),
                     file_metadata.merkle_root
                 );
@@ -5877,10 +5288,10 @@ async fn download_blocks_from_network(
             }
         }
 
-        info!("🔽 DHT node is running, calling dht.download_file");
+        info!("[DL] DHT node is running, calling dht.download_file");
         dht.download_file(file_metadata, download_path).await
     } else {
-        error!("🔽 DHT node is not running!");
+        error!("[DL] DHT node is not running!");
         Err("DHT node is not running".to_string())
     }
 }
@@ -5893,7 +5304,7 @@ async fn download_file_from_network(
 ) -> Result<String, String> {
     use std::path::Path;
 
-    // ✅ VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
+    // [OK] VALIDATE OUTPUT PATH BEFORE STARTING DOWNLOAD
     let path = Path::new(&output_path);
 
     // Check if parent directory exists
@@ -5943,9 +5354,7 @@ async fn download_file_from_network(
                     // doesn't include seeders yet, fall back to DHT provider discovery.
                     let mut metadata = metadata;
                     if metadata.seeders.is_empty() {
-                        let providers = dht_service
-                            .get_seeders_for_file(&metadata.merkle_root)
-                            .await;
+                        let providers = dht_service.get_seeders_for_file(&metadata.merkle_root).await;
                         if !providers.is_empty() {
                             info!(
                                 "Metadata had 0 seeders; using {} providers from DHT for {}",
@@ -6096,7 +5505,7 @@ async fn download_file_from_network(
                             // Check if we already have an open WebRTC connection to this peer
                             if webrtc_service.has_open_connection(&selected_peer).await {
                                 info!(
-                                    "♻️ Reusing existing WebRTC connection to peer {}",
+                                    "[REUSE] Reusing existing WebRTC connection to peer {}",
                                     selected_peer
                                 );
 
@@ -7062,139 +6471,35 @@ async fn update_proxy_latency(
     proxy_id: String,
     latency_ms: Option<u64>,
 ) -> Result<(), String> {
-    if proxy_id.trim().is_empty() {
-        return Err("proxy_id must not be empty".to_string());
-    }
-
-    let status = if latency_ms.is_some() {
-        ProxyStatus::Online
-    } else {
-        ProxyStatus::Offline
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
     };
 
-    {
-        let mut svc = state.proxy_latency.lock().await;
-        svc.update_proxy_latency(proxy_id.clone(), latency_ms, status.clone());
+    if let Some(multi_source_service) = ms {
+        multi_source_service
+            .update_proxy_latency(proxy_id, latency_ms)
+            .await;
+        Ok(())
+    } else {
+        Err("Multi-source download service not available for proxy latency update".to_string())
     }
-
-    {
-        let mut proxies = state.proxies.lock().await;
-        if let Some(node) = proxies
-            .iter_mut()
-            .find(|p| p.id == proxy_id || p.address == proxy_id)
-        {
-            node.status = match status {
-                ProxyStatus::Online => "online".to_string(),
-                ProxyStatus::Offline => "offline".to_string(),
-                ProxyStatus::Connecting => "connecting".to_string(),
-                ProxyStatus::Error => "error".to_string(),
-            };
-            if let Some(ms) = latency_ms {
-                node.latency = ms as u32;
-            }
-            node.error = None;
-        } else {
-            proxies.push(ProxyNode {
-                id: proxy_id.clone(),
-                address: proxy_id.clone(),
-                status: match status {
-                    ProxyStatus::Online => "online".to_string(),
-                    ProxyStatus::Offline => "offline".to_string(),
-                    ProxyStatus::Connecting => "connecting".to_string(),
-                    ProxyStatus::Error => "error".to_string(),
-                },
-                latency: latency_ms.unwrap_or_default() as u32,
-                error: None,
-            });
-        }
-    }
-
-    Ok(())
 }
 
 #[tauri::command]
 async fn get_proxy_optimization_status(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let svc = state.proxy_latency.lock().await;
-    let summary = svc.get_status();
-    let top = svc.get_snapshot(Some(10));
-    Ok(serde_json::json!({
-        "summary": summary,
-        "topProxies": top
-    }))
-}
-
-#[tauri::command]
-async fn get_proxy_latency_snapshot(
-    state: State<'_, AppState>,
-    limit: Option<usize>,
-) -> Result<Vec<ProxyLatencyInfo>, String> {
-    let svc = state.proxy_latency.lock().await;
-    Ok(svc.get_snapshot(limit))
-}
-
-#[tauri::command]
-async fn get_best_proxy_candidate(
-    state: State<'_, AppState>,
-) -> Result<Option<ProxyLatencyInfo>, String> {
-    let svc = state.proxy_latency.lock().await;
-    Ok(svc.get_best_proxy())
-}
-
-#[tauri::command]
-async fn remove_proxy_latency_entry(
-    state: State<'_, AppState>,
-    proxy_id: String,
-) -> Result<bool, String> {
-    if proxy_id.trim().is_empty() {
-        return Err("proxy_id must not be empty".to_string());
-    }
-
-    let removed = {
-        let mut svc = state.proxy_latency.lock().await;
-        svc.remove_proxy(&proxy_id)
+    let ms = {
+        let ms_guard = state.multi_source_download.lock().await;
+        ms_guard.as_ref().cloned()
     };
 
-    if removed {
-        let mut proxies = state.proxies.lock().await;
-        proxies.retain(|p| p.id != proxy_id);
+    if let Some(multi_source_service) = ms {
+        Ok(multi_source_service.get_proxy_optimization_status().await)
+    } else {
+        Err("Multi-source download service not available for proxy optimization status".to_string())
     }
-
-    Ok(removed)
-}
-
-#[tauri::command]
-async fn clear_proxy_latency_data(state: State<'_, AppState>) -> Result<usize, String> {
-    let removed = {
-        let mut svc = state.proxy_latency.lock().await;
-        svc.clear()
-    };
-    Ok(removed)
-}
-
-#[tauri::command]
-async fn get_proxy_latency_entry(
-    state: State<'_, AppState>,
-    proxy_id: String,
-) -> Result<Option<ProxyLatencyInfo>, String> {
-    if proxy_id.trim().is_empty() {
-        return Err("proxy_id must not be empty".to_string());
-    }
-    let svc = state.proxy_latency.lock().await;
-    Ok(svc.get_proxy(&proxy_id))
-}
-
-#[tauri::command]
-async fn get_proxy_latency_score(
-    state: State<'_, AppState>,
-    proxy_id: String,
-) -> Result<f64, String> {
-    if proxy_id.trim().is_empty() {
-        return Err("proxy_id must not be empty".to_string());
-    }
-    let svc = state.proxy_latency.lock().await;
-    Ok(svc.get_proxy_score(&proxy_id))
 }
 
 #[tauri::command]
@@ -7820,15 +7125,6 @@ async fn clear_bootstrap_cache() -> Result<(), String> {
 async fn reconnect_geth_bootstrap(min_peers: Option<u32>) -> Result<u32, String> {
     let threshold = min_peers.unwrap_or(3);
     reconnect_to_bootstrap_if_needed(threshold).await
-}
-
-/// Reconnect to bootstrap/seed nodes and return a detailed state snapshot
-#[tauri::command]
-async fn reconnect_geth_bootstrap_snapshot(
-    min_peers: Option<u32>,
-) -> Result<PeerRecoverySnapshot, String> {
-    let threshold = min_peers.unwrap_or(3);
-    reconnect_to_bootstrap_with_snapshot(threshold).await
 }
 
 /// Add a specific peer to Geth
@@ -8614,42 +7910,11 @@ fn get_logs_directory(app: tauri::AppHandle) -> Result<String, String> {
 }
 #[tauri::command]
 async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String> {
-    let current_run_id = {
-        let lifecycle = state.dht_lifecycle.lock().await;
-        lifecycle.run_id
-    };
-
-    {
-        let mut lifecycle = state.dht_lifecycle.lock().await;
-        let _ = lifecycle.try_begin_stop(current_run_id);
+    // Stop DHT if running
+    if let Some(dht) = state.dht.lock().await.as_ref() {
+        let _ = dht.shutdown().await;
     }
-    sync_lifecycle_status(&state).await;
-    cancel_peer_cache_warmstart_task(&state, current_run_id).await;
-
-    let dht = {
-        let mut dht_guard = state.dht.lock().await;
-        dht_guard.take()
-    };
-    if let Some(dht) = dht {
-        let dht_for_snapshot = dht.clone();
-        let result = peer_cache_runtime::run_snapshot_then_teardown(
-            async {
-                snapshot_and_save_peer_cache_from_dht(&state, &dht_for_snapshot, current_run_id)
-                    .await
-                    .map_err(|err| format!("Failed to save peer cache on reset: {}", err))
-            },
-            async {
-                dht.shutdown()
-                    .await
-                    .map_err(|e| format!("Failed to stop DHT on reset: {}", e))
-            },
-        )
-        .await;
-        if let Err(err) = result {
-            let mut status = state.peer_cache_status.lock().await;
-            status.last_error = Some(err);
-        }
-    }
+    *state.dht.lock().await = None;
 
     // Stop WebRTC if running (just clear the reference)
     *state.webrtc.lock().await = None;
@@ -8663,13 +7928,6 @@ async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String
     // Stop any running pumps
     *state.file_transfer_pump.lock().await = None;
     *state.multi_source_pump.lock().await = None;
-
-    {
-        let mut lifecycle = state.dht_lifecycle.lock().await;
-        lifecycle.mark_stopped();
-    }
-    sync_lifecycle_status(&state).await;
-
     Ok(())
 }
 
@@ -8705,38 +7963,13 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
             tracing::info!("Proof-of-storage watcher stopped");
         }
 
-        let current_run_id = {
-            let lifecycle = state.dht_lifecycle.lock().await;
-            lifecycle.run_id
-        };
-        {
-            let mut lifecycle = state.dht_lifecycle.lock().await;
-            let _ = lifecycle.try_begin_stop(current_run_id);
-        }
-        sync_lifecycle_status(&state).await;
-        cancel_peer_cache_warmstart_task(&state, current_run_id).await;
-
-        let dht = {
+        // Stop DHT and related services
+        if let Some(dht) = {
             let mut dht_guard = state.dht.lock().await;
             dht_guard.take()
-        };
-        if let Some(dht) = dht {
-            let dht_for_snapshot = dht.clone();
-            if let Err(err) = peer_cache_runtime::run_snapshot_then_teardown(
-                async {
-                    snapshot_and_save_peer_cache_from_dht(&state, &dht_for_snapshot, current_run_id)
-                        .await
-                        .map_err(|e| format!("Failed to save peer cache during shutdown: {}", e))
-                },
-                async {
-                    dht.shutdown()
-                        .await
-                        .map_err(|e| format!("Failed to stop DHT: {}", e))
-                },
-            )
-            .await
-            {
-                tracing::warn!("{}", err);
+        } {
+            if let Err(e) = dht.shutdown().await {
+                tracing::warn!("Failed to stop DHT: {}", e);
             }
         }
 
@@ -8753,12 +7986,6 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
             *state.file_transfer_pump.lock().await = None;
             *state.multi_source_pump.lock().await = None;
         }
-
-        {
-            let mut lifecycle = state.dht_lifecycle.lock().await;
-            lifecycle.mark_stopped();
-        }
-        sync_lifecycle_status(&state).await;
 
         if let Ok(mut geth) = state.geth.try_lock() {
             if let Err(e) = geth.stop() {
@@ -8939,7 +8166,7 @@ async fn download_file_http(
     };
 
     if let Some(ref local_id) = downloader_peer_id {
-        tracing::info!("📤 Downloader peer ID: {}", local_id);
+        tracing::info!("[OUT] Downloader peer ID: {}", local_id);
     }
 
     // Create progress channel
@@ -9002,7 +8229,7 @@ async fn download_file_http(
                 if let Some(dht) = state.dht.lock().await.as_ref() {
                     dht.record_transfer_success(peer_id_str, file_size, duration_ms)
                         .await;
-                    tracing::info!("📊 Recorded successful transfer for peer: {}", peer_id_str);
+                    tracing::info!("[STATS] Recorded successful transfer for peer: {}", peer_id_str);
                 }
             }
 
@@ -9016,7 +8243,7 @@ async fn download_file_http(
                 if let Some(dht) = state.dht.lock().await.as_ref() {
                     dht.record_transfer_failure(peer_id_str, "http_download_error")
                         .await;
-                    tracing::info!("📊 Recorded failed transfer for peer: {}", peer_id_str);
+                    tracing::info!("[STATS] Recorded failed transfer for peer: {}", peer_id_str);
                 }
             }
 
@@ -9723,22 +8950,6 @@ async fn remove_payment_checkpoint_session(
     state.payment_checkpoint.remove_session(&session_id).await
 }
 
-fn proxysec_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    tauri::plugin::Builder::new("proxysec")
-        .invoke_handler(tauri::generate_handler![
-            proxy_self_test,
-            proxy_self_test_all,
-            proxy_self_test_report,
-            get_proxy_latency_snapshot,
-            get_best_proxy_candidate,
-            remove_proxy_latency_entry,
-            clear_proxy_latency_data,
-            get_proxy_latency_entry,
-            get_proxy_latency_score
-        ])
-        .build()
-}
-
 // #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
@@ -9751,13 +8962,13 @@ fn main() {
     // Handle --download-geth flag
     if args.download_geth {
         use crate::geth_downloader::GethDownloader;
-        println!("🔽 Downloading Geth binary...");
+        println!("[DL] Downloading Geth binary...");
 
         let downloader = GethDownloader::new();
 
         if downloader.is_geth_installed() {
             println!(
-                "✓ Geth is already installed at: {}",
+                "[OK] Geth is already installed at: {}",
                 downloader.geth_path().display()
             );
             std::process::exit(0);
@@ -9778,7 +8989,7 @@ fn main() {
         match result {
             Ok(_) => {
                 println!(
-                    "✓ Geth downloaded successfully to: {}",
+                    "[OK] Geth downloaded successfully to: {}",
                     downloader.geth_path().display()
                 );
                 println!("\nYou can now run mining commands:");
@@ -9786,7 +8997,7 @@ fn main() {
                 std::process::exit(0);
             }
             Err(e) => {
-                eprintln!("❌ Failed to download Geth: {}", e);
+                eprintln!("[X] Failed to download Geth: {}", e);
                 std::process::exit(1);
             }
         }
@@ -9993,9 +9204,9 @@ fn main() {
         verdict: reputation::TransactionVerdict,
         state: State<'_, AppState>,
     ) -> Result<(), String> {
-        println!("📊 RUST: publish_reputation_verdict called");
+        println!("[STATS] RUST: publish_reputation_verdict called");
         tracing::info!(
-            "📊 publish_reputation_verdict: {} -> {} ({:?})",
+            "[STATS] publish_reputation_verdict: {} -> {} ({:?})",
             verdict.issuer_id,
             verdict.target_id,
             verdict.outcome
@@ -10010,12 +9221,12 @@ fn main() {
         // Create ReputationDhtService and store verdict
         let mut reputation_dht = reputation::ReputationDhtService::new();
         reputation_dht.set_dht_service(Arc::clone(dht));
-        println!("📊 RUST: About to store verdict");
+        println!("[STATS] RUST: About to store verdict");
         reputation_dht.store_transaction_verdict(&verdict).await?;
 
-        println!("✅ RUST: Verdict stored successfully");
+        println!("[OK] RUST: Verdict stored successfully");
         tracing::info!(
-            "✅ Published verdict to DHT for peer: {}",
+            "[OK] Published verdict to DHT for peer: {}",
             verdict.target_id
         );
         Ok(())
@@ -10026,8 +9237,8 @@ fn main() {
         peer_id: String,
         state: State<'_, AppState>,
     ) -> Result<Vec<reputation::TransactionVerdict>, String> {
-        println!("🔍 RUST: get_reputation_verdicts called for: {}", peer_id);
-        tracing::info!("📊 get_reputation_verdicts for peer: {}", peer_id);
+        println!("[SEARCH] RUST: get_reputation_verdicts called for: {}", peer_id);
+        tracing::info!("[STATS] get_reputation_verdicts for peer: {}", peer_id);
 
         // Get DHT service from AppState
         let dht_guard = state.dht.lock().await;
@@ -10038,14 +9249,14 @@ fn main() {
         // Create ReputationDhtService and retrieve verdicts
         let mut reputation_dht = reputation::ReputationDhtService::new();
         reputation_dht.set_dht_service(Arc::clone(dht));
-        println!("🔍 RUST: About to retrieve verdicts");
+        println!("[SEARCH] RUST: About to retrieve verdicts");
         let verdicts = reputation_dht
             .retrieve_transaction_verdicts(&peer_id)
             .await?;
 
-        println!("✅ RUST: Retrieved {} verdicts", verdicts.len());
+        println!("[OK] RUST: Retrieved {} verdicts", verdicts.len());
         tracing::info!(
-            "✅ Retrieved {} verdicts for peer: {}",
+            "[OK] Retrieved {} verdicts for peer: {}",
             verdicts.len(),
             peer_id
         );
@@ -10057,7 +9268,6 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
-        .plugin(proxysec_plugin())
         .manage(AppState {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
@@ -10074,8 +9284,6 @@ fn main() {
             )),
             proxies: Arc::new(Mutex::new(Vec::new())),
             privacy_proxies: Arc::new(Mutex::new(Vec::new())),
-            proxy_latency: Arc::new(Mutex::new(ProxyLatencyService::new())),
-            proxy_self_test_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
@@ -10136,16 +9344,6 @@ fn main() {
 
             // FTP server for serving uploaded files (created earlier for protocol manager)
             ftp_server: ftp_server_arc,
-
-            // DHT lifecycle and peer-cache warm-start state
-            dht_lifecycle: Arc::new(Mutex::new(peer_cache_runtime::DhtLifecycleState::default())),
-            dht_run_counter: Arc::new(AtomicU64::new(0)),
-            peer_cache_status: Arc::new(Mutex::new(peer_cache_runtime::PeerCacheStatus::default())),
-            peer_cache_namespace: Arc::new(Mutex::new(None)),
-            peer_cache_last_cache: Arc::new(Mutex::new(None)),
-            peer_cache_last_success: Arc::new(Mutex::new(HashMap::new())),
-            peer_cache_warmstart_task: Arc::new(Mutex::new(None)),
-            peer_cache_cancel_run: Arc::new(AtomicU64::new(0)),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -10204,7 +9402,6 @@ fn main() {
             get_cached_bootstrap_health,
             clear_bootstrap_cache,
             reconnect_geth_bootstrap,
-            reconnect_geth_bootstrap_snapshot,
             add_geth_peer,
             get_geth_peers,
             get_geth_node_info,
@@ -10249,8 +9446,6 @@ fn main() {
             ensure_directory_exists,
             get_dht_health,
             get_dht_peer_count,
-            get_peer_cache_status,
-            get_peer_cache_stats,
             get_dht_peer_id,
             get_peer_id,
             is_dht_running,
@@ -10762,7 +9957,7 @@ fn main() {
                                         e
                                     );
                                     eprintln!(
-                                        "⚠️  HTTP server failed to start on port {}: {}",
+                                        "[WARN]  HTTP server failed to start on port {}: {}",
                                         port, e
                                     );
                                     break;
@@ -10777,7 +9972,7 @@ fn main() {
                                 port_end
                             );
                             eprintln!(
-                                "⚠️  HTTP server could not start - all ports {}-{} are in use",
+                                "[WARN]  HTTP server could not start - all ports {}-{} are in use",
                                 port_start, port_end
                             );
                         }
@@ -10857,13 +10052,13 @@ fn main() {
                                 {
                                     Ok(_handle) => {
                                         info!(
-                                            "✓ Successfully restored torrent: {} to {:?}",
+                                            "[OK] Successfully restored torrent: {} to {:?}",
                                             torrent.info_hash, torrent.output_path
                                         );
                                     }
                                     Err(e) => {
                                         error!(
-                                            "✗ Failed to restore torrent {}: {}",
+                                            "[X] Failed to restore torrent {}: {}",
                                             torrent.info_hash, e
                                         );
                                     }
@@ -10892,19 +10087,16 @@ fn main() {
                 };
 
                 if let Some(dht_service) = dht_clone_for_pump {
-                    if let Some(state) = app_handle.try_state::<AppState>() {
-                        let proxies_arc_for_pump = state.proxies.clone();
-                        let proxy_lat_for_pump = state.proxy_latency.clone();
-                        tauri::async_runtime::spawn(async move {
-                            pump_dht_events(
-                                app_handle,
-                                dht_service,
-                                proxies_arc_for_pump,
-                                proxy_lat_for_pump,
-                            )
-                            .await;
-                        });
-                    }
+                    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
+
+                    tauri::async_runtime::spawn(async move {
+                        pump_dht_events(
+                            app_handle,
+                            dht_service,
+                            proxies_arc_for_pump,
+                        )
+                        .await;
+                    });
                 }
             }
 
@@ -11057,7 +10249,7 @@ async fn create_bt_handler_with_fallback(
         {
             Ok(h) => {
                 println!(
-                    "✓ Using BitTorrent fallback port range: {}-{}",
+                    "[OK] Using BitTorrent fallback port range: {}-{}",
                     start,
                     start + 10
                 );
@@ -11527,7 +10719,6 @@ async fn pump_dht_events(
     app_handle: tauri::AppHandle,
     dht_service: Arc<DhtService>,
     proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
-    proxy_latency_arc: Arc<Mutex<ProxyLatencyService>>,
 ) {
     loop {
         let events = dht_service.drain_events(64).await;
@@ -11586,16 +10777,6 @@ async fn pump_dht_events(
                             node
                         }
                     };
-                    {
-                        let mut svc = proxy_latency_arc.lock().await;
-                        let status_kind = match to_emit.status.as_str() {
-                            "online" => ProxyStatus::Online,
-                            "offline" => ProxyStatus::Offline,
-                            "connecting" => ProxyStatus::Connecting,
-                            _ => ProxyStatus::Error,
-                        };
-                        svc.update_proxy_latency(to_emit.id.clone(), latency_ms, status_kind);
-                    }
                     let _ = app_handle.emit("proxy_status_update", to_emit);
                 }
                 DhtEvent::NatStatus {

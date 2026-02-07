@@ -275,7 +275,7 @@ $: canShowLockAction = !showFirstRunWizard;
 
           for (const [transferId, transfer] of $store.transfers.entries()) {
             if (transfer.status === 'completed') {
-              // First time we see this transfer as completed → fire toast
+              // First time we see this transfer as completed -> fire toast
               if (!notifiedCompletedTransfers.has(transferId)) {
                 notifiedCompletedTransfers.add(transferId);
 

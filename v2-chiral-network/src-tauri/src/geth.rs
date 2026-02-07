@@ -360,7 +360,7 @@ impl GethProcess {
             ));
         }
 
-        println!("✅ Blockchain initialized with chain ID {}", CHAIN_ID);
+        println!("[OK] Blockchain initialized with chain ID {}", CHAIN_ID);
         Ok(())
     }
 
@@ -384,9 +384,9 @@ impl GethProcess {
         let geth_path = self.geth_path();
 
         // Get healthy bootstrap nodes (with health checking and caching)
-        println!("🔍 Checking bootstrap node health...");
+        println!("[SEARCH] Checking bootstrap node health...");
         let bootstrap_nodes = geth_bootstrap::get_healthy_enodes().await;
-        println!("✅ Using bootstrap nodes: {}", if bootstrap_nodes.len() > 100 {
+        println!("[OK] Using bootstrap nodes: {}", if bootstrap_nodes.len() > 100 {
             format!("{}...", &bootstrap_nodes[..100])
         } else {
             bootstrap_nodes.clone()
@@ -454,7 +454,7 @@ impl GethProcess {
 
         self.child = Some(child);
 
-        println!("✅ Geth started");
+        println!("[OK] Geth started");
         println!("   Logs: {}", log_path.display());
         println!("   RPC: {}", rpc_endpoint());
 
@@ -463,10 +463,10 @@ impl GethProcess {
 
         // Auto-start mining if miner address is set
         if miner_address.is_some() {
-            println!("⛏️  Auto-starting mining...");
+            println!("[MINE]  Auto-starting mining...");
             match self.start_mining(1).await {
-                Ok(_) => println!("✅ Mining started automatically"),
-                Err(e) => println!("⚠️  Failed to auto-start mining: {}", e),
+                Ok(_) => println!("[OK] Mining started automatically"),
+                Err(e) => println!("[WARN]  Failed to auto-start mining: {}", e),
             }
         }
 
@@ -477,7 +477,7 @@ impl GethProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
             child.kill().map_err(|e| format!("Failed to stop geth: {}", e))?;
-            println!("✅ Geth stopped");
+            println!("[OK] Geth stopped");
         }
         Ok(())
     }

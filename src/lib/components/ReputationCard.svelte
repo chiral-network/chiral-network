@@ -109,12 +109,12 @@
     <div class="flex items-center justify-center gap-1" title={`Score: ${starRating.toFixed(1)}/5`}>
       {#each Array(5) as _, index}
         <div class="relative w-4 h-4">
-          <span class="text-gray-300 absolute">☆</span>
+          <span class="text-gray-300 absolute">*</span>
           <span 
             class="text-yellow-400 absolute overflow-hidden"
             style={`width: ${Math.max(0, Math.min(1, starRating - index)) * 100}%;`}
           >
-            ★
+            *
           </span>
         </div>
       {/each}

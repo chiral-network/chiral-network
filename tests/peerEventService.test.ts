@@ -642,7 +642,7 @@ describe('peerEventService', () => {
       const connectHandler = mockListeners.get('dht_peer_connected')!;
       const disconnectHandler = mockListeners.get('dht_peer_disconnected')!;
 
-      // Discovery → Connect → Disconnect sequence
+      // Discovery -> Connect -> Disconnect sequence
       discoveryHandler({
         payload: {
           peerId: 'peer1',
