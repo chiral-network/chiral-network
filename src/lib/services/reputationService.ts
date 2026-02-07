@@ -51,16 +51,16 @@ class ReputationService {
         throw new RateLimitError(message, decision);
       }
 
-      console.log('[STATS] Publishing reputation verdict to DHT:', completeVerdict);
+      console.log('📊 Publishing reputation verdict to DHT:', completeVerdict);
       await invoke('publish_reputation_verdict', { verdict: completeVerdict });
       reputationRateLimiter.recordDecision(completeVerdict, decision, { sent: true });
-      console.log('[OK] Published reputation verdict to DHT for peer:', completeVerdict.target_id);
+      console.log('✅ Published reputation verdict to DHT for peer:', completeVerdict.target_id);
       return decision;
     } catch (error) {
       if (completeVerdict && decision && !(error instanceof RateLimitError)) {
         reputationRateLimiter.recordDecision(completeVerdict, decision, { sent: false });
       }
-      console.error('[X] Failed to publish reputation verdict:', error);
+      console.error('❌ Failed to publish reputation verdict:', error);
       throw error;
     }
   }
@@ -70,7 +70,7 @@ class ReputationService {
       const verdicts = await invoke<TransactionVerdict[]>('get_reputation_verdicts', { peerId });
       return verdicts;
     } catch (error) {
-      console.error('[X] Failed to get reputation verdicts:', error);
+      console.error('❌ Failed to get reputation verdicts:', error);
       return [];
     }
   }

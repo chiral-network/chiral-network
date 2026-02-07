@@ -306,7 +306,7 @@ impl PaymentCheckpointService {
             // For upfront mode, no more checkpoints
             u64::MAX
         } else {
-            // Exponential scaling: 1 -> 2 -> 4 -> 8 -> 16 MB
+            // Exponential scaling: 1 → 2 -> 4 -> 8 -> 16 MB
             let next_mb = (checkpoint_mb * 2).max(MIN_CHECKPOINT_MB);
             checkpoint.last_checkpoint_mb = next_mb;
             next_mb
@@ -502,7 +502,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Check next checkpoint is at 10 MB + 20 MB = 30 MB (exponential: 10 -> 20)
+        // Check next checkpoint is at 10 MB + 20 MB = 30 MB (exponential: 10 → 20)
         let checkpoint = service.get_checkpoint_info("test-session").await.unwrap();
         assert_eq!(checkpoint.next_checkpoint_bytes, 30 * 1024 * 1024);
         assert_eq!(checkpoint.last_checkpoint_mb, 20);

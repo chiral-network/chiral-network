@@ -2205,7 +2205,7 @@
               on:click={() => selectedGasOption = 'slow'}
             >
               <div class="flex items-center gap-1 mb-1">
-                <span class="text-lg">[SLOW]</span>
+                <span class="text-lg">🐢</span>
                 <span class="text-sm font-medium">{$t('transfer.gas.slow')}</span>
               </div>
               {#if gasEstimate}
@@ -2224,7 +2224,7 @@
               on:click={() => selectedGasOption = 'standard'}
             >
               <div class="flex items-center gap-1 mb-1">
-                <span class="text-lg">[FAST]</span>
+                <span class="text-lg">⚡</span>
                 <span class="text-sm font-medium">{$t('transfer.gas.standard')}</span>
               </div>
               {#if gasEstimate}
@@ -2243,7 +2243,7 @@
               on:click={() => selectedGasOption = 'fast'}
             >
               <div class="flex items-center gap-1 mb-1">
-                <span class="text-lg">[START]</span>
+                <span class="text-lg">🚀</span>
                 <span class="text-sm font-medium">{$t('transfer.gas.fast')}</span>
               </div>
               {#if gasEstimate}
@@ -2688,7 +2688,7 @@
             </div>
           {:else if !$transactionPagination.hasMore}
             <div class="text-center py-3">
-              <p class="text-sm text-green-600">[OK] All transactions loaded</p>
+              <p class="text-sm text-green-600">✅ All transactions loaded</p>
               {#if $transactionPagination.oldestBlockScanned !== null}
                 <p class="text-xs text-muted-foreground mt-1">
                   Scanned all blocks from #{$transactionPagination.oldestBlockScanned.toLocaleString()} to current
@@ -2742,7 +2742,7 @@
               </div>
             {:else if !$miningPagination.hasMore && $miningPagination.oldestBlockScanned !== null}
               <div class="text-center py-3 border-t">
-                <p class="text-sm text-green-600">[OK] {$t('transactions.miningRewards.allLoaded')}</p>
+                <p class="text-sm text-green-600">✅ {$t('transactions.miningRewards.allLoaded')}</p>
                 <p class="text-xs text-muted-foreground mt-1">
                   {$t('transactions.miningRewards.scannedAll')}
                 </p>

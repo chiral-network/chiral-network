@@ -325,7 +325,7 @@ export class ReassemblyManager {
             continue;
           }
 
-          // Persistence failed -> rollback logical receipt
+          // Persistence failed → rollback logical receipt
           state.chunkStates[chunkIndex] = ChunkState.CORRUPTED;
           state.corruptedChunks.add(chunkIndex);
           state.receivedChunks.delete(chunkIndex);

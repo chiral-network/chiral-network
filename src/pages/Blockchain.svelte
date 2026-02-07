@@ -456,7 +456,7 @@
           </div>
         </div>
         <p class="text-xs text-blue-600 mt-2">
-          [WAIT] {tr('blockchain.sync.complete')}
+          ⏳ {tr('blockchain.sync.complete')}
         </p>
       </div>
     </div>

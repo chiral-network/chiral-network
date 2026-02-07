@@ -1724,7 +1724,7 @@ function sectionMatches(section: string, query: string) {
           <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
             <p>Custom bootstrap nodes: {localSettings.customBootstrapNodes?.length || 0}</p>
             {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
-              <p class="text-green-600">[OK] Using custom bootstrap nodes</p>
+              <p class="text-green-600">✅ Using custom bootstrap nodes</p>
             {:else}
               <p class="text-blue-600">Using default hardcoded bootstrap nodes</p>
             {/if}
@@ -2404,12 +2404,12 @@ function sectionMatches(section: string, query: string) {
             <div class="mb-4 p-3 bg-gray-50 rounded-lg">
               <h3 class="font-medium mb-2">{$t("settings.diagnostics.resultsTitle")}</h3>
               <div class="flex gap-4 text-sm">
-                <span class="text-green-600">[OK] {diagnosticsReport.summary.passed} passed</span>
+                <span class="text-green-600">✅ {diagnosticsReport.summary.passed} passed</span>
                 {#if diagnosticsReport.summary.warnings > 0}
-                  <span class="text-amber-600">[WARN] {diagnosticsReport.summary.warnings} warnings</span>
+                  <span class="text-amber-600">⚠️ {diagnosticsReport.summary.warnings} warnings</span>
                 {/if}
                 {#if diagnosticsReport.summary.failed > 0}
-                  <span class="text-red-600">[X] {diagnosticsReport.summary.failed} failed</span>
+                  <span class="text-red-600">❌ {diagnosticsReport.summary.failed} failed</span>
                 {/if}
               </div>
             </div>
@@ -2602,7 +2602,7 @@ function sectionMatches(section: string, query: string) {
               </div>
             {/if}
             <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-              [INFO] <strong>{$t('pureClientMode.settings.dht.clientMode.autoBehaviorLabel')}</strong> {$t('pureClientMode.settings.dht.clientMode.autoBehaviorText')}
+              ℹ️ <strong>{$t('pureClientMode.settings.dht.clientMode.autoBehaviorLabel')}</strong> {$t('pureClientMode.settings.dht.clientMode.autoBehaviorText')}
             </div>
           </div>
         </div>
@@ -2630,7 +2630,7 @@ function sectionMatches(section: string, query: string) {
             </p>
             {#if localSettings.forceServerMode}
               <div class="ml-6 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-                [WARN] <strong>{$t('pureClientMode.settings.dht.serverMode.warningLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.warningText')}
+                ⚠️ <strong>{$t('pureClientMode.settings.dht.serverMode.warningLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.warningText')}
               </div>
             {/if}
             {#if localSettings.pureClientMode}
@@ -2639,7 +2639,7 @@ function sectionMatches(section: string, query: string) {
               </div>
             {/if}
             <div class="ml-6 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-              [INFO] <strong>{$t('pureClientMode.settings.dht.serverMode.autoBehaviorLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.autoBehaviorText')}
+              ℹ️ <strong>{$t('pureClientMode.settings.dht.serverMode.autoBehaviorLabel')}</strong> {$t('pureClientMode.settings.dht.serverMode.autoBehaviorText')}
             </div>
           </div>
         </div>
