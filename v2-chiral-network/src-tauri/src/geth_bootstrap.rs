@@ -104,16 +104,22 @@ static CACHE: Lazy<Arc<RwLock<BootstrapCache>>> =
 pub fn get_default_nodes() -> Vec<BootstrapNode> {
     vec![
         BootstrapNode {
-            enode: "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303".into(),
-            name: "Stony Brook Primary".into(),
+            enode: "enode://45cc5ba89142b2c82180986f411aa16dbfe6041043d1f7112f08e710f23fdeb7283551ec15ca9d23a0da91ac12e080e014f8c32230a8109d6d0b01be8ca71102@130.245.173.73:30303".into(),
+            name: "Primary Bootstrap (Chiral Test)".into(),
             region: "US East".into(),
             priority: 1,
+        },
+        BootstrapNode {
+            enode: "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303".into(),
+            name: "Stony Brook Secondary".into(),
+            region: "US East".into(),
+            priority: 2,
         },
         BootstrapNode {
             enode: "enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303".into(),
             name: "Azure West".into(),
             region: "US West".into(),
-            priority: 2,
+            priority: 3,
         },
     ]
 }

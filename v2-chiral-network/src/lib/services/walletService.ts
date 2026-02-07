@@ -66,13 +66,16 @@ class WalletService {
     // Check cache
     const cached = this.balanceCache.get(address.toLowerCase());
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      console.log('[walletService.getBalance] Returning cached balance for', address, ':', cached.balance);
       return cached.balance;
     }
 
     if (isTauriEnvironment()) {
       try {
+        console.log('[walletService.getBalance] Querying balance for', address);
         const result = await invoke<WalletBalance>('get_wallet_balance', { address });
         const balance = result.balance || '0.00';
+        console.log('[walletService.getBalance] Got balance:', balance, 'wei:', result.balanceWei);
 
         // Update cache
         this.balanceCache.set(address.toLowerCase(), {
@@ -82,11 +85,7 @@ class WalletService {
 
         return balance;
       } catch (error) {
-        // Silent fail - Geth not running is expected initially
-        // Only log if we don't have a cached value
-        if (!cached) {
-          console.debug('Balance unavailable - Geth may not be running');
-        }
+        console.log('[walletService.getBalance] Failed to get balance:', error);
         // Return cached value if available, otherwise 0
         return cached?.balance || '0.00';
       }

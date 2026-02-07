@@ -25,8 +25,12 @@ pub const CHAIN_ID: u64 = 98765;
 /// Network ID (same as chain ID for our network)
 pub const NETWORK_ID: u64 = 98765;
 
-/// Default RPC endpoint
-pub const RPC_ENDPOINT: &str = "http://127.0.0.1:8545";
+/// Shared RPC endpoint for the Chiral Network
+/// Override with CHIRAL_RPC_ENDPOINT environment variable
+pub fn rpc_endpoint() -> String {
+    std::env::var("CHIRAL_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
+}
 
 // ============================================================================
 // Types
@@ -452,7 +456,7 @@ impl GethProcess {
 
         println!("✅ Geth started");
         println!("   Logs: {}", log_path.display());
-        println!("   RPC: {}", RPC_ENDPOINT);
+        println!("   RPC: {}", rpc_endpoint());
 
         // Wait for Geth to start up
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -623,8 +627,9 @@ impl GethProcess {
             "id": 1
         });
 
+        let endpoint = rpc_endpoint();
         let response = client
-            .post(RPC_ENDPOINT)
+            .post(&endpoint)
             .json(&payload)
             .send()
             .await
@@ -665,8 +670,9 @@ mod tests {
 
     #[test]
     fn test_rpc_endpoint() {
-        assert_eq!(RPC_ENDPOINT, "http://127.0.0.1:8545");
-        assert!(RPC_ENDPOINT.starts_with("http://127.0.0.1"));
+        let endpoint = rpc_endpoint();
+        assert!(endpoint.starts_with("http://"));
+        assert!(endpoint.contains(":8545"));
     }
 
     #[test]

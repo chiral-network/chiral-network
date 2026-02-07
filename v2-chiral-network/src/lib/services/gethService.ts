@@ -126,6 +126,7 @@ class GethService {
    */
   async getStatus(): Promise<GethStatus> {
     const status = await invoke<GethStatus>('get_geth_status');
+    console.log('[gethService.getStatus] Status:', JSON.stringify(status));
     gethStatus.set(status);
     return status;
   }
