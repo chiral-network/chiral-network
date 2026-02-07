@@ -10,7 +10,7 @@ Chiral Network is a decentralized peer-to-peer file sharing application that com
 
 1. **Fully Decentralized P2P**: No centralized servers - all peer discovery via DHT
 2. **BitTorrent-Style Sharing**: Files immediately start seeding when added (no "upload" step)
-3. **Non-Commercial**: No marketplace, pricing, or trading features to prevent misuse
+3. **Token Economy**: Chiral token-based download speed tiers; no external marketplaces, advertising, or third-party payment systems
 4. **Privacy-First**: AutoNAT v2, SOCKS5 proxy support, anonymous mode
 5. **Legitimate Use Only**: Designed for personal, educational, and organizational file sharing
 6. **Blockchain Integration**: Separate Ethereum-compatible network with Geth integration
@@ -66,9 +66,8 @@ The application uses client-side routing with the following pages:
 10. **Settings** - Comprehensive configuration (storage, network, privacy, bandwidth scheduling, diagnostics, i18n)
 
 ### Removed Pages (Anti-Piracy Measures)
-- ❌ Search page (could enable finding copyrighted content)
-- ❌ Market page (no commercial transactions)
-- ❌ Bundles page (no selling file packages)
+- [X] Search page (could enable finding copyrighted content)
+- [X] Bundles page (no selling file packages)
 
 ## State Management (`src/lib/stores.ts`)
 
@@ -289,7 +288,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 
 ### 14. System Diagnostics
 - **Service**: `src/lib/services/diagnosticsService.ts`
-- **Location**: Settings → Diagnostics section
+- **Location**: Settings -> Diagnostics section
 - **Features**:
   - 13 comprehensive health checks across 5 categories
   - Environment detection (Tauri vs web build)
@@ -392,7 +391,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 
 ### When Adding Features
 
-1. **No Commercial Elements**: Never add pricing, trading, or marketplace features
+1. **Token Economy Only**: Download speed tiers use Chiral tokens; never add external payment systems, advertising, or third-party marketplaces
 2. **Privacy First**: Always consider user privacy and anonymity
 3. **Legitimate Use**: Design for legal file sharing use cases only
 4. **Decentralized**: No centralized servers or intermediaries
@@ -571,32 +570,36 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 
 ## What NOT to Implement
 
-### Commercial & Piracy-Enabling Features
+### Piracy-Enabling & External Commercial Features
 
 **Never add:**
 - Global file search/discovery (could enable piracy)
-- Price fields or payment systems
-- File marketplace or trading
+- External payment systems or third-party marketplaces
 - Content recommendations
 - Social features (comments, likes, reviews)
 - Advertising systems
 - Analytics that could track users
 - Centralized market servers
 
+**Allowed:**
+- Chiral token-based download speed tiers (rate-limited free tier, paid faster tiers)
+- Per-MB file pricing using Chiral tokens (already implemented)
+- Peer-to-peer token transfers for file sharing incentives
+
 ### VPN & General Anonymity Network Features
 
 **We are NOT building a VPN or anonymity network:**
-- ❌ VPN service functionality
-- ❌ General internet traffic routing (only P2P file transfer traffic)
-- ❌ Exit node functionality (no routing of non-P2P traffic)
-- ❌ Anonymous browsing capabilities
-- ❌ Full anonymity network features
-- ❌ Traffic mixing/onion routing
+- [X] VPN service functionality
+- [X] General internet traffic routing (only P2P file transfer traffic)
+- [X] Exit node functionality (no routing of non-P2P traffic)
+- [X] Anonymous browsing capabilities
+- [X] Full anonymity network features
+- [X] Traffic mixing/onion routing
 
 **What we DO support** (limited to file sharing):
-- ✅ SOCKS5 proxy support (use existing proxies like Tor)
-- ✅ File encryption (protect file content)
-- ✅ Anonymous mode (hide IP during P2P file transfers only)
+- [OK] SOCKS5 proxy support (use existing proxies like Tor)
+- [OK] File encryption (protect file content)
+- [OK] Anonymous mode (hide IP during P2P file transfers only)
 
 **Why?**
 1. Legal compliance - VPN/anonymity networks attract regulatory scrutiny
@@ -627,7 +630,7 @@ npm run check            # TypeScript type check
 
 ### Using Built-in Diagnostics
 
-**Run system diagnostics first** (Settings → Diagnostics):
+**Run system diagnostics first** (Settings -> Diagnostics):
 - Checks environment, network, storage, security, and system health
 - 13 comprehensive tests with color-coded results
 - Export report for bug reports

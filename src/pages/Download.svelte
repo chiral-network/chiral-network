@@ -131,9 +131,9 @@
           price: 0,
           protocol: 'BitTorrent'
         }]);
-        console.log(`✅ Test file added: ${fileName} at ${filePath}`);
+        console.log(`[OK] Test file added: ${fileName} at ${filePath}`);
       };
-      console.log('🛠️ Debug mode: Use addTestFile("path/to/file") to test preview');
+      console.log('[TOOL] Debug mode: Use addTestFile("path/to/file") to test preview');
     }
 
     // Initialize payment service to load persisted wallet and transactions
@@ -172,7 +172,7 @@
             newStatus = existing?.status === 'initializing' ? 'initializing' : 'downloading';
           }
 
-          console.log(`📊 BitTorrent Progress: ${info_hash.substring(0, 8)}... - ${downloaded}/${total} bytes (${progress.toFixed(1)}%) - Speed: ${speed} B/s - Status: ${newStatus}`);
+          console.log(`[STATS] BitTorrent Progress: ${info_hash.substring(0, 8)}... - ${downloaded}/${total} bytes (${progress.toFixed(1)}%) - Speed: ${speed} B/s - Status: ${newStatus}`);
 
           torrentDownloads.set(info_hash, {
             info_hash,
@@ -190,7 +190,7 @@
           syncTorrentToFilesStore(info_hash, existing?.name || 'Fetching name...', newStatus, progress, total, speed, eta_seconds);
         } else if (payload.Complete) {
           const { info_hash, name } = payload.Complete;
-          console.log(`✅ BitTorrent Complete: ${info_hash} - ${name}`);
+          console.log(`[OK] BitTorrent Complete: ${info_hash} - ${name}`);
           const existing = torrentDownloads.get(info_hash);
           if (existing) {
             torrentDownloads.set(info_hash, {
@@ -234,7 +234,7 @@
           }
         } else if (payload.Added) {
             const { info_hash, name } = payload.Added;
-            console.log(`➕ BitTorrent Added: ${info_hash} - ${name}`);
+            console.log(`+ BitTorrent Added: ${info_hash} - ${name}`);
             torrentDownloads.set(info_hash, {
                 info_hash,
                 name: name || 'Torrent Download',
@@ -345,7 +345,7 @@
                 chunkSize: number;
             };
 
-            console.log('📦 Bitswap chunk received:', {
+            console.log('[PKG] Bitswap chunk received:', {
                 fileHash: progress.fileHash,
                 chunkIndex: progress.chunkIndex,
                 totalChunks: progress.totalChunks,
@@ -356,7 +356,7 @@
             files.update(f => {
                 // Log all downloading files to help debug hash matching
                 const downloadingFiles = f.filter(file => file.status === 'downloading');
-                console.log('📦 Currently downloading files:', downloadingFiles.map(file => ({
+                console.log('[PKG] Currently downloading files:', downloadingFiles.map(file => ({
                     name: file.name,
                     hash: file.hash,
                     hashMatch: file.hash === progress.fileHash
@@ -488,7 +488,7 @@
                                 });
                                 // Also update frontend reputation store for immediate UI feedback
                                 PeerSelectionService.notePeerSuccess(seederPeerId);
-                                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after Bitswap download (+${completedFile.size} bytes)`);
+                                console.log(`[OK] Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after Bitswap download (+${completedFile.size} bytes)`);
                               } catch (repError) {
                                 console.error('Failed to update seeder reputation:', repError);
                               }
@@ -659,7 +659,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
       return;
     }
 
-    // ✅ GET SETTINGS PATH
+    // [OK] GET SETTINGS PATH
     const stored = localStorage.getItem("chiralSettings");
     if (!stored) {
       showToast(
@@ -771,7 +771,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
                 });
                 // Also update frontend reputation store for immediate UI feedback
                 PeerSelectionService.notePeerSuccess(seederPeerId);
-                console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (+${completedFile.size} bytes)`);
+                console.log(`[OK] Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (+${completedFile.size} bytes)`);
               } catch (repError) {
                 console.error('Failed to update seeder reputation:', repError);
               }
@@ -808,7 +808,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
           });
           // Also update frontend reputation store for immediate UI feedback
           PeerSelectionService.notePeerSuccess(seederPeerId);
-          console.log(`✅ Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (already paid)`);
+          console.log(`[OK] Updated reputation for seeder peer ${seederPeerId.substring(0, 20)}... after WebRTC download (already paid)`);
         } catch (repError) {
           console.error('Failed to update seeder reputation:', repError);
         }
@@ -904,7 +904,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     // Listen for payment checkpoint events
     paymentCheckpointService.listenToCheckpoints(async (event) => {
-      console.log('💰 Payment checkpoint reached:', event)
+      console.log('[PAY] Payment checkpoint reached:', event)
 
       // Find the file name from the file hash
       const file = $files.find(f => f.hash === event.fileHash)
@@ -917,7 +917,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
     })
 
     paymentCheckpointService.listenToPayments(async (event) => {
-      console.log('✅ Payment confirmed:', event)
+      console.log('[OK] Payment confirmed:', event)
       showPaymentModal = false
       showToast(`Payment confirmed: ${event.amountPaid} Chiral`, 'success')
     }).catch(err => {
@@ -1017,7 +1017,7 @@ const unlistenWebRTCComplete = await listen('webrtc_download_complete', async (e
 
     // Log transfer events store activity for debugging
     if ($transferStore.lastEventTimestamp > 0 && import.meta.env.DEV) {
-      console.log('📦 Transfer store update:', {
+      console.log('[PKG] Transfer store update:', {
         active: $transferStore.activeCount,
         queued: $transferStore.queuedCount,
         completed: $transferStore.completedCount,
@@ -1304,7 +1304,7 @@ async function loadAndResumeDownloads() {
   }
 
   async function handleFavoriteDownload(detail: { hash: string; name: string }) {
-    console.log('⭐ handleFavoriteDownload called:', detail);
+    console.log('* handleFavoriteDownload called:', detail);
 
     // Search for the file in DHT by hash
     try {
@@ -1320,7 +1320,7 @@ async function loadAndResumeDownloads() {
   }
 
   async function handleSearchDownload(metadata: FileMetadata & { selectedProtocol?: string }) {
-    console.log('📥 handleSearchDownload called:', {
+    console.log('[IN] handleSearchDownload called:', {
       fileName: metadata.fileName,
       selectedProtocol: metadata.selectedProtocol,
       seeders: metadata.seeders?.length,
@@ -1332,7 +1332,7 @@ async function loadAndResumeDownloads() {
     // Use user's protocol selection if provided, otherwise auto-detect
     if (metadata.selectedProtocol) {
       detectedProtocol = metadata.selectedProtocol === 'webrtc' ? 'WebRTC' : 'Bitswap';
-      console.log('📥 Protocol explicitly set:', detectedProtocol);
+      console.log('[IN] Protocol explicitly set:', detectedProtocol);
     } else {
       // Auto-detect protocol based on file metadata
       // BitSwap files have CIDs, WebRTC files have seeders but NO CIDs
@@ -1458,7 +1458,7 @@ async function loadAndResumeDownloads() {
         event.detail.amount
       )
 
-      console.log(`✅ Payment recorded for checkpoint: ${currentCheckpoint.sessionId}`)
+      console.log(`[OK] Payment recorded for checkpoint: ${currentCheckpoint.sessionId}`)
       showToast(`Payment recorded: ${event.detail.amount} Chiral`, 'success')
 
       // Close modal
@@ -1721,7 +1721,7 @@ async function loadAndResumeDownloads() {
       return
     }
     
-    console.log('📦 processQueue: Processing file:', {
+    console.log('[PKG] processQueue: Processing file:', {
       name: nextFile.name,
       protocol: nextFile.protocol,
       hash: nextFile.hash?.slice(0, 12)
@@ -1743,7 +1743,7 @@ async function loadAndResumeDownloads() {
 
     // Use the protocol stored with the file, or fall back to global detectedProtocol
     const fileProtocol = downloadingFile.protocol || detectedProtocol;
-    console.log('📦 processQueue: Resolved protocol:', fileProtocol, 'detectedProtocol:', detectedProtocol);
+    console.log('[PKG] processQueue: Resolved protocol:', fileProtocol, 'detectedProtocol:', detectedProtocol);
 
     // Validate protocol before attempting P2P download
     if (!fileProtocol) {
@@ -1857,7 +1857,7 @@ async function loadAndResumeDownloads() {
       price: downloadingFile.price ?? 0  // Add price field
     }
 
-    console.log('📦 Bitswap download starting:', {
+    console.log('[PKG] Bitswap download starting:', {
       fileHash: metadata.fileHash,
       fileName: metadata.fileName,
       fileSize: metadata.fileSize,
@@ -1900,7 +1900,7 @@ async function loadAndResumeDownloads() {
   }
 } else if (fileProtocol === "WebRTC") {
     // WebRTC download path - Use backend Rust WebRTC (works in Tauri)
-    console.log('🌐 WebRTC download path triggered for:', downloadingFile.name);
+    console.log('[NET] WebRTC download path triggered for:', downloadingFile.name);
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const { join } = await import('@tauri-apps/api/path');
@@ -1941,7 +1941,7 @@ async function loadAndResumeDownloads() {
         // Construct full file path: directory + filename
         const outputPath = await join(storagePath, downloadingFile.name);
 
-        console.log('🌐 Calling download_file_from_network:', {
+        console.log('[NET] Calling download_file_from_network:', {
           fileHash: downloadingFile.hash,
           outputPath: outputPath
         });
@@ -1953,7 +1953,7 @@ async function loadAndResumeDownloads() {
           outputPath: outputPath
         });
 
-        console.log('🌐 download_file_from_network result:', result);
+        console.log('[NET] download_file_from_network result:', result);
 
         // WebRTC download initiated - update status to downloading
         files.update(f => f.map(file =>
@@ -2026,7 +2026,7 @@ async function loadAndResumeDownloads() {
    */
   async function publishToChiralNetwork(infoHash: string) {
     try {
-      console.log(`🌐 Publishing torrent to Chiral Network: ${infoHash}`);
+      console.log(`[NET] Publishing torrent to Chiral Network: ${infoHash}`);
 
       const result = await invoke('bittorrent_post_download_publish', {
         infoHash
@@ -2040,20 +2040,20 @@ async function loadAndResumeDownloads() {
       };
 
       if (result.published_to_dht) {
-        console.log(`✅ Published to Chiral DHT with hash: ${result.chiral_hash}`);
+        console.log(`[OK] Published to Chiral DHT with hash: ${result.chiral_hash}`);
         showToast(
           `Now seeding "${result.file_name}" on both BitTorrent and Chiral Network`,
           'success'
         );
       } else {
-        console.warn(`⚠️ Failed to publish to Chiral DHT`);
+        console.warn(`[WARN] Failed to publish to Chiral DHT`);
         showToast(
           `Download complete but couldn't publish to Chiral Network`,
           'warning'
         );
       }
     } catch (error) {
-      console.error(`❌ Error publishing to Chiral Network:`, error);
+      console.error(`[X] Error publishing to Chiral Network:`, error);
       // Don't show error toast as download was successful, just DHT publish failed
       console.warn(`Download successful but DHT publishing failed: ${error}`);
     }
@@ -2925,7 +2925,7 @@ async function loadAndResumeDownloads() {
               <div class="mt-2">
                 <Progress value={100} class="h-2" />
                 <div class="text-xs mt-1">
-                  <span class="text-green-600 dark:text-green-400">✓ Download complete{#if torrent.size > 0} - {toHumanReadableSize(torrent.size)}{/if}</span>
+                  <span class="text-green-600 dark:text-green-400">[OK] Download complete{#if torrent.size > 0} - {toHumanReadableSize(torrent.size)}{/if}</span>
                 </div>
               </div>
             {/if}

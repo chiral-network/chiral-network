@@ -30,7 +30,7 @@ Located in: `tests/e2e/real-network.test.ts`
 ## Option1: Attach Mode (Recommended, Cross-Machine, Real Network + Real Chain)
 
 In this mode, you **run the Uploader/Downloader nodes separately**, then execute the test suite from **one machine only** (typically the Downloader side) to validate the full flow:
-**upload → DHT search → HTTP Range download → payment (tx receipt)**.
+**upload -> DHT search -> HTTP Range download -> payment (tx receipt)**.
 
 > Note (Local chain): By default, Chiral uses a **local Geth chain** (chainId/networkId: `98765`) with RPC at `http://127.0.0.1:8545`.
 > For real cross-machine attach mode with payments, you typically run Geth on the **Uploader VM** and make the Downloader access it via **SSH local port forwarding** (no public RPC exposure).
@@ -257,7 +257,7 @@ This will:
 ## Test Scenarios
 
 ### WebRTC Communication
-- **Small file (5MB)**: Full upload → search → download → payment flow
+- **Small file (5MB)**: Full upload -> search -> download -> payment flow
 - **Large file (50MB)**: Tests streaming and memory efficiency
 - **Verification**: File integrity check after download
 
@@ -275,13 +275,13 @@ This will:
 
 ```
 ┌─────────────────┐         DHT Network         ┌─────────────────┐
-│  Uploader Node  │◄──────────────────────────►│ Downloader Node │
+│  Uploader Node  │[<]──────────────────────────[>]│ Downloader Node │
 │                 │                              │                 │
 │ Port 4001 (DHT) │      WebRTC/Bitswap         │ Port 4002 (DHT) │
-│ Port 8081 (API) │◄──────────────────────────►│ Port 8082 (API) │
+│ Port 8081 (API) │[<]──────────────────────────[>]│ Port 8082 (API) │
 │                 │                              │                 │
 │ - Upload files  │     Payment Network          │ - Download files│
-│ - Receive $$$   │◄──────────────────────────►│ - Send $$$      │
+│ - Receive $$$   │[<]──────────────────────────[>]│ - Send $$$      │
 └─────────────────┘                              └─────────────────┘
 ```
 
@@ -469,7 +469,7 @@ it("should test my scenario", async () => {
 - [ ] Network condition simulation (latency, packet loss)
 - [ ] Multi-peer downloads (3+ nodes)
 - [ ] Connection interruption tests
-- [ ] Protocol fallback tests (WebRTC → Bitswap)
+- [ ] Protocol fallback tests (WebRTC -> Bitswap)
 - [ ] Real blockchain integration tests
 - [ ] Performance profiling and metrics collection
 

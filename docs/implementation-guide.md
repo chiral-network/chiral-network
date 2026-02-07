@@ -458,7 +458,7 @@ Regular peers should omit `--is-bootstrap`; they rely on the configured `bootstr
   `--autonat-server` flags. `--show-reachability` streams a periodic summary in
   headless mode (state, confidence, observed addresses, last error) so ops can
   validate reachability without the GUI.
-- The Network → DHT page now surfaces a “Reachability” card that mirrors Kubo’s
+- The Network -> DHT page now surfaces a “Reachability” card that mirrors Kubo’s
   vocabulary (Direct/Relayed/Unknown), confidence badge, observed external
   addresses with copy affordances, and the last few probe summaries. Toasts are
   emitted when reachability changes (restored, degraded, reset) to give desktop
@@ -467,7 +467,7 @@ Regular peers should omit `--is-bootstrap`; they rely on the configured `bootstr
 ### Local download resilience & tracing
 
 The desktop runtime now performs up to three local download attempts with an
-exponential backoff (250 ms → 500 ms → 1 s). Each attempt emits a
+exponential backoff (250 ms -> 500 ms -> 1 s). Each attempt emits a
 `download_attempt` tracing span carrying `hash`, `attempt`, `max_attempts`, and
 `duration_ms` fields. When debugging failed transfers, filter logs on
 `download_succeeded`/`download_failed` events to see whether the file was missing

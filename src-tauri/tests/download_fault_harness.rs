@@ -4,12 +4,12 @@
 // Aligned with docs/download-restart.md specification
 //
 // Tests cover:
-// - ETag flip mid-download → restart from zero
-// - Missing Accept-Ranges header → full download restart
-// - 200 OK instead of 206 Partial Content → restart
-// - 416 Range Not Satisfiable → size re-probe and restart
-// - Weak ETag (W/) → restart from zero
-// - Last-Modified-only (no ETag) → resume with warning
+// - ETag flip mid-download -> restart from zero
+// - Missing Accept-Ranges header -> full download restart
+// - 200 OK instead of 206 Partial Content -> restart
+// - 416 Range Not Satisfiable -> size re-probe and restart
+// - Weak ETag (W/) -> restart from zero
+// - Last-Modified-only (no ETag) -> resume with warning
 //
 // Reference: docs/download-restart.md section 10 (Testing plan)
 

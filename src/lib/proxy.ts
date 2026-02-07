@@ -190,6 +190,6 @@ export async function getProxyOptimizationStatus(): Promise<string> {
     return String(status);
   } catch (e) {
     console.error("get_proxy_optimization_status failed:", e);
-    return "❌ Failed to get optimization status";
+    return "[X] Failed to get optimization status";
   }
 }

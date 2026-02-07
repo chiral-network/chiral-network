@@ -171,9 +171,9 @@ HTTP, FTP, and any future byte-range-capable transports conform to this trait so
 - Renewal uses the same DHT channel. On success the seeder returns a fresh `resume_token` with a new `exp`.
 - JWKS endpoint: `/.well-known/chiral/jwks.json` served by the seeder. Keys are rotated with a 48-hour overlap window; clients cache by `ETag` and `Cache-Control`.
 - Failure handling:
-  - `401` / invalid token → move to `HandshakeRetry`, keep bytes, redo handshake.
-  - `403` (aud/scope/kid mismatch) → fail closed, surface error.
-  - `429` / `5xx` → exponential backoff with jitter before `HandshakeRetry`.
+  - `401` / invalid token -> move to `HandshakeRetry`, keep bytes, redo handshake.
+  - `403` (aud/scope/kid mismatch) -> fail closed, surface error.
+  - `429` / `5xx` -> exponential backoff with jitter before `HandshakeRetry`.
 
 ## 6. On-disk format
 
@@ -221,12 +221,12 @@ Generation and validation rules:
 - **Failure handling / `Failed`:** non-recoverable errors (persistent HTTP rejections, disk full, hash mismatch, permission failure, unreachable source) mark the download as `Failed` with a structured `last_error`. Users can retry via `resume_download`, which re-enters validation, or restart from scratch.
 
 Error code mapping:
-- `NotFound` → app code `DOWNLOAD_NOT_FOUND`
-- `Invalid` → app code `DOWNLOAD_INVALID_REQUEST`
-- `Source` → app code `DOWNLOAD_SOURCE_ERROR`
-- `Io` → system code `IO_ERROR`
-- `DiskFull` → system code `STORAGE_EXHAUSTED`
-- `AlreadyCompleted` → app code `DOWNLOAD_ALREADY_COMPLETE`
+- `NotFound` -> app code `DOWNLOAD_NOT_FOUND`
+- `Invalid` -> app code `DOWNLOAD_INVALID_REQUEST`
+- `Source` -> app code `DOWNLOAD_SOURCE_ERROR`
+- `Io` -> system code `IO_ERROR`
+- `DiskFull` -> system code `STORAGE_EXHAUSTED`
+- `AlreadyCompleted` -> app code `DOWNLOAD_ALREADY_COMPLETE`
 
 ## 8. State machine
 
@@ -234,41 +234,41 @@ Error code mapping:
 Control plane and setup
 
 [Idle]
-  └─ start_download → [Handshake]
-        ├─ success → [PreparingHead]
-        ├─ transient_error → [HandshakeRetry] → retry → [Handshake]
-        └─ lease_expired → [Handshake] (request fresh token)
+  └─ start_download -> [Handshake]
+        ├─ success -> [PreparingHead]
+        ├─ transient_error -> [HandshakeRetry] -> retry -> [Handshake]
+        └─ lease_expired -> [Handshake] (request fresh token)
 
 [PreparingHead]
-  ├─ transient_error → [HeadBackoff] → retry → [PreparingHead]
-  ├─ weak_etag/size_unknown → [Restarting] → cleanup → [PreparingHead]
-  └─ headers_ok → [PreflightStorage]
+  ├─ transient_error -> [HeadBackoff] -> retry -> [PreparingHead]
+  ├─ weak_etag/size_unknown -> [Restarting] -> cleanup -> [PreparingHead]
+  └─ headers_ok -> [PreflightStorage]
 
 [PreflightStorage]
-  ├─ disk_full/open_fail → [Restarting] → cleanup → [PreparingHead]
-  └─ space_ok → [ValidatingMetadata]
+  ├─ disk_full/open_fail -> [Restarting] -> cleanup -> [PreparingHead]
+  └─ space_ok -> [ValidatingMetadata]
 
 [ValidatingMetadata]
-  ├─ version or length mismatch → [Restarting] → cleanup → [PreparingHead]
-  └─ metadata_ok → [Downloading]
+  ├─ version or length mismatch -> [Restarting] -> cleanup -> [PreparingHead]
+  └─ metadata_ok -> [Downloading]
 
 Streaming and resume
 
 [Downloading]
-  ├─ chunk flushed → [PersistingProgress] → fsync ok → [Downloading]
-  ├─ lease_renew_due → [LeaseRenewDue] → renew_ok → [Downloading]
-  ├─ lease_expired → [LeaseExpired] → [Handshake]
-  ├─ range 200 without Content-Range / weak ETag / 416 w/ offset > size / RangeUnsupported → [Restarting] → cleanup → [PreparingHead]
-  └─ pause or shutdown → [Paused] → relaunch → [AwaitingResume] → resume → [PreparingHead]
+  ├─ chunk flushed -> [PersistingProgress] -> fsync ok -> [Downloading]
+  ├─ lease_renew_due -> [LeaseRenewDue] -> renew_ok -> [Downloading]
+  ├─ lease_expired -> [LeaseExpired] -> [Handshake]
+  ├─ range 200 without Content-Range / weak ETag / 416 w/ offset > size / RangeUnsupported -> [Restarting] -> cleanup -> [PreparingHead]
+  └─ pause or shutdown -> [Paused] -> relaunch -> [AwaitingResume] -> resume -> [PreparingHead]
 
 Finish and failure
 
 [Downloading]
-  └─ bytes == expected → [VerifyingSha]
-         ├─ hash mismatch → [Failed] → user retry → [AwaitingResume]
-         └─ hash_ok → [FinalizingIo]
-                ├─ rename/copy ok → [Completed]
-                └─ rename fail → [Failed] → user retry → [AwaitingResume]
+  └─ bytes == expected -> [VerifyingSha]
+         ├─ hash mismatch -> [Failed] -> user retry -> [AwaitingResume]
+         └─ hash_ok -> [FinalizingIo]
+                ├─ rename/copy ok -> [Completed]
+                └─ rename fail -> [Failed] -> user retry -> [AwaitingResume]
 
 [PersistingProgress] can also enter `[Failed]` when disk full or IO errors occur; users retry via `[AwaitingResume]`.
 ```
@@ -315,7 +315,7 @@ App crashes or manual exits persist `.meta.json` at every state transition (`Han
   - Let a lease expire mid-stream, ensure the client enters `LeaseExpired`, re-handshakes, and resumes without losing data.
 - **Demo harness**
   - Provide `demo/http-transfer.sh` that launches Node A's HTTP server, triggers a download on Node B, pauses at 50%, restarts the Tauri backend, then resumes and finishes.
-  - Record a short screen capture (≤60 s) showing start → pause → resume → finished hash to share in class.
+  - Record a short screen capture (≤60 s) showing start -> pause -> resume -> finished hash to share in class.
 
 ## 11. Team boundaries
 

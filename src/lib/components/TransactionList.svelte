@@ -204,7 +204,7 @@
             on:click={() => sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'}
             class="px-3"
           >
-            {sortOrder === 'desc' ? '↓' : '↑'}
+            {sortOrder === 'desc' ? 'v' : '^'}
           </Button>
           <Button
             variant="outline"

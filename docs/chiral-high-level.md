@@ -131,17 +131,17 @@ The system automatically selects the best protocol based on network conditions.
                                              │
                     ┌────────────────────────┴────────────────────────┐
                     │                                                  │
-           ┌────────▼────────┐                              ┌─────────▼─────────┐
+           ┌────────[v]────────┐                              ┌─────────[v]─────────┐
            │  File Transfer  │                              │     Payments      │
            │     Layer       │                              │      Layer        │
            │                 │                              │                   │
            │  - HTTP         │                              │  - Wallet         │
-           │  - WebTorrent   │◄────── Decoupled ──────────►│  - Blockchain     │
+           │  - WebTorrent   │[<]────── Decoupled ──────────[>]│  - Blockchain     │
            │  - BitTorrent   │                              │  - Mining         │
            │  - ed2k         │                              │                   │
            └────────┬────────┘                              └───────────────────┘
                     │
-           ┌────────▼────────┐
+           ┌────────[v]────────┐
            │   P2P Network   │
            │                 │
            │  - DHT          │

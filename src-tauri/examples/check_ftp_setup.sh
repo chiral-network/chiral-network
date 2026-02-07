@@ -11,14 +11,14 @@ echo ""
 echo "Checking Python installation..."
 if command -v python3 &> /dev/null; then
     PYTHON_VERSION=$(python3 --version)
-    echo "  ✓ Python found: $PYTHON_VERSION"
+    echo "  [OK] Python found: $PYTHON_VERSION"
     PYTHON_CMD="python3"
 elif command -v python &> /dev/null; then
     PYTHON_VERSION=$(python --version)
-    echo "  ✓ Python found: $PYTHON_VERSION"
+    echo "  [OK] Python found: $PYTHON_VERSION"
     PYTHON_CMD="python"
 else
-    echo "  ✗ Python NOT found"
+    echo "  [X] Python NOT found"
     echo "    Install: sudo apt install python3  (Ubuntu/Debian)"
     echo "             brew install python3       (Mac)"
     PYTHON_CMD=""
@@ -29,9 +29,9 @@ echo ""
 if [ -n "$PYTHON_CMD" ]; then
     echo "Checking pyftpdlib installation..."
     if $PYTHON_CMD -c "import pyftpdlib" 2>/dev/null; then
-        echo "  ✓ pyftpdlib found"
+        echo "  [OK] pyftpdlib found"
     else
-        echo "  ✗ pyftpdlib NOT found"
+        echo "  [X] pyftpdlib NOT found"
         echo "    Install: pip3 install pyftpdlib"
     fi
     echo ""
@@ -41,9 +41,9 @@ fi
 echo "Checking Rust installation..."
 if command -v cargo &> /dev/null; then
     CARGO_VERSION=$(cargo --version)
-    echo "  ✓ Cargo found: $CARGO_VERSION"
+    echo "  [OK] Cargo found: $CARGO_VERSION"
 else
-    echo "  ✗ Cargo NOT found"
+    echo "  [X] Cargo NOT found"
     echo "    Install: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 fi
 echo ""
@@ -54,7 +54,7 @@ echo "==================================="
 echo ""
 
 if [ -n "$PYTHON_CMD" ] && $PYTHON_CMD -c "import pyftpdlib" 2>/dev/null; then
-    echo "✓ All prerequisites met!"
+    echo "[OK] All prerequisites met!"
     echo ""
     echo "To run FTP demo:"
     echo "  Terminal 1: $PYTHON_CMD -m pyftpdlib -p 2121 -w -d /tmp/ftp_test"
