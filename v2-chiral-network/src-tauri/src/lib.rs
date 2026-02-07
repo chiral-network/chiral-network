@@ -790,11 +790,16 @@ struct TransactionHistoryResult {
     transactions: Vec<Transaction>,
 }
 
-// Default RPC endpoint for Chiral Network (can be configured)
-const DEFAULT_RPC_ENDPOINT: &str = "http://127.0.0.1:8545";
+// Use the shared RPC endpoint from geth module
+fn default_rpc_endpoint() -> String {
+    crate::geth::rpc_endpoint()
+}
 
 #[tauri::command]
 async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, String> {
+    let rpc_endpoint = default_rpc_endpoint();
+    println!("[get_wallet_balance] Querying balance for {} from RPC: {}", address, rpc_endpoint);
+
     // Query balance from blockchain via JSON-RPC
     let client = reqwest::Client::new();
 
@@ -806,11 +811,17 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
     });
 
     let response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&rpc_endpoint)
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("Failed to connect to blockchain node: {}. Make sure Geth is running.", e))?;
+        .map_err(|e| {
+            println!("[get_wallet_balance] Failed to connect to {}: {}", rpc_endpoint, e);
+            format!("Failed to connect to blockchain node at {}: {}", rpc_endpoint, e)
+        })?;
+
+    let status = response.status();
+    println!("[get_wallet_balance] RPC response status: {}", status);
 
     let json_response: serde_json::Value = response
         .json()
@@ -819,6 +830,7 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
 
     // Check for RPC errors
     if let Some(error) = json_response.get("error") {
+        println!("[get_wallet_balance] RPC error: {}", error);
         return Err(format!("Blockchain RPC error: {}", error));
     }
 
@@ -837,6 +849,8 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
 
     // Convert wei to CHR (1 CHR = 10^18 wei)
     let balance_chr = balance_wei as f64 / 1e18;
+
+    println!("[get_wallet_balance] Balance for {}: {} CHR (hex: {}, wei: {})", address, balance_chr, balance_hex, balance_wei);
 
     Ok(WalletBalanceResult {
         balance: format!("{:.6}", balance_chr),
@@ -946,7 +960,7 @@ async fn send_transaction(
     });
 
     let nonce_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&nonce_payload)
         .send()
         .await
@@ -970,7 +984,7 @@ async fn send_transaction(
     });
 
     let balance_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&balance_payload)
         .send()
         .await
@@ -1001,7 +1015,7 @@ async fn send_transaction(
     });
 
     let gas_price_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&gas_price_payload)
         .send()
         .await
@@ -1085,7 +1099,7 @@ async fn send_transaction(
     });
 
     let send_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&send_payload)
         .send()
         .await
@@ -1119,7 +1133,7 @@ async fn send_transaction(
     });
 
     let receipt_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&receipt_payload)
         .send()
         .await;
@@ -1163,7 +1177,7 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
     });
 
     let nonce_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&nonce_payload)
         .send()
         .await
@@ -1195,7 +1209,7 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
     });
 
     let _ = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&unlock_payload)
         .send()
         .await;
@@ -1209,7 +1223,7 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
     });
 
     let send_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&send_payload)
         .send()
         .await
@@ -1248,7 +1262,7 @@ async fn get_transaction_history(address: String) -> Result<TransactionHistoryRe
     });
 
     let block_response = client
-        .post(DEFAULT_RPC_ENDPOINT)
+        .post(&default_rpc_endpoint())
         .json(&block_payload)
         .send()
         .await
@@ -1278,7 +1292,7 @@ async fn get_transaction_history(address: String) -> Result<TransactionHistoryRe
         });
 
         let block_response = client
-            .post(DEFAULT_RPC_ENDPOINT)
+            .post(&default_rpc_endpoint())
             .json(&get_block_payload)
             .send()
             .await;
