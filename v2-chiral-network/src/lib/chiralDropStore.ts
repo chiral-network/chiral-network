@@ -2,6 +2,9 @@ import { writable, derived, get } from 'svelte/store';
 import { generateAlias, aliasFromPeerId, type UserAlias } from './aliasService';
 import { saveHistoryToDht, loadHistoryFromDht, syncHistory } from './encryptedHistoryService';
 import { walletAccount } from './stores';
+import { logger } from './logger';
+
+const log = logger('ChiralDrop');
 
 // Transaction types
 export interface FileTransfer {
@@ -64,7 +67,7 @@ function loadHistoryFromLocal(): FileTransfer[] {
       }));
     }
   } catch (e) {
-    console.error('Failed to load transfer history from localStorage:', e);
+    log.error('Failed to load transfer history from localStorage:', e);
   }
   return [];
 }
@@ -73,7 +76,7 @@ function saveHistoryToLocal(history: FileTransfer[]) {
   try {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
   } catch (e) {
-    console.error('Failed to save transfer history to localStorage:', e);
+    log.error('Failed to save transfer history to localStorage:', e);
   }
 }
 
@@ -92,7 +95,7 @@ transferHistory.subscribe((history) => {
   }
   saveTimeout = setTimeout(() => {
     saveHistoryToDht(history).catch((err) => {
-      console.error('Failed to save history to DHT:', err);
+      log.error('Failed to save history to DHT:', err);
     });
   }, 2000);
 });
@@ -100,7 +103,7 @@ transferHistory.subscribe((history) => {
 // When wallet connects, sync history from DHT
 walletAccount.subscribe(async (wallet) => {
   if (wallet) {
-    console.log('Wallet connected, syncing history from DHT...');
+    log.info('Wallet connected, syncing history from DHT...');
     try {
       const localHistory = get(transferHistory);
       const syncedHistory = await syncHistory(localHistory);
@@ -108,9 +111,9 @@ walletAccount.subscribe(async (wallet) => {
       if (syncedHistory.length > 0) {
         transferHistory.set(syncedHistory);
       }
-      console.log('History synced:', syncedHistory.length, 'transfers');
+      log.info('History synced:', syncedHistory.length, 'transfers');
     } catch (err) {
-      console.error('Failed to sync history:', err);
+      log.error('Failed to sync history:', err);
     }
   }
 });

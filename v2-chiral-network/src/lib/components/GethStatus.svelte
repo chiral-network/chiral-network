@@ -22,6 +22,8 @@
     XCircle,
     Pickaxe
   } from 'lucide-svelte';
+  import { logger } from '$lib/logger';
+  const log = logger('GethStatus');
 
   // State
   let isInstalled = $state(false);
@@ -44,7 +46,7 @@
         await gethService.initialize();
       }
     } catch (error) {
-      console.error('Failed to initialize Geth service:', error);
+      log.error('Failed to initialize Geth service:', error);
     }
   });
 
@@ -58,7 +60,7 @@
       isInstalled = await gethService.isInstalled();
       toasts.show('Geth installed successfully', 'success');
     } catch (error) {
-      console.error('Failed to download Geth:', error);
+      log.error('Failed to download Geth:', error);
       toasts.show('Failed to download Geth: ' + error, 'error');
     }
   }
@@ -70,7 +72,7 @@
       await gethService.start(minerAddr);
       toasts.show('Geth started successfully', 'success');
     } catch (error) {
-      console.error('Failed to start Geth:', error);
+      log.error('Failed to start Geth:', error);
       toasts.show('Failed to start Geth: ' + error, 'error');
     } finally {
       isStarting = false;
@@ -83,7 +85,7 @@
       await gethService.stop();
       toasts.show('Geth stopped', 'info');
     } catch (error) {
-      console.error('Failed to stop Geth:', error);
+      log.error('Failed to stop Geth:', error);
       toasts.show('Failed to stop Geth: ' + error, 'error');
     } finally {
       isStopping = false;
@@ -100,7 +102,7 @@
       await gethService.startMining(miningThreads);
       toasts.show('Mining started', 'success');
     } catch (error) {
-      console.error('Failed to start mining:', error);
+      log.error('Failed to start mining:', error);
       toasts.show('Failed to start mining: ' + error, 'error');
     } finally {
       isStartingMining = false;
@@ -112,7 +114,7 @@
       await gethService.stopMining();
       toasts.show('Mining stopped', 'info');
     } catch (error) {
-      console.error('Failed to stop mining:', error);
+      log.error('Failed to stop mining:', error);
       toasts.show('Failed to stop mining: ' + error, 'error');
     }
   }
