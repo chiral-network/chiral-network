@@ -185,7 +185,7 @@ pub async fn run_repl(context: ReplContext) -> Result<(), Box<dyn std::error::Er
                         }
                     }
                     Err(e) => {
-                        eprintln!("❌ Error: {}", e);
+                        eprintln!("[X] Error: {}", e);
                     }
                 }
             }
@@ -317,10 +317,10 @@ async fn handle_command(
 
             suggestions.sort_by_key(|(_, dist)| *dist);
 
-            println!("{}", format!("❌ Unknown command: '{}'", command).red());
+            println!("{}", format!("[X] Unknown command: '{}'", command).red());
 
             if let Some((suggestion, _)) = suggestions.first() {
-                println!("{}", format!("💡 Did you mean: {}", suggestion).yellow());
+                println!("{}", format!("[HINT] Did you mean: {}", suggestion).yellow());
 
                 // Show usage example for the suggested command
                 match *suggestion {
@@ -421,7 +421,7 @@ fn print_help() {
 }
 
 async fn cmd_status(context: &ReplContext) -> Result<(), String> {
-    println!("\n📊 Network Status:");
+    println!("\n[STATS] Network Status:");
     println!("  ┌──────────────────────────────────────────────────────────────┐");
 
     // Get connected peers
@@ -460,14 +460,14 @@ async fn cmd_peers(args: &[&str], context: &ReplContext) -> Result<(), String> {
     match *subcommand {
         "count" => {
             let connected_peers = context.dht_service.get_connected_peers().await;
-            println!("\n🌐 Connected peers: {}", connected_peers.len());
+            println!("\n[NET] Connected peers: {}", connected_peers.len());
             println!();
         }
         "list" => {
             let connected_peers = context.dht_service.get_connected_peers().await;
 
             if connected_peers.is_empty() {
-                println!("\n🌐 No connected peers");
+                println!("\n[NET] No connected peers");
                 println!();
                 return Ok(());
             }
@@ -510,7 +510,7 @@ async fn cmd_peers(args: &[&str], context: &ReplContext) -> Result<(), String> {
                 }
             }
 
-            println!("\n🌐 Connected Peers:");
+            println!("\n[NET] Connected Peers:");
             if sort_by != "default" {
                 println!("  (Sorted by: {})", sort_by);
             }
@@ -610,7 +610,7 @@ async fn cmd_list(args: &[&str], context: &ReplContext) -> Result<(), String> {
 
     match *what {
         "files" | "seeding" => {
-            println!("\n📤 Seeding Files:");
+            println!("\n[OUT] Seeding Files:");
             println!("  (This feature requires integration with file storage service)");
             println!();
         }
@@ -619,12 +619,12 @@ async fn cmd_list(args: &[&str], context: &ReplContext) -> Result<(), String> {
                 let snapshot = ft.download_metrics_snapshot().await;
 
                 if snapshot.recent_attempts.is_empty() {
-                    println!("\n📥 No recent downloads");
+                    println!("\n[IN] No recent downloads");
                     println!();
                     return Ok(());
                 }
 
-                println!("\n📥 Recent Downloads:");
+                println!("\n[IN] Recent Downloads:");
                 println!("  ┌──────────────────────────────────────────────────────────────┐");
 
                 for attempt in snapshot.recent_attempts.iter().take(10) {
@@ -635,8 +635,8 @@ async fn cmd_list(args: &[&str], context: &ReplContext) -> Result<(), String> {
                     };
 
                     let status_icon = match attempt.status {
-                        AttemptStatus::Success => "✅",
-                        AttemptStatus::Failed => "❌",
+                        AttemptStatus::Success => "[OK]",
+                        AttemptStatus::Failed => "[X]",
                         AttemptStatus::Retrying => "",
                     };
 
@@ -647,7 +647,7 @@ async fn cmd_list(args: &[&str], context: &ReplContext) -> Result<(), String> {
                 println!("  └──────────────────────────────────────────────────────────────┘");
                 println!();
             } else {
-                println!("\n📥 File transfer service not available");
+                println!("\n[IN] File transfer service not available");
                 println!();
             }
         }
@@ -721,7 +721,7 @@ async fn cmd_add(args: &[&str], context: &ReplContext) -> Result<(), String> {
     context.dht_service.publish_file(metadata, None).await
         .map_err(|e| format!("Failed to publish file: {}", e))?;
 
-    println!("\n✅ Added and seeding: {} ({})", file_name, hash);
+    println!("\n[OK] Added and seeding: {} ({})", file_name, hash);
     println!("  Size: {} bytes", file_data.len());
     println!();
 
@@ -735,12 +735,12 @@ async fn cmd_download(args: &[&str], context: &ReplContext) -> Result<(), String
 
     let hash = args[0];
 
-    println!("\n📥 Searching for file: {}", hash);
+    println!("\n[IN] Searching for file: {}", hash);
 
     // Try to search file in DHT
     match context.dht_service.get_file(hash.to_string()).await {
         Ok(_) => {
-            println!("✅ Search initiated for: {}", hash);
+            println!("[OK] Search initiated for: {}", hash);
             println!("  (Full download implementation requires file transfer service integration)");
             println!();
         }
@@ -761,7 +761,7 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
         "status" => {
             let metrics = context.dht_service.metrics_snapshot().await;
 
-            println!("\n🔍 DHT Status:");
+            println!("\n[SEARCH] DHT Status:");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<60} │", format!("Reachability: {:?}", metrics.reachability));
             println!("  │ {:<60} │", format!("Confidence: {:?}", metrics.reachability_confidence));
@@ -789,11 +789,11 @@ async fn cmd_dht(args: &[&str], context: &ReplContext) -> Result<(), String> {
             }
 
             let hash = args[1];
-            println!("\n🔍 Searching DHT for: {}", hash);
+            println!("\n[SEARCH] Searching DHT for: {}", hash);
 
             match context.dht_service.get_file(hash.to_string()).await {
                 Ok(_) => {
-                    println!("✅ DHT search initiated for: {}", hash);
+                    println!("[OK] DHT search initiated for: {}", hash);
                     println!("  Check logs for results");
                     println!();
                 }
@@ -821,7 +821,7 @@ async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> 
 
     match args[0] {
         "status" => {
-            println!("\n⛏️  Mining Status:");
+            println!("\n[MINE]  Mining Status:");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
 
             // Get actual mining status from Geth
@@ -895,11 +895,11 @@ async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> 
             let miner_addr = context.miner_address.as_ref()
                 .ok_or("No miner address configured. Set via --miner-address flag")?;
 
-            println!("\n⛏️  Starting mining with {} thread(s)...", threads);
+            println!("\n[MINE]  Starting mining with {} thread(s)...", threads);
 
             match crate::ethereum::start_mining(miner_addr, threads).await {
                 Ok(_) => {
-                    println!("✅ Mining started successfully!");
+                    println!("[OK] Mining started successfully!");
                     println!("  Miner Address: {}", miner_addr);
                     println!("  Threads: {}", threads);
                     println!();
@@ -912,11 +912,11 @@ async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> 
             }
         }
         "stop" => {
-            println!("\n⛏️  Stopping mining...");
+            println!("\n[MINE]  Stopping mining...");
 
             match crate::ethereum::stop_mining().await {
                 Ok(_) => {
-                    println!("✅ Mining stopped successfully!");
+                    println!("[OK] Mining stopped successfully!");
                     println!();
                 }
                 Err(e) => {
@@ -947,7 +947,7 @@ async fn cmd_mining(args: &[&str], context: &ReplContext) -> Result<(), String> 
 
 // Mining dashboard with live stats
 async fn cmd_mining_dashboard(context: &ReplContext) -> Result<(), String> {
-    println!("\n⛏️  Mining Dashboard:");
+    println!("\n[MINE]  Mining Dashboard:");
     println!("  ┌──────────────────────────────────────────────────────────────┐");
 
     // Get mining status
@@ -1067,7 +1067,7 @@ async fn cmd_mining_logs(context: &ReplContext, lines: usize) -> Result<(), Stri
 
 // Mining rewards summary
 async fn cmd_mining_rewards(context: &ReplContext) -> Result<(), String> {
-    println!("\n💰 Mining Rewards:");
+    println!("\n[PAY] Mining Rewards:");
     println!("  ┌──────────────────────────────────────────────────────────────┐");
 
     let miner_addr = context.miner_address.as_ref()
@@ -1138,7 +1138,7 @@ async fn cmd_mining_rewards(context: &ReplContext) -> Result<(), String> {
 
 // Mining performance metrics
 async fn cmd_mining_performance(context: &ReplContext) -> Result<(), String> {
-    println!("\n📊 Mining Performance:");
+    println!("\n[STATS] Mining Performance:");
     println!("  ┌──────────────────────────────────────────────────────────────┐");
 
     match crate::ethereum::get_mining_performance(&context.geth_data_dir).await {
@@ -1221,7 +1221,7 @@ fn format_number(n: u64) -> String {
 async fn cmd_downloads(_context: &ReplContext) -> Result<(), String> {
     // This would integrate with MultiSourceDownloadService for real-time progress
     // For now, showing a placeholder implementation
-    println!("\n📥 Active Downloads:");
+    println!("\n[IN] Active Downloads:");
     println!("  ┌──────────────────────────────────────────────────────────────┐");
     println!("  │ {:<60} │", "No active downloads");
     println!("  │ {:<60} │", "");
@@ -1245,7 +1245,7 @@ async fn cmd_config(args: &[&str], _context: &ReplContext) -> Result<(), String>
 
     match args[0] {
         "list" => {
-            println!("\n⚙️  Configuration Settings:");
+            println!("\n[CFG]  Configuration Settings:");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<60} │", "Network Settings:");
             println!("  │ {:<60} │", "  max_peers: 50");
@@ -1272,7 +1272,7 @@ async fn cmd_config(args: &[&str], _context: &ReplContext) -> Result<(), String>
                 return Err("Usage: config get <key>".to_string());
             }
             let key = args[1];
-            println!("\n⚙️  Config value for '{}':", key);
+            println!("\n[CFG]  Config value for '{}':", key);
             println!("  (Configuration retrieval requires settings integration)");
             println!();
         }
@@ -1282,7 +1282,7 @@ async fn cmd_config(args: &[&str], _context: &ReplContext) -> Result<(), String>
             }
             let key = args[1];
             let value = args[2];
-            println!("\n⚙️  Setting '{}' = '{}'", key, value);
+            println!("\n[CFG]  Setting '{}' = '{}'", key, value);
             println!("  (Configuration update requires settings integration)");
             println!();
         }
@@ -1291,7 +1291,7 @@ async fn cmd_config(args: &[&str], _context: &ReplContext) -> Result<(), String>
                 return Err("Usage: config reset <key>".to_string());
             }
             let key = args[1];
-            println!("\n⚙️  Resetting '{}' to default", key);
+            println!("\n[CFG]  Resetting '{}' to default", key);
             println!("  (Configuration reset requires settings integration)");
             println!();
         }
@@ -1313,7 +1313,7 @@ async fn cmd_storage(args: &[&str], _context: &ReplContext) -> Result<(), String
             use crate::storage_manager::StorageUsage;
             use colored::Colorize;
 
-            println!("\n📊 Storage Usage:");
+            println!("\n[STATS] Storage Usage:");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
 
             // Get project directories
@@ -1361,7 +1361,7 @@ async fn cmd_storage(args: &[&str], _context: &ReplContext) -> Result<(), String
             let stats = manager.get_stats()
                 .map_err(|e| format!("Failed to get blockstore stats: {}", e))?;
 
-            println!("\n📦 Blockstore Statistics:");
+            println!("\n[PKG] Blockstore Statistics:");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<60} │", format!("Size:           {}", stats.format_size()));
             println!("  │ {:<60} │", format!("Files:          {}", stats.file_count));
@@ -1369,9 +1369,9 @@ async fn cmd_storage(args: &[&str], _context: &ReplContext) -> Result<(), String
             println!("  │ {:<60} │", format!("Usage:          {:.1}%", stats.usage_percentage()));
 
             let status = if stats.exceeds_limit {
-                "⚠️  Over Limit".yellow().bold()
+                "[WARN]  Over Limit".yellow().bold()
             } else {
-                "✅ Within Limit".green()
+                "[OK] Within Limit".green()
             };
             println!("  │ {:<60} │", format!("Status:         {}", status));
             println!("  └──────────────────────────────────────────────────────────────┘");
@@ -1414,7 +1414,7 @@ async fn cmd_storage(args: &[&str], _context: &ReplContext) -> Result<(), String
             use crate::blockstore_manager::BlockstoreManager;
             use colored::Colorize;
 
-            println!("{}", "⚠️  WARNING: This will delete the ENTIRE blockstore!".yellow().bold());
+            println!("{}", "[WARN]  WARNING: This will delete the ENTIRE blockstore!".yellow().bold());
             println!("   All cached blocks will be removed and files will need to be re-downloaded.");
             println!("\n   Are you sure? Type 'yes' to confirm: ");
 
@@ -1446,7 +1446,7 @@ async fn cmd_storage(args: &[&str], _context: &ReplContext) -> Result<(), String
             }
 
             println!("  └──────────────────────────────────────────────────────────────┘");
-            println!("\n   {}", "✅ Blockstore cleared successfully!".green().bold());
+            println!("\n   {}", "[OK] Blockstore cleared successfully!".green().bold());
             println!();
         }
         _ => {
@@ -1498,12 +1498,12 @@ async fn cmd_reputation(args: &[&str], context: &ReplContext) -> Result<(), Stri
             let peers = context.dht_service.get_connected_peers().await;
 
             if peers.is_empty() {
-                println!("\n👥 No peers with reputation data");
+                println!("\n[PEERS] No peers with reputation data");
                 println!();
                 return Ok(());
             }
 
-            println!("\n👥 Peer Reputation:");
+            println!("\n[PEERS] Peer Reputation:");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<20} {:<10} {:<22} │", "Peer ID", "Score", "Trust Level");
             println!("  ├──────────────────────────────────────────────────────────────┤");
@@ -1539,7 +1539,7 @@ async fn cmd_reputation(args: &[&str], context: &ReplContext) -> Result<(), Stri
             }
 
             let peer_id = args[1];
-            println!("\n👥 Reputation Details for: {}", peer_id);
+            println!("\n[PEERS] Reputation Details for: {}", peer_id);
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<60} │", format!("Score: 82/100"));
             println!("  │ {:<60} │", format!("Trust Level: High"));
@@ -1697,7 +1697,7 @@ async fn export_metrics(context: &ReplContext, format: &str, output_path: Option
 
             std::fs::write(path, serde_json::to_string_pretty(&data).unwrap())
                 .map_err(|e| format!("Failed to write file: {}", e))?;
-            println!("\n✅ Exported metrics to: {}", path.green());
+            println!("\n[OK] Exported metrics to: {}", path.green());
         }
         "csv" => {
             let csv_data = format!(
@@ -1711,7 +1711,7 @@ async fn export_metrics(context: &ReplContext, format: &str, output_path: Option
 
             std::fs::write(path, csv_data)
                 .map_err(|e| format!("Failed to write file: {}", e))?;
-            println!("\n✅ Exported metrics to: {}", path.green());
+            println!("\n[OK] Exported metrics to: {}", path.green());
         }
         _ => {
             return Err("Format must be 'json' or 'csv'".to_string());
@@ -1747,7 +1747,7 @@ async fn export_peers(context: &ReplContext, format: &str, output_path: Option<&
 
             std::fs::write(path, serde_json::to_string_pretty(&data).unwrap())
                 .map_err(|e| format!("Failed to write file: {}", e))?;
-            println!("\n✅ Exported {} peers to: {}", peers.len(), path.green());
+            println!("\n[OK] Exported {} peers to: {}", peers.len(), path.green());
         }
         "csv" => {
             let mut csv_data = String::from("peer_id,score,latency_ms,trust\n");
@@ -1760,7 +1760,7 @@ async fn export_peers(context: &ReplContext, format: &str, output_path: Option<&
 
             std::fs::write(path, csv_data)
                 .map_err(|e| format!("Failed to write file: {}", e))?;
-            println!("\n✅ Exported {} peers to: {}", peers.len(), path.green());
+            println!("\n[OK] Exported {} peers to: {}", peers.len(), path.green());
         }
         _ => {
             return Err("Format must be 'json' or 'csv'".to_string());
@@ -1799,7 +1799,7 @@ async fn export_downloads(context: &ReplContext, format: &str, output_path: Opti
 
                 std::fs::write(path, serde_json::to_string_pretty(&data).unwrap())
                     .map_err(|e| format!("Failed to write file: {}", e))?;
-                println!("\n✅ Exported download history to: {}", path.green());
+                println!("\n[OK] Exported download history to: {}", path.green());
             }
             "csv" => {
                 let mut csv_data = String::from("file_hash,status,attempt,max_attempts\n");
@@ -1810,7 +1810,7 @@ async fn export_downloads(context: &ReplContext, format: &str, output_path: Opti
 
                 std::fs::write(path, csv_data)
                     .map_err(|e| format!("Failed to write file: {}", e))?;
-                println!("\n✅ Exported download history to: {}", path.green());
+                println!("\n[OK] Exported download history to: {}", path.green());
             }
             _ => {
                 return Err("Format must be 'json' or 'csv'".to_string());
@@ -1912,7 +1912,7 @@ async fn cmd_plugin(args: &[&str], _context: &ReplContext) -> Result<(), String>
             }
 
             let plugin_path = args[1];
-            println!("\n🔌 Loading plugin: {}", plugin_path);
+            println!("\n[CONN] Loading plugin: {}", plugin_path);
             println!("  (Plugin system requires dynamic library loading implementation)");
             println!("  Plugins can add custom commands to the REPL");
             println!();
@@ -1923,12 +1923,12 @@ async fn cmd_plugin(args: &[&str], _context: &ReplContext) -> Result<(), String>
             }
 
             let plugin_name = args[1];
-            println!("\n🔌 Unloading plugin: {}", plugin_name);
+            println!("\n[CONN] Unloading plugin: {}", plugin_name);
             println!("  (Plugin system requires dynamic library loading implementation)");
             println!();
         }
         "list" => {
-            println!("\n🔌 Loaded Plugins:");
+            println!("\n[CONN] Loaded Plugins:");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<60} │", "No plugins loaded");
             println!("  │ {:<60} │", "");
@@ -1969,7 +1969,7 @@ async fn cmd_webhook(args: &[&str], context: &ReplContext) -> Result<(), String>
 
             // Validate event
             if !is_valid_event(event) {
-                println!("\n{}", format!("❌ Invalid event: {}", event).red());
+                println!("\n{}", format!("[X] Invalid event: {}", event).red());
                 print_webhook_events();
                 return Ok(());
             }
@@ -1981,7 +1981,7 @@ async fn cmd_webhook(args: &[&str], context: &ReplContext) -> Result<(), String>
 
             let webhook_id = webhook_manager.add_webhook(event.to_string(), url.to_string()).await?;
 
-            println!("\n✅ Webhook added successfully!");
+            println!("\n[OK] Webhook added successfully!");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<60} │", format!("ID: {}", webhook_id));
             println!("  │ {:<60} │", format!("Event: {}", event));
@@ -1999,7 +1999,7 @@ async fn cmd_webhook(args: &[&str], context: &ReplContext) -> Result<(), String>
             let webhook_id = args[1];
             webhook_manager.remove_webhook(webhook_id).await?;
 
-            println!("\n✅ Webhook removed: {}", webhook_id);
+            println!("\n[OK] Webhook removed: {}", webhook_id);
             println!();
         }
         "list" => {
@@ -2057,7 +2057,7 @@ async fn cmd_webhook(args: &[&str], context: &ReplContext) -> Result<(), String>
 
             webhook_manager.test_webhook(webhook_id, &context.peer_id).await?;
 
-            println!("  ✅ Test webhook sent successfully!");
+            println!("  [OK] Test webhook sent successfully!");
             println!("  Check your webhook endpoint for the test payload");
             println!();
         }
@@ -2079,7 +2079,7 @@ async fn cmd_report(args: &[&str], context: &ReplContext) -> Result<(), String> 
 
     match *report_type {
         "summary" | "full" => {
-            println!("\n📊 Network Report");
+            println!("\n[STATS] Network Report");
             println!("  ┌──────────────────────────────────────────────────────────────┐");
             println!("  │ {:<60} │", format!("Generated: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
             println!("  │ {:<60} │", format!("Peer ID: {}...", &context.peer_id[..20]));

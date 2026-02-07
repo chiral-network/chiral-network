@@ -48,7 +48,7 @@
   }
 
   function getSortIcon(column: keyof PeerMetrics): string {
-    if (sortBy !== column) return '↕️';
+    if (sortBy !== column) return '[SORT]';
     return sortOrder === 'asc' ? '^' : 'v';
   }
 
@@ -104,7 +104,7 @@
 
   {#if error}
     <div class="error">
-      <p>❌ {$t('network.peerMetrics.error')}: {error}</p>
+      <p>[X] {$t('network.peerMetrics.error')}: {error}</p>
     </div>
   {/if}
 
@@ -204,7 +204,7 @@
               </td>
               <td class="encryption">
                 <span class={peer.encryption_support ? 'text-green-600' : 'text-gray-400'}>
-                  {peer.encryption_support ? '✅' : '❌'}
+                  {peer.encryption_support ? '[OK]' : '[X]'}
                 </span>
               </td>
               <td class="health">

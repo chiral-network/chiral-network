@@ -176,8 +176,8 @@
       "farthest": "Más lejano",
       "online": "En línea",
       "offline": "Desconectado",
-      "aToZ": "A → Z",
-      "zToA": "Z → A",
+      "aToZ": "A -> Z",
+      "zToA": "Z -> A",
       "anonymous": "Anónimo",
       "unknown": "Desconocido",
       "joined": "Unido",
@@ -386,7 +386,7 @@
   "button": {
     "clearCache": "Borrar caché",
     "clearing": "Borrando...",
-    "cleared": "✅ ¡Borrado!"
+    "cleared": "[OK] ¡Borrado!"
   },
   "account": {
     "title": "Cuenta",
@@ -605,8 +605,8 @@
     "from": "De",
     "to": "Para",
     "sort": "Ordenar",
-    "sortNewest": "Más recientes → Más antiguas",
-    "sortOldest": "Más antiguas → Más recientes",
+    "sortNewest": "Más recientes -> Más antiguas",
+    "sortOldest": "Más antiguas -> Más recientes",
     "reset": "Restablecer"
   },
   "actions": {
@@ -802,8 +802,8 @@
     },
     "errors": {
       "connectionTimeout": "Tiempo de conexión agotado",
-      "optimizationUnavailable": "❌ Estado de optimización no disponible",
-      "tauriUnavailable": "❌ API de Tauri no disponible. Por favor ejecuta esta prueba en la aplicación de escritorio, no en el navegador."
+      "optimizationUnavailable": "[X] Estado de optimización no disponible",
+      "tauriUnavailable": "[X] API de Tauri no disponible. Por favor ejecuta esta prueba en la aplicación de escritorio, no en el navegador."
     },
     "dialog": {
       "confirmRemoval": "Confirmar eliminación",
@@ -1258,7 +1258,7 @@
       "recipientPublicKey": "Clave Pública del Destinatario",
       "publicKeyPlaceholder": "Ingrese la clave pública X25519 del destinatario (64 caracteres hexadecimales)",
       "publicKeyHint": "Ingrese la clave pública X25519 del destinatario (formato hexadecimal, 64 caracteres). El archivo se cifrará para que solo ellos puedan descifrarlo. Déjelo vacío para cifrar para usted mismo.",
-      "invalidPublicKey": "⚠️ Formato de clave pública inválido. Debe tener 64 caracteres hexadecimales.",
+      "invalidPublicKey": "[WARN] Formato de clave pública inválido. Debe tener 64 caracteres hexadecimales.",
       "encryptedBadge": "Cifrado"
     },
     "currentProtocol": "Protocolo Actual",
@@ -1280,8 +1280,8 @@
     "hashCopiedClipboard": "¡Hash Merkle copiado al portapapeles!",
     "desktopAppRequired": "Se Requiere Aplicación de Escritorio",
     "storageMonitoringDesktopOnly": "El monitoreo de almacenamiento requiere la aplicación de escritorio",
-    "dropFilesHere": "✨ ¡Suelta archivos aquí!",
-    "uploadingFiles": "🔄 Subiendo archivos...",
+    "dropFilesHere": "[NEW] ¡Suelta archivos aquí!",
+    "uploadingFiles": "[SYNC] Subiendo archivos...",
     "releaseToUpload": "Suelta para subir tus archivos instantáneamente",
     "dragDropWebNotAvailable": "Arrastrar y soltar no disponible en versión web",
     "pleaseWaitProcessing": "Por favor espera mientras tus archivos están siendo procesados...",
@@ -1688,8 +1688,8 @@
       "forcedModeMining": "Ha habilitado manualmente el modo cliente puro en Configuración. Blockchain sincroniza solo los últimos ~100 bloques en lugar de sincronización completa (~10,000 bloques). Minería disponible pero usa almacenamiento mínimo.",
       "natDetected": "AutoNAT detectó que está detrás de NAT o un firewall restrictivo. Puede descargar archivos pero no puede compartirlos directamente con otros pares. Los archivos se guardan localmente y pueden compartirse a través de servidores de retransmisión.",
       "natDetectedMining": "AutoNAT detectó que está detrás de NAT o un firewall restrictivo. Blockchain sincroniza solo los últimos ~100 bloques para reducir requisitos de ancho de banda/almacenamiento. Minería disponible con almacenamiento reducido.",
-      "settingsForced": "⚠️ Modo cliente forzado: No podrá compartir archivos ni actuar como servidor DHT. Blockchain usa sincronización parcial (solo últimos ~100 bloques) en lugar de sincronización completa (~10,000 bloques). Minería disponible con almacenamiento reducido. Requiere reinicio de DHT.",
-      "serverModeDisabled": "ℹ️ El modo servidor está deshabilitado cuando el modo cliente está forzado."
+      "settingsForced": "[WARN] Modo cliente forzado: No podrá compartir archivos ni actuar como servidor DHT. Blockchain usa sincronización parcial (solo últimos ~100 bloques) en lugar de sincronización completa (~10,000 bloques). Minería disponible con almacenamiento reducido. Requiere reinicio de DHT.",
+      "serverModeDisabled": "[INFO] El modo servidor está deshabilitado cuando el modo cliente está forzado."
     },
     "banner": {
       "title": {
@@ -1705,10 +1705,10 @@
         "defaultMining": "Está en modo solo cliente. Blockchain sincroniza solo los últimos ~100 bloques (almacenamiento mínimo). Minería disponible."
       },
       "help": {
-        "forced": "Para habilitar compartir, deshabilite \"Forzar Modo Solo Cliente\" en Configuración → Desarrolladores → Modo Cliente DHT.",
-        "nat": "Para habilitar el intercambio directo entre pares: 1) Active UPnP en Configuración → Red (si su router lo admite), 2) Configure manualmente el reenvío de puertos en su router, o 3) Use una VPN con IP pública. El intercambio basado en retransmisión aún puede funcionar.",
+        "forced": "Para habilitar compartir, deshabilite \"Forzar Modo Solo Cliente\" en Configuración -> Desarrolladores -> Modo Cliente DHT.",
+        "nat": "Para habilitar el intercambio directo entre pares: 1) Active UPnP en Configuración -> Red (si su router lo admite), 2) Configure manualmente el reenvío de puertos en su router, o 3) Use una VPN con IP pública. El intercambio basado en retransmisión aún puede funcionar.",
         "default": "Verifique su configuración de red o configuración de AutoNAT.",
-        "forcedMining": "Para habilitar sincronización blockchain completa (10,000 bloques), deshabilite \"Forzar Modo Solo Cliente\" en Configuración → Desarrolladores.",
+        "forcedMining": "Para habilitar sincronización blockchain completa (10,000 bloques), deshabilite \"Forzar Modo Solo Cliente\" en Configuración -> Desarrolladores.",
         "natMining": "Los nodos completos sincronizan ~10,000 bloques. Para actualizar, configure reenvío de puertos o use una VPN con IP pública para ser públicamente accesible.",
         "defaultMining": "Verifique su configuración de red o configuración de AutoNAT para funcionalidad completa."
       }

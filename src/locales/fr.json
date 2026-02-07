@@ -180,8 +180,8 @@
       "farthest": "Le plus éloigné",
       "online": "En ligne",
       "offline": "Hors ligne",
-      "aToZ": "A → Z",
-      "zToA": "Z → A",
+      "aToZ": "A -> Z",
+      "zToA": "Z -> A",
       "anonymous": "Anonyme",
       "unknown": "Inconnu",
       "joined": "Rejoint",
@@ -499,7 +499,7 @@
   "button": {
     "clearCache": "Vider le cache",
     "clearing": "Vidage...",
-    "cleared": "✅ Cache vidé !"
+    "cleared": "[OK] Cache vidé !"
   },
   "account": {
     "title": "Compte",
@@ -898,8 +898,8 @@
     },
     "errors": {
       "connectionTimeout": "Délai de connexion dépassé",
-      "optimizationUnavailable": "❌ État d’optimisation indisponible",
-      "tauriUnavailable": "❌ API Tauri indisponible. Veuillez exécuter ce test dans l’application de bureau, et non dans le navigateur."
+      "optimizationUnavailable": "[X] État d’optimisation indisponible",
+      "tauriUnavailable": "[X] API Tauri indisponible. Veuillez exécuter ce test dans l’application de bureau, et non dans le navigateur."
     },
     "dialog": {
       "confirmRemoval": "Confirmer la suppression",
@@ -1085,7 +1085,7 @@
     },
     "starting": "Démarrage du minage... (peut redémarrer le nœud si nécessaire)",
     "temporaryAccount": {
-      "title": "⚠️ Compte temporaire – Récompenses de minage à risque !",
+      "title": "[WARN] Compte temporaire – Récompenses de minage à risque !",
       "description": "Vous minez avec un compte temporaire. Les récompenses de minage seront perdues lorsque vous fermerez l’application, sauf si vous sauvegardez votre compte.",
       "createWallet": "Créer un portefeuille permanent",
       "goToAccount": "Aller à la page Compte"
@@ -1111,8 +1111,8 @@
       "revenue": "Revenus",
       "cost": "Coût",
       "profitMargin": "Marge bénéficiaire",
-      "profitable": "✅ Rentable",
-      "notProfitable": "❌ Non rentable",
+      "profitable": "[OK] Rentable",
+      "notProfitable": "[X] Non rentable",
       "profitableDesc": "Les gains de minage dépassent les coûts d’électricité",
       "notProfitableDesc": "Les coûts d’électricité dépassent les gains de minage",
       "calculationDetails": "Détails du calcul :",
@@ -1230,7 +1230,7 @@
     "file": "fichier",
     "files": "fichiers",
     "total": "au total",
-    "tip": "💡 Astuce : vous pouvez aussi glisser-déposer des fichiers ici pour les ajouter",
+    "tip": "[HINT] Astuce : vous pouvez aussi glisser-déposer des fichiers ici pour les ajouter",
     "addMoreFiles": "Ajouter d’autres fichiers",
     "supportedFormats": "Prend en charge les images, vidéos, audio, documents, fichiers de code et plus",
     "supportedFormatsDesktop": "L’application de bureau prend en charge les images, vidéos, audio, documents, fichiers de code et plus",
@@ -1266,7 +1266,7 @@
       "recipientPublicKey": "Clé publique du destinataire",
       "publicKeyPlaceholder": "Saisir la clé publique X25519 du destinataire (64 caractères hexadécimaux)",
       "publicKeyHint": "Saisissez la clé publique X25519 du destinataire (format hex, 64 caractères). Le fichier sera chiffré pour qu’eux seuls puissent le déchiffrer. Laisser vide pour chiffrer pour vous-même.",
-      "invalidPublicKey": "⚠️ Format de clé publique invalide. Doit comporter 64 caractères hexadécimaux.",
+      "invalidPublicKey": "[WARN] Format de clé publique invalide. Doit comporter 64 caractères hexadécimaux.",
       "encryptedBadge": "Chiffré"
     },
     "currentProtocol": "Protocole actuel",
@@ -1288,8 +1288,8 @@
     "hashCopiedClipboard": "Merkle hash copié dans le presse-papiers !",
     "desktopAppRequired": "Application de bureau requise",
     "storageMonitoringDesktopOnly": "La surveillance du stockage nécessite l’application de bureau",
-    "dropFilesHere": "✨ Déposez les fichiers ici !",
-    "uploadingFiles": "🔄 Envoi des fichiers...",
+    "dropFilesHere": "[NEW] Déposez les fichiers ici !",
+    "uploadingFiles": "[SYNC] Envoi des fichiers...",
     "releaseToUpload": "Relâchez pour envoyer vos fichiers immédiatement",
     "dragDropWebNotAvailable": "Glisser-déposer indisponible dans la version web",
     "pleaseWaitProcessing": "Veuillez patienter pendant le traitement de vos fichiers...",
@@ -1723,8 +1723,8 @@
       "forcedModeMining": "Vous avez activé manuellement le mode client pur dans les Paramètres. La blockchain ne synchronise que les ~100 derniers blocs au lieu de la synchronisation complète (~10 000 blocs). Le minage est disponible mais utilise un stockage minimal.",
       "natDetected": "AutoNAT a détecté que vous êtes derrière un NAT ou un pare-feu restrictif. Vous pouvez télécharger des fichiers mais ne pouvez pas les partager avec d'autres pairs.",
       "natDetectedMining": "AutoNAT a détecté que vous êtes derrière un NAT ou un pare-feu restrictif. La blockchain ne synchronise que les ~100 derniers blocs pour réduire les besoins en bande passante/stockage. Le minage est disponible avec un stockage réduit.",
-      "settingsForced": "⚠️ Mode client forcé : Vous ne pourrez pas partager de fichiers ni agir en tant que serveur DHT. La blockchain utilise la synchronisation partielle (seulement les ~100 derniers blocs) au lieu de la synchronisation complète (~10 000 blocs). Minage disponible avec stockage réduit. Nécessite un redémarrage DHT.",
-      "serverModeDisabled": "ℹ️ Le mode serveur est désactivé lorsque le mode client est forcé."
+      "settingsForced": "[WARN] Mode client forcé : Vous ne pourrez pas partager de fichiers ni agir en tant que serveur DHT. La blockchain utilise la synchronisation partielle (seulement les ~100 derniers blocs) au lieu de la synchronisation complète (~10 000 blocs). Minage disponible avec stockage réduit. Nécessite un redémarrage DHT.",
+      "serverModeDisabled": "[INFO] Le mode serveur est désactivé lorsque le mode client est forcé."
     },
     "banner": {
       "title": {
@@ -1740,10 +1740,10 @@
         "defaultMining": "Vous êtes en mode client uniquement. La blockchain ne synchronise que les ~100 derniers blocs (stockage minimal). Le minage est disponible."
       },
       "help": {
-        "forced": "Pour activer le partage, désactivez \"Forcer le Mode Client Uniquement\" dans Paramètres → Développeurs → Mode Client DHT.",
+        "forced": "Pour activer le partage, désactivez \"Forcer le Mode Client Uniquement\" dans Paramètres -> Développeurs -> Mode Client DHT.",
         "nat": "Vos fichiers seront toujours enregistrés localement, mais ne seront pas partagés sur le réseau. Pour activer le partage, configurez la redirection de port ou utilisez un VPN avec une IP publique.",
         "default": "Vérifiez vos paramètres réseau ou votre configuration AutoNAT.",
-        "forcedMining": "Pour activer la synchronisation blockchain complète (10 000 blocs), désactivez \"Forcer le Mode Client Uniquement\" dans Paramètres → Développeurs.",
+        "forcedMining": "Pour activer la synchronisation blockchain complète (10 000 blocs), désactivez \"Forcer le Mode Client Uniquement\" dans Paramètres -> Développeurs.",
         "natMining": "Les nœuds complets synchronisent ~10 000 blocs. Pour passer en mode complet, configurez la redirection de port ou utilisez un VPN avec une IP publique pour devenir publiquement accessible.",
         "defaultMining": "Vérifiez vos paramètres réseau ou votre configuration AutoNAT pour une fonctionnalité complète."
       }

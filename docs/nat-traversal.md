@@ -19,25 +19,25 @@ Chiral Network implements comprehensive NAT traversal solutions to ensure connec
 
 ## Implementation Progress
 
-### ✅ Phase 1: NAT Traversal Infrastructure (Completed)
+### [OK] Phase 1: NAT Traversal Infrastructure (Completed)
 - AutoNAT v2 for reachability detection
 - UPnP automatic port forwarding
 - mDNS for local peer discovery
 
-### 🔄 Phase 2: Content-Based Discovery (Next Step)
+### [SYNC] Phase 2: Content-Based Discovery (Next Step)
 - **Goal**: Automatic peer discovery by file hash using DHT
 - **Implementation Needed**:
   - When sharing a file: `put_record("file:SHA256_HASH", peer_address)`
   - When searching for a file: `get_record("file:SHA256_HASH")` returns peer addresses
 - **Result**: Fully decentralized P2P file sharing - no manual address exchange needed
 
-### 📋 Phase 3: Optimization (Future)
+### [LIST] Phase 3: Optimization (Future)
 - WebRTC direct connections for browser-compatible transfers
 - SOCKS5 proxy integration for privacy
 
 ## Current Implementation Status
 
-### ✅ Implemented Features
+### [OK] Implemented Features
 
 #### 1. AutoNAT v2 Reachability Detection
 - Automatic 30-second probe cycles
@@ -52,7 +52,7 @@ Chiral Network implements comprehensive NAT traversal solutions to ensure connec
 - Address change detection and logging
 
 
-### ✅ GUI Configuration 
+### [OK] GUI Configuration 
 
 #### 1. Settings UI for NAT Traversal
 - AutoNAT toggle with configurable probe interval (10-300s)
@@ -114,8 +114,8 @@ Modern routers support automatic port forwarding protocols that enable NAT'd pee
 
 **Connection Priority**:
 ```
-1. Try UPnP → Direct connection if successful
-2. If failed → SOCKS5 proxy (if configured)
+1. Try UPnP -> Direct connection if successful
+2. If failed -> SOCKS5 proxy (if configured)
 ```
 
 ## See Also

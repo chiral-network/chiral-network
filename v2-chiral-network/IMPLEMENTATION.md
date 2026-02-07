@@ -30,7 +30,7 @@ V2 Chiral Network is a complete rewrite of the decentralized peer-to-peer file s
 
 - **Send CHR Functionality**:
   - Send CHR to any valid Ethereum address
-  - Two-step confirmation (form → confirm screen)
+  - Two-step confirmation (form -> confirm screen)
   - Input validation (address format, sufficient balance)
   - MAX button for sending entire balance
   - Loading states during transaction submission

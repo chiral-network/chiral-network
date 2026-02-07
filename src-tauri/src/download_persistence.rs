@@ -2,7 +2,7 @@
 // Persistence & storage safety for download pause/resume
 //
 // This module implements Elliot's deliverables for the download-restart baseline:
-// - .meta.json schema v1 with atomic write (write temp → fsync -> rename)
+// - .meta.json schema v1 with atomic write (write temp -> fsync -> rename)
 // - .part writer with per-path mutex + OS advisory lock (fs2::try_lock_exclusive)
 // - Fsync policy: every 8 MiB (configurable); cross-volume finalize via stream-copy
 // - Preflight free space checks
@@ -129,7 +129,7 @@ impl DownloadPersistence {
         
         // Try to canonicalize the destination if it exists, otherwise normalize it
         let normalized_dest = if let Ok(canonical_dest) = dest.canonicalize() {
-            // Path exists, use canonical form (resolves symlinks like /var → /private/var on macOS)
+            // Path exists, use canonical form (resolves symlinks like /var -> /private/var on macOS)
             canonical_dest
         } else {
             // Path doesn't exist yet, normalize it manually
@@ -236,7 +236,7 @@ impl DownloadPersistence {
         Ok((path_mutex, file))
     }
     
-    /// Write metadata atomically: write temp → fsync -> rename
+    /// Write metadata atomically: write temp -> fsync -> rename
     pub fn write_metadata_atomic(
         &self,
         meta_path: &Path,
