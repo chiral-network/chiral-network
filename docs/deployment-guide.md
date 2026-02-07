@@ -138,16 +138,6 @@ npm run tauri build
 
 The built application will be in `src-tauri/target/release/`.
 
-#### Build the Relay Server (Optional)
-
-If you need to run your own relay server for NAT traversal:
-
-```bash
-cd relay
-cargo build --release
-sudo cp target/release/chiral-relay /usr/local/bin/
-```
-
 ## Configuration
 
 ### 1. Blockchain Configuration
@@ -299,7 +289,7 @@ chiral-node tools genesis \
   --secret "<optional stable peer-id seed>"
 ```
 
-- `run-bootstrap.sh` builds `chiral-network` (if needed) and launches `--headless --is-bootstrap`, which disables provider storage and AutoRelay so the node stays focused on routing DHT traffic.
+- `run-bootstrap.sh` builds `chiral-network` (if needed) and launches `--headless --is-bootstrap`, which disables provider storage so the node stays focused on routing DHT traffic.
 - Pass `--enable-geth` (or set `ENABLE_GETH=true`) so the bootstrap host keeps a local Geth process online for RPC/state; leave mining disabled to keep the bootstrap focused on routing.
 - Keep at least one bootstrap instance running at all times. Plan to provision multiple bootstrap nodes/IPs to avoid a single point of failure.
 
