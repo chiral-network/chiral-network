@@ -45,7 +45,7 @@ export class P2PFileTransferService {
     string,
     (transfer: P2PTransfer) => void
   >();
-  private webrtcSessions = new Map<string, any>(); // peerId -> WebRTCSession
+  private webrtcSessions = new Map<string, any>(); // peerId → WebRTCSession
   private signalingService: SignalingService;
 
   constructor() {
@@ -333,7 +333,7 @@ export class P2PFileTransferService {
           error: error,
         });
         PeerSelectionService.notePeerFailure(failedSeederPeerId);
-        console.log(`[X] Updated reputation for peer ${failedSeederPeerId.substring(0, 20)}... after connection failure`);
+        console.log(`❌ Updated reputation for peer ${failedSeederPeerId.substring(0, 20)}... after connection failure`);
       } catch (repError) {
         console.error('Failed to update peer reputation:', repError);
       }
@@ -771,7 +771,7 @@ export class P2PFileTransferService {
                   durationMs: duration,
                 });
                 PeerSelectionService.notePeerSuccess(seederPeerId, duration);
-                console.log(`[OK] Updated reputation for peer ${seederPeerId.substring(0, 20)}... after P2P transfer (+${transfer.fileSize} bytes)`);
+                console.log(`✅ Updated reputation for peer ${seederPeerId.substring(0, 20)}... after P2P transfer (+${transfer.fileSize} bytes)`);
               } catch (repError) {
                 console.error('Failed to update peer reputation:', repError);
               }
@@ -826,7 +826,7 @@ export class P2PFileTransferService {
             durationMs: duration,
           });
           PeerSelectionService.notePeerSuccess(seederPeerId, duration);
-          console.log(`[OK] Updated reputation for peer ${seederPeerId.substring(0, 20)}... after streaming transfer (+${transfer.fileSize} bytes)`);
+          console.log(`✅ Updated reputation for peer ${seederPeerId.substring(0, 20)}... after streaming transfer (+${transfer.fileSize} bytes)`);
         } catch (repError) {
           console.error('Failed to update peer reputation:', repError);
         }
@@ -845,7 +845,7 @@ export class P2PFileTransferService {
             error: `Streaming finalization failed: ${error}`,
           });
           PeerSelectionService.notePeerFailure(seederPeerId);
-          console.log(`[X] Updated reputation for peer ${seederPeerId.substring(0, 20)}... after streaming failure`);
+          console.log(`❌ Updated reputation for peer ${seederPeerId.substring(0, 20)}... after streaming failure`);
         } catch (repError) {
           console.error('Failed to update peer reputation:', repError);
         }
