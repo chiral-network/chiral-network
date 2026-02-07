@@ -23,7 +23,7 @@ impl RemoteReplServer {
 
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind(&self.addr).await?;
-        println!("\n[NET] Remote REPL server listening on: {}", self.addr.green());
+        println!("\n🌐 Remote REPL server listening on: {}", self.addr.green());
         println!("  Auth token: {}", self.auth_token.yellow());
         println!("  Use 'nc {} <port>' to connect remotely", self.addr.split(':').next().unwrap());
         println!();
@@ -166,7 +166,7 @@ pub async fn cmd_remote(args: &[&str], context: &ReplContext) -> Result<(), Stri
                 token
             };
 
-            println!("\n[NET] Starting remote REPL server...");
+            println!("\n🌐 Starting remote REPL server...");
             println!("  Address: {}", addr.green());
             println!("  Auth Token: {}", token.yellow());
             println!();
@@ -182,12 +182,12 @@ pub async fn cmd_remote(args: &[&str], context: &ReplContext) -> Result<(), Stri
             println!();
         }
         "stop" => {
-            println!("\n[NET] Stopping remote REPL server...");
+            println!("\n🌐 Stopping remote REPL server...");
             println!("  (Remote server stop requires task handle management)");
             println!();
         }
         "status" => {
-            println!("\n[NET] Remote REPL Server Status:");
+            println!("\n🌐 Remote REPL Server Status:");
             println!("  ┌────────────────────────────────────────────────────────┐");
             println!("  │ {:<54} │", "Status: Not running");
             println!("  │ {:<54} │", "");

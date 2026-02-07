@@ -147,16 +147,16 @@
   }
 
   async function searchForFile() {
-    console.log('[SEARCH] searchForFile() called with searchMode:', searchMode, 'searchHash:', searchHash)
+    console.log('🔍 searchForFile() called with searchMode:', searchMode, 'searchHash:', searchHash)
     if (isSearching) {
-      console.warn('[WARN] Search already in progress, ignoring duplicate call')
+      console.warn('⚠️ Search already in progress, ignoring duplicate call')
       return
     }
     isSearching = true
 
     // Handle BitTorrent downloads - show confirmation instead of immediately downloading
     if (searchMode === 'magnet' || searchMode === 'torrent' || searchMode === 'ed2k' || searchMode === 'ftp') {
-      console.log('[OK] Entering magnet/torrent/ed2k/ftp path')
+      console.log('✅ Entering magnet/torrent/ed2k/ftp path')
       let identifier: string | null = null
 
       if (searchMode === 'magnet') {
@@ -168,18 +168,18 @@
         }
 
         // For magnet links, extract info_hash and search DHT directly
-        console.log('[SEARCH] Parsing magnet link:', identifier)
+        console.log('🔍 Parsing magnet link:', identifier)
         const infoHash = extractInfoHashFromMagnet(identifier)
-        console.log('[SEARCH] Extracted info_hash (normalized to lowercase):', infoHash)
+        console.log('🔍 Extracted info_hash (normalized to lowercase):', infoHash)
         if (infoHash) {
           try {
-            console.log('[SEARCH] Searching DHT by info_hash:', infoHash)
+            console.log('🔍 Searching DHT by info_hash:', infoHash)
             // Tauri converts parameters to camelCase, so we use infoHash here
             const params = { infoHash }
-            console.log('[SEARCH] Calling search_by_infohash with params:', JSON.stringify(params))
-            // Search DHT by info_hash (uses two-step lookup: info_hash -> merkle_root -> metadata)
+            console.log('🔍 Calling search_by_infohash with params:', JSON.stringify(params))
+            // Search DHT by info_hash (uses two-step lookup: info_hash → merkle_root -> metadata)
             const metadata = await invoke('search_by_infohash', params) as FileMetadata | null
-            console.log('[SEARCH] DHT search result:', metadata)
+            console.log('🔍 DHT search result:', metadata)
             if (metadata) {
               // Found the file! Show it instead of the placeholder
               metadata.fileHash = metadata.merkleRoot || ""
@@ -190,14 +190,14 @@
               isSearching = false
               return
             } else {
-              console.log('[WARN] No metadata found for info_hash:', infoHash)
+              console.log('⚠️ No metadata found for info_hash:', infoHash)
             }
           } catch (error) {
-            console.error('[X] DHT search error:', error)
+            console.error('❌ DHT search error:', error)
             console.log('Falling back to magnet download')
           }
         } else {
-          console.log('[WARN] Could not extract info_hash from magnet link')
+          console.log('⚠️ Could not extract info_hash from magnet link')
         }
 
         // If not found in DHT or no info_hash, proceed with magnet download
@@ -215,13 +215,13 @@
             const arrayBuffer = await file.arrayBuffer()
             const bytes = new Uint8Array(arrayBuffer)
             const infoHash = await extractInfoHashFromTorrentBytes(bytes)
-            console.log('[SEARCH] Extracted info_hash from torrent file:', infoHash)
+            console.log('🔍 Extracted info_hash from torrent file:', infoHash)
 
             try {
-              console.log('[SEARCH] Searching DHT by info_hash:', infoHash)
+              console.log('🔍 Searching DHT by info_hash:', infoHash)
               const params = { infoHash }
               const metadata = await invoke('search_by_infohash', params) as FileMetadata | null
-              console.log('[SEARCH] DHT search result:', metadata)
+              console.log('🔍 DHT search result:', metadata)
               if (metadata) {
                 metadata.fileHash = metadata.merkleRoot || ""
                 latestMetadata = metadata
@@ -231,10 +231,10 @@
                 isSearching = false
                 return
               } else {
-                console.log('[WARN] No metadata found for info_hash:', infoHash)
+                console.log('⚠️ No metadata found for info_hash:', infoHash)
               }
             } catch (error) {
-              console.error('[X] DHT search error:', error)
+              console.error('❌ DHT search error:', error)
             }
 
             // If not found in DHT, proceed with torrent download flow
@@ -964,7 +964,7 @@
     // Log transparency info for auto-selection
     if (peerSelectionMode === 'auto' && autoSelectionInfo) {
       autoSelectionInfo.forEach((info, index) => {
-        console.log(`[STATS] Auto-selected peer ${index + 1}:`, {
+        console.log(`📊 Auto-selected peer ${index + 1}:`, {
           peerId: info.peerId.slice(0, 12),
           score: info.score.toFixed(3),
           allocation: `${availablePeers.find(p => p.peerId === info.peerId)?.percentage}%`,

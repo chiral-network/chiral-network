@@ -33,7 +33,7 @@ function saveTransactionsToStorage(txs: Transaction[]) {
     const serialized = JSON.stringify(txs);
     localStorage.setItem("chiral_transactions", serialized);
     console.log(
-      `[SAVE] Saved ${txs.length} transactions to localStorage (${(serialized.length / 1024).toFixed(2)} KB)`
+      `💾 Saved ${txs.length} transactions to localStorage (${(serialized.length / 1024).toFixed(2)} KB)`
     );
   } catch (error) {
     console.error("Failed to save transactions to localStorage:", error);
@@ -217,7 +217,7 @@ export class PaymentService {
     try {
       // Check if this file has already been paid for
       if (this.processedPayments.has(fileHash)) {
-        console.log("[WARN] Payment already processed for file:", fileHash);
+        console.log("⚠️ Payment already processed for file:", fileHash);
         return {
           success: false,
           error: "Payment already processed for this file",
@@ -227,7 +227,7 @@ export class PaymentService {
       const amount = await this.calculateDownloadCost(fileSize);
 
       if (!seederAddress || !this.WALLET_ADDRESS_REGEX.test(seederAddress)) {
-        console.error("[X] Invalid seeder wallet address for payment", {
+        console.error("❌ Invalid seeder wallet address for payment", {
           seederAddress,
           fileName,
           fileHash,
@@ -251,7 +251,7 @@ export class PaymentService {
       const currentTransactions = get(transactions);
       let transactionHash = "";
 
-      console.log("[PAY] Processing download payment:", {
+      console.log("💰 Processing download payment:", {
         currentBalance: currentWallet.balance,
         amount,
         fileName,
@@ -268,7 +268,7 @@ export class PaymentService {
           throw new Error("Payment request did not return a transaction hash");
         }
         transactionHash = result;
-        console.log("[LINK] On-chain payment submitted:", {
+        console.log("🔗 On-chain payment submitted:", {
           transactionHash,
           seederAddress,
           amount,
@@ -278,7 +278,7 @@ export class PaymentService {
           chainError?.message ||
           chainError?.toString() ||
           "Failed to submit on-chain payment";
-        console.error("[X] Ethereum payment transaction failed:", chainError);
+        console.error("❌ Ethereum payment transaction failed:", chainError);
         return {
           success: false,
           error: errorMessage,
@@ -295,7 +295,7 @@ export class PaymentService {
       const newBalance = parseFloat(
         (currentWallet.balance - amount).toFixed(8)
       );
-      console.log("[SEND] Balance Update:", {
+      console.log("💸 Balance Update:", {
         before: currentWallet.balance,
         deducting: amount,
         after: newBalance,
@@ -306,7 +306,7 @@ export class PaymentService {
         ...w,
         balance: newBalance,
       }));
-      console.log("[OK] Wallet store updated with new balance:", newBalance);
+      console.log("✅ Wallet store updated with new balance:", newBalance);
 
       // Create transaction record for downloader
       const newTransaction: Transaction = {
@@ -321,26 +321,26 @@ export class PaymentService {
         status: "success",
       };
 
-      console.log("[NOTE] Creating transaction:", newTransaction);
+      console.log("📝 Creating transaction:", newTransaction);
 
       // Add transaction to history with persistence
       transactions.update((txs) => {
         const updated = [newTransaction, ...txs];
-        console.log("[OK] Updated transactions array length:", updated.length);
+        console.log("✅ Updated transactions array length:", updated.length);
         saveTransactionsToStorage(updated);
         return updated;
       });
 
       // Mark this file as paid to prevent duplicate payments
       this.processedPayments.add(fileHash);
-      console.log("[OK] Marked file as paid:", fileHash);
+      console.log("✅ Marked file as paid:", fileHash);
 
       // Publish reputation verdict for successful payment (downloader perspective)
       // Get our own peer ID first for the issuer_id
       let downloaderPeerId = currentWallet.address; // Fallback to wallet address
       try {
         downloaderPeerId = await invoke<string>("get_peer_id");
-        console.log("[STATS] Got downloader peer ID:", downloaderPeerId);
+        console.log("📊 Got downloader peer ID:", downloaderPeerId);
       } catch (err) {
         console.warn(
           "Could not get peer ID for issuer_id, using wallet address:",
@@ -351,12 +351,12 @@ export class PaymentService {
       // Publish reputation verdict using signed message system (see docs/SIGNED_TRANSACTION_MESSAGES.md)
       try {
         console.log(
-          "[STATS] Attempting to publish reputation verdict for downloader->seeder"
+          "📊 Attempting to publish reputation verdict for downloader→seeder"
         );
-        console.log("[STATS] seederPeerId:", seederPeerId);
-        console.log("[STATS] seederAddress:", seederAddress);
-        console.log("[STATS] Using target_id:", seederPeerId || seederAddress);
-        console.log("[STATS] Using issuer_id:", downloaderPeerId);
+        console.log("📊 seederPeerId:", seederPeerId);
+        console.log("📊 seederAddress:", seederAddress);
+        console.log("📊 Using target_id:", seederPeerId || seederAddress);
+        console.log("📊 Using issuer_id:", downloaderPeerId);
 
         await reputationService.publishVerdict({
           target_id: seederPeerId || seederAddress,
@@ -370,12 +370,12 @@ export class PaymentService {
         });
 
         console.log(
-          "[OK] Published good reputation verdict for seeder:",
+          "✅ Published good reputation verdict for seeder:",
           seederPeerId || seederAddress
         );
       } catch (reputationError) {
         console.error(
-          "[X] Failed to publish reputation verdict:",
+          "❌ Failed to publish reputation verdict:",
           reputationError
         );
         // Don't fail the payment if reputation update fails
@@ -384,12 +384,12 @@ export class PaymentService {
       // Notify backend about the payment - this will send P2P message to the seeder
       try {
         console.log(
-          "[OUT] Sending payment notification with downloaderPeerId:",
+          "📤 Sending payment notification with downloaderPeerId:",
           downloaderPeerId
         );
-        console.log("[OUT] Type of downloaderPeerId:", typeof downloaderPeerId);
+        console.log("📤 Type of downloaderPeerId:", typeof downloaderPeerId);
         console.log(
-          "[OUT] Is downloaderPeerId a peer ID?",
+          "📤 Is downloaderPeerId a peer ID?",
           downloaderPeerId?.startsWith("12D3Koo")
         );
 
@@ -405,7 +405,7 @@ export class PaymentService {
           transactionId,
           transactionHash,
         });
-        console.log("[OK] Payment notification sent to seeder:", seederAddress);
+        console.log("✅ Payment notification sent to seeder:", seederAddress);
       } catch (invokeError) {
         console.warn("Failed to send payment notification:", invokeError);
         // Continue anyway - frontend state is updated
@@ -444,7 +444,7 @@ export class PaymentService {
 
       // Check if we already received this payment
       if (this.receivedPayments.has(paymentKey)) {
-        console.log("[WARN] Payment already received for:", paymentKey);
+        console.log("⚠️ Payment already received for:", paymentKey);
         return {
           success: false,
           error: "Payment already received",
@@ -503,14 +503,14 @@ export class PaymentService {
 
       // Mark this payment as received
       this.receivedPayments.add(paymentKey);
-      console.log("[OK] Marked payment as received:", paymentKey);
+      console.log("✅ Marked payment as received:", paymentKey);
 
       // Publish reputation verdict for successful payment (seeder perspective)
       // Get our own peer ID first for the issuer_id
       let seederPeerId = currentWallet.address; // Fallback to wallet address
       try {
         seederPeerId = await invoke<string>("get_peer_id");
-        console.log("[STATS] Got seeder peer ID:", seederPeerId);
+        console.log("📊 Got seeder peer ID:", seederPeerId);
       } catch (err) {
         console.warn(
           "Could not get peer ID for issuer_id, using wallet address:",
@@ -521,15 +521,15 @@ export class PaymentService {
       // Publish reputation verdict using signed message system (see docs/SIGNED_TRANSACTION_MESSAGES.md)
       try {
         console.log(
-          "[STATS] Attempting to publish reputation verdict for seeder->downloader"
+          "📊 Attempting to publish reputation verdict for seeder→downloader"
         );
-        console.log("[STATS] downloaderPeerId:", downloaderPeerId);
-        console.log("[STATS] downloaderAddress:", downloaderAddress);
+        console.log("📊 downloaderPeerId:", downloaderPeerId);
+        console.log("📊 downloaderAddress:", downloaderAddress);
         console.log(
-          "[STATS] Using target_id:",
+          "📊 Using target_id:",
           downloaderPeerId || downloaderAddress
         );
-        console.log("[STATS] Using issuer_id:", seederPeerId);
+        console.log("📊 Using issuer_id:", seederPeerId);
 
         await reputationService.publishVerdict({
           target_id: downloaderPeerId || downloaderAddress,
@@ -543,12 +543,12 @@ export class PaymentService {
         });
 
         console.log(
-          "[OK] Published good reputation verdict for downloader:",
+          "✅ Published good reputation verdict for downloader:",
           downloaderPeerId || downloaderAddress
         );
       } catch (reputationError) {
         console.error(
-          "[X] Failed to publish reputation verdict:",
+          "❌ Failed to publish reputation verdict:",
           reputationError
         );
         // Don't fail the payment if reputation update fails
@@ -572,7 +572,7 @@ export class PaymentService {
         // Continue anyway - frontend state is updated
       }
 
-      console.log("[PAY] Seeder payment credited:", {
+      console.log("💰 Seeder payment credited:", {
         amount: amount.toFixed(8),
         from: downloaderAddress,
         file: fileName,
@@ -657,11 +657,11 @@ export class PaymentService {
    */
   static startPaymentNotificationPolling(): void {
     if (this.pollingInterval) {
-      console.log("[WARN] Payment notification polling already running");
+      console.log("⚠️ Payment notification polling already running");
       return;
     }
 
-    console.log("[SYNC] Starting payment notification polling...");
+    console.log("🔄 Starting payment notification polling...");
 
     // Poll immediately
     this.checkForPaymentNotifications();
@@ -679,7 +679,7 @@ export class PaymentService {
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = null;
-      console.log("[STOP] Stopped payment notification polling");
+      console.log("🛑 Stopped payment notification polling");
     }
   }
 
@@ -715,7 +715,7 @@ export class PaymentService {
     notification: any
   ): Promise<void> {
     try {
-      console.log("[PAY] Payment notification received:", notification);
+      console.log("💰 Payment notification received:", notification);
 
       // Credit the seeder's wallet
       const result = await this.creditSeederPayment(
@@ -727,9 +727,9 @@ export class PaymentService {
       );
 
       if (result.success) {
-        console.log("[OK] Payment credited successfully");
+        console.log("✅ Payment credited successfully");
       } else {
-        console.warn("[WARN] Failed to credit payment:", result.error);
+        console.warn("⚠️ Failed to credit payment:", result.error);
       }
     } catch (error) {
       console.error("Error handling payment notification:", error);

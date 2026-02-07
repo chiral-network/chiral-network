@@ -272,7 +272,7 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
     if let Some(ft) = &file_transfer_service {
         let snapshot = ft.download_metrics_snapshot().await;
         info!(
-            "[STATS] Download metrics: success={}, failures={}, retries={}",
+            "📊 Download metrics: success={}, failures={}, retries={}",
             snapshot.total_success, snapshot.total_failures, snapshot.total_retries
         );
         if let Some(latest) = snapshot.recent_attempts.first() {
@@ -286,7 +286,7 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
     if args.show_multiaddr {
         // Get local IP addresses
         let local_ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-        info!("[LINK] Multiaddr for other nodes to connect:");
+        info!("🔗 Multiaddr for other nodes to connect:");
         info!("   /ip4/{}/tcp/{}/p2p/{}", local_ip, args.dht_port, peer_id);
         info!("   /ip4/127.0.0.1/tcp/{}/p2p/{}", args.dht_port, peer_id);
     }
@@ -302,10 +302,10 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
         )?;
         if args.pure_client_mode {
             info!(
-                "[OK] Geth node started in pure-client mode (minimal blockchain sync: ~100 blocks)"
+                "✅ Geth node started in pure-client mode (minimal blockchain sync: ~100 blocks)"
             );
         } else {
-            info!("[OK] Geth node started (full blockchain sync: ~10,000 blocks)");
+            info!("✅ Geth node started (full blockchain sync: ~10,000 blocks)");
         }
         Some(geth)
     } else {
@@ -574,7 +574,7 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
 
 fn log_reachability_snapshot(snapshot: &DhtMetricsSnapshot) {
     info!(
-        "[NET] Reachability: {:?} (confidence {:?})",
+        "🌐 Reachability: {:?} (confidence {:?})",
         snapshot.reachability, snapshot.reachability_confidence
     );
     if let Some(ts) = snapshot.last_probe_at {

@@ -749,7 +749,7 @@ impl ReputationDhtService {
             .map(|h| h.as_str())
             .unwrap_or("no_tx");
 
-        println!("[STATS] STORING VERDICT:");
+        println!("📊 STORING VERDICT:");
         println!("   Issuer (who wrote this): {}", verdict.issuer_id);
         println!("   Target (who this is about): {}", verdict.target_id);
         println!("   Outcome: {:?}", verdict.outcome);
@@ -758,15 +758,15 @@ impl ReputationDhtService {
         let issuer_target_key =
             TransactionVerdict::dht_key_for_verdict(&verdict.issuer_id, &verdict.target_id);
         println!(
-            "[STATS] Storing verdict in DHT with issuer+target key: {}",
+            "📊 Storing verdict in DHT with issuer+target key: {}",
             issuer_target_key
         );
         println!(
-            "[STATS] Verdict: issuer={}, target={}, outcome={:?}",
+            "📊 Verdict: issuer={}, target={}, outcome={:?}",
             verdict.issuer_id, verdict.target_id, verdict.outcome
         );
         tracing::info!(
-            "[STATS] Storing verdict in DHT with issuer+target key: {}",
+            "📊 Storing verdict in DHT with issuer+target key: {}",
             issuer_target_key
         );
 
@@ -800,11 +800,11 @@ impl ReputationDhtService {
         // ALSO store under target-only key (for "verdicts about this peer")
         let target_only_key = TransactionVerdict::dht_key_for_target(&verdict.target_id);
         println!(
-            "[STATS] ALSO storing verdict with target-only key: {}",
+            "📊 ALSO storing verdict with target-only key: {}",
             target_only_key
         );
         tracing::info!(
-            "[STATS] ALSO storing verdict with target-only key: {}",
+            "📊 ALSO storing verdict with target-only key: {}",
             target_only_key
         );
 
@@ -838,8 +838,8 @@ impl ReputationDhtService {
         };
         dht_service.publish_file(metadata2, None).await?;
 
-        println!("[OK] Verdict stored successfully under both keys");
-        tracing::info!("[OK] Verdict stored successfully under both keys");
+        println!("✅ Verdict stored successfully under both keys");
+        tracing::info!("✅ Verdict stored successfully under both keys");
         Ok(())
     }
 
@@ -854,60 +854,60 @@ impl ReputationDhtService {
             .as_ref()
             .ok_or("DHT service not initialized")?;
 
-        println!("[SEARCH] RETRIEVING VERDICTS ABOUT: '{}'", target_id);
+        println!("🔍 RETRIEVING VERDICTS ABOUT: '{}'", target_id);
 
         // Use target-only key to find verdicts ABOUT this peer
         let search_key = TransactionVerdict::dht_key_for_target(target_id);
 
-        println!("[SEARCH] Searching for verdicts ABOUT target: {}", target_id);
-        println!("[SEARCH] Using DHT key: {}", search_key);
+        println!("🔍 Searching for verdicts ABOUT target: {}", target_id);
+        println!("🔍 Using DHT key: {}", search_key);
         tracing::info!(
-            "[SEARCH] Searching for verdicts ABOUT target: {}, key: {}",
+            "🔍 Searching for verdicts ABOUT target: {}, key: {}",
             target_id,
             search_key
         );
 
         // Use GetDhtValue to retrieve the verdict data directly
-        println!("[SEARCH] Calling get_dht_value for key: {}", search_key);
+        println!("🔍 Calling get_dht_value for key: {}", search_key);
         match dht_service.get_dht_value(search_key.clone()).await {
             Ok(Some(verdict_bytes)) => {
                 println!(
-                    "[OK] Found verdict data, size={} bytes",
+                    "✅ Found verdict data, size={} bytes",
                     verdict_bytes.len()
                 );
                 tracing::info!(
-                    "[OK] Found verdict data, size={} bytes",
+                    "✅ Found verdict data, size={} bytes",
                     verdict_bytes.len()
                 );
                 // Try to deserialize the verdict data as a TransactionVerdict
                 match serde_json::from_slice::<TransactionVerdict>(&verdict_bytes) {
                     Ok(verdict) => {
                         println!(
-                            "[OK] Deserialized verdict: issuer={}, outcome={:?}",
+                            "✅ Deserialized verdict: issuer={}, outcome={:?}",
                             verdict.issuer_id, verdict.outcome
                         );
                         tracing::info!(
-                            "[OK] Found verdict: issuer={}, outcome={:?}",
+                            "✅ Found verdict: issuer={}, outcome={:?}",
                             verdict.issuer_id,
                             verdict.outcome
                         );
                         Ok(vec![verdict])
                     }
                     Err(e) => {
-                        println!("[X] Failed to deserialize verdict: {}", e);
-                        tracing::warn!("[X] Failed to deserialize verdict: {}", e);
+                        println!("❌ Failed to deserialize verdict: {}", e);
+                        tracing::warn!("❌ Failed to deserialize verdict: {}", e);
                         Ok(vec![])
                     }
                 }
             }
             Ok(None) => {
-                println!("[X] No verdicts found about target: {}", target_id);
-                tracing::info!("[X] No verdicts found about target: {}", target_id);
+                println!("❌ No verdicts found about target: {}", target_id);
+                tracing::info!("❌ No verdicts found about target: {}", target_id);
                 Ok(vec![])
             }
             Err(e) => {
-                println!("[X] DHT search failed: {}", e);
-                tracing::warn!("[X] DHT search failed: {}", e);
+                println!("❌ DHT search failed: {}", e);
+                tracing::warn!("❌ DHT search failed: {}", e);
                 Ok(vec![]) // Return empty instead of error to not break UI
             }
         }

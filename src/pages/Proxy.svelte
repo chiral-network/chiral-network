@@ -408,12 +408,12 @@
         return;
       }
 
-      console.log("[TEST] Testing Proxy Latency Optimization...");
-      testResults = "[TEST] Running comprehensive proxy optimization tests...\n";
+      console.log("🧪 Testing Proxy Latency Optimization...");
+      testResults = "🧪 Running comprehensive proxy optimization tests...\n";
       
       // Test 1: Update some proxy latencies
       console.log("Test 1: Updating proxy latencies...");
-      testResults += "\n[STATS] Test 1: Updating proxy latencies...\n";
+      testResults += "\n📊 Test 1: Updating proxy latencies...\n";
       
       await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-1", 50);
       await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-2", undefined);
@@ -421,22 +421,22 @@
       await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-4", 100);
       await ProxyLatencyOptimizationService.updateProxyLatency("test-proxy-5", 25);
       
-      testResults += "[OK] Updated 5 test proxies with varying latencies\n";
+      testResults += "✅ Updated 5 test proxies with varying latencies\n";
       
       // Test 2: Get optimization status
       console.log("Test 2: Getting optimization status...");
-      testResults += "\n[UP] Test 2: Checking optimization status...\n";
+      testResults += "\n📈 Test 2: Checking optimization status...\n";
       
       const status = await ProxyLatencyOptimizationService.getOptimizationStatus();
-      testResults += `[OK] Optimization enabled: ${status}\n`;
+      testResults += `✅ Optimization enabled: ${status}\n`;
 
-      testResults += "\n[DONE] All proxy latency optimization tests completed successfully!";
+      testResults += "\n🎉 All proxy latency optimization tests completed successfully!";
       
       // Update the main optimization status
       await updateOptimizationStatus();
     } catch (error) {
-      console.error("[X] Proxy latency optimization test failed:", error);
-      testResults += `\n[X] Test failed with error: ${error}`;
+      console.error("❌ Proxy latency optimization test failed:", error);
+      testResults += `\n❌ Test failed with error: ${error}`;
     } finally {
       isTestingOptimization = false;
     }
