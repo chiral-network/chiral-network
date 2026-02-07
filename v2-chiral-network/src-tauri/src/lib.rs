@@ -3,12 +3,14 @@ mod encryption;
 mod file_transfer;
 mod geth;
 mod geth_bootstrap;
+mod speed_tiers;
 
 use dht::DhtService;
 use encryption::EncryptionKeypair;
 use file_transfer::FileTransferService;
 use geth::{GethDownloader, GethProcess, GethStatus, MiningStatus};
 use geth_bootstrap::BootstrapHealthReport;
+use speed_tiers::SpeedTier;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
@@ -24,6 +26,7 @@ pub struct AppState {
     pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data (for local caching)
     pub geth: Arc<Mutex<GethProcess>>,
     pub encryption_keypair: Arc<Mutex<Option<EncryptionKeypair>>>,
+    pub download_tiers: Arc<Mutex<HashMap<String, SpeedTier>>>, // request_id -> speed tier
 }
 
 #[tauri::command]
@@ -37,7 +40,7 @@ async fn start_dht(
         return Err("DHT already running".to_string());
     }
 
-    let dht = Arc::new(DhtService::new(state.file_transfer.clone()));
+    let dht = Arc::new(DhtService::new(state.file_transfer.clone(), state.download_tiers.clone()));
     let result = dht.start(app.clone()).await?;
     *dht_guard = Some(dht);
 
@@ -449,6 +452,9 @@ struct DownloadStartResult {
     status: String,
 }
 
+/// Burn address for speed tier payments (deflationary)
+const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
+
 #[tauri::command]
 async fn start_download(
     app: tauri::AppHandle,
@@ -456,39 +462,97 @@ async fn start_download(
     file_hash: String,
     file_name: String,
     seeders: Vec<String>,
+    speed_tier: String,
+    file_size: u64,
+    wallet_address: Option<String>,
+    private_key: Option<String>,
 ) -> Result<DownloadStartResult, String> {
-    // Log the download initiation
-    println!("Starting download: {} (hash: {}) from {} seeders", file_name, file_hash, seeders.len());
+    // Parse speed tier
+    let tier = SpeedTier::from_str(&speed_tier)?;
+    println!("⚡ Starting download: {} (hash: {}) from {} seeders [tier: {:?}]",
+             file_name, file_hash, seeders.len(), tier);
+
+    // Handle payment for paid tiers
+    let cost_wei = speed_tiers::calculate_cost(&tier, file_size);
+    if cost_wei > 0 {
+        let wallet_addr = wallet_address.as_deref()
+            .ok_or("Wallet address required for paid speed tier")?;
+        let priv_key = private_key.as_deref()
+            .ok_or("Private key required for paid speed tier")?;
+
+        // Convert wei to CHR string for send_transaction
+        let cost_chr = speed_tiers::format_wei_as_chr(cost_wei);
+        println!("💰 Speed tier payment: {} CHR ({} wei) to burn address", cost_chr, cost_wei);
+
+        // Process payment to burn address
+        let payment_result = send_transaction(
+            wallet_addr.to_string(),
+            BURN_ADDRESS.to_string(),
+            cost_chr.clone(),
+            priv_key.to_string(),
+        ).await;
+
+        match payment_result {
+            Ok(result) => {
+                println!("✅ Speed tier payment successful: tx {}", result.hash);
+            }
+            Err(e) => {
+                println!("❌ Speed tier payment failed: {}", e);
+                return Err(format!("Payment failed: {}. Download not started.", e));
+            }
+        }
+    }
 
     // First, check if we have the file in local cache
     {
         let storage = state.file_storage.lock().await;
         if let Some(file_data) = storage.get(&file_hash) {
-            println!("File found in local cache");
+            println!("📁 File found in local cache");
 
-            // Save to downloads folder
+            // Save to downloads folder (rate-limited even for cached files)
             let downloads_dir = dirs::download_dir()
                 .ok_or("Could not find downloads directory")?;
             let file_path = downloads_dir.join(&file_name);
+            let request_id = format!("local-{}", &file_hash[..8]);
 
-            std::fs::write(&file_path, file_data)
-                .map_err(|e| format!("Failed to write file: {}", e))?;
+            let file_data_clone = file_data.clone();
+            let app_clone = app.clone();
+            let tier_clone = tier.clone();
+            let hash_clone = file_hash.clone();
+            let name_clone = file_name.clone();
+            let rid_clone = request_id.clone();
 
-            println!("File downloaded to: {:?}", file_path);
-
-            // Emit completion event
-            let _ = app.emit("file-download-complete", serde_json::json!({
-                "requestId": format!("local-{}", file_hash[..8].to_string()),
-                "fileHash": file_hash,
-                "fileName": file_name,
-                "filePath": file_path.to_string_lossy().to_string(),
-                "fileSize": file_data.len(),
-                "status": "completed"
-            }));
+            // Spawn rate-limited write
+            tokio::spawn(async move {
+                match speed_tiers::rate_limited_write(
+                    &app_clone, &file_path, &file_data_clone, &tier_clone,
+                    &rid_clone, &hash_clone, &name_clone,
+                ).await {
+                    Ok(_) => {
+                        println!("📁 File saved to: {:?}", file_path);
+                        let _ = app_clone.emit("file-download-complete", serde_json::json!({
+                            "requestId": rid_clone,
+                            "fileHash": hash_clone,
+                            "fileName": name_clone,
+                            "filePath": file_path.to_string_lossy(),
+                            "fileSize": file_data_clone.len(),
+                            "status": "completed"
+                        }));
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to save cached file: {}", e);
+                        let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                            "requestId": rid_clone,
+                            "fileHash": hash_clone,
+                            "error": format!("Failed to save file: {}", e)
+                        }));
+                    }
+                }
+            });
 
             return Ok(DownloadStartResult {
-                request_id: format!("local-{}", file_hash[..8].to_string()),
-                status: "completed".to_string(),
+                request_id,
+                status: "downloading".to_string(),
             });
         }
     }
@@ -508,17 +572,22 @@ async fn start_download(
                 .unwrap()
                 .as_millis());
 
+        // Store the speed tier for this download so dht.rs can use it during write
+        {
+            let mut tiers = state.download_tiers.lock().await;
+            tiers.insert(request_id.clone(), tier);
+        }
+
         // Emit download started event
         let _ = app.emit("download-started", serde_json::json!({
             "requestId": request_id,
             "fileHash": file_hash,
             "fileName": file_name,
-            "seeders": seeders.len()
+            "seeders": seeders.len(),
+            "speedTier": speed_tier
         }));
 
         // Try each seeder until one succeeds
-        // This handles the case where DHT lookup returned connected peers as fallback
-        // but not all of them may have the file
         let mut last_error = String::new();
         let mut request_sent = false;
 
@@ -527,14 +596,13 @@ async fn start_download(
 
             match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone()).await {
                 Ok(_) => {
-                    println!("File request sent successfully to seeder {}", seeder);
+                    println!("✅ File request sent successfully to seeder {}", seeder);
                     request_sent = true;
                     break;
                 }
                 Err(e) => {
-                    println!("Failed to request file from seeder {}: {}", seeder, e);
+                    println!("❌ Failed to request file from seeder {}: {}", seeder, e);
                     last_error = e;
-                    // Continue to try next seeder
                 }
             }
         }
@@ -545,6 +613,11 @@ async fn start_download(
                 status: "requesting".to_string(),
             })
         } else {
+            // Clean up tier entry on failure
+            {
+                let mut tiers = state.download_tiers.lock().await;
+                tiers.remove(&request_id);
+            }
             let _ = app.emit("file-download-failed", serde_json::json!({
                 "requestId": request_id,
                 "fileHash": file_hash,
@@ -555,6 +628,38 @@ async fn start_download(
     } else {
         Err("DHT not running".to_string())
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadCostResult {
+    cost_wei: String,
+    cost_chr: String,
+    tier: String,
+    speed_label: String,
+}
+
+/// Calculate the cost of downloading a file at a given speed tier
+#[tauri::command]
+async fn calculate_download_cost(
+    speed_tier: String,
+    file_size: u64,
+) -> Result<DownloadCostResult, String> {
+    let tier = SpeedTier::from_str(&speed_tier)?;
+    let cost_wei = speed_tiers::calculate_cost(&tier, file_size);
+    let cost_chr = speed_tiers::format_wei_as_chr(cost_wei);
+    let speed_label = match tier.bytes_per_second() {
+        Some(bps) if bps < 1024 * 1024 => format!("{} KB/s", bps / 1024),
+        Some(bps) => format!("{} MB/s", bps / (1024 * 1024)),
+        None => "Unlimited".to_string(),
+    };
+
+    Ok(DownloadCostResult {
+        cost_wei: cost_wei.to_string(),
+        cost_chr,
+        tier: speed_tier,
+        speed_label,
+    })
 }
 
 /// Re-register a previously shared file (called on app startup)
@@ -1768,6 +1873,7 @@ pub fn run() {
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth: Arc::new(Mutex::new(GethProcess::new())),
             encryption_keypair: Arc::new(Mutex::new(None)),
+            download_tiers: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -1790,6 +1896,7 @@ pub fn run() {
             publish_file,
             search_file,
             start_download,
+            calculate_download_cost,
             register_shared_file,
             parse_torrent_file,
             export_torrent_file,
