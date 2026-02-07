@@ -266,7 +266,7 @@ Files are stored locally:
 
 ### Privacy Considerations
 
-1. **Seeding reveals IP**: Use proxy/relay for anonymity
+1. **Seeding reveals IP**: Use proxy for anonymity
 2. **Metadata is public**: DHT metadata visible to all peers
 3. **Consider file names**: Avoid revealing information
 

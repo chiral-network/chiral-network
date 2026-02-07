@@ -420,9 +420,6 @@ All interactive modes support these flags:
 
 # NAT traversal
 --disable-autonat              # Disable AutoNAT probes
---disable-autorelay            # Disable AutoRelay client
---enable-relay                 # Run as relay server
---relay <MULTIADDR>            # Preferred relay nodes
 
 # Privacy
 --socks5-proxy <ADDR>          # SOCKS5 proxy (e.g., 127.0.0.1:9050)
@@ -594,7 +591,6 @@ chiral> status
   │ Reachability: Public                                   │
   │ NAT Status: Active                                     │
   │ AutoNAT: Enabled                                       │
-  │ Circuit Relay: None                                    │
   └────────────────────────────────────────────────────────┘
 
 chiral> peers count
@@ -665,7 +661,7 @@ COMMANDS
 │ Peers: 42 ████████░░    │ ┌──────────────────────────────────┐ │
 │ DHT: 1,234 entries      │ │ file.pdf [████████░░] 75%       │ │
 │ NAT: Public             │ │   8 peers, 4.2 MB/s, ETA 2m     │ │
-│ Relay: Connected        │ │                                  │ │
+│                         │ │                                  │ │
 │                         │ │ video.mp4 [███░░░░░░] 30%       │ │
 ├─────────────────────────┤ │   3 peers, 1.8 MB/s, ETA 8m     │ │
 │ ⚡ Mining [3]           │ └──────────────────────────────────┘ │
@@ -731,8 +727,6 @@ Press `Enter` to execute, `Esc` to cancel.
 - Reachability status (Public/Private/Unknown)
 - NAT status and traversal info
 - AutoNAT configuration
-- Circuit Relay status with peer ID
-- DCUtR hole punching success rate
 - DHT reachability and confidence
 - Observed addresses count
 - Download success/failure/retry stats
@@ -971,7 +965,7 @@ done
 **Scenario:** Running as a bootstrap node with monitoring
 
 ```bash
-./chiral-network --interactive --is-bootstrap --enable-relay
+./chiral-network --interactive --is-bootstrap
 
 chiral> status
 # Monitor incoming connections
