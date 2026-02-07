@@ -2,6 +2,9 @@ import { ethers } from 'ethers';
 import { get } from 'svelte/store';
 import { invoke } from '@tauri-apps/api/core';
 import { walletAccount } from '$lib/stores';
+import { logger } from '$lib/logger';
+
+const log = logger('Wallet');
 
 const DEFAULT_CHAIN_ID = 98765; // Fallback Chiral Network Chain ID
 
@@ -26,7 +29,7 @@ export async function getChainId(): Promise<number> {
       cachedChainId = await invoke<number>('get_chain_id');
       return cachedChainId;
     } catch (error) {
-      console.warn('Failed to get chain ID from backend, using default:', error);
+      log.warn('Failed to get chain ID from backend, using default:', error);
       return DEFAULT_CHAIN_ID;
     }
   }
@@ -66,16 +69,16 @@ class WalletService {
     // Check cache
     const cached = this.balanceCache.get(address.toLowerCase());
     if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-      console.log('[walletService.getBalance] Returning cached balance for', address, ':', cached.balance);
+      log.info('[walletService.getBalance] Returning cached balance for', address, ':', cached.balance);
       return cached.balance;
     }
 
     if (isTauriEnvironment()) {
       try {
-        console.log('[walletService.getBalance] Querying balance for', address);
+        log.info('[walletService.getBalance] Querying balance for', address);
         const result = await invoke<WalletBalance>('get_wallet_balance', { address });
         const balance = result.balance || '0.00';
-        console.log('[walletService.getBalance] Got balance:', balance, 'wei:', result.balanceWei);
+        log.info('[walletService.getBalance] Got balance:', balance, 'wei:', result.balanceWei);
 
         // Update cache
         this.balanceCache.set(address.toLowerCase(), {
@@ -85,7 +88,7 @@ class WalletService {
 
         return balance;
       } catch (error) {
-        console.log('[walletService.getBalance] Failed to get balance:', error);
+        log.info('[walletService.getBalance] Failed to get balance:', error);
         // Return cached value if available, otherwise 0
         return cached?.balance || '0.00';
       }
@@ -153,7 +156,7 @@ export async function signTransaction(txRequest: TransactionRequest): Promise<st
     const signedTx = await walletInstance.signTransaction(transaction);
     return signedTx;
   } catch (error) {
-    console.error('Transaction signing failed:', error);
+    log.error('Transaction signing failed:', error);
     throw new Error('Failed to sign transaction: ' + (error instanceof Error ? error.message : 'Unknown error'));
   }
 }

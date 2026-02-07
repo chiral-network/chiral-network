@@ -26,6 +26,8 @@
   } from 'lucide-svelte';
   import { networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
+  import { logger } from '$lib/logger';
+  const log = logger('Download');
 
   // Check if running in Tauri environment (reactive)
   let isTauri = $state(false);
@@ -160,7 +162,7 @@
         }));
       }
     } catch (e) {
-      console.error('Failed to load download history:', e);
+      log.error('Failed to load download history:', e);
     }
   }
 
@@ -169,7 +171,7 @@
       localStorage.setItem(DOWNLOAD_HISTORY_KEY, JSON.stringify(downloadHistory));
       localStorage.setItem(ACTIVE_DOWNLOADS_KEY, JSON.stringify(downloads));
     } catch (e) {
-      console.error('Failed to save download history:', e);
+      log.error('Failed to save download history:', e);
     }
   }
 
@@ -262,7 +264,7 @@
         }
       }
     } catch (error) {
-      console.error('Failed to parse torrent file:', error);
+      log.error('Failed to parse torrent file:', error);
       toasts.show(`Failed to parse torrent file: ${error}`, 'error');
     }
   }
@@ -344,7 +346,7 @@
         searchError = 'Search requires the desktop application';
       }
     } catch (error) {
-      console.error('Search failed:', error);
+      log.error('Search failed:', error);
       searchError = `Search failed: ${error}`;
     } finally {
       isSearching = false;
@@ -395,7 +397,7 @@
         seeders: result.seeders
       });
 
-      console.log('Download request sent:', response);
+      log.info('Download request sent:', response);
       toasts.show(`Requesting file from seeder...`, 'info');
 
       // Update download with request ID
@@ -404,7 +406,7 @@
       );
       saveDownloadHistory();
     } catch (error) {
-      console.error('Download failed:', error);
+      log.error('Download failed:', error);
       downloads = downloads.map(d =>
         d.id === newDownload.id ? { ...d, status: 'failed' as const } : d
       );
@@ -484,7 +486,7 @@
         fileSize: number;
         status: string;
       }>('file-download-complete', (event) => {
-        console.log('Download complete:', event.payload);
+        log.info('Download complete:', event.payload);
         const { fileHash, fileName, filePath, fileSize } = event.payload;
 
         // Update the download status
@@ -511,7 +513,7 @@
         fileHash: string;
         error: string;
       }>('file-download-failed', (event) => {
-        console.error('Download failed:', event.payload);
+        log.error('Download failed:', event.payload);
         const { fileHash, error } = event.payload;
 
         // Update the download status
@@ -529,9 +531,9 @@
         toasts.show(`Download failed: ${error}`, 'error');
       });
 
-      console.log('Download event listeners registered');
+      log.info('Download event listeners registered');
     } catch (error) {
-      console.error('Failed to setup event listeners:', error);
+      log.error('Failed to setup event listeners:', error);
     }
   }
 

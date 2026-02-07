@@ -10,22 +10,19 @@
     Copy,
     Eye,
     EyeOff,
-    Download,
     LogOut,
-    Shield,
     AlertTriangle,
     Check,
     Key,
-    User,
     RefreshCw,
-    Coins,
     Send,
     History,
     ArrowUpRight,
     ArrowDownLeft,
-    Loader2,
-    ExternalLink
+    Loader2
   } from 'lucide-svelte';
+  import { logger } from '$lib/logger';
+  const log = logger('Account');
 
   // Types
   interface Transaction {
@@ -43,7 +40,6 @@
   // State
   let privateKeyVisible = $state(false);
   let copied = $state<'address' | 'privateKey' | null>(null);
-  let showExportModal = $state(false);
   let showLogoutModal = $state(false);
   let showSendModal = $state(false);
   let balance = $state<string>('0.00');
@@ -63,6 +59,32 @@
   // Check if Tauri is available
   function isTauri(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  }
+
+  // Poll for transaction confirmation and refresh balance
+  async function pollForConfirmation(txHash: string) {
+    if (!isTauri()) return;
+    const maxAttempts = 30; // Poll for up to 30 seconds
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        const receipt = await invoke<{ status: string } | null>('get_transaction_receipt', { txHash });
+        if (receipt) {
+          log.ok('Transaction confirmed:', txHash.slice(0, 10));
+          walletService.clearCache($walletAccount?.address);
+          loadBalance();
+          loadTransactionHistory();
+          return;
+        }
+      } catch {
+        // Receipt not available yet
+      }
+    }
+    // Timed out - refresh anyway
+    log.warn('Transaction not confirmed after 30s, refreshing anyway');
+    walletService.clearCache($walletAccount?.address);
+    loadBalance();
+    loadTransactionHistory();
   }
 
   // Load balance on mount and when wallet changes
@@ -86,17 +108,17 @@
 
   // Load wallet balance
   async function loadBalance() {
-    console.log('[Account.loadBalance] Called, address:', $walletAccount?.address);
+    log.info('[Account.loadBalance] Called, address:', $walletAccount?.address);
     if (!$walletAccount?.address) return;
 
     isLoadingBalance = true;
     try {
       const result = await walletService.getBalance($walletAccount.address);
       balance = result;
-      console.log('[Account.loadBalance] Balance loaded:', result);
+      log.info('[Account.loadBalance] Balance loaded:', result);
       gethWarningShown = false; // Reset if successful
     } catch (error) {
-      console.warn('[Account.loadBalance] Failed:', error);
+      log.warn('[Account.loadBalance] Failed:', error);
       if (!gethWarningShown) {
         gethWarningShown = true;
       }
@@ -168,13 +190,10 @@
       showConfirmSend = false;
       showSendModal = false;
 
-      // Refresh balance and history
-      setTimeout(() => {
-        loadBalance();
-        loadTransactionHistory();
-      }, 2000);
+      // Wait for transaction to be mined, then refresh
+      pollForConfirmation(result.hash);
     } catch (error) {
-      console.error('Failed to send transaction:', error);
+      log.error('Failed to send transaction:', error);
       toasts.show(`Transaction failed: ${error}`, 'error');
     } finally {
       isSending = false;
@@ -189,34 +208,9 @@
       toasts.show(`${type === 'address' ? 'Address' : 'Private key'} copied to clipboard`, 'success');
       setTimeout(() => copied = null, 2000);
     } catch (error) {
-      console.error('Failed to copy:', error);
+      log.error('Failed to copy:', error);
       toasts.show('Failed to copy to clipboard', 'error');
     }
-  }
-
-  // Export wallet
-  function exportWallet() {
-    if (!$walletAccount) return;
-
-    const walletData = {
-      address: $walletAccount.address,
-      privateKey: $walletAccount.privateKey,
-      exportedAt: new Date().toISOString(),
-      network: 'Chiral Network'
-    };
-
-    const blob = new Blob([JSON.stringify(walletData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `chiral-wallet-${$walletAccount.address.slice(0, 8)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    showExportModal = false;
-    toasts.show('Wallet exported successfully', 'success');
   }
 
   // Logout
@@ -225,7 +219,7 @@
     try {
       await dhtService.stop();
     } catch (e) {
-      console.warn('Failed to stop DHT during logout:', e);
+      log.warn('Failed to stop DHT during logout:', e);
     }
     walletAccount.set(null);
     isAuthenticated.set(false);
@@ -405,70 +399,6 @@
       </div>
     </div>
 
-    <!-- Balance & Export Section -->
-    <div class="grid md:grid-cols-2 gap-6">
-      <!-- Balance Info Card -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
-            <Coins class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
-          </div>
-          <div>
-            <h3 class="font-semibold dark:text-white">CHR Token</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Chiral Network native token</p>
-          </div>
-        </div>
-        <div class="space-y-3">
-          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Available Balance</span>
-            <span class="font-medium dark:text-white">{formatBalance(balance)} CHR</span>
-          </div>
-          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Network</span>
-            <span class="font-medium dark:text-white">Chiral Mainnet</span>
-          </div>
-          <div class="flex justify-between items-center py-2">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Token Symbol</span>
-            <span class="font-medium dark:text-white">CHR</span>
-          </div>
-        </div>
-
-        <!-- Get Test CHR Info -->
-        {#if parseFloat(balance) === 0}
-          <div class="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-            <p class="text-sm text-yellow-800 dark:text-yellow-300 font-medium mb-1">Need test CHR?</p>
-            <p class="text-xs text-yellow-700 dark:text-yellow-400">
-              Go to the <strong>Mining</strong> page to start Geth and mine blocks.
-              Block rewards will be sent to your wallet address.
-            </p>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Export Wallet Card -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-            <Download class="w-6 h-6 text-green-600 dark:text-green-400" />
-          </div>
-          <div>
-            <h3 class="font-semibold dark:text-white">Export Wallet</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Download your wallet backup</p>
-          </div>
-        </div>
-        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-          Export your wallet to a JSON file for backup. Keep this file secure and never share it.
-        </p>
-        <button
-          onclick={() => showExportModal = true}
-          class="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
-        >
-          <Download class="w-4 h-4" />
-          Export Wallet
-        </button>
-      </div>
-    </div>
-
     <!-- Send CHR Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center justify-between mb-4">
@@ -561,75 +491,6 @@
       {/if}
     </div>
 
-    <!-- Security & Account Details Section -->
-    <div class="grid md:grid-cols-2 gap-6">
-      <!-- Security Info Card -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <Shield class="w-6 h-6 text-blue-600 dark:text-blue-400" />
-          </div>
-          <div>
-            <h3 class="font-semibold dark:text-white">Security Tips</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Keep your wallet safe</p>
-          </div>
-        </div>
-        <ul class="text-sm text-gray-600 dark:text-gray-400 space-y-2">
-          <li class="flex items-start gap-2">
-            <Check class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-            <span>Store your recovery phrase offline</span>
-          </li>
-          <li class="flex items-start gap-2">
-            <Check class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-            <span>Never share your private key</span>
-          </li>
-          <li class="flex items-start gap-2">
-            <Check class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-            <span>Use strong passwords</span>
-          </li>
-          <li class="flex items-start gap-2">
-            <Check class="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
-            <span>Keep your software updated</span>
-          </li>
-        </ul>
-      </div>
-
-      <!-- Account Details Card -->
-      <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-            <User class="w-6 h-6 text-purple-600 dark:text-purple-400" />
-          </div>
-          <div>
-            <h3 class="font-semibold dark:text-white">Account Details</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Technical information</p>
-          </div>
-        </div>
-
-        <div class="space-y-3">
-          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Network</span>
-            <span class="font-medium dark:text-white">Chiral Network</span>
-          </div>
-          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Address Format</span>
-            <span class="font-medium dark:text-white">EVM Compatible</span>
-          </div>
-          <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Connection</span>
-            <span class="font-medium dark:text-white flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></span>
-              {$networkConnected ? 'Connected' : 'Disconnected'}
-            </span>
-          </div>
-          <div class="flex justify-between items-center py-2">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Key Type</span>
-            <span class="font-medium dark:text-white">secp256k1</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
   {:else}
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-12 text-center">
       <Wallet class="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
@@ -638,48 +499,6 @@
     </div>
   {/if}
 </div>
-
-<!-- Export Modal -->
-{#if showExportModal}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showExportModal = false} onkeydown={(e) => e.key === 'Escape' && (showExportModal = false)}>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-      <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
-          <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
-        </div>
-        <h3 class="text-lg font-semibold dark:text-white">Export Wallet</h3>
-      </div>
-
-      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
-        <p class="text-sm text-yellow-800 dark:text-yellow-300">
-          <strong>Warning:</strong> This file will contain your private key. Anyone with access to this file can control your wallet. Store it securely and never share it.
-        </p>
-      </div>
-
-      <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
-        Your wallet will be exported as a JSON file containing your address and private key.
-      </p>
-
-      <div class="flex gap-3">
-        <button
-          onclick={() => showExportModal = false}
-          class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
-        >
-          Cancel
-        </button>
-        <button
-          onclick={exportWallet}
-          class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
-        >
-          <Download class="w-4 h-4" />
-          Export
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
 
 <!-- Logout Modal -->
 {#if showLogoutModal}
