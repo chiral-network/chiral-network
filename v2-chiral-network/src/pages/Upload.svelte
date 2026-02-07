@@ -25,6 +25,8 @@
   } from 'lucide-svelte';
   import { networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
+  import { logger } from '$lib/logger';
+  const log = logger('Upload');
 
   // Check if running in Tauri environment (reactive)
   let isTauri = $state(false);
@@ -138,7 +140,7 @@
         }));
       }
     } catch (e) {
-      console.error('Failed to load upload history:', e);
+      log.error('Failed to load upload history:', e);
     }
   }
 
@@ -146,7 +148,7 @@
     try {
       localStorage.setItem(UPLOAD_HISTORY_KEY, JSON.stringify(sharedFiles));
     } catch (e) {
-      console.error('Failed to save upload history:', e);
+      log.error('Failed to save upload history:', e);
     }
   }
 
@@ -159,7 +161,7 @@
       const storage = await invoke<number>('get_available_storage');
       availableStorage = storage;
     } catch (error) {
-      console.error('Failed to get storage:', error);
+      log.error('Failed to get storage:', error);
     } finally {
       isRefreshingStorage = false;
     }
@@ -171,7 +173,7 @@
     const tauriAvailable = checkTauriAvailability();
     
     if (!tauriAvailable) {
-      console.error('Tauri not detected. Window properties:', Object.keys(window).filter(k => k.includes('TAURI')));
+      log.error('Tauri not detected. Window properties:', Object.keys(window).filter(k => k.includes('TAURI')));
       toasts.show('File upload requires the desktop app. Please run with: npm run tauri:dev', 'error');
       return;
     }
@@ -194,7 +196,7 @@
         await processFiles(selectedPaths);
       }
     } catch (error) {
-      console.error('File dialog error:', error);
+      log.error('File dialog error:', error);
       toasts.show(`Failed to open file dialog: ${error}`, 'error');
     } finally {
       isUploading = false;
@@ -213,7 +215,7 @@
         try {
           fileSize = await invoke<number>('get_file_size', { filePath });
         } catch (e) {
-          console.warn('Could not get file size:', e);
+          log.warn('Could not get file size:', e);
         }
 
         // Publish to DHT with selected protocol
@@ -239,7 +241,7 @@
         saveUploadHistory();
         toasts.show(`${fileName} is now being shared via ${selectedProtocol}`, 'success');
       } catch (error) {
-        console.error('Failed to process file:', error);
+        log.error('Failed to process file:', error);
         toasts.show(`Failed to share file: ${error}`, 'error');
       }
     }
@@ -297,7 +299,7 @@
       });
       toasts.show(`Torrent file saved to ${result.path}`, 'success');
     } catch (error) {
-      console.error('Failed to export torrent:', error);
+      log.error('Failed to export torrent:', error);
       toasts.show(`Failed to export torrent: ${error}`, 'error');
     }
   }
@@ -370,9 +372,9 @@
             fileName: file.name,
             fileSize: file.size
           });
-          console.log(`Re-registered shared file: ${file.name}`);
+          log.info(`Re-registered shared file: ${file.name}`);
         } catch (e) {
-          console.warn(`Failed to re-register file ${file.name}:`, e);
+          log.warn(`Failed to re-register file ${file.name}:`, e);
           // File might not exist anymore, mark for removal
           if (String(e).includes('no longer exists')) {
             filesToRemove.push(file.id);
@@ -386,7 +388,7 @@
         saveUploadHistory();
       }
     } catch (e) {
-      console.error('Failed to re-register shared files:', e);
+      log.error('Failed to re-register shared files:', e);
     }
   }
 
@@ -444,7 +446,7 @@
           }
         });
       } catch (error) {
-        console.error('Failed to setup drag-drop listener:', error);
+        log.error('Failed to setup drag-drop listener:', error);
       }
     }
   });

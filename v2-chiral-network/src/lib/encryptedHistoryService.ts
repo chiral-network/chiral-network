@@ -1,6 +1,9 @@
 import { get } from 'svelte/store';
 import { walletAccount } from './stores';
 import type { FileTransfer } from './chiralDropStore';
+import { logger } from './logger';
+
+const log = logger('History');
 
 const HISTORY_DHT_PREFIX = 'chiraldrop_history_';
 const HISTORY_LOCAL_KEY = 'chiraldrop_history_encrypted';
@@ -104,7 +107,7 @@ function isTauri(): boolean {
 export async function saveHistoryToDht(history: FileTransfer[]): Promise<void> {
   const wallet = get(walletAccount);
   if (!wallet) {
-    console.warn('No wallet connected, cannot save to DHT');
+    log.warn('No wallet connected, cannot save to DHT');
     // Fall back to localStorage
     saveHistoryToLocal(history);
     return;
@@ -120,13 +123,13 @@ export async function saveHistoryToDht(history: FileTransfer[]): Promise<void> {
         key: getDhtKey(wallet.address),
         value: encryptedData
       });
-      console.log('History saved to DHT');
+      log.info('History saved to DHT');
     }
 
     // Always also save locally as cache
     localStorage.setItem(HISTORY_LOCAL_KEY, encryptedData);
   } catch (error) {
-    console.error('Failed to save history to DHT:', error);
+    log.error('Failed to save history to DHT:', error);
     // Fall back to localStorage
     saveHistoryToLocal(history);
   }
@@ -138,7 +141,7 @@ export async function saveHistoryToDht(history: FileTransfer[]): Promise<void> {
 export async function loadHistoryFromDht(): Promise<FileTransfer[]> {
   const wallet = get(walletAccount);
   if (!wallet) {
-    console.warn('No wallet connected, loading from local cache');
+    log.warn('No wallet connected, loading from local cache');
     return loadHistoryFromLocal();
   }
 
@@ -152,7 +155,7 @@ export async function loadHistoryFromDht(): Promise<FileTransfer[]> {
           key: getDhtKey(wallet.address)
         });
       } catch (e) {
-        console.log('DHT value not found, checking local cache');
+        log.info('DHT value not found, checking local cache');
       }
     }
 
@@ -169,7 +172,7 @@ export async function loadHistoryFromDht(): Promise<FileTransfer[]> {
     const decryptedData = await decrypt(encryptedData, key);
     return JSON.parse(decryptedData);
   } catch (error) {
-    console.error('Failed to load history from DHT:', error);
+    log.error('Failed to load history from DHT:', error);
     return loadHistoryFromLocal();
   }
 }
@@ -181,7 +184,7 @@ function saveHistoryToLocal(history: FileTransfer[]): void {
   try {
     localStorage.setItem('chiraldrop_history_plain', JSON.stringify(history));
   } catch (error) {
-    console.error('Failed to save history to localStorage:', error);
+    log.error('Failed to save history to localStorage:', error);
   }
 }
 
@@ -195,7 +198,7 @@ function loadHistoryFromLocal(): FileTransfer[] {
       return JSON.parse(stored);
     }
   } catch (error) {
-    console.error('Failed to load history from localStorage:', error);
+    log.error('Failed to load history from localStorage:', error);
   }
   return [];
 }
@@ -239,7 +242,7 @@ export async function syncHistory(localHistory: FileTransfer[]): Promise<FileTra
 
     return merged;
   } catch (error) {
-    console.error('Failed to sync history:', error);
+    log.error('Failed to sync history:', error);
     return localHistory;
   }
 }

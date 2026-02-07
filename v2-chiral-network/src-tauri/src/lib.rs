@@ -879,6 +879,39 @@ fn parse_hex_u128(hex: &str) -> u128 {
     u128::from_str_radix(hex, 16).unwrap_or(0)
 }
 
+/// Convert CHR amount string to wei using string math (avoids f64 precision loss)
+fn parse_chr_to_wei(amount: &str) -> Result<u128, String> {
+    let amount = amount.trim();
+    let parts: Vec<&str> = amount.split('.').collect();
+    if parts.len() > 2 {
+        return Err("Invalid amount format".to_string());
+    }
+
+    let whole: u128 = if parts[0].is_empty() { 0 } else {
+        parts[0].parse().map_err(|_| "Invalid amount".to_string())?
+    };
+
+    let frac_wei = if parts.len() == 2 {
+        let frac_str = parts[1];
+        if frac_str.len() > 18 {
+            // Truncate to 18 decimal places
+            frac_str[..18].parse::<u128>().map_err(|_| "Invalid amount".to_string())?
+        } else {
+            let padded = format!("{:0<18}", frac_str);
+            padded.parse::<u128>().map_err(|_| "Invalid amount".to_string())?
+        }
+    } else {
+        0u128
+    };
+
+    let wei = whole
+        .checked_mul(1_000_000_000_000_000_000u128)
+        .and_then(|w| w.checked_add(frac_wei))
+        .ok_or("Amount overflow".to_string())?;
+
+    Ok(wei)
+}
+
 /// Encode unsigned transaction for signing (EIP-155)
 fn encode_unsigned_tx(
     nonce: u64,
@@ -902,6 +935,22 @@ fn encode_unsigned_tx(
     stream.out().to_vec()
 }
 
+/// Strip leading zero bytes from a byte slice (for RLP integer encoding)
+fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
+    let first_nonzero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    &bytes[first_nonzero..]
+}
+
+/// Append raw big-endian bytes as an RLP integer (stripping leading zeros)
+fn rlp_append_bytes_as_uint(stream: &mut RlpStream, bytes: &[u8]) {
+    let stripped = strip_leading_zeros(bytes);
+    if stripped.is_empty() {
+        stream.append(&0u8);
+    } else {
+        stream.append(&stripped.to_vec());
+    }
+}
+
 /// Encode signed transaction
 fn encode_signed_tx(
     nonce: u64,
@@ -922,8 +971,9 @@ fn encode_signed_tx(
     stream.append(&value);
     stream.append(&data.to_vec());
     stream.append(&v);
-    stream.append(&r.to_vec());
-    stream.append(&s.to_vec());
+    // r and s must be encoded as integers (leading zeros stripped)
+    rlp_append_bytes_as_uint(&mut stream, r);
+    rlp_append_bytes_as_uint(&mut stream, s);
     stream.out().to_vec()
 }
 
@@ -947,9 +997,8 @@ async fn send_transaction(
         .map_err(|e| format!("Invalid private key: {}", e))?;
 
     // Convert amount from CHR to wei (1 CHR = 10^18 wei)
-    let amount_f64: f64 = amount.parse()
-        .map_err(|e| format!("Invalid amount: {}", e))?;
-    let amount_wei = (amount_f64 * 1e18) as u128;
+    // Use string-based conversion to avoid f64 precision loss
+    let amount_wei = parse_chr_to_wei(&amount)?;
 
     // Get the nonce for the sender address
     let nonce_payload = serde_json::json!({
@@ -998,14 +1047,6 @@ async fn send_transaction(
 
     println!("[PAY] Sender balance: {} wei ({} CHR)", balance_wei, balance_wei as f64 / 1e18);
 
-    if balance_wei < amount_wei {
-        return Err(format!(
-            "Insufficient balance: have {} CHR, need {} CHR",
-            balance_wei as f64 / 1e18,
-            amount_wei as f64 / 1e18
-        ));
-    }
-
     // Get gas price
     let gas_price_payload = serde_json::json!({
         "jsonrpc": "2.0",
@@ -1031,6 +1072,18 @@ async fn send_transaction(
     let gas_limit: u64 = 21000; // Standard transfer
     let chain_id: u64 = geth::CHAIN_ID;
     let gas_price_u128 = gas_price as u128;
+
+    // Check total cost (amount + gas)
+    let gas_cost = gas_price_u128 * gas_limit as u128;
+    let total_cost = amount_wei.checked_add(gas_cost).ok_or("Amount overflow".to_string())?;
+    if balance_wei < total_cost {
+        return Err(format!(
+            "Insufficient balance: have {:.6} CHR, need {:.6} CHR (amount) + {:.6} CHR (gas)",
+            balance_wei as f64 / 1e18,
+            amount_wei as f64 / 1e18,
+            gas_cost as f64 / 1e18
+        ));
+    }
 
     // Parse to address
     let to_bytes = hex::decode(to_address.trim_start_matches("0x"))
@@ -1154,6 +1207,40 @@ async fn send_transaction(
         hash: tx_hash,
         status: "pending".to_string(),
     })
+}
+
+/// Get a transaction receipt to check if it has been mined
+#[tauri::command]
+async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+    let client = reqwest::Client::new();
+
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionReceipt",
+        "params": [&tx_hash],
+        "id": 1
+    });
+
+    let response = client
+        .post(&default_rpc_endpoint())
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get receipt: {}", e))?;
+
+    let json: serde_json::Value = response.json().await
+        .map_err(|e| format!("Failed to parse receipt: {}", e))?;
+
+    if let Some(error) = json.get("error") {
+        return Err(format!("RPC error: {}", error));
+    }
+
+    let result = json.get("result").cloned();
+    if result.as_ref().map_or(true, |v| v.is_null()) {
+        Ok(None)
+    } else {
+        Ok(result)
+    }
 }
 
 /// Dev faucet - gives 1 CHR to an address for testing
@@ -1688,6 +1775,7 @@ pub fn run() {
             // Wallet commands
             get_wallet_balance,
             send_transaction,
+            get_transaction_receipt,
             get_transaction_history,
             request_faucet,
             get_chain_id,
