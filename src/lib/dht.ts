@@ -437,7 +437,7 @@ export class DhtService {
 
     try {
       // Trigger the backend search and wait for the direct result
-      console.log("🔍 Frontend calling search_file_metadata for:", trimmed);
+      console.log("[SEARCH] Frontend calling search_file_metadata for:", trimmed);
       const metadata = await invoke<FileMetadata | null>(
         "search_file_metadata",
         {
@@ -446,7 +446,7 @@ export class DhtService {
         }
       );
       console.log(
-        "🔍 Frontend received direct result from search_file_metadata:",
+        "[SEARCH] Frontend received direct result from search_file_metadata:",
         metadata
       );
 

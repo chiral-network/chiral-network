@@ -996,7 +996,7 @@ async fn send_transaction(
     let balance_hex = balance_json["result"].as_str().unwrap_or("0x0");
     let balance_wei = u128::from_str_radix(balance_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
-    println!("💰 Sender balance: {} wei ({} CHR)", balance_wei, balance_wei as f64 / 1e18);
+    println!("[PAY] Sender balance: {} wei ({} CHR)", balance_wei, balance_wei as f64 / 1e18);
 
     if balance_wei < amount_wei {
         return Err(format!(
@@ -1080,7 +1080,7 @@ async fn send_transaction(
 
     let signed_tx_hex = format!("0x{}", hex::encode(&signed_tx));
 
-    println!("📤 Sending transaction:");
+    println!("[OUT] Sending transaction:");
     println!("   From: {}", from_address);
     println!("   To: {}", to_address);
     println!("   Amount: {} CHR ({} wei)", amount, amount_wei);
@@ -1108,7 +1108,7 @@ async fn send_transaction(
     let send_json: serde_json::Value = send_response.json().await
         .map_err(|e| format!("Failed to parse send response: {}", e))?;
 
-    println!("📥 RPC Response: {}", send_json);
+    println!("[IN] RPC Response: {}", send_json);
 
     if let Some(error) = send_json.get("error") {
         return Err(format!("Transaction failed: {}", error));
@@ -1119,7 +1119,7 @@ async fn send_transaction(
         .ok_or("No transaction hash in response")?
         .to_string();
 
-    println!("✅ Transaction submitted: {}", tx_hash);
+    println!("[OK] Transaction submitted: {}", tx_hash);
 
     // Wait a moment and check if transaction is pending
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -1141,11 +1141,11 @@ async fn send_transaction(
     if let Ok(resp) = receipt_response {
         if let Ok(receipt_json) = resp.json::<serde_json::Value>().await {
             if receipt_json["result"].is_null() {
-                println!("⏳ Transaction pending (not yet mined). Make sure mining is running!");
+                println!("[WAIT] Transaction pending (not yet mined). Make sure mining is running!");
             } else {
                 let status = receipt_json["result"]["status"].as_str().unwrap_or("unknown");
                 let block = receipt_json["result"]["blockNumber"].as_str().unwrap_or("unknown");
-                println!("📦 Transaction mined in block {} with status {}", block, status);
+                println!("[PKG] Transaction mined in block {} with status {}", block, status);
             }
         }
     }

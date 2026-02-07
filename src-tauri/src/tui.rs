@@ -376,7 +376,7 @@ fn render_content(f: &mut Frame, area: Rect, state: &TuiState, context: &TuiCont
 fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("🌐 Network Status");
+        .title("[NET] Network Status");
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -499,7 +499,7 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics
 fn render_downloads_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("📥 Recent Downloads");
+        .title("[IN] Recent Downloads");
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -564,7 +564,7 @@ fn render_downloads_panel(f: &mut Frame, area: Rect, context: &TuiContext, metri
 fn render_peers_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("👥 Connected Peers");
+        .title("[PEERS] Connected Peers");
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -613,7 +613,7 @@ fn render_peers_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: 
 fn render_mining_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("⛏️  Mining Status");
+        .title("[MINE]  Mining Status");
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -742,7 +742,7 @@ fn render_footer(f: &mut Frame, area: Rect, state: &TuiState) {
             .split(area);
 
         let result_color = if *is_error { Color::Red } else { Color::Green };
-        let result_prefix = if *is_error { "❌ " } else { "✅ " };
+        let result_prefix = if *is_error { "[X] " } else { "[OK] " };
         let result_widget = Paragraph::new(format!("{}{}", result_prefix, result))
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(result_color))

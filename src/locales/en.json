@@ -210,8 +210,8 @@
       "farthest": "Farthest",
       "online": "Online",
       "offline": "Offline",
-      "aToZ": "A → Z",
-      "zToA": "Z → A",
+      "aToZ": "A -> Z",
+      "zToA": "Z -> A",
       "anonymous": "Anonymous",
       "unknown": "Unknown",
       "joined": "Joined",
@@ -531,7 +531,7 @@
   "button": {
     "clearCache": "Clear Cache",
     "clearing": "Clearing...",
-    "cleared": "✅ Cleared!"
+    "cleared": "[OK] Cleared!"
   },
   "account": {
     "title": "Account",
@@ -771,8 +771,8 @@
     "from": "From",
     "to": "To",
     "sort": "Sort",
-    "sortNewest": "Newest → Oldest",
-    "sortOldest": "Oldest → Newest",
+    "sortNewest": "Newest -> Oldest",
+    "sortOldest": "Oldest -> Newest",
     "reset": "Reset"
   },
   "actions": {
@@ -959,8 +959,8 @@
     },
     "errors": {
       "connectionTimeout": "Connection timeout",
-      "optimizationUnavailable": "❌ Optimization status unavailable",
-      "tauriUnavailable": "❌ Tauri API not available. Please run this test in the desktop application, not the browser."
+      "optimizationUnavailable": "[X] Optimization status unavailable",
+      "tauriUnavailable": "[X] Tauri API not available. Please run this test in the desktop application, not the browser."
     },
     "dialog": {
       "confirmRemoval": "Confirm Removal",
@@ -1146,7 +1146,7 @@
     },
     "starting": "Starting mining... (may restart node if needed)",
     "temporaryAccount": {
-      "title": "⚠️ Temporary Account - Mining Rewards at Risk!",
+      "title": "[WARN] Temporary Account - Mining Rewards at Risk!",
       "description": "You're mining with a temporary account. Mining rewards will be lost when you close the app unless you save your account.",
       "createWallet": "Create Permanent Wallet",
       "goToAccount": "Go to Account Page"
@@ -1172,8 +1172,8 @@
       "revenue": "Revenue",
       "cost": "Cost",
       "profitMargin": "Profit Margin",
-      "profitable": "✅ Profitable",
-      "notProfitable": "❌ Not Profitable",
+      "profitable": "[OK] Profitable",
+      "notProfitable": "[X] Not Profitable",
       "profitableDesc": "Mining earnings exceed electricity costs",
       "notProfitableDesc": "Electricity costs exceed mining earnings",
       "calculationDetails": "Calculation Details:",
@@ -1237,7 +1237,7 @@
       "hoverTooltip": "{level}: {count}",
       "prev": "Prev",
       "next": "Next",
-      "scoreFormat": "{score}/5.0 ⭐"
+      "scoreFormat": "{score}/5.0 *"
     },
     "pageTitle": "Reputation System - Chiral Network",
     "sortBy": "Sort By",
@@ -1291,7 +1291,7 @@
     "file": "file",
     "files": "files",
     "total": "total",
-    "tip": "💡 Tip: You can also drag and drop files here to add them",
+    "tip": "[HINT] Tip: You can also drag and drop files here to add them",
     "addMoreFiles": "Add More Files",
     "supportedFormats": "Supports images, videos, audio, documents, code files and more",
     "supportedFormatsDesktop": "Desktop app supports images, videos, audio, documents, code files and more",
@@ -1327,7 +1327,7 @@
       "recipientPublicKey": "Recipient Public Key",
       "publicKeyPlaceholder": "Enter recipient's X25519 public key (64 hex characters)",
       "publicKeyHint": "Enter the recipient's X25519 public key (hex format, 64 characters). The file will be encrypted so only they can decrypt it. Leave empty to encrypt for yourself.",
-      "invalidPublicKey": "⚠️ Invalid public key format. Must be 64 hexadecimal characters.",
+      "invalidPublicKey": "[WARN] Invalid public key format. Must be 64 hexadecimal characters.",
       "encryptedBadge": "Encrypted",
       "recipientsList": "Recipients List",
       "numberOfRecipientsAdded": "recipient(s) added"
@@ -1351,8 +1351,8 @@
     "hashCopiedClipboard": "Merkle hash copied to clipboard!",
     "desktopAppRequired": "Desktop App Required",
     "storageMonitoringDesktopOnly": "Storage monitoring requires the desktop application",
-    "dropFilesHere": "✨ Drop files here!",
-    "uploadingFiles": "🔄 Uploading files...",
+    "dropFilesHere": "[NEW] Drop files here!",
+    "uploadingFiles": "[SYNC] Uploading files...",
     "releaseToUpload": "Release to upload your files instantly",
     "dragDropWebNotAvailable": "Drag and drop not available in web version",
     "pleaseWaitProcessing": "Please wait while your files are being processed...",
@@ -1777,8 +1777,8 @@
       "forcedModeMining": "You have manually enabled pure client mode in Settings. Blockchain syncs only last ~100 blocks instead of full sync (~10,000 blocks). Mining is available but uses minimal storage.",
       "natDetected": "AutoNAT detected that you're behind NAT or a restrictive firewall. You can download files but cannot seed them directly to other peers. Files are saved locally and may be shared through relay servers.",
       "natDetectedMining": "AutoNAT detected that you're behind NAT or a restrictive firewall. Blockchain syncs only last ~100 blocks to reduce bandwidth/storage requirements. Mining is available with reduced storage.",
-      "settingsForced": "⚠️ Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
-      "serverModeDisabled": "ℹ️ Server mode is disabled when client mode is forced."
+      "settingsForced": "[WARN] Client mode forced: You will not be able to seed files or act as DHT server. Blockchain uses partial sync (last ~100 blocks only) instead of full sync (~10,000 blocks). Mining available with reduced storage. Requires DHT restart.",
+      "serverModeDisabled": "[INFO] Server mode is disabled when client mode is forced."
     },
     "banner": {
       "title": {
@@ -1794,10 +1794,10 @@
         "defaultMining": "You are in client-only mode. Blockchain syncs only last ~100 blocks (minimal storage). Mining is available."
       },
       "help": {
-        "forced": "To enable seeding, disable \"Force Client-Only Mode\" in Settings → Developers → DHT Client Mode.",
-        "nat": "To enable direct peer-to-peer seeding: 1) Enable UPnP in Settings → Network (if your router supports it), 2) Manually configure port forwarding on your router, or 3) Use a VPN with a public IP. Relay-based sharing may still work.",
+        "forced": "To enable seeding, disable \"Force Client-Only Mode\" in Settings -> Developers -> DHT Client Mode.",
+        "nat": "To enable direct peer-to-peer seeding: 1) Enable UPnP in Settings -> Network (if your router supports it), 2) Manually configure port forwarding on your router, or 3) Use a VPN with a public IP. Relay-based sharing may still work.",
         "default": "Check your network settings or AutoNAT configuration.",
-        "forcedMining": "To enable full blockchain sync (10,000 blocks), disable \"Force Client-Only Mode\" in Settings → Developers.",
+        "forcedMining": "To enable full blockchain sync (10,000 blocks), disable \"Force Client-Only Mode\" in Settings -> Developers.",
         "natMining": "Full nodes sync ~10,000 blocks. To upgrade, configure port forwarding or use a VPN with a public IP to become publicly reachable.",
         "defaultMining": "Check your network settings or AutoNAT configuration for full functionality."
       }

@@ -180,8 +180,8 @@
       "farthest": "Mais Distante",
       "online": "Online",
       "offline": "Offline",
-      "aToZ": "A → Z",
-      "zToA": "Z → A",
+      "aToZ": "A -> Z",
+      "zToA": "Z -> A",
       "anonymous": "Anônimo",
       "unknown": "Desconhecido",
       "joined": "Entrou",
@@ -499,7 +499,7 @@
   "button": {
     "clearCache": "Limpar Cache",
     "clearing": "Limpando...",
-    "cleared": "✅ Limpo!"
+    "cleared": "[OK] Limpo!"
   },
   "account": {
     "title": "Conta",
@@ -730,8 +730,8 @@
     "from": "De",
     "to": "Para",
     "sort": "Ordenar",
-    "sortNewest": "Mais Novos → Mais Antigos",
-    "sortOldest": "Mais Antigos → Mais Novos",
+    "sortNewest": "Mais Novos -> Mais Antigos",
+    "sortOldest": "Mais Antigos -> Mais Novos",
     "reset": "Redefinir"
   },
   "actions": {
@@ -899,8 +899,8 @@
     },
     "errors": {
       "connectionTimeout": "Tempo de conexão esgotado",
-      "optimizationUnavailable": "❌ Status de otimização indisponível",
-      "tauriUnavailable": "❌ API Tauri não disponível. Por favor, execute este teste no aplicativo desktop, não no navegador."
+      "optimizationUnavailable": "[X] Status de otimização indisponível",
+      "tauriUnavailable": "[X] API Tauri não disponível. Por favor, execute este teste no aplicativo desktop, não no navegador."
     },
     "dialog": {
       "confirmRemoval": "Confirmar Remoção",
@@ -1086,7 +1086,7 @@
     },
     "starting": "Iniciando mineração... (pode reiniciar o nó se necessário)",
     "temporaryAccount": {
-      "title": "⚠️ Conta Temporária - Recompensas de Mineração em Risco!",
+      "title": "[WARN] Conta Temporária - Recompensas de Mineração em Risco!",
       "description": "Você está minerando com uma conta temporária. As recompensas de mineração serão perdidas quando você fechar o aplicativo, a menos que salve sua conta.",
       "createWallet": "Criar Carteira Permanente",
       "goToAccount": "Ir para Página da Conta"
@@ -1112,8 +1112,8 @@
       "revenue": "Receita",
       "cost": "Custo",
       "profitMargin": "Margem de Lucro",
-      "profitable": "✅ Lucrativo",
-      "notProfitable": "❌ Não Lucrativo",
+      "profitable": "[OK] Lucrativo",
+      "notProfitable": "[X] Não Lucrativo",
       "profitableDesc": "Ganhos de mineração excedem custos de eletricidade",
       "notProfitableDesc": "Custos de eletricidade excedem ganhos de mineração",
       "calculationDetails": "Detalhes do Cálculo:",
@@ -1177,7 +1177,7 @@
       "hoverTooltip": "{level}: {count}",
       "prev": "Anterior",
       "next": "Próximo",
-      "scoreFormat": "{score}/5.0 ⭐"
+      "scoreFormat": "{score}/5.0 *"
     },
     "pageTitle": "Sistema de Reputação - Rede Chiral",
     "sortBy": "Ordenar Por",
@@ -1231,7 +1231,7 @@
     "file": "arquivo",
     "files": "arquivos",
     "total": "total",
-    "tip": "💡 Dica: Você também pode arrastar e soltar arquivos aqui para adicioná-los",
+    "tip": "[HINT] Dica: Você também pode arrastar e soltar arquivos aqui para adicioná-los",
     "addMoreFiles": "Adicionar Mais Arquivos",
     "supportedFormats": "Suporta imagens, vídeos, áudio, documentos, arquivos de código e mais",
     "supportedFormatsDesktop": "O aplicativo desktop suporta imagens, vídeos, áudio, documentos, arquivos de código e mais",
@@ -1267,7 +1267,7 @@
       "recipientPublicKey": "Chave Pública do Destinatário",
       "publicKeyPlaceholder": "Digite a chave pública X25519 do destinatário (64 caracteres hex)",
       "publicKeyHint": "Digite a chave pública X25519 do destinatário (formato hex, 64 caracteres). O arquivo será criptografado para que apenas eles possam descriptografá-lo. Deixe vazio para criptografar para você mesmo.",
-      "invalidPublicKey": "⚠️ Formato de chave pública inválido. Deve ter 64 caracteres hexadecimais.",
+      "invalidPublicKey": "[WARN] Formato de chave pública inválido. Deve ter 64 caracteres hexadecimais.",
       "encryptedBadge": "Criptografado"
     },
     "currentProtocol": "Protocolo Atual",
@@ -1289,8 +1289,8 @@
     "hashCopiedClipboard": "Hash Merkle copiado para a área de transferência!",
     "desktopAppRequired": "Aplicativo Desktop Necessário",
     "storageMonitoringDesktopOnly": "O monitoramento de armazenamento requer o aplicativo desktop",
-    "dropFilesHere": "✨ Solte arquivos aqui!",
-    "uploadingFiles": "🔄 Enviando arquivos...",
+    "dropFilesHere": "[NEW] Solte arquivos aqui!",
+    "uploadingFiles": "[SYNC] Enviando arquivos...",
     "releaseToUpload": "Solte para enviar seus arquivos instantaneamente",
     "dragDropWebNotAvailable": "Arrastar e soltar não disponível na versão web",
     "pleaseWaitProcessing": "Por favor, aguarde enquanto seus arquivos estão sendo processados...",
@@ -1724,8 +1724,8 @@
       "forcedModeMining": "Você ativou manualmente o modo cliente puro nas Configurações. O blockchain sincroniza apenas os últimos ~100 blocos ao invés da sincronização completa (~10.000 blocos). A mineração está disponível mas usa armazenamento mínimo.",
       "natDetected": "AutoNAT detectou que você está atrás de NAT ou firewall restritivo. Você pode baixar arquivos mas não pode compartilhá-los com outros peers.",
       "natDetectedMining": "AutoNAT detectou que você está atrás de NAT ou firewall restritivo. O blockchain sincroniza apenas os últimos ~100 blocos para reduzir requisitos de largura de banda/armazenamento. A mineração está disponível com armazenamento reduzido.",
-      "settingsForced": "⚠️ Modo cliente forçado: Você não poderá compartilhar arquivos ou atuar como servidor DHT. O blockchain usa sincronização parcial (apenas últimos ~100 blocos) ao invés de sincronização completa (~10.000 blocos). Mineração disponível com armazenamento reduzido. Requer reinicialização do DHT.",
-      "serverModeDisabled": "ℹ️ O modo servidor está desabilitado quando o modo cliente é forçado."
+      "settingsForced": "[WARN] Modo cliente forçado: Você não poderá compartilhar arquivos ou atuar como servidor DHT. O blockchain usa sincronização parcial (apenas últimos ~100 blocos) ao invés de sincronização completa (~10.000 blocos). Mineração disponível com armazenamento reduzido. Requer reinicialização do DHT.",
+      "serverModeDisabled": "[INFO] O modo servidor está desabilitado quando o modo cliente é forçado."
     },
     "banner": {
       "title": {
@@ -1741,10 +1741,10 @@
         "defaultMining": "Você está no modo somente cliente. O blockchain sincroniza apenas os últimos ~100 blocos (armazenamento mínimo). A mineração está disponível."
       },
       "help": {
-        "forced": "Para habilitar o compartilhamento, desative \"Forçar Modo Somente Cliente\" em Configurações → Desenvolvedores → Modo Cliente DHT.",
+        "forced": "Para habilitar o compartilhamento, desative \"Forçar Modo Somente Cliente\" em Configurações -> Desenvolvedores -> Modo Cliente DHT.",
         "nat": "Seus arquivos ainda serão salvos localmente, mas não serão compartilhados com a rede. Para habilitar o compartilhamento, configure redirecionamento de porta ou use uma VPN com IP público.",
         "default": "Verifique suas configurações de rede ou configuração AutoNAT.",
-        "forcedMining": "Para habilitar sincronização blockchain completa (10.000 blocos), desative \"Forçar Modo Somente Cliente\" em Configurações → Desenvolvedores.",
+        "forcedMining": "Para habilitar sincronização blockchain completa (10.000 blocos), desative \"Forçar Modo Somente Cliente\" em Configurações -> Desenvolvedores.",
         "natMining": "Nós completos sincronizam ~10.000 blocos. Para atualizar, configure redirecionamento de porta ou use uma VPN com IP público para se tornar publicamente acessível.",
         "defaultMining": "Verifique suas configurações de rede ou configuração AutoNAT para funcionalidade completa."
       }

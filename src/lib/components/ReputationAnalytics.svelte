@@ -33,17 +33,17 @@
   // Get event icon
   const getEventIcon = (type: string): string => {
     switch (type) {
-      case 'FileTransferSuccess': return '📤';
-      case 'FileTransferFailure': return '⚠️';
-      case 'PaymentSuccess': return '🎉';
-      case 'PaymentFailure': return '💥';
-      case 'ConnectionEstablished': return '🔗';
-      case 'ConnectionLost': return '🔌';
-      case 'DhtQueryAnswered': return '💡';
-      case 'StorageOffered': return '📦';
-      case 'MaliciousBehaviorReport': return '🚩';
-      case 'FileShared': return '🤝';
-      default: return '⚙️';
+      case 'FileTransferSuccess': return '[OUT]';
+      case 'FileTransferFailure': return '[WARN]';
+      case 'PaymentSuccess': return '[DONE]';
+      case 'PaymentFailure': return '[FAIL]';
+      case 'ConnectionEstablished': return '[LINK]';
+      case 'ConnectionLost': return '[CONN]';
+      case 'DhtQueryAnswered': return '[HINT]';
+      case 'StorageOffered': return '[PKG]';
+      case 'MaliciousBehaviorReport': return '[FLAG]';
+      case 'FileShared': return '[HANDSHAKE]';
+      default: return '[CFG]';
     }
   };
 
@@ -152,7 +152,7 @@
           <p class="text-2xl font-bold text-gray-900">{analytics.totalPeers}</p>
         </div>
         <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-          <span class="text-blue-600 text-sm">👥</span>
+          <span class="text-blue-600 text-sm">[PEERS]</span>
         </div>
       </div>
     </Card>
@@ -164,7 +164,7 @@
           <p class="text-2xl font-bold text-green-600">{analytics.trustedPeers}</p>
         </div>
         <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-          <span class="text-green-600 text-sm">🛡️</span>
+          <span class="text-green-600 text-sm">[SHIELD]</span>
         </div>
       </div>
     </Card>
@@ -176,7 +176,7 @@
           <p class="text-2xl font-bold text-purple-600">{(analytics.averageScore * 5).toFixed(1)}/5.0</p>
         </div>
         <div class="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
-          <span class="text-purple-600 text-sm">⭐</span>
+          <span class="text-purple-600 text-sm">*</span>
         </div>
       </div>
     </Card>
@@ -190,7 +190,7 @@
           </p>
         </div>
         <div class="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
-          <span class="text-indigo-600 text-sm">📊</span>
+          <span class="text-indigo-600 text-sm">[STATS]</span>
         </div>
       </div>
     </Card>
@@ -281,7 +281,7 @@
           on:click={prevEventPage}
           disabled={currentEventPage <= 1}
           class="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-        >←</button>
+        >&lt;</button>
         <input
           type="number"
           bind:value={currentEventPage}
@@ -295,7 +295,7 @@
           on:click={nextEventPage}
           disabled={currentEventPage >= totalEventPages}
           class="px-3 py-1 text-sm border rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-        >→</button>
+        >&gt;</button>
       </div>
     </Card>
   </div>
