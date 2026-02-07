@@ -19,9 +19,9 @@ use crate::dht::DhtService;
 /// HTTP Server for serving files via Range requests
 ///
 /// Simplified Architecture (no pre-chunking):
-/// - GET /health -> Health check
-/// - GET /files/{file_hash} -> Serve file (supports Range header for partial downloads)
-/// - GET /files/{file_hash}/metadata -> Returns file metadata (name, size, encrypted status)
+/// - GET /health → Health check
+/// - GET /files/{file_hash} → Serve file (supports Range header for partial downloads)
+/// - GET /files/{file_hash}/metadata → Returns file metadata (name, size, encrypted status)
 ///
 /// This approach:
 /// - Stores whole files (not pre-chunked)
@@ -45,7 +45,7 @@ pub struct HttpServerState {
     /// This is the same directory used by FileTransferService
     pub storage_dir: PathBuf,
 
-    /// Maps file_hash -> HttpFileMetadata
+    /// Maps file_hash → HttpFileMetadata
     /// Tracks which files are available for HTTP download
     pub files: Arc<RwLock<HashMap<String, HttpFileMetadata>>>,
     
@@ -69,7 +69,7 @@ impl HttpServerState {
     pub async fn set_dht(&self, dht: Arc<DhtService>) {
         let mut dht_lock = self.dht.lock().await;
         *dht_lock = Some(dht);
-        tracing::info!("[OK] DHT service attached to HTTP server for metrics tracking");
+        tracing::info!("✅ DHT service attached to HTTP server for metrics tracking");
     }
 
     /// Register a file for HTTP serving
@@ -119,7 +119,7 @@ async fn serve_metadata(
     Path(file_hash): Path<String>,
     State(state): State<Arc<HttpServerState>>,
 ) -> Response {
-    tracing::info!("[SEARCH] Metadata request for: {}", file_hash);
+    tracing::info!("🔍 Metadata request for: {}", file_hash);
     
     // Debug: List all registered files
     let files = state.files.read().await;
@@ -128,12 +128,12 @@ async fn serve_metadata(
 
     match state.get_file_metadata(&file_hash).await {
         Some(metadata) => {
-            tracing::info!("[OK] Served metadata for {}: {} (file_hash: {})", 
+            tracing::info!("✅ Served metadata for {}: {} (file_hash: {})", 
                 file_hash, metadata.name, metadata.file_hash);
             (StatusCode::OK, Json(metadata)).into_response()
         }
         None => {
-            tracing::warn!("[X] Metadata not found for: {}", file_hash);
+            tracing::warn!("❌ Metadata not found for: {}", file_hash);
             (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
@@ -169,7 +169,7 @@ async fn serve_file(
         .map(|s| s.to_string());
     
     if let Some(ref peer_id) = downloader_peer_id {
-        tracing::info!("[IN] Download request from peer: {}", peer_id);
+        tracing::info!("📥 Download request from peer: {}", peer_id);
     }
 
     // Check if file is registered
@@ -229,7 +229,7 @@ async fn serve_file(
         tokio::spawn(async move {
             if let Some(dht) = state_clone.dht.lock().await.as_ref() {
                 dht.record_transfer_success(&peer_id_clone, file_size, 0).await;
-                tracing::info!("[STATS] Provider: Recorded upload to peer {}", peer_id_clone);
+                tracing::info!("📊 Provider: Recorded upload to peer {}", peer_id_clone);
             }
         });
     }
@@ -338,9 +338,9 @@ async fn serve_entire_file(file_path: &PathBuf, file_size: u64) -> Response {
 /// Parse HTTP Range header
 ///
 /// Supports formats:
-/// - "bytes=0-999" -> Some((0, 999))
-/// - "bytes=1000-" -> Some((1000, file_size-1))
-/// - "bytes=-500" -> Not supported (returns None)
+/// - "bytes=0-999" → Some((0, 999))
+/// - "bytes=1000-" → Some((1000, file_size-1))
+/// - "bytes=-500" → Not supported (returns None)
 fn parse_range_header(range_str: &str, file_size: u64) -> Option<(u64, u64)> {
     let bytes_str = range_str.strip_prefix("bytes=")?;
     let mut parts = bytes_str.split('-');

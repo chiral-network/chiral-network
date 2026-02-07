@@ -297,7 +297,7 @@
   }
 
   // Parse a log line and extract a severity prefix (if present) and the rest of the message.
-  // Example: "INFO [09-14|16:32:29.577] Message..." -> { prefix: 'INFO', rest: '[09-14|16:32:29.577] Message...' }
+  // Example: "INFO [09-14|16:32:29.577] Message..." → { prefix: 'INFO', rest: '[09-14|16:32:29.577] Message...' }
   function splitLogPrefix(line: string): { prefix: string | null; rest: string } {
     if (!line) return { prefix: null, rest: '' }
     // Match leading ALL-CAPS token (usually INFO, WARN, ERROR, DEBUG) optionally followed by a timestamp bracket
@@ -550,7 +550,7 @@
         miningMonitorUnlisten = unlistenBlockMined;
         scanProgressUnlisten = null;
       } catch (error) {
-        console.error('[Mining Page] [X] FAILED to start mining monitor:', error);
+        console.error('[Mining Page] ❌ FAILED to start mining monitor:', error);
       }
 
       // Fetch mining stats on page load
@@ -914,7 +914,7 @@
       showPoolList = true;
       await invoke('update_pool_discovery'); // Update pool stats
     } catch (e) {
-      console.error('[X] Pool discovery error:', e);
+      console.error('❌ Pool discovery error:', e);
       poolError = String(e);
     } finally {
       isDiscovering = false;
@@ -1335,7 +1335,7 @@
     <Card class="p-4 bg-yellow-50 border-yellow-200">
       <div class="flex items-start gap-3">
         <div class="text-yellow-600 mt-0.5">
-          [WARN]
+          ⚠️
         </div>
         <div class="flex-1 space-y-2">
           <p class="text-sm font-semibold text-yellow-800">
@@ -1737,7 +1737,7 @@
               </div>
             </div>
             <p class="text-xs text-blue-600 mt-2">
-              [WAIT] Mining will begin automatically when sync completes
+              ⏳ Mining will begin automatically when sync completes
             </p>
           </div>
         </div>

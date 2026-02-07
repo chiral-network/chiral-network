@@ -1317,8 +1317,8 @@ async fn run_dht_node(
             let peer_id_str = peer_id.to_string();
 
             // 1. Resolve naming: use merkle_root as the identifier
-            info!("[SEARCH] DEBUG DHT PUBLISH: Local peer_id = {}", peer_id_str);
-            info!("[SEARCH] DEBUG DHT PUBLISH: Merkle root = {}", metadata.merkle_root);
+            info!("🔍 DEBUG DHT PUBLISH: Local peer_id = {}", peer_id_str);
+            info!("🔍 DEBUG DHT PUBLISH: Merkle root = {}", metadata.merkle_root);
 
             // 2. Define merged_metadata by checking the local cache
             // This fixes the "cannot find value merged_metadata" errors
@@ -1342,7 +1342,7 @@ async fn run_dht_node(
             // IMPORTANT:
             // We MUST go through serde for FileMetadata here to ensure:
             // - field renames (merkleRoot/fileName/...) are correct
-            // - CID custom serialization runs (cids -> Vec<String>)
+            // - CID custom serialization runs (cids → Vec<String>)
             //
             // Then we add a few legacy/extra fields for backwards compatibility.
             let mut dht_metadata = serde_json::to_value(&merged_metadata).unwrap_or_else(|_| serde_json::json!({}));
@@ -1420,7 +1420,7 @@ async fn run_dht_node(
             }
 
             // 5. Notify frontend and respond to the command
-            info!("[SEARCH] DEBUG DHT: Sending PublishedFile event for {}", merged_metadata.merkle_root);
+            info!("🔍 DEBUG DHT: Sending PublishedFile event for {}", merged_metadata.merkle_root);
             let _ = event_tx.send(DhtEvent::PublishedFile(merged_metadata.clone())).await;
 
             if let Some(info_hash) = &merged_metadata.info_hash {
@@ -1562,7 +1562,7 @@ async fn run_dht_node(
 
                                             // 4. Announce self as provider (only if we have dialable addrs)
                                             if !swarm_has_dialable_addr(&swarm) {
-                                                warn!("[STOP] Not registering encrypted file {} as provider: no dialable address (set CHIRAL_PUBLIC_IP or enable UPnP)", metadata.merkle_root);
+                                                warn!("🛑 Not registering encrypted file {} as provider: no dialable address (set CHIRAL_PUBLIC_IP or enable UPnP)", metadata.merkle_root);
                                                 {
                                                     let mut pending = pending_provider_registrations.lock().await;
                                                     pending.insert(metadata.merkle_root.clone());
@@ -1599,8 +1599,8 @@ async fn run_dht_node(
                                             let _ = response_tx.send(Ok(()));
                                         }
                                     Some(DhtCommand::DownloadFile(mut file_metadata, download_path)) =>{
-                                        info!("[ACTION] DownloadFile command received for: {} to: {}", file_metadata.file_name, download_path);
-                                        info!("[ACTION] file has cids: {:?}", file_metadata.cids);
+                                        info!("🎬 DownloadFile command received for: {} to: {}", file_metadata.file_name, download_path);
+                                        info!("🎬 file has cids: {:?}", file_metadata.cids);
                                         // Dual-lookup check: If the merkle_root is an info_hash, resolve it first.
                                         if file_metadata.merkle_root.starts_with("info_hash:") {
                                             let info_hash = file_metadata.merkle_root.clone();
@@ -1652,7 +1652,7 @@ async fn run_dht_node(
                                                     root_query_mapping.lock().await.insert(query_id, file_metadata.clone());
 
                                                     info!(
-                                                        "[ACTION] Started Bitswap download: rootCid={} queryId={:?} file={}",
+                                                        "🎬 Started Bitswap download: rootCid={} queryId={:?} file={}",
                                                         root_cid, query_id, file_metadata.merkle_root
                                                     );
                                                     continue;
@@ -1755,8 +1755,8 @@ async fn run_dht_node(
                                             debug!("StopPublish completed for {}", file_hash);
                                         }
                                     Some(DhtCommand::SearchFile { file_hash, sender }) => {
-                                        info!("[SEARCH] Received search command for file: {}", file_hash);
-                                        info!("[SEARCH] Initiating DHT queries for file search");
+                                        info!("🔍 Received search command for file: {}", file_hash);
+                                        info!("🔍 Initiating DHT queries for file search");
                                         // Query both the metadata record AND the provider records
                                         // This ensures we find the file even if only provider announcements exist
                                         let key = kad::RecordKey::new(&file_hash.as_bytes());
@@ -1766,7 +1766,7 @@ async fn run_dht_node(
 
                                         // Start record lookup
                                         let record_query_id = swarm.behaviour_mut().kademlia.get_record(key.clone());
-                                        info!("[SEARCH] Searching for file metadata: {} (record query: {:?})", file_hash, record_query_id);
+                                        info!("🔍 Searching for file metadata: {} (record query: {:?})", file_hash, record_query_id);
                                         pending_query.record_query_id = Some(record_query_id);
 
                                         // Track both queries under the record query ID (primary)
@@ -1961,7 +1961,7 @@ async fn run_dht_node(
                                         let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
                                         info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
 
-                                        // Store the query_id -> (file_hash, start_time) mapping for error handling and timeout detection
+                                        // Store the query_id → (file_hash, start_time) mapping for error handling and timeout detection
                                         get_providers_queries.lock().await.insert(query_id, (file_hash.clone(), std::time::Instant::now()));
 
                                         // Store the query for async handling
@@ -2030,32 +2030,32 @@ async fn run_dht_node(
 
                                         match swarm.behaviour_mut().kademlia.put_record(record, kad::Quorum::One) {
                                             Ok(query_id) => {
-                                                info!("[OK] DHT put started: key={}, query_id={:?}", key, query_id);
+                                                info!("✅ DHT put started: key={}, query_id={:?}", key, query_id);
                                                 let _ = sender.send(Ok(()));
                                             }
                                             Err(e) => {
-                                                error!("[X] DHT put failed for key {}: {}", key, e);
+                                                error!("❌ DHT put failed for key {}: {}", key, e);
                                                 let _ = sender.send(Err(format!("Failed to store in DHT: {}", e)));
                                             }
                                         }
                                     }
                                     Some(DhtCommand::GetDhtValue { key, sender }) => {
-                                        info!("[SEARCH] Fetching DHT value with key: {}", key);
+                                        info!("🔍 Fetching DHT value with key: {}", key);
                                         let record_key = kad::RecordKey::new(&key);
                                         let query_id = swarm.behaviour_mut().kademlia.get_record(record_key);
-                                        info!("[SEARCH] DHT get started: key={}, query_id={:?}", key, query_id);
+                                        info!("🔍 DHT get started: key={}, query_id={:?}", key, query_id);
 
                                         // Store the sender to respond when we get the Kademlia result
                                         pending_dht_queries.lock().await.insert(query_id, sender);
                                     }
                                     Some(DhtCommand::ReBootstrap { sender }) => {
-                                        info!("[SYNC] Re-bootstrapping DHT to discover new peers...");
+                                        info!("🔄 Re-bootstrapping DHT to discover new peers...");
                                         let initial_peer_count = connected_peers.lock().await.len();
 
                                         // Trigger Kademlia bootstrap
                                         match swarm.behaviour_mut().kademlia.bootstrap() {
                                             Ok(query_id) => {
-                                                info!("[OK] Re-bootstrap initiated (query_id: {:?})", query_id);
+                                                info!("✅ Re-bootstrap initiated (query_id: {:?})", query_id);
 
                                                 // Update metrics
                                                 {
@@ -2072,7 +2072,7 @@ async fn run_dht_node(
                                                 });
                                             }
                                             Err(e) => {
-                                                error!("[X] Re-bootstrap failed: {:?}", e);
+                                                error!("❌ Re-bootstrap failed: {:?}", e);
                                                 let mut m = metrics.lock().await;
                                                 m.bootstrap_failures = m.bootstrap_failures.saturating_add(1);
                                                 m.last_error = Some(format!("Re-bootstrap failed: {:?}", e));
@@ -2114,7 +2114,7 @@ async fn run_dht_node(
 
                                         // Auto-recover if unhealthy and requested
                                         if !healthy && auto_recover {
-                                            info!("[SYNC] Auto-recovery: triggering re-bootstrap (peers: {}, min: {})", peer_count, min_peers);
+                                            info!("🔄 Auto-recovery: triggering re-bootstrap (peers: {}, min: {})", peer_count, min_peers);
                                             if let Ok(_) = swarm.behaviour_mut().kademlia.bootstrap() {
                                                 recovery_triggered = true;
                                                 let mut m = metrics.lock().await;
@@ -2208,11 +2208,11 @@ async fn run_dht_node(
                                                 || std::env::var("CHIRAL_E2E_API_PORT").ok().is_some()) =>
                                     match bitswap {
                                         beetswap::Event::GetQueryResponse { query_id, data } => {
-                                            info!("[IN] Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
+                                            info!("📥 Received Bitswap block (query_id: {:?}, size: {} bytes)", query_id, data.len());
 
                                             // Check if this is a root block query first
                                             if let Some(metadata) = root_query_mapping.lock().await.remove(&query_id) {
-                                                info!("[OK] This is a ROOT BLOCK for file: {}", metadata.merkle_root);
+                                                info!("✅ This is a ROOT BLOCK for file: {}", metadata.merkle_root);
 
                                                 // This is the root block containing CIDs - parse and request all data blocks
                                                 // Try multiple formats for backward compatibility
@@ -2342,7 +2342,7 @@ async fn run_dht_node(
                                                     );
 
                                                         info!(
-                                                            "[ACTION] Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
+                                                            "🎬 Started tracking download for file {} with {} chunks (chunk_size: {} bytes)",
                                                             metadata.merkle_root, cids.len(), chunk_size
                                                         );
 
@@ -2382,7 +2382,7 @@ async fn run_dht_node(
                                                 for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
                                                     let mut active_download = active_download_lock.lock().await;
                                                     if let Some(chunk_index) = active_download.queries.remove(&query_id) {
-                                                        info!("[PKG] Processing successful chunk {} for file {}", chunk_index, file_hash);
+                                                        info!("📦 Processing successful chunk {} for file {}", chunk_index, file_hash);
                                                         found = true;
 
                                                             // This query belongs to this file - write the chunk to disk
@@ -2406,7 +2406,7 @@ async fn run_dht_node(
                                                                 active_download.total_chunks,
                                                                 file_hash);
 
-                                                            info!("[OUT] Emitting BitswapChunkDownloaded event: file_hash={}, chunk={}/{}",
+                                                            info!("📤 Emitting BitswapChunkDownloaded event: file_hash={}, chunk={}/{}",
                                                                 file_hash, chunk_index, active_download.total_chunks);
 
                                                             let _ = event_tx.send(DhtEvent::BitswapChunkDownloaded {
@@ -2452,7 +2452,7 @@ async fn run_dht_node(
                       file_hash, received_count, total_expected, queries_remaining);
 
                 if active_download.is_complete() {
-                    info!("[DONE] Download complete for file {}! Finalizing...", file_hash);
+                    info!("🎉 Download complete for file {}! Finalizing...", file_hash);
                     // Flush and finalize the file
                     match active_download.finalize() {
                         Ok(_) => {
@@ -2502,7 +2502,7 @@ async fn run_dht_node(
                                             error,
                                         } => {
                                             // Handle Bitswap query error
-                                            error!("[X] Bitswap query {:?} failed: {:?}", query_id, error);
+                                            error!("❌ Bitswap query {:?} failed: {:?}", query_id, error);
 
                                             // Check if any active downloads contain this failed query
                                             {
@@ -2512,7 +2512,7 @@ async fn run_dht_node(
                                                 for (file_hash, active_download_lock) in active_downloads_guard.iter_mut() {
                                                     let mut active_download = active_download_lock.lock().await;
                                                     if active_download.queries.remove(&query_id).is_some() {
-                                                        warn!("[X] Query {:?} failed for file {}, but continuing with remaining chunks", query_id, file_hash);
+                                                        warn!("❌ Query {:?} failed for file {}, but continuing with remaining chunks", query_id, file_hash);
 
                                                         // Check if download is still complete with remaining chunks
                                                         if active_download.is_complete() {
@@ -2665,7 +2665,7 @@ async fn run_dht_node(
                                             m.last_success = Some(SystemTime::now());
                                         }
 
-                                        info!("[OK] Connected to {} (connection #{})", peer_id, num_established);
+                                        info!("✅ Connected to {} (connection #{})", peer_id, num_established);
                                         info!("   Total connected peers: {}", peers_count);
 
                                         let _ = event_tx
@@ -2676,7 +2676,7 @@ async fn run_dht_node(
                                             .await;
                                     }
                                     SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                                        warn!("[X] DISCONNECTED from peer: {}", peer_id);
+                                        warn!("❌ DISCONNECTED from peer: {}", peer_id);
                                         warn!("   Cause: {:?}", cause);
                                         swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
 
@@ -2714,7 +2714,7 @@ async fn run_dht_node(
                                                 }
 
                                                 swarm.add_external_address(address.clone());
-                                                info!("[OK] Advertising reachable address: {}", address);
+                                                info!("✅ Advertising reachable address: {}", address);
                                             }
                                         }
                                     }
@@ -2738,25 +2738,25 @@ async fn run_dht_node(
                                                 let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
                                                 if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
                                                     LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
-                                                    error!("[X] Outgoing connection error to {}: {}", pid, error);
+                                                    error!("❌ Outgoing connection error to {}: {}", pid, error);
                                                 }
 
                                                 if error_str.contains("rsa") {
-                                                    error!("   [INFO] Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                                    error!("   ℹ️ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
                                                 } else if error_str.contains("Timeout") {
                                                     if is_bootstrap {
-                                                        warn!("   [INFO] Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                                        warn!("   ℹ️ Hint: Bootstrap nodes may be unreachable or overloaded.");
                                                     } else {
-                                                        warn!("   [INFO] Hint: Peer may be unreachable (timeout).");
+                                                        warn!("   ℹ️ Hint: Peer may be unreachable (timeout).");
                                                     }
                                                 } else if error_str.contains("Connection refused") {
                                                     if is_bootstrap {
-                                                        warn!("   [INFO] Hint: Bootstrap nodes are not accepting connections.");
+                                                        warn!("   ℹ️ Hint: Bootstrap nodes are not accepting connections.");
                                                     } else {
-                                                        warn!("   [INFO] Hint: Peer is not accepting connections.");
+                                                        warn!("   ℹ️ Hint: Peer is not accepting connections.");
                                                     }
                                                 } else if error_str.contains("Transport") {
-                                                    warn!("   [INFO] Hint: Transport protocol negotiation failed.");
+                                                    warn!("   ℹ️ Hint: Transport protocol negotiation failed.");
                                                 }
                                         } else {
                                             // Rate limit connection errors to once every 30 seconds
@@ -2767,7 +2767,7 @@ async fn run_dht_node(
                                             let last_log = LAST_CONNECTION_ERROR_LOG.load(Ordering::Relaxed);
                                             if now.saturating_sub(last_log) >= 30_000 { // 30 seconds
                                                 LAST_CONNECTION_ERROR_LOG.store(now, Ordering::Relaxed);
-                                                error!("[X] Outgoing connection error to unknown peer: {}", error);
+                                                error!("❌ Outgoing connection error to unknown peer: {}", error);
                                             }
                                         }
                                         let _ = event_tx.send(DhtEvent::Error(format!("Connection failed: {}", error))).await;
@@ -2795,7 +2795,7 @@ async fn run_dht_node(
                                                             if parsed.get("type").and_then(|v| v.as_str()) == Some("payment_notification") {
                                                                 // This is a payment notification, emit special event
                                                                 if let Some(payload) = parsed.get("payload") {
-                                                                    info!("[PAY] Received payment notification from peer {}: {:?}", peer, payload);
+                                                                    info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
                                                                     let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
                                                                         from_peer: peer.to_string(),
                                                                         payload: payload.clone(),
@@ -3056,7 +3056,7 @@ async fn run_dht_node(
                 match event {
                     crate::webrtc_service::WebRTCEvent::FileChunkReceived { peer_id, chunk } => {
                         info!(
-                            "[IN] Received WebRTC chunk {}/{} from peer {} for file {}",
+                            "📥 Received WebRTC chunk {}/{} from peer {} for file {}",
                             chunk.chunk_index + 1,
                             chunk.total_chunks,
                             peer_id,
@@ -3065,7 +3065,7 @@ async fn run_dht_node(
                     }
                     crate::webrtc_service::WebRTCEvent::TransferProgress { peer_id, progress } => {
                         info!(
-                            "[STATS] Transfer progress from {}: {:.1}%",
+                            "📊 Transfer progress from {}: {:.1}%",
                             peer_id, progress.percentage
                         );
                     }
@@ -3074,7 +3074,7 @@ async fn run_dht_node(
                         file_hash,
                     } => {
                         info!(
-                            "[OK] WebRTC transfer completed: {} from peer {}",
+                            "✅ WebRTC transfer completed: {} from peer {}",
                             file_hash, peer_id
                         );
 
@@ -3098,7 +3098,7 @@ async fn run_dht_node(
                         error,
                     } => {
                         error!(
-                            "[X] WebRTC transfer failed: {} from peer {}: {}",
+                            "❌ WebRTC transfer failed: {} from peer {}: {}",
                             file_hash, peer_id, error
                         );
                         let _ = event_tx
@@ -3114,7 +3114,7 @@ async fn run_dht_node(
                         chunk_index,
                     } => {
                         info!(
-                            "[OUT] Peer {} requested chunk {} of file {}",
+                            "📤 Peer {} requested chunk {} of file {}",
                             peer_id, chunk_index, file_hash
                         );
 
@@ -3170,7 +3170,7 @@ async fn run_dht_node(
                                                 );
                                             } else {
                                                 info!(
-                                                    "[OK] Sent chunk {} to peer {}",
+                                                    "✅ Sent chunk {} to peer {}",
                                                     chunk_index, peer_id
                                                 );
                                             }
@@ -3310,7 +3310,7 @@ async fn handle_kademlia_event(
                         // Check if this is a response to a generic DHT value query (e.g., reputation verdicts)
                         if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
                             info!(
-                                "[OK] DHT get successful: found {} bytes",
+                                "✅ DHT get successful: found {} bytes",
                                 peer_record.record.value.len()
                             );
                             let _ = sender.send(Ok(Some(peer_record.record.value.clone())));
@@ -3323,7 +3323,7 @@ async fn handle_kademlia_event(
                         {
                             let search_file_hash = pending_search.file_hash.clone();
                             info!(
-                                "[IN] Received search result for query ID: {:?}, searching for: {}",
+                                "📥 Received search result for query ID: {:?}, searching for: {}",
                                 id, search_file_hash
                             );
 
@@ -3333,7 +3333,7 @@ async fn handle_kademlia_event(
                             ) {
                                 Ok(metadata_json) => {
                                     // Debug: Log the raw metadata JSON
-                                    info!("[SEARCH] Raw metadata JSON: {}", metadata_json);
+                                    info!("🔍 Raw metadata JSON: {}", metadata_json);
 
                                     // Construct FileMetadata from the JSON
                                     // NOTE: We accept both snake_case and camelCase because different publish paths
@@ -3363,7 +3363,7 @@ async fn handle_kademlia_event(
                                             metadata_json.get("createdAt").and_then(|v| v.as_u64())
                                         });
 
-                                    info!("[SEARCH] Parsed fields - merkleRoot: {:?}, fileName: {:?}, fileSize: {:?}, createdAt: {:?}", merkle_root, file_name, file_size, created_at);
+                                    info!("🔍 Parsed fields - merkleRoot: {:?}, fileName: {:?}, fileSize: {:?}, createdAt: {:?}", merkle_root, file_name, file_size, created_at);
 
                                     if let (
                                         Some(file_hash),
@@ -3372,11 +3372,11 @@ async fn handle_kademlia_event(
                                         Some(created_at_val),
                                     ) = (merkle_root, file_name, file_size, created_at)
                                     {
-                                        info!("[SEARCH] Found metadata record - merkleRoot: {}, searching for: {}", file_hash, search_file_hash);
+                                        info!("🔍 Found metadata record - merkleRoot: {}, searching for: {}", file_hash, search_file_hash);
                                         // Verify this is the file we were searching for
                                         if file_hash == search_file_hash {
                                             info!(
-                                                "[CFG] Constructing metadata for found file: {}",
+                                                "⚙️ Constructing metadata for found file: {}",
                                                 file_hash
                                             );
                                             let mut metadata =
@@ -3387,10 +3387,10 @@ async fn handle_kademlia_event(
                                                     file_size_val,
                                                     created_at_val,
                                                 );
-                                            info!("[CFG] Metadata constructed successfully");
+                                            info!("⚙️ Metadata constructed successfully");
 
                                             // Merge providers with existing seeders from metadata
-                                            info!("[CFG] Merging providers with metadata seeders");
+                                            info!("⚙️ Merging providers with metadata seeders");
                                             if let Some(providers) = &pending_search.found_providers
                                             {
                                                 // Add providers that aren't already in seeders
@@ -3399,22 +3399,22 @@ async fn handle_kademlia_event(
                                                         metadata.seeders.push(provider.clone());
                                                     }
                                                 }
-                                                info!("[OK] Found searched file: {} ({}) with {} seeders (merged from metadata + providers)", file_name_val, file_hash, metadata.seeders.len());
+                                                info!("✅ Found searched file: {} ({}) with {} seeders (merged from metadata + providers)", file_name_val, file_hash, metadata.seeders.len());
                                             } else {
-                                                info!("[OK] Found searched file: {} ({}) with {} seeders from metadata", file_name_val, file_hash, metadata.seeders.len());
+                                                info!("✅ Found searched file: {} ({}) with {} seeders from metadata", file_name_val, file_hash, metadata.seeders.len());
                                             }
 
                                             // Merge with local cache to preserve multi-protocol metadata
                                             // This ensures that if we uploaded via both WebRTC and Bitswap locally,
                                             // the search result will include CIDs from local cache even if DHT
                                             // record only has one protocol's data
-                                            info!("[CFG] Merging with local cache");
+                                            info!("⚙️ Merging with local cache");
                                             {
                                                 let cache = file_metadata_cache.lock().await;
                                                 if let Some(cached) =
                                                     cache.get(&metadata.merkle_root)
                                                 {
-                                                    info!("[SEARCH] Merging search result with local cache for {}", metadata.merkle_root);
+                                                    info!("🔍 Merging search result with local cache for {}", metadata.merkle_root);
                                                     metadata = merge_file_metadata(
                                                         cached.clone(),
                                                         metadata,
@@ -3423,7 +3423,7 @@ async fn handle_kademlia_event(
                                             }
 
                                             // Send event to frontend for search results
-                                            info!("[NET] Sending DhtEvent::FileDiscovered for file: {} (CIDs: {:?}, FTP: {})",
+                                            info!("🌐 Sending DhtEvent::FileDiscovered for file: {} (CIDs: {:?}, FTP: {})",
                                             metadata.file_name,
                                             metadata.cids.as_ref().map(|v| v.len()),
                                             metadata.ftp_sources.as_ref().map(|v| v.len()).unwrap_or(0));
@@ -3431,22 +3431,22 @@ async fn handle_kademlia_event(
                                                 .send(DhtEvent::FileDiscovered(metadata.clone()))
                                                 .await;
                                             info!(
-                                                "[NET] Sending result through channel for file: {}",
+                                                "🌐 Sending result through channel for file: {}",
                                                 metadata.file_name
                                             );
                                             let _ = pending_search.sender.send(Ok(Some(metadata)));
-                                            info!("[OK] Search result processing completed successfully");
+                                            info!("✅ Search result processing completed successfully");
                                             return; // Successfully handled the search result
                                         } else {
-                                            info!("[X] Hash mismatch - found metadata for {} but searching for {}", file_hash, search_file_hash);
+                                            info!("❌ Hash mismatch - found metadata for {} but searching for {}", file_hash, search_file_hash);
                                         }
                                     } else {
                                         debug!("Received incomplete metadata record during search");
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("[X] Failed to parse metadata JSON: {}", e);
-                                    info!("[X] Raw metadata bytes: {:?}", &peer_record.record.value);
+                                    warn!("❌ Failed to parse metadata JSON: {}", e);
+                                    info!("❌ Raw metadata bytes: {:?}", &peer_record.record.value);
                                 }
                             }
 
@@ -3664,7 +3664,7 @@ async fn handle_kademlia_event(
 
                     // Check if this was a failed DHT value query
                     if let Some(sender) = pending_dht_queries.lock().await.remove(&id) {
-                        info!("[X] DHT get failed: {:?}", err);
+                        info!("❌ DHT get failed: {:?}", err);
                         let _ = sender.send(Ok(None)); // Return None on error rather than Err
                         return;
                     }
@@ -3723,15 +3723,15 @@ async fn handle_kademlia_event(
                 }
                 QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
                     let key_str = String::from_utf8_lossy(key.as_ref());
-                    info!("[OK] PutRecord completed successfully for key: {}", key_str);
+                    info!("✅ PutRecord completed successfully for key: {}", key_str);
 
                     // Check if this is an info_hash index
                     if key_str.starts_with(INFO_HASH_PREFIX) {
-                        info!("[OK] Info_hash index record stored in DHT: {}", key_str);
+                        info!("✅ Info_hash index record stored in DHT: {}", key_str);
                     }
                 }
                 QueryResult::PutRecord(Err(err)) => {
-                    error!("[X] PutRecord failed: {:?}", err);
+                    error!("❌ PutRecord failed: {:?}", err);
                     let _ = event_tx
                         .send(DhtEvent::Error(format!("PutRecord failed: {:?}", err)))
                         .await;
@@ -3811,7 +3811,7 @@ async fn handle_kademlia_event(
 
                                 if dial_success {
                                     info!(
-                                        "[OK] Initiated {} connection attempts to peer {}",
+                                        "✅ Initiated {} connection attempts to peer {}",
                                         connection_attempts, peer_info.peer_id
                                     );
                                 }
@@ -3869,7 +3869,7 @@ async fn handle_kademlia_event(
                                         pending_search.found_providers =
                                             Some(provider_strings.clone());
                                         info!(
-                                            "[OK] Updated pending search for {} with {} providers",
+                                            "✅ Updated pending search for {} with {} providers",
                                             file_hash,
                                             provider_strings.len()
                                         );
@@ -3940,17 +3940,17 @@ async fn handle_kademlia_event(
                 //     num_remaining,
                 // })) => {
                 //     println!(
-                //         "[OK] Bootstrap query succeeded. Peer: {peer}, remaining: {num_remaining}"
+                //         "✅ Bootstrap query succeeded. Peer: {peer}, remaining: {num_remaining}"
                 //     );
                 //     if num_remaining == 0 {
-                //         println!("[TARGET] Bootstrap fully complete!");
+                //         println!("🎯 Bootstrap fully complete!");
                 //     }
                 // }
                 // QueryResult::Bootstrap(Err(BootstrapError::Timeout { peer, .. })) => {
                 //     eprintln!("[TIME] Bootstrap timed out; contacted peers: {:?}", peer);
                 // }
                 // QueryResult::Bootstrap(Err(e)) => {
-                //     eprintln!("[X] Bootstrap failed: {:?}", e);
+                //     eprintln!("❌ Bootstrap failed: {:?}", e);
                 // }
                 _ => {}
             }
@@ -4063,7 +4063,7 @@ async fn handle_mdns_event(
                             .or_insert_with(Vec::new)
                             .push(multiaddr.to_string());
                     }
-                    Err(e) => warn!("[X] Failed to dial bootstrap {}: {}", multiaddr, e),
+                    Err(e) => warn!("❌ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }
             }
             for (peer_id, addresses) in discovered {
@@ -4179,7 +4179,7 @@ async fn handle_upnp_event(
 ) {
     match event {
         upnp::Event::NewExternalAddr(addr) => {
-            info!("[NET] UPnP: Successfully mapped external address: {}", addr);
+            info!("🌐 UPnP: Successfully mapped external address: {}", addr);
 
             // Add the external address to the swarm
             swarm.add_external_address(addr.clone());
@@ -4187,7 +4187,7 @@ async fn handle_upnp_event(
             // Notify the UI
             let _ = event_tx
                 .send(DhtEvent::Info(format!(
-                    "[OK] UPnP port mapping successful: {}",
+                    "✅ UPnP port mapping successful: {}",
                     addr
                 )))
                 .await;
@@ -4203,7 +4203,7 @@ async fn handle_upnp_event(
                 .await;
         }
         upnp::Event::GatewayNotFound => {
-            warn!("[WARN]  UPnP: No UPnP gateway found on network");
+            warn!("⚠️  UPnP: No UPnP gateway found on network");
             warn!("    - Make sure your router supports UPnP/IGD");
             warn!("    - Check if UPnP is enabled in router settings");
             let _ = event_tx
@@ -4213,7 +4213,7 @@ async fn handle_upnp_event(
                 .await;
         }
         upnp::Event::NonRoutableGateway => {
-            warn!("[WARN]  UPnP: Gateway is not routable");
+            warn!("⚠️  UPnP: Gateway is not routable");
             warn!("    - Your router may be behind another NAT (carrier-grade NAT)");
             warn!("    - Direct connections may not be possible");
 
@@ -4289,14 +4289,14 @@ async fn handle_external_addr_confirmed(
     // Skip upgrade if in pure-client mode (cannot act as DHT server)
     if pure_client_mode {
         info!(
-            "[WARN]  Pure client mode enabled - staying in Client mode despite public reachability at {}",
+            "⚠️  Pure client mode enabled - staying in Client mode despite public reachability at {}",
             addr
         );
         info!("   Note: Node cannot seed files or act as DHT server in pure-client mode");
     } else {
         swarm.behaviour_mut().kademlia.set_mode(Some(Mode::Server));
         info!(
-            "[SYNC] Upgraded Kademlia to Server mode - node is publicly reachable at {}",
+            "🔄 Upgraded Kademlia to Server mode - node is publicly reachable at {}",
             addr
         );
     }
@@ -4510,7 +4510,7 @@ impl ActiveDownload {
 
         if complete {
             info!(
-                "[DONE] Download completion check: queries_empty={}, received_chunks={}/{}, COMPLETE!",
+                "🎉 Download completion check: queries_empty={}, received_chunks={}/{}, COMPLETE!",
                 queries_empty, received_count, self.total_chunks
             );
         } else {
@@ -4765,7 +4765,7 @@ impl DhtService {
         // Developer override: force Server mode immediately if requested (for testing/debugging)
         if force_server_mode {
             kademlia.set_mode(Some(Mode::Server));
-            info!("[WARN]  Starting Kademlia in FORCED Server mode (developer override)");
+            info!("⚠️  Starting Kademlia in FORCED Server mode (developer override)");
             info!("   Note: This may cause connectivity issues if behind NAT/firewall");
         } else {
             kademlia.set_mode(Some(Mode::Client));
@@ -4830,7 +4830,7 @@ impl DhtService {
 
         // UPnP configuration for automatic port mapping
         let upnp_behaviour = if enable_upnp {
-            info!("[NET] UPnP enabled - attempting automatic port mapping");
+            info!("🌐 UPnP enabled - attempting automatic port mapping");
             Some(upnp::tokio::Behaviour::default())
         } else {
             info!("UPnP disabled");
@@ -4970,10 +4970,10 @@ impl DhtService {
                                 .add_address(&peer_id, addr.clone());
                         }
                     }
-                    Err(e) => warn!("[X] Failed to dial bootstrap {}: {}", bootstrap_addr, e),
+                    Err(e) => warn!("❌ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
                 }
             } else {
-                warn!("[X] Invalid bootstrap address format: {}", bootstrap_addr);
+                warn!("❌ Invalid bootstrap address format: {}", bootstrap_addr);
             }
         }
 
@@ -5002,11 +5002,11 @@ impl DhtService {
             if successful_connections > 0 {
                 let _ = swarm.behaviour_mut().kademlia.bootstrap();
                 info!(
-                    "[OK] Starting Kademlia bootstrap with {} bootstrap connection(s)",
+                    "✅ Starting Kademlia bootstrap with {} bootstrap connection(s)",
                     successful_connections
                 );
             } else {
-                warn!("[WARN] No bootstrap connections succeeded - cannot bootstrap DHT");
+                warn!("⚠️ No bootstrap connections succeeded - cannot bootstrap DHT");
                 warn!("  Node will operate in standalone mode until peers connect");
                 warn!("  Consider checking network connectivity and bootstrap node addresses");
             }
@@ -5347,11 +5347,11 @@ impl DhtService {
         download_path: String,
     ) -> Result<(), String> {
         info!(
-            "[IN] DhtService::download_file called for: {} to: {}",
+            "📥 DhtService::download_file called for: {} to: {}",
             file_metadata.file_name, download_path
         );
         info!(
-            "[IN] file has {} seeders, cids present: {}",
+            "📥 file has {} seeders, cids present: {}",
             file_metadata.seeders.len(),
             file_metadata.cids.is_some()
         );
@@ -5429,7 +5429,7 @@ impl DhtService {
         timeout_ms: u64,
     ) -> Result<Option<FileMetadata>, String> {
         info!(
-            "[SEARCH] Starting search for file: {} (timeout: {}ms)",
+            "🔍 Starting search for file: {} (timeout: {}ms)",
             file_hash, timeout_ms
         );
 
@@ -5450,7 +5450,7 @@ impl DhtService {
         let (tx, rx) = oneshot::channel();
 
         // Send the validated search command
-        info!("[SEARCH] Sending DHT search command for file: {}", file_hash);
+        info!("🔍 Sending DHT search command for file: {}", file_hash);
         if let Err(err) = self
             .cmd_tx
             .send(DhtCommand::SearchFile {
@@ -5459,22 +5459,22 @@ impl DhtService {
             })
             .await
         {
-            error!("[X] Failed to send DHT search command: {}", err);
+            error!("❌ Failed to send DHT search command: {}", err);
             return Err(err.to_string());
         }
-        info!("[OK] DHT search command sent successfully");
+        info!("✅ DHT search command sent successfully");
 
         // Wait for the validated result
         // Check DHT health before waiting
         // let health = self.check_health(3, false).await;
         // info!(
-        // "[SEARCH] DHT health before search - peers: {}, healthy: {}",
+        // "🔍 DHT health before search - peers: {}, healthy: {}",
         // health.peer_count, health.healthy
         // );
-        info!("[WAIT] Waiting for search result with {}ms timeout", timeout_ms);
+        info!("⏳ Waiting for search result with {}ms timeout", timeout_ms);
         match tokio::time::timeout(timeout_duration, rx).await {
             Ok(Ok(Ok(Some(metadata)))) => {
-                info!("[OK] Search succeeded for file: {}", metadata.merkle_root);
+                info!("✅ Search succeeded for file: {}", metadata.merkle_root);
                 // Cache the result locally
                 {
                     let mut cache = self.file_metadata_cache.lock().await;
@@ -5483,15 +5483,15 @@ impl DhtService {
                 Ok(Some(metadata))
             }
             Ok(Ok(Ok(None))) => {
-                info!("[X] Search found no results for file: {}", file_hash);
+                info!("❌ Search found no results for file: {}", file_hash);
                 Ok(None)
             }
             Ok(Ok(Err(e))) => {
-                error!("[X] Search error for file {}: {}", file_hash, e);
+                error!("❌ Search error for file {}: {}", file_hash, e);
                 Err(format!("Search error: {}", e))
             }
             Ok(Err(_)) => {
-                error!("[X] Search channel closed for file: {}", file_hash);
+                error!("❌ Search channel closed for file: {}", file_hash);
                 Err("Search channel closed".into())
             }
             Err(_) => {
@@ -5504,13 +5504,13 @@ impl DhtService {
                 // let health = self.check_health(5, false).await;
                 // if health.peer_count < 5 {
                 //     warn!(
-                //         "[WARN] Low peer count ({} peers, minimum {}) may affect search reliability",
+                //         "⚠️ Low peer count ({} peers, minimum {}) may affect search reliability",
                 //         health.peer_count, health.min_required
                 //     );
                 // }
                 // if health.bootstrap_failures > 0 {
                 //     warn!(
-                //         "[WARN] Bootstrap failures detected ({}), network connectivity may be degraded",
+                //         "⚠️ Bootstrap failures detected ({}), network connectivity may be degraded",
                 //         health.bootstrap_failures
                 //     );
                 // }
@@ -5793,7 +5793,7 @@ impl DhtService {
                 // Check if the response matches our verification payload
                 if response == verification_payload {
                     info!(
-                        "[OK] Proxy capability verified for peer {} via echo test",
+                        "✅ Proxy capability verified for peer {} via echo test",
                         peer_id
                     );
                     Ok(())
@@ -5843,13 +5843,13 @@ impl DhtService {
                                 proxy_mgr.add_trusted_proxy_node(peer_id.clone());
                                 discovered_and_verified += 1;
                                 info!(
-                                    "[OK] Verified and added DHT-discovered proxy provider: {}",
+                                    "✅ Verified and added DHT-discovered proxy provider: {}",
                                     peer_id
                                 );
                             }
                             Err(e) => {
                                 warn!(
-                                    "[X] DHT proxy provider verification failed for {}: {}",
+                                    "❌ DHT proxy provider verification failed for {}: {}",
                                     peer_id, e
                                 );
                                 proxy_mgr.capable.remove(&peer_id);
@@ -6055,7 +6055,7 @@ impl DhtService {
         rx.await
             .map_err(|e| format!("Failed to receive DHT response: {}", e))??;
         tracing::info!(
-            "[OK] Published {} verdict for peer {} (key: {}...)",
+            "✅ Published {} verdict for peer {} (key: {}...)",
             match outcome {
                 VerdictOutcome::Good => "positive",
                 VerdictOutcome::Disputed => "disputed",
@@ -6291,19 +6291,19 @@ impl DhtService {
                     providers.len(),
                     file_hash
                 );
-                info!("[SEARCH] DEBUG DHT: Providers from DHT query = {:?}", providers);
+                info!("🔍 DEBUG DHT: Providers from DHT query = {:?}", providers);
                 // Optionally filter unreachable providers here (try connect/ping) before returning.
                 providers
             }
             Ok(Ok(Err(e))) => {
                 warn!("GetProviders command failed for {}: {}", file_hash, e);
-                warn!("[SEARCH] DEBUG DHT: No providers found via DHT query - returning empty list");
+                warn!("🔍 DEBUG DHT: No providers found via DHT query - returning empty list");
                 // Return empty list - don't fall back to random connected peers as they won't have the file
                 Vec::new()
             }
             Ok(Err(e)) => {
                 warn!("GetProviders receiver error for {}: {}", file_hash, e);
-                warn!("[SEARCH] DEBUG DHT: Channel error - returning empty list");
+                warn!("🔍 DEBUG DHT: Channel error - returning empty list");
                 // Return empty list - don't fall back to random connected peers
                 Vec::new()
             }
@@ -6312,7 +6312,7 @@ impl DhtService {
                     "GetProviders command timed out for file: {} (waited 10s)",
                     file_hash
                 );
-                warn!("[SEARCH] DEBUG DHT: Timeout waiting for providers - returning empty list");
+                warn!("🔍 DEBUG DHT: Timeout waiting for providers - returning empty list");
                 // Return empty list - the file truly has no providers available
                 Vec::new()
             }
@@ -6353,11 +6353,11 @@ impl DhtService {
                     Ok(_) => {
                         proxy_mgr.add_trusted_proxy_node(peer_id.clone());
                         trusted_proxy_count += 1;
-                        info!("[OK] Added connected peer {} as trusted proxy node (capability verified)", peer_id);
+                        info!("✅ Added connected peer {} as trusted proxy node (capability verified)", peer_id);
                     }
                     Err(e) => {
                         warn!(
-                            "[X] Proxy capability verification failed for peer {}: {}",
+                            "❌ Proxy capability verification failed for peer {}: {}",
                             peer_id, e
                         );
                         // Remove from capable list if verification fails
@@ -6594,7 +6594,7 @@ impl DhtService {
         &self,
         info_hash: String,
     ) -> Result<Option<FileMetadata>, String> {
-        info!("[SEARCH] DHT search_by_infohash called for: {}", info_hash);
+        info!("🔍 DHT search_by_infohash called for: {}", info_hash);
         let (sender, receiver) = oneshot::channel();
         self.cmd_tx
             .send(DhtCommand::SearchByInfohash {
@@ -6606,7 +6606,7 @@ impl DhtService {
 
         let result = receiver.await.map_err(|e| e.to_string())?;
         info!(
-            "[SEARCH] DHT search_by_infohash result for {}: {:?}",
+            "🔍 DHT search_by_infohash result for {}: {:?}",
             info_hash,
             result.is_some()
         );
@@ -7325,7 +7325,7 @@ mod tests {
             only_seeder_b_remains,
             "Node A was not pruned from the seeder list after leaving"
         );
-        println!("[OK] Multi-uploader resilience test passed!");
+        println!("✅ Multi-uploader resilience test passed!");
 
         // Cleanup
         seeder_b.shutdown().await.unwrap();

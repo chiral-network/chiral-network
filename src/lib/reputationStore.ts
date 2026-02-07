@@ -35,7 +35,7 @@ export class ReputationStore {
       if (stored) {
         const data = JSON.parse(stored) as Array<[PeerId, PeerReputation]>;
         this.store = new Map(data);
-        console.log(`[OK] Loaded ${this.store.size} peer reputations from storage`);
+        console.log(`✅ Loaded ${this.store.size} peer reputations from storage`);
       }
     } catch (e) {
       console.warn('Failed to load reputation store from localStorage:', e);
@@ -138,7 +138,7 @@ export class ReputationStore {
       rep.lastUpdatedMs = Date.now();
     }
     this.saveToStorage();
-    console.log(`[OK] Synced ${metrics.length} peer reputations from backend`);
+    console.log(`✅ Synced ${metrics.length} peer reputations from backend`);
   }
 
   // Get all peers with their data

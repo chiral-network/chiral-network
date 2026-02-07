@@ -39,7 +39,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { diagnosticLogger } from './lib/diagnostics/logger';
     // gets path name not entire url:
-    // ex: http://locatlhost:1420/download -> /download
+    // ex: http://locatlhost:1420/download → /download
     
     // get path name based on current url
     // if no path name, default to 'download'
@@ -275,7 +275,7 @@ $: canShowLockAction = !showFirstRunWizard;
 
           for (const [transferId, transfer] of $store.transfers.entries()) {
             if (transfer.status === 'completed') {
-              // First time we see this transfer as completed -> fire toast
+              // First time we see this transfer as completed → fire toast
               if (!notifiedCompletedTransfers.has(transferId)) {
                 notifiedCompletedTransfers.add(transferId);
 
