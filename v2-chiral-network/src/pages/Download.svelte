@@ -703,10 +703,11 @@
 
     <!-- Search Result -->
     {#if searchResult}
+      {@const FileIcon = getFileIcon(searchResult.fileName)}
       <div class="mt-6 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
         <div class="flex items-start gap-4">
           <div class="flex items-center justify-center w-14 h-14 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 flex-shrink-0">
-            <svelte:component this={getFileIcon(searchResult.fileName)} class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
+            <FileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
           </div>
 
           <div class="flex-1 min-w-0">
@@ -766,11 +767,12 @@
     {:else}
       <div class="space-y-4">
         {#each downloads as download (download.id)}
+          {@const DownloadIcon = getFileIcon(download.name)}
           <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
             <div class="flex items-center gap-4">
               <!-- File Icon -->
               <div class="flex items-center justify-center w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
-                <svelte:component this={getFileIcon(download.name)} class="w-6 h-6 {getFileColor(download.name)}" />
+                <DownloadIcon class="w-6 h-6 {getFileColor(download.name)}" />
               </div>
 
               <!-- File Info -->
@@ -888,11 +890,12 @@
       {:else}
         <div class="divide-y divide-gray-100 dark:divide-gray-700">
           {#each downloadHistory as entry (entry.id)}
+            {@const EntryIcon = getFileIcon(entry.fileName)}
             <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
               <div class="flex items-center gap-4">
                 <!-- File Icon -->
                 <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
-                  <svelte:component this={getFileIcon(entry.fileName)} class="w-5 h-5 {getFileColor(entry.fileName)}" />
+                  <EntryIcon class="w-5 h-5 {getFileColor(entry.fileName)}" />
                 </div>
 
                 <!-- File Info -->
