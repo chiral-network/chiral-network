@@ -934,12 +934,12 @@ impl BitTorrentHandler {
                     {
                         Ok(_) => {
                             info!(
-                                "[OK] Successfully restored torrent: {} to {:?}",
+                                "✅ Successfully restored torrent: {} to {:?}",
                                 torrent.info_hash, torrent.output_path
                             );
                         }
                         Err(e) => {
-                            error!("[X] Failed to restore torrent {}: {}", torrent.info_hash, e);
+                            error!("❌ Failed to restore torrent {}: {}", torrent.info_hash, e);
                         }
                     }
                 }

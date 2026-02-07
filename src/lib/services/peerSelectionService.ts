@@ -253,7 +253,7 @@ export class PeerSelectionService {
       return null; // No peers support the required protocols
     }
 
-    // [NEW] Pre-rank by local reputation composite (no external metrics needed)
+    // ✨ Pre-rank by local reputation composite (no external metrics needed)
     availablePeers.sort((a, b) => {
       const cb = this.rep.composite(b);
       const ca = this.rep.composite(a);
@@ -303,7 +303,7 @@ export class PeerSelectionService {
       return [];
     }
 
-    // [NEW] Pre-rank available peers by local reputation composite score
+    // ✨ Pre-rank available peers by local reputation composite score
     // This prioritizes peers with higher reputation before passing them to the strategy selector.
     const sortedAvailablePeers = [...availablePeers].sort((a, b) => {
       const scoreB = this.rep.composite(b);
@@ -448,12 +448,12 @@ export class PeerSelectionService {
     if (p.transfer_count === 0) {
       // Only log if window.DEBUG is set (for debugging)
       if (typeof window !== "undefined" && (window as any).DEBUG) {
-        console.log(`[NEW] New peer ${p.peer_id.substring(0,15)}... has 0 transfers, returning 0.7 score (High trust)`);
+        console.log(`✨ New peer ${p.peer_id.substring(0,15)}... has 0 transfers, returning 0.7 score (High trust)`);
       }
       return 0.7; // Exactly 3.5/5.0 stars for new peers
     }
     
-    console.log(`[UP] Existing peer ${p.peer_id.substring(0,15)}... has ${p.transfer_count} transfers (${p.successful_transfers} success, ${p.failed_transfers} failed)`);
+    console.log(`📈 Existing peer ${p.peer_id.substring(0,15)}... has ${p.transfer_count} transfers (${p.successful_transfers} success, ${p.failed_transfers} failed)`);
 
     
     // Use backend success_rate directly (more accurate than frontend Beta distribution)

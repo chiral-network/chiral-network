@@ -95,7 +95,7 @@ class PaymentCheckpointService {
    * @param seederAddress Seeder's wallet address
    * @param seederPeerId Seeder's peer ID
    * @param pricePerMb Price per megabyte in Chiral
-   * @param paymentMode "exponential" for 10->20->40 MB checkpoints, "upfront" for full payment
+   * @param paymentMode "exponential" for 10→20→40 MB checkpoints, "upfront" for full payment
    */
   async initCheckpointSession(
     sessionId: string,
@@ -117,7 +117,7 @@ class PaymentCheckpointService {
         paymentMode,
       });
 
-      console.log(`[OK] Payment checkpoint session initialized: ${sessionId} (mode: ${paymentMode})`);
+      console.log(`✅ Payment checkpoint session initialized: ${sessionId} (mode: ${paymentMode})`);
     } catch (error) {
       console.error('Failed to initialize payment checkpoint:', error);
       throw error;
@@ -185,7 +185,7 @@ class PaymentCheckpointService {
         amountPaid,
       });
 
-      console.log(`[OK] Checkpoint payment recorded: ${sessionId} (${amountPaid} Chiral, tx: ${transactionHash})`);
+      console.log(`✅ Checkpoint payment recorded: ${sessionId} (${amountPaid} Chiral, tx: ${transactionHash})`);
     } catch (error) {
       console.error('Failed to record checkpoint payment:', error);
       throw error;
@@ -216,7 +216,7 @@ class PaymentCheckpointService {
   async markPaymentFailed(sessionId: string, reason: string): Promise<void> {
     try {
       await invoke('mark_checkpoint_payment_failed', { sessionId, reason });
-      console.warn(`[WARN] Payment marked as failed: ${sessionId} - ${reason}`);
+      console.warn(`⚠️ Payment marked as failed: ${sessionId} - ${reason}`);
     } catch (error) {
       console.error('Failed to mark payment failed:', error);
       throw error;
@@ -231,7 +231,7 @@ class PaymentCheckpointService {
   async markCompleted(sessionId: string): Promise<void> {
     try {
       await invoke('mark_checkpoint_completed', { sessionId });
-      console.log(`[OK] Download completed: ${sessionId}`);
+      console.log(`✅ Download completed: ${sessionId}`);
     } catch (error) {
       console.error('Failed to mark checkpoint completed:', error);
       throw error;
@@ -250,7 +250,7 @@ class PaymentCheckpointService {
 
       // Remove backend session
       await invoke('remove_payment_checkpoint_session', { sessionId });
-      console.log(`[DEL] Checkpoint session removed: ${sessionId}`);
+      console.log(`🗑️ Checkpoint session removed: ${sessionId}`);
     } catch (error) {
       console.error('Failed to remove checkpoint session:', error);
       throw error;
@@ -337,7 +337,7 @@ class PaymentCheckpointService {
    * @returns Next checkpoint size in MB
    */
   calculateNextCheckpoint(currentCheckpointMb: number): number {
-    // Exponential scaling: 10 -> 20 -> 40 -> 80 MB
+    // Exponential scaling: 10 → 20 -> 40 -> 80 MB
     return currentCheckpointMb * 2;
   }
 
