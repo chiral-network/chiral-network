@@ -225,7 +225,7 @@ use sha2::{Digest, Sha256};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -261,9 +261,7 @@ static LAST_CONNECTION_ERROR_LOG: AtomicU64 = AtomicU64::new(0);
 use libp2p::{
     autonat::v2,
     core::{
-        muxing::StreamMuxerBox,
-        // FIXED E0432: ListenerEvent is removed, only import what is available.
-        transport::{Boxed, DialOpts, ListenerId, Transport, TransportError, TransportEvent},
+        transport::{DialOpts, ListenerId, Transport, TransportError, TransportEvent},
     },
     identify::{self, Event as IdentifyEvent},
     identity,

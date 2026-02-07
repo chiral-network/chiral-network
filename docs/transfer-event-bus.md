@@ -444,7 +444,6 @@ pub enum SourceType {
     P2p,
     BitTorrent,
     WebRtc,
-    Relay,
 }
 ```
 
