@@ -27,6 +27,7 @@ pub struct AppState {
     pub geth: Arc<Mutex<GethProcess>>,
     pub encryption_keypair: Arc<Mutex<Option<EncryptionKeypair>>>,
     pub download_tiers: Arc<Mutex<HashMap<String, SpeedTier>>>, // request_id -> speed tier
+    pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
 }
 
 #[tauri::command]
@@ -495,6 +496,18 @@ async fn start_download(
         match payment_result {
             Ok(result) => {
                 println!("✅ Speed tier payment successful: tx {}", result.hash);
+                // Record transaction metadata for enriched history
+                let meta = TransactionMeta {
+                    tx_hash: result.hash.clone(),
+                    tx_type: "speed_tier_payment".to_string(),
+                    description: format!("⚡ {} tier download: {}", speed_tier, file_name),
+                    file_name: Some(file_name.clone()),
+                    file_hash: Some(file_hash.clone()),
+                    speed_tier: Some(speed_tier.clone()),
+                    recipient_label: Some("Burn Address (Speed Tier)".to_string()),
+                };
+                let mut metadata = state.tx_metadata.lock().await;
+                metadata.insert(result.hash.clone(), meta);
             }
             Err(e) => {
                 println!("❌ Speed tier payment failed: {}", e);
@@ -887,6 +900,19 @@ struct WalletBalanceResult {
     balance_wei: String,
 }
 
+// Transaction metadata for enriching blockchain data with local context
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionMeta {
+    tx_hash: String,
+    tx_type: String,         // "send", "receive", "speed_tier_payment", "faucet"
+    description: String,     // Human-readable description
+    file_name: Option<String>,    // For download payments
+    file_hash: Option<String>,    // For download payments
+    speed_tier: Option<String>,   // For speed tier payments
+    recipient_label: Option<String>, // User-provided label for recipient
+}
+
 // Transaction types
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -898,8 +924,15 @@ struct Transaction {
     value_wei: String,
     block_number: u64,
     timestamp: u64,
-    status: String, // "confirmed", "pending", "failed"
+    status: String,          // "confirmed", "pending", "failed"
     gas_used: u64,
+    // Enriched metadata fields
+    tx_type: String,         // "send", "receive", "speed_tier_payment", "unknown"
+    description: String,     // Human-readable description
+    file_name: Option<String>,
+    file_hash: Option<String>,
+    speed_tier: Option<String>,
+    recipient_label: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1460,9 +1493,67 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
     })
 }
 
+/// Classify a transaction based on known addresses and local metadata
+fn classify_transaction(
+    tx_hash: &str,
+    from: &str,
+    to: &str,
+    address: &str,
+    metadata: &HashMap<String, TransactionMeta>,
+) -> (String, String, Option<String>, Option<String>, Option<String>, Option<String>) {
+    let address_lower = address.to_lowercase();
+    let to_lower = to.to_lowercase();
+    let from_lower = from.to_lowercase();
+    let burn_lower = BURN_ADDRESS.to_lowercase();
+
+    // Check local metadata first (most accurate)
+    if let Some(meta) = metadata.get(tx_hash) {
+        return (
+            meta.tx_type.clone(),
+            meta.description.clone(),
+            meta.file_name.clone(),
+            meta.file_hash.clone(),
+            meta.speed_tier.clone(),
+            meta.recipient_label.clone(),
+        );
+    }
+
+    // Auto-detect based on addresses
+    if to_lower == burn_lower && from_lower == address_lower {
+        // Payment to burn address — likely a speed tier payment
+        return (
+            "speed_tier_payment".to_string(),
+            "⚡ Speed tier download payment".to_string(),
+            None, None, None,
+            Some("Burn Address (Speed Tier)".to_string()),
+        );
+    }
+
+    if from_lower == address_lower {
+        return (
+            "send".to_string(),
+            format!("💸 Sent to {}", &to[..10]),
+            None, None, None, None,
+        );
+    }
+
+    if to_lower == address_lower {
+        return (
+            "receive".to_string(),
+            format!("📥 Received from {}", &from[..10]),
+            None, None, None, None,
+        );
+    }
+
+    ("unknown".to_string(), "Transaction".to_string(), None, None, None, None)
+}
+
 /// Get transaction history for an address
 #[tauri::command]
-async fn get_transaction_history(address: String) -> Result<TransactionHistoryResult, String> {
+async fn get_transaction_history(
+    state: tauri::State<'_, AppState>,
+    address: String,
+) -> Result<TransactionHistoryResult, String> {
     let client = reqwest::Client::new();
 
     // Get the latest block number
@@ -1485,6 +1576,9 @@ async fn get_transaction_history(address: String) -> Result<TransactionHistoryRe
 
     let latest_block_hex = block_json["result"].as_str().unwrap_or("0x0");
     let latest_block = u64::from_str_radix(latest_block_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+
+    // Load local metadata for enrichment
+    let metadata = state.tx_metadata.lock().await;
 
     // For simplicity, we'll check the last 100 blocks for transactions
     // In production, you'd use an indexer or logs
@@ -1530,16 +1624,29 @@ async fn get_transaction_history(address: String) -> Result<TransactionHistoryRe
                                 let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
                                 let gas_used = u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
+                                let tx_hash = tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
+                                let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
+                                let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
+
+                                let (tx_type, description, file_name, file_hash, speed_tier, recipient_label) =
+                                    classify_transaction(tx_hash, tx_from, tx_to, &address, &metadata);
+
                                 transactions.push(Transaction {
-                                    hash: tx.get("hash").and_then(|h| h.as_str()).unwrap_or("").to_string(),
-                                    from: tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_string(),
-                                    to: tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+                                    hash: tx_hash.to_string(),
+                                    from: tx_from.to_string(),
+                                    to: tx_to.to_string(),
                                     value: format!("{:.6}", value_chr),
                                     value_wei: value_wei.to_string(),
                                     block_number: block_num,
                                     timestamp: block_timestamp,
                                     status: "confirmed".to_string(),
                                     gas_used,
+                                    tx_type,
+                                    description,
+                                    file_name,
+                                    file_hash,
+                                    speed_tier,
+                                    recipient_label,
                                 });
                             }
                         }
@@ -1555,6 +1662,29 @@ async fn get_transaction_history(address: String) -> Result<TransactionHistoryRe
     }
 
     Ok(TransactionHistoryResult { transactions })
+}
+
+/// Record transaction metadata for enriching transaction history
+#[tauri::command]
+async fn record_transaction_meta(
+    state: tauri::State<'_, AppState>,
+    tx_hash: String,
+    tx_type: String,
+    description: String,
+    recipient_label: Option<String>,
+) -> Result<(), String> {
+    let meta = TransactionMeta {
+        tx_hash: tx_hash.clone(),
+        tx_type,
+        description,
+        file_name: None,
+        file_hash: None,
+        speed_tier: None,
+        recipient_label,
+    };
+    let mut metadata = state.tx_metadata.lock().await;
+    metadata.insert(tx_hash, meta);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1874,6 +2004,7 @@ pub fn run() {
             geth: Arc::new(Mutex::new(GethProcess::new())),
             encryption_keypair: Arc::new(Mutex::new(None)),
             download_tiers: Arc::new(Mutex::new(HashMap::new())),
+            tx_metadata: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -1905,6 +2036,7 @@ pub fn run() {
             send_transaction,
             get_transaction_receipt,
             get_transaction_history,
+            record_transaction_meta,
             request_faucet,
             get_chain_id,
             // Geth commands
