@@ -1259,7 +1259,6 @@ Protocol Layers:
 │                  │
 │  • IP            │
 │  • NAT Traversal │
-│  • Circuit Relay │
 └──────────────────┘
 ```
 
@@ -1638,7 +1637,7 @@ Techniques:
 
 1. Full libp2p v0.54 integration
 2. Kademlia DHT implementation
-3. NAT traversal (AutoNAT v2, Circuit Relay v2)
+3. NAT traversal (AutoNAT v2)
 4. CPU mining with Geth
 
 ### Phase 3: File Sharing & Protocols 🚧 IN PROGRESS

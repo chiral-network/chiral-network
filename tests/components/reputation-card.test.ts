@@ -312,39 +312,6 @@ describe('ReputationCard Component', () => {
     });
   });
 
-  describe('Relay Status', () => {
-    it('should show relay badge for relay peers', () => {
-      const peer = {
-        isRelay: true,
-        showRelayBadge: true
-      };
-
-      expect(peer.showRelayBadge).toBe(true);
-    });
-
-    it('should hide relay badge for non-relay peers', () => {
-      const peer = {
-        isRelay: false,
-        showRelayBadge: false
-      };
-
-      expect(peer.showRelayBadge).toBe(false);
-    });
-
-    it('should display relay-specific metrics', () => {
-      const peer = {
-        isRelay: true,
-        relayMetrics: {
-          connectionsRelayed: 150,
-          relayUptime: 0.99
-        }
-      };
-
-      expect(peer.relayMetrics.connectionsRelayed).toBeGreaterThan(0);
-      expect(peer.relayMetrics.relayUptime).toBeGreaterThan(0.95);
-    });
-  });
-
   describe('Encryption Support', () => {
     it('should show encryption badge when supported', () => {
       const peer = {

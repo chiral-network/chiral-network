@@ -33,7 +33,6 @@ async fn test_peer_cache_full_lifecycle() {
             total_bytes_transferred: 10485760,
             average_latency_ms: 45,
             is_bootstrap: false,
-            supports_relay: true,
             reliability_score: 0.85,
         },
         PeerCacheEntry {
@@ -46,7 +45,6 @@ async fn test_peer_cache_full_lifecycle() {
             total_bytes_transferred: 5242880,
             average_latency_ms: 60,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.75,
         },
         PeerCacheEntry {
@@ -59,7 +57,6 @@ async fn test_peer_cache_full_lifecycle() {
             total_bytes_transferred: 20971520,
             average_latency_ms: 30,
             is_bootstrap: false,
-            supports_relay: true,
             reliability_score: 0.92,
         },
     ];
@@ -80,11 +77,6 @@ async fn test_peer_cache_full_lifecycle() {
     assert_eq!(loaded_cache.peers[1].peer_id, "12D3KooWPeer1", "Second highest reliability peer should be second");
     assert_eq!(loaded_cache.peers[2].peer_id, "12D3KooWPeer2", "Lowest reliability peer should be last");
     
-    // Phase 4: Verify relay capability is preserved
-    let relay_peers: Vec<_> = loaded_cache.peers.iter()
-        .filter(|p| p.supports_relay)
-        .collect();
-    assert_eq!(relay_peers.len(), 2, "Relay capability should be preserved");
 }
 
 #[tokio::test]
@@ -128,7 +120,6 @@ async fn test_peer_cache_filters_zero_transfer_peers() {
         total_bytes_transferred: 1024000,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     });
     
@@ -143,7 +134,6 @@ async fn test_peer_cache_filters_zero_transfer_peers() {
         total_bytes_transferred: 0,
         average_latency_ms: 0,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.5,
     });
     
@@ -180,7 +170,6 @@ async fn test_peer_cache_respects_size_limit() {
             total_bytes_transferred: (i as u64) * 1024,
             average_latency_ms: 50,
             is_bootstrap: false,
-            supports_relay: i % 2 == 0, // Every other peer supports relay
             reliability_score: (i as f64) / 150.0,
         });
     }
@@ -225,7 +214,6 @@ async fn test_peer_cache_stale_filtering_on_load() {
         total_bytes_transferred: 1024000,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     });
     
@@ -240,7 +228,6 @@ async fn test_peer_cache_stale_filtering_on_load() {
         total_bytes_transferred: 1024000,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     });
     
@@ -254,54 +241,6 @@ async fn test_peer_cache_stale_filtering_on_load() {
     // Only fresh peer should remain
     assert_eq!(loaded.peers.len(), 1);
     assert_eq!(loaded.peers[0].peer_id, "fresh");
-}
-
-#[tokio::test]
-async fn test_peer_cache_relay_priority() {
-    // Test that relay-capable peers get priority in reconnection
-    let current_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    
-    let mut peers = vec![
-        PeerCacheEntry {
-            peer_id: "non_relay_high".to_string(),
-            addresses: vec!["/ip4/1.1.1.1/tcp/4001".to_string()],
-            last_seen: current_time - 300,
-            connection_count: 10,
-            successful_transfers: 10,
-            failed_transfers: 0,
-            total_bytes_transferred: 10240000,
-            average_latency_ms: 30,
-            is_bootstrap: false,
-            supports_relay: false,
-            reliability_score: 0.95,
-        },
-        PeerCacheEntry {
-            peer_id: "relay_low".to_string(),
-            addresses: vec!["/ip4/2.2.2.2/tcp/4001".to_string()],
-            last_seen: current_time - 300,
-            connection_count: 5,
-            successful_transfers: 4,
-            failed_transfers: 1,
-            total_bytes_transferred: 1024000,
-            average_latency_ms: 60,
-            is_bootstrap: false,
-            supports_relay: true,
-            reliability_score: 0.70,
-        },
-    ];
-    
-    // Sort by relay support first, then reliability
-    peers.sort_by(|a, b| {
-        b.supports_relay.cmp(&a.supports_relay)
-            .then_with(|| b.reliability_score.partial_cmp(&a.reliability_score).unwrap_or(std::cmp::Ordering::Equal))
-    });
-    
-    // Relay-capable peer should come first despite lower reliability
-    assert_eq!(peers[0].peer_id, "relay_low");
-    assert_eq!(peers[1].peer_id, "non_relay_high");
 }
 
 #[tokio::test]
@@ -324,7 +263,6 @@ async fn test_peer_cache_version_forward_compatibility() {
                 "total_bytes_transferred": 1024000,
                 "average_latency_ms": 50,
                 "is_bootstrap": false,
-                "supports_relay": false,
                 "reliability_score": 0.8
             }
         ]

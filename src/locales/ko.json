@@ -140,41 +140,6 @@
           "private": "접근성이 저하되었습니다. {summary}",
           "unknown": "접근성 상태가 업데이트되었습니다. {summary}"
         }
-      },
-      "dcutr": {
-        "title": "DCUtR 홀 펀칭",
-        "enabled": "DCUtR 활성화됨",
-        "disabled": "DCUtR 비활성화됨",
-        "attempts": "홀 펀치 시도",
-        "successes": "성공",
-        "failures": "실패",
-        "successRate": "성공률",
-        "lastSuccess": "마지막 성공",
-        "lastFailure": "마지막 실패",
-        "never": "없음",
-        "description": "릴레이를 통한 직접 연결 업그레이드(DCUtR)는 NAT 홀 펀칭을 활성화하여 직접 피어 연결을 설정합니다."
-      },
-      "relay": {
-        "title": "릴레이 상태",
-        "enabled": "자동 릴레이 활성화됨",
-        "disabled": "자동 릴레이 비활성화됨",
-        "timeline": "자동 릴레이 타임라인",
-        "enabledAt": "마지막 활성화",
-        "disabledAt": "마지막 비활성화",
-        "noPeer": "릴레이에 연결되지 않음",
-        "activePeer": "활성 릴레이",
-        "status": "상태",
-        "lastSuccess": "마지막 예약 성공",
-        "lastFailure": "마지막 예약 실패",
-        "renewals": "예약 갱신",
-        "evictions": "예약 제거",
-        "never": "없음",
-        "neverEnabled": "활성화된 적 없음",
-        "neverDisabled": "비활성화된 적 없음",
-        "noEvictions": "제거 없음",
-        "accepted": "예약 수락됨",
-        "pending": "대기 중",
-        "failed": "실패"
       }
     },
     "networkStatus": "네트워크 상태",
@@ -316,11 +281,6 @@
         "button": "주소 복사",
         "success": "멀티주소가 복사되었습니다!"
       },
-      "toggleAutorelay": {
-        "tooltip": "자동 릴레이 연결 전환",
-        "buttonOn": "릴레이: 켜짐",
-        "buttonOff": "릴레이: 꺼짐"
-      },
       "startStopDht": {
         "startTooltip": "DHT 네트워크에 연결",
         "stopTooltip": "DHT 네트워크에서 연결 해제",
@@ -354,7 +314,6 @@
     "upload": "업로드",
     "torrents": "토렌트",
     "network": "네트워크",
-    "relay": "릴레이",
     "mining": "채굴",
     "proxy": "프록시",
     "proxySelfTest": "프록시 자체 테스트",
@@ -1022,8 +981,6 @@
     "refreshData": "데이터 새로고침",
     "hideAnalytics": "분석 숨기기",
     "showAnalytics": "분석 표시",
-    "hideRelayLeaderboard": "릴레이 리더보드 숨기기",
-    "showRelayLeaderboard": "릴레이 리더보드 표시",
     "loading": "평판 데이터 로딩 중...",
     "searchPeers": "피어 검색",
     "searchPlaceholder": "피어 ID로 검색...",
@@ -1088,14 +1045,6 @@
       "MaliciousBehaviorReport": "악의적 행동 보고",
       "FileShared": "파일 공유"
     },
-    "myRelay": {
-      "title": "내 릴레이 평판",
-      "subtitle": "노드가 릴레이 서버로 실행 중입니다",
-      "rankOf": "{total}개 중 순위",
-      "reputationScore": "평판 점수",
-      "successfulCircuits": "성공한 회로",
-      "reservations": "예약"
-    },
     "pagination": {
       "showing": "{total}개 피어 중 {start}-{end}개 표시",
       "previous": "이전",
@@ -1115,124 +1064,6 @@
       "encryption": "암호화",
       "supported": "지원됨",
       "notSupported": "지원되지 않음"
-    }
-  },
-  "relay": {
-    "title": "릴레이 인프라",
-    "subtitle": "릴레이 서버 및 네트워크 연결 관리",
-    "server": {
-      "title": "릴레이 서버",
-      "subtitle": "노드를 통해 피어 연결 지원",
-      "running": "실행 중",
-      "stopped": "중지됨",
-      "description": "NAT 뒤에 있는 피어가 네트워크에 연결하도록 돕고 평판을 얻기 위해 릴레이 서버를 실행하세요.",
-      "benefit1": "피어를 돕고 평판 포인트를 획득",
-      "benefit2": "네트워크 연결성 및 분산화 개선",
-      "benefit3": "회로를 적극적으로 릴레이할 때 대역폭 사용",
-      "enable": "릴레이 서버 활성화",
-      "disable": "릴레이 서버 비활성화",
-      "start": "서버 시작",
-      "stop": "서버 중지",
-      "starting": "시작 중...",
-      "enabling": "활성화 중...",
-      "disabling": "비활성화 중...",
-      "activeMessage": "릴레이 서버가 활성화되어 피어를 돕고 있습니다!",
-      "earningReputation": "성공적인 연결마다 평판을 얻고 있습니다.",
-      "aliasLabel": "릴레이 서버 별칭 (공개 이름)",
-      "aliasPlaceholder": "예: Alice의 빠른 릴레이 🚀",
-      "aliasHint": "이 친근한 이름은 로그에 표시되며 다른 노드가 릴레이를 통해 부트스트랩할 때 나타납니다",
-      "dhtNotRunning": "DHT 네트워크가 실행되지 않음",
-      "dhtNotRunningHint": "먼저 네트워크 페이지에서 네트워크를 시작하세요.",
-      "broadcastingAs": "다음으로 브로드캐스팅:"
-    },
-    "client": {
-      "title": "AutoRelay 클라이언트",
-      "subtitle": "필요할 때 릴레이 노드를 통해 연결",
-      "enableAutorelay": "Circuit Relay v2 (AutoRelay) 활성화",
-      "preferredRelays": "선호 릴레이 노드 (선택사항)",
-      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\n한 줄에 하나의 멀티주소",
-      "preferredRelaysHint": "릴레이로 부트스트랩 노드를 사용하려면 비워두세요",
-      "howItWorks": "작동 방식:",
-      "description": "AutoRelay는 NAT 또는 방화벽 뒤에 있을 때 자동으로 릴레이 노드를 통해 연결하여 항상 네트워크에 참여할 수 있도록 합니다."
-    },
-    "monitoring": {
-      "title": "릴레이 상태 및 모니터링"
-    },
-    "errors": {
-      "dhtNotRunning": "DHT가 실행 중이 아닙니다. 네트워크 페이지에서 먼저 네트워크를 시작하세요.",
-      "toggleFailed": "릴레이 서버 전환 실패: {error}"
-    },
-    "monitor": {
-      "statsTitle": "릴레이 풀 통계",
-      "totalRelays": "총 릴레이",
-      "connected": "연결됨",
-      "healthy": "정상",
-      "totalErrors": "총 오류",
-      "avgHealthScore": "평균 상태 점수",
-      "activeRelayTitle": "활성 릴레이",
-      "connectedBadge": "연결됨",
-      "peerId": "피어 ID:",
-      "healthScore": "상태 점수:",
-      "avgLatency": "평균 지연:",
-      "reservation": "예약:",
-      "successRate": "성공률:",
-      "relayPoolTitle": "릴레이 풀",
-      "noRelaysInPool": "풀에 릴레이가 없습니다",
-      "primaryBadge": "주요",
-      "state": "상태:",
-      "latency": "지연:",
-      "attempts": "시도:",
-      "successes": "성공:",
-      "failures": "실패:",
-      "lastSuccess": "마지막 성공:",
-      "recentErrorsLabel": "최근 오류:",
-      "recentErrorsTitle": "최근 오류",
-      "clearButton": "지우기",
-      "relayLabel": "릴레이:",
-      "retryLabel": "재시도:",
-      "errorTypes": {
-        "connectionRefused": "연결 거부됨",
-        "timeout": "시간 초과",
-        "reservationFailed": "예약 실패",
-        "expired": "만료됨",
-        "overloaded": "과부하",
-        "unreachable": "연결 불가",
-        "networkError": "네트워크 오류",
-        "authFailed": "인증 실패",
-        "protocolError": "프로토콜 오류",
-        "unknown": "알 수 없음"
-      },
-      "time": {
-        "never": "없음",
-        "justNow": "방금",
-        "minutesAgo": "{minutes}분 전",
-        "hoursAgo": "{hours}시간 전",
-        "na": "해당 없음",
-        "expired": "만료됨",
-        "seconds": "{seconds}초",
-        "minutes": "{minutes}분",
-        "hours": "{hours}시간"
-      }
-    },
-    "leaderboard": {
-      "title": "상위 릴레이 서버",
-      "subtitle": "평판 기반 릴레이 노드 순위",
-      "refresh": "새로고침",
-      "refreshing": "새로고침 중...",
-      "loading": "릴레이 평판 데이터 로딩 중...",
-      "rank": "순위",
-      "peerId": "피어 ID",
-      "score": "점수",
-      "circuits": "회로",
-      "bandwidth": "대역폭",
-      "uptime": "가동 시간",
-      "points": "점",
-      "lastSeen": "마지막 접속",
-      "totalRelays": "총 릴레이",
-      "badgedRelays": "배지 있는 릴레이",
-      "totalCircuits": "총 회로",
-      "noRelays": "릴레이 서버를 찾을 수 없음",
-      "noRelaysDesc": "리더보드에 나타나려면 릴레이 서버를 실행하세요"
     }
   },
   "upload": {
@@ -1650,8 +1481,7 @@
     },
     "settings": {
       "updated": "설정이 업데이트되었습니다!",
-      "networkingError": "설정은 저장되었지만 네트워크 업데이트에 실패했습니다",
-      "proxyRelayWarning": "내 IP 숨기기를 사용하기 전에 신뢰할 수 있는 프록시 릴레이를 최소 하나 추가하세요."
+      "networkingError": "설정은 저장되었지만 네트워크 업데이트에 실패했습니다"
     },
     "analytics": {
       "direction": {
@@ -1728,7 +1558,6 @@
       "goToUpload": "업로드로 이동",
       "goToNetwork": "네트워크로 이동",
       "goToMining": "채굴로 이동",
-      "goToRelay": "릴레이로 이동",
       "goToAnalytics": "분석으로 이동",
       "goToReputation": "평판으로 이동",
       "goToBlockchain": "블록체인으로 이동",
@@ -1860,11 +1689,7 @@
       "quit": "애플리케이션 종료"
     }
   },
-  "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
-  "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
-  "settings.autorelay.relays": "Preferred Relay Nodes",
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
-  "settings.diagnostics.circuitRelay": "Circuit Relay",
   "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
   "settings.diagnostics.diskSpace": "Disk Space",
   "settings.diagnostics.encryptionSupport": "Encryption Support",

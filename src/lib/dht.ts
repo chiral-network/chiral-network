@@ -26,11 +26,7 @@ export interface DhtConfig {
   proxyAddress?: string;
   chunkSizeKb?: number;
   cacheSizeMb?: number;
-  enableAutorelay?: boolean;
-  preferredRelays?: string[];
-  enableRelayServer?: boolean;
   enableUpnp?: boolean;
-  relayServerAlias?: string; // Public alias for relay server (appears in logs and bootstrap)
   pureClientMode?: boolean; // Pure DHT client mode - cannot seed files or act as DHT server
   forceServerMode?: boolean; // Force DHT server mode - act as DHT server even behind NAT (for testing/development)
 }
@@ -100,34 +96,6 @@ export interface DhtHealth {
   observedAddrs: string[];
   reachabilityHistory: NatHistoryItem[];
   autonatEnabled: boolean;
-  // AutoRelay metrics
-  autorelayEnabled: boolean;
-  lastAutorelayEnabledAt: number | null;
-  lastAutorelayDisabledAt: number | null;
-  activeRelayPeerId: string | null;
-  relayReservationStatus: string | null;
-  lastReservationSuccess: number | null;
-  lastReservationFailure: number | null;
-  reservationRenewals: number;
-  reservationEvictions: number;
-  // Extended relay error tracking
-  relayConnectionAttempts: number;
-  relayConnectionSuccesses: number;
-  relayConnectionFailures: number;
-  lastRelayError: string | null;
-  lastRelayErrorType: string | null;
-  lastRelayErrorAt: number | null;
-  activeRelayCount: number;
-  totalRelaysInPool: number;
-  relayHealthScore: number; // Average health score of all relays
-  lastReservationRenewal: number | null;
-  // DCUtR hole-punching metrics
-  dcutrEnabled: boolean;
-  dcutrHolePunchAttempts: number;
-  dcutrHolePunchSuccesses: number;
-  dcutrHolePunchFailures: number;
-  lastDcutrSuccess: number | null;
-  lastDcutrFailure: number | null;
 }
 
 export class DhtService {
@@ -183,23 +151,8 @@ export class DhtService {
       if (typeof config?.cacheSizeMb === "number") {
         payload.cacheSizeMb = config.cacheSizeMb;
       }
-      if (typeof config?.enableAutorelay === "boolean") {
-        payload.enableAutorelay = config.enableAutorelay;
-      }
-      if (config?.preferredRelays && config.preferredRelays.length > 0) {
-        payload.preferredRelays = config.preferredRelays;
-      }
-      if (typeof config?.enableRelayServer === "boolean") {
-        payload.enableRelayServer = config.enableRelayServer;
-      }
       if (typeof config?.enableUpnp === "boolean") {
         payload.enableUpnp = config.enableUpnp;
-      }
-      if (
-        typeof config?.relayServerAlias === "string" &&
-        config.relayServerAlias.trim().length > 0
-      ) {
-        payload.relayServerAlias = config.relayServerAlias.trim();
       }
       if (typeof config?.pureClientMode === "boolean") {
         payload.pureClientMode = config.pureClientMode;

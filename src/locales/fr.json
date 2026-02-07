@@ -1,9 +1,6 @@
 {
   "settings.title": "Paramètres",
   "settings.subtitle": "Configurez vos préférences du réseau Chiral",
-  "settings.autorelay.enable": "Activer AutoRelay (Circuit Relay v2)",
-  "settings.autorelay.relays": "Nœuds relais préférés",
-  "settings.autorelay.description": "Saisissez les adresses des nœuds relais (une par ligne). Laissez vide pour utiliser les nœuds bootstrap.",
   "settings.searchPlaceholder": "Rechercher dans les paramètres...",
   "settings.diagnostics.title": "Diagnostics",
   "settings.diagnostics.description": "Lancez des vérifications de l’environnement, du stockage et de la connectivité.",
@@ -140,41 +137,6 @@
           "private": "Accessibilité dégradée. {summary}",
           "unknown": "Statut d’accessibilité mis à jour. {summary}"
         }
-      },
-      "relay": {
-        "title": "État du relais",
-        "enabled": "AutoRelay activé",
-        "disabled": "AutoRelay désactivé",
-        "timeline": "Chronologie AutoRelay",
-        "enabledAt": "Dernière activation",
-        "disabledAt": "Dernière désactivation",
-        "noPeer": "Aucun relais connecté",
-        "activePeer": "Relais actif",
-        "status": "Statut",
-        "lastSuccess": "Dernière réservation réussie",
-        "lastFailure": "Dernier échec de réservation",
-        "renewals": "Réservations renouvelées",
-        "evictions": "Réservations expulsées",
-        "never": "Jamais",
-        "neverEnabled": "Jamais activé",
-        "neverDisabled": "Jamais désactivé",
-        "noEvictions": "Aucune expulsion",
-        "accepted": "Réservation acceptée",
-        "pending": "En attente",
-        "failed": "Échec"
-      },
-      "dcutr": {
-        "title": "Perçage de NAT DCUtR",
-        "enabled": "DCUtR activé",
-        "disabled": "DCUtR désactivé",
-        "attempts": "Tentatives de perçage",
-        "successes": "Réussites",
-        "failures": "Échecs",
-        "successRate": "Taux de réussite",
-        "lastSuccess": "Dernière réussite",
-        "lastFailure": "Dernier échec",
-        "never": "Jamais",
-        "description": "Direct Connection Upgrade through Relay (DCUtR) permet le perçage de NAT pour établir des connexions directes entre pairs."
       }
     },
     "networkStatus": "État du réseau",
@@ -315,11 +277,6 @@
         "tooltipUnavailable": "Multiadresse non disponible",
         "button": "Copier l'adresse",
         "success": "Multiadresse copiée !"
-      },
-      "toggleAutorelay": {
-        "tooltip": "Activer/désactiver les connexions relais automatiques",
-        "buttonOn": "Relais : Activé",
-        "buttonOff": "Relais : Désactivé"
       },
       "startStopDht": {
         "startTooltip": "Se connecter au réseau DHT",
@@ -488,7 +445,6 @@
     "upload": "Envoyer",
     "torrents": "Torrents",
     "network": "Réseau",
-    "relay": "Relais",
     "mining": "Minage",
     "proxy": "Proxy",
     "proxySelfTest": "Auto-test du proxy",
@@ -1178,11 +1134,8 @@
     "refreshData": "Actualiser les données",
     "hideAnalytics": "Masquer les analyses",
     "showAnalytics": "Afficher les analyses",
-    "hideRelayLeaderboard": "Masquer le classement des relais",
-    "showRelayLeaderboard": "Afficher le classement des relais",
     "loading": "Chargement des données de réputation...",
     "viewPeers": "Réputation des pairs",
-    "viewRelays": "Classement des relais",
     "searchPeers": "Rechercher des pairs",
     "searchPlaceholder": "Rechercher par ID de pair...",
     "filters": "Filtres",
@@ -1246,14 +1199,6 @@
       "MaliciousBehaviorReport": "Signalement de comportement malveillant",
       "FileShared": "Fichier partagé"
     },
-    "myRelay": {
-      "title": "Votre réputation de relais",
-      "subtitle": "Votre nœud fonctionne comme serveur de relais",
-      "rankOf": "Rang sur {total}",
-      "reputationScore": "Score de réputation",
-      "successfulCircuits": "Circuits réussis",
-      "reservations": "Réservations"
-    },
     "pagination": {
       "showing": "Affichage de {start}–{end} sur {total} pairs",
       "previous": "Précédent",
@@ -1273,124 +1218,6 @@
       "encryption": "Chiffrement",
       "supported": "Pris en charge",
       "notSupported": "Non pris en charge"
-    }
-  },
-  "relay": {
-    "title": "Infrastructure de relais",
-    "subtitle": "Gérez les serveurs de relais et la connectivité réseau",
-    "server": {
-      "title": "Serveur de relais",
-      "subtitle": "Aidez les pairs à se connecter via votre nœud",
-      "running": "En cours d’exécution",
-      "stopped": "Arrêté",
-      "description": "Exécutez un serveur de relais pour aider les pairs derrière un NAT à se connecter au réseau et gagnez de la réputation.",
-      "benefit1": "Gagnez des points de réputation en aidant les pairs",
-      "benefit2": "Améliorez la connectivité et la décentralisation du réseau",
-      "benefit3": "Utilise de la bande passante lors du relais actif de circuits",
-      "enable": "Activer le serveur de relais",
-      "disable": "Désactiver le serveur de relais",
-      "start": "Démarrer le serveur",
-      "stop": "Arrêter le serveur",
-      "starting": "Démarrage...",
-      "enabling": "Activation...",
-      "disabling": "Désactivation...",
-      "activeMessage": "Votre serveur de relais est actif et aide les pairs !",
-      "earningReputation": "Vous gagnez de la réputation pour chaque connexion réussie.",
-      "aliasLabel": "Alias du serveur de relais (nom public)",
-      "aliasPlaceholder": "ex. Relais rapide d’Alice 🚀",
-      "aliasHint": "Ce nom convivial apparaîtra dans les journaux et lorsque d’autres nœuds se connecteront via votre relais",
-      "dhtNotRunning": "Réseau DHT non démarré",
-      "dhtNotRunningHint": "Veuillez d’abord démarrer le réseau depuis la page Réseau.",
-      "broadcastingAs": "Diffusé comme :"
-    },
-    "client": {
-      "title": "Client AutoRelay",
-      "subtitle": "Se connecter via des nœuds relais si nécessaire",
-      "enableAutorelay": "Activer Circuit Relay v2 (AutoRelay)",
-      "preferredRelays": "Nœuds relais préférés (optionnel)",
-      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\nUne multiadresse par ligne",
-      "preferredRelaysHint": "Laissez vide pour utiliser les nœuds de bootstrap comme relais",
-      "howItWorks": "Fonctionnement :",
-      "description": "AutoRelay se connecte automatiquement via des nœuds relais lorsque vous êtes derrière un NAT ou un pare-feu, afin que vous puissiez toujours participer au réseau."
-    },
-    "monitoring": {
-      "title": "Santé et surveillance des relais"
-    },
-    "errors": {
-      "dhtNotRunning": "DHT n’est pas en cours d’exécution. Veuillez démarrer le réseau depuis la ",
-      "toggleFailed": "Échec du changement d’état du serveur de relais : {error}"
-    },
-    "monitor": {
-      "statsTitle": "Statistiques du pool de relais",
-      "totalRelays": "Nombre total de relais",
-      "connected": "Connectés",
-      "healthy": "Sains",
-      "totalErrors": "Nombre total d’erreurs",
-      "avgHealthScore": "Score moyen de santé",
-      "activeRelayTitle": "Relais actif",
-      "connectedBadge": "Connecté",
-      "peerId": "ID de pair :",
-      "healthScore": "Score de santé :",
-      "avgLatency": "Latence moyenne :",
-      "reservation": "Réservation :",
-      "successRate": "Taux de réussite :",
-      "relayPoolTitle": "Pool de relais",
-      "noRelaysInPool": "Aucun relais dans le pool",
-      "primaryBadge": "Principal",
-      "state": "État :",
-      "latency": "Latence :",
-      "attempts": "Tentatives :",
-      "successes": "Succès :",
-      "failures": "Échecs :",
-      "lastSuccess": "Dernier succès :",
-      "recentErrorsLabel": "Erreurs récentes :",
-      "recentErrorsTitle": "Erreurs récentes",
-      "clearButton": "Effacer",
-      "relayLabel": "Relais :",
-      "retryLabel": "Nouvelle tentative :",
-      "errorTypes": {
-        "connectionRefused": "Connexion refusée",
-        "timeout": "Délai dépassé",
-        "reservationFailed": "Échec de la réservation",
-        "expired": "Expiré",
-        "overloaded": "Surchargé",
-        "unreachable": "Injoignable",
-        "networkError": "Erreur réseau",
-        "authFailed": "Échec de l’authentification",
-        "protocolError": "Erreur de protocole",
-        "unknown": "Inconnu"
-      },
-      "time": {
-        "never": "Jamais",
-        "justNow": "À l’instant",
-        "minutesAgo": "Il y a {minutes} min",
-        "hoursAgo": "Il y a {hours} h",
-        "na": "N/A",
-        "expired": "Expiré",
-        "seconds": "{seconds}s",
-        "minutes": "{minutes}min",
-        "hours": "{hours}h"
-      }
-    },
-    "leaderboard": {
-      "title": "Meilleurs serveurs de relais",
-      "subtitle": "Classement des nœuds relais basé sur la réputation",
-      "refresh": "Actualiser",
-      "refreshing": "Actualisation...",
-      "loading": "Chargement des données de réputation des relais...",
-      "rank": "Rang",
-      "peerId": "ID de pair",
-      "score": "Score",
-      "circuits": "Circuits",
-      "bandwidth": "Bande passante",
-      "uptime": "Disponibilité",
-      "points": "pts",
-      "lastSeen": "dernière vue",
-      "totalRelays": "Nombre total de relais",
-      "badgedRelays": "Relais distingués",
-      "totalCircuits": "Nombre total de circuits",
-      "noRelays": "Aucun serveur de relais trouvé",
-      "noRelaysDesc": "Commencez à exécuter un serveur de relais pour apparaître dans le classement"
     }
   },
   "upload": {
@@ -1768,8 +1595,7 @@
     },
     "settings": {
       "updated": "Paramètres mis à jour !",
-      "networkingError": "Paramètres enregistrés, mais la mise à jour réseau a échoué",
-      "proxyRelayWarning": "Ajoutez au moins un relais proxy de confiance avant d’activer Masquer mon IP."
+      "networkingError": "Paramètres enregistrés, mais la mise à jour réseau a échoué"
     },
     "analytics": {
       "direction": {
@@ -1845,7 +1671,6 @@
       "goToUpload": "Aller au Partage",
       "goToNetwork": "Aller au Réseau",
       "goToMining": "Aller au Minage",
-      "goToRelay": "Aller au Relais",
       "goToAnalytics": "Aller aux Analyses",
       "goToReputation": "Aller à la Réputation",
       "goToBlockchain": "Aller à la Blockchain",
@@ -1883,7 +1708,6 @@
     }
   },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
-  "settings.diagnostics.circuitRelay": "Circuit Relay",
   "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
   "settings.diagnostics.diskSpace": "Disk Space",
   "settings.diagnostics.encryptionSupport": "Encryption Support",

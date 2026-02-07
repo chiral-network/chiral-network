@@ -120,9 +120,6 @@
     enableAutonat: true,
     autonatProbeInterval: 30,
     autonatServers: [],
-    enableAutorelay: true,
-    preferredRelays: [],
-    enableRelayServer: false,
     anonymousMode: false,
     shareAnalytics: true,
     customBootstrapNodes: [],
@@ -143,7 +140,6 @@
     cacheSize: 1024, // MB
     logLevel: "info",
     autoUpdate: true,
-    relayServerAlias: "", // Empty by default - user can set a friendly name
     pureClientMode: false,
     forceServerMode: false,
     enableWalletAutoLock: false,
@@ -227,17 +223,17 @@
     },
     {
       value: "prefer",
-      label: "Prefer Relay (fall back to direct if needed)",
+      label: "Prefer Proxy (fall back to direct if needed)",
     },
     {
       value: "strict",
-      label: "Strict Relay-only (never expose your IP)",
+      label: "Strict Proxy-only (never expose your IP)",
     },
   ];
 
   type PrivacySnapshot = Pick<
     AppSettings,
-    "ipPrivacyMode" | "enableProxy" | "proxyAddress" | "disableDirectNatTraversal" | "enableAutorelay"
+    "ipPrivacyMode" | "enableProxy" | "proxyAddress" | "disableDirectNatTraversal"
   >;
 
   let anonymousModeRestore: PrivacySnapshot | null = null;
@@ -331,7 +327,6 @@
       enableProxy: localSettings.enableProxy,
       proxyAddress: localSettings.proxyAddress,
       disableDirectNatTraversal: localSettings.disableDirectNatTraversal,
-      enableAutorelay: localSettings.enableAutorelay,
     };
   }
 
@@ -341,8 +336,7 @@
     const needsUpdate =
       localSettings.ipPrivacyMode !== "strict" ||
       !localSettings.enableProxy ||
-      !localSettings.disableDirectNatTraversal ||
-      !localSettings.enableAutorelay;
+      !localSettings.disableDirectNatTraversal;
 
     if (!needsUpdate) {
       return;
@@ -352,7 +346,6 @@
       ...localSettings,
       ipPrivacyMode: "strict",
       enableProxy: true,
-      enableAutorelay: true,
       disableDirectNatTraversal: true,
     };
   }
@@ -371,7 +364,6 @@
       enableProxy: snapshot.enableProxy,
       proxyAddress: snapshot.proxyAddress,
       disableDirectNatTraversal: snapshot.disableDirectNatTraversal,
-      enableAutorelay: snapshot.enableAutorelay,
     };
   }
 
@@ -384,9 +376,9 @@
   $: privacyStatus = (() => {
     switch (localSettings.ipPrivacyMode) {
       case "prefer":
-        return "Relay routing will be attempted first. If no relay is available, the app falls back to a direct connection and your IP may be exposed.";
+        return "Proxy routing will be attempted first. If no proxy is available, the app falls back to a direct connection and your IP may be exposed.";
       case "strict":
-        return "All traffic must tunnel through a trusted relay or proxy. Direct connections and IP exposure are blocked.";
+        return "All traffic must tunnel through a trusted proxy. Direct connections and IP exposure are blocked.";
       default:
         return "Direct connections are allowed. Use a SOCKS5 proxy if you still want to mask your IP.";
     }
@@ -403,11 +395,6 @@
     if (hasValidationErrors) {
       showToast("Please fix validation errors before saving", "error");
       return;
-    }
-
-    // Map trustedProxyRelays to preferredRelays for consistency
-    if (localSettings.trustedProxyRelays?.length) {
-      localSettings.preferredRelays = localSettings.trustedProxyRelays;
     }
 
     const sanitizedThresholds = Array.isArray(localSettings.capWarningThresholds)
@@ -651,18 +638,11 @@
       autonatProbeIntervalSecs: localSettings.autonatProbeInterval,
       chunkSizeKb: localSettings.chunkSize,
       cacheSizeMb: localSettings.cacheSize,
-      enableAutorelay: localSettings.ipPrivacyMode !== "off" ? true : localSettings.enableAutorelay,
-      enableRelayServer: localSettings.enableRelayServer,
       enableUpnp: localSettings.enableUPnP,
     };
 
     if (localSettings.autonatServers?.length) {
       payload.autonatServers = localSettings.autonatServers;
-    }
-    if (localSettings.trustedProxyRelays?.length) {
-      payload.preferredRelays = localSettings.trustedProxyRelays;
-    } else if (localSettings.preferredRelays?.length) {
-      payload.preferredRelays = localSettings.preferredRelays;
     }
     if (localSettings.enableProxy && localSettings.proxyAddress?.trim()) {
       payload.proxyAddress = localSettings.proxyAddress.trim();
@@ -2019,12 +1999,12 @@ function sectionMatches(section: string, query: string) {
 
           {#if localSettings.ipPrivacyMode !== "off"}
             <div>
-              <Label for="trusted-proxies">Trusted proxy relays</Label>
+              <Label for="trusted-proxies">Trusted proxy addresses</Label>
               <textarea
                 id="trusted-proxies"
                 bind:value={trustedProxyText}
                 on:blur={updateTrustedProxyRelays}
-                placeholder="/dns4/relay.example.com/tcp/4001/p2p/12D3KooW...\nOne multiaddress per line."
+                placeholder="/dns4/proxy.example.com/tcp/4001/p2p/12D3KooW...\nOne multiaddress per line."
                 rows="4"
                 class="w-full px-3 py-2 border rounded-md text-sm"
               ></textarea>
@@ -2040,12 +2020,12 @@ function sectionMatches(section: string, query: string) {
                 bind:checked={localSettings.disableDirectNatTraversal}
               />
               <Label for="disable-nat-privacy" class="cursor-pointer">
-                Disable STUN/DCUtR while hiding IP
+                Disable STUN while hiding IP
               </Label>
             </div>
 
             <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
-              <p>Trusted relays configured: {localSettings.trustedProxyRelays.length}</p>
+              <p>Trusted proxies configured: {localSettings.trustedProxyRelays.length}</p>
               <p>SOCKS5 proxy: {localSettings.enableProxy ? (localSettings.proxyAddress || "Not set") : "Disabled"}</p>
               <p>Direct NAT traversal: {localSettings.disableDirectNatTraversal ? "Disabled (safer)" : "Enabled (may reveal IP)"}</p>
             </div>

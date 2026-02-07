@@ -1,9 +1,6 @@
 {
   "settings.title": "Configurações",
   "settings.subtitle": "Configure suas preferências da Rede Chiral",
-  "settings.autorelay.enable": "Ativar AutoRelay (Circuit Relay v2)",
-  "settings.autorelay.relays": "Nós de Relay Preferidos",
-  "settings.autorelay.description": "Insira endereços de nós de relay (um por linha). Deixe vazio para usar nós bootstrap.",
   "settings.searchPlaceholder": "Pesquisar configurações...",
   "settings.diagnostics.title": "Diagnósticos",
   "settings.diagnostics.description": "Execute verificações de ambiente, armazenamento e conectividade.",
@@ -140,41 +137,6 @@
           "private": "Alcançabilidade degradada. {summary}",
           "unknown": "Status de alcançabilidade atualizado. {summary}"
         }
-      },
-      "relay": {
-        "title": "Status do Relay",
-        "enabled": "AutoRelay Ativado",
-        "disabled": "AutoRelay Desativado",
-        "timeline": "Linha do tempo do AutoRelay",
-        "enabledAt": "Última ativação",
-        "disabledAt": "Última desativação",
-        "noPeer": "Não conectado ao relay",
-        "activePeer": "Relay Ativo",
-        "status": "Status",
-        "lastSuccess": "Última reserva bem-sucedida",
-        "lastFailure": "Última falha de reserva",
-        "renewals": "Reservas renovadas",
-        "evictions": "Reservas despejadas",
-        "never": "Nunca",
-        "neverEnabled": "Nunca ativado",
-        "neverDisabled": "Nunca desativado",
-        "noEvictions": "Sem despejos",
-        "accepted": "Reserva aceita",
-        "pending": "Pendente",
-        "failed": "Falhou"
-      },
-      "dcutr": {
-        "title": "Perfuração de NAT DCUtR",
-        "enabled": "DCUtR ativado",
-        "disabled": "DCUtR desativado",
-        "attempts": "Tentativas de perfuração",
-        "successes": "Sucessos",
-        "failures": "Falhas",
-        "successRate": "Taxa de sucesso",
-        "lastSuccess": "Último sucesso",
-        "lastFailure": "Última falha",
-        "never": "Nunca",
-        "description": "Atualização de Conexão Direta através de Relay (DCUtR) permite perfuração de NAT para estabelecer conexões diretas entre pares."
       }
     },
     "networkStatus": "Status da Rede",
@@ -315,11 +277,6 @@
         "tooltipUnavailable": "Multiendereço não disponível",
         "button": "Copiar Endereço",
         "success": "Multiendereço copiado!"
-      },
-      "toggleAutorelay": {
-        "tooltip": "Alternar conexões de retransmissão automática",
-        "buttonOn": "Relay: Ativo",
-        "buttonOff": "Relay: Inativo"
       },
       "startStopDht": {
         "startTooltip": "Conectar à rede DHT",
@@ -488,7 +445,6 @@
     "upload": "Upload",
     "torrents": "Torrents",
     "network": "Rede",
-    "relay": "Relay",
     "mining": "Mineração",
     "proxy": "Proxy",
     "proxySelfTest": "Autoteste de Proxy",
@@ -1179,11 +1135,8 @@
     "refreshData": "Atualizar Dados",
     "hideAnalytics": "Ocultar Análises",
     "showAnalytics": "Mostrar Análises",
-    "hideRelayLeaderboard": "Ocultar Classificação de Relay",
-    "showRelayLeaderboard": "Mostrar Classificação de Relay",
     "loading": "Carregando dados de reputação...",
     "viewPeers": "Reputação de Pares",
-    "viewRelays": "Classificação de Relay",
     "searchPeers": "Pesquisar Pares",
     "searchPlaceholder": "Pesquisar por ID do par...",
     "filters": "Filtros",
@@ -1247,14 +1200,6 @@
       "MaliciousBehaviorReport": "Relato de Comportamento Malicioso",
       "FileShared": "Arquivo Compartilhado"
     },
-    "myRelay": {
-      "title": "Sua Reputação de Relay",
-      "subtitle": "Seu nó está funcionando como servidor relay",
-      "rankOf": "Classificação de {total}",
-      "reputationScore": "Pontuação de Reputação",
-      "successfulCircuits": "Circuitos Bem-sucedidos",
-      "reservations": "Reservas"
-    },
     "pagination": {
       "showing": "Mostrando {start}-{end} de {total} pares",
       "previous": "Anterior",
@@ -1274,124 +1219,6 @@
       "encryption": "Criptografia",
       "supported": "Suportado",
       "notSupported": "Não Suportado"
-    }
-  },
-  "relay": {
-    "title": "Infraestrutura de Relay",
-    "subtitle": "Gerenciar servidores relay e conectividade de rede",
-    "server": {
-      "title": "Servidor Relay",
-      "subtitle": "Ajude pares a se conectarem através do seu nó",
-      "running": "Em Execução",
-      "stopped": "Parado",
-      "description": "Execute um servidor relay para ajudar pares atrás de NATs a se conectarem à rede e ganhar reputação.",
-      "benefit1": "Ganhe pontos de reputação por ajudar pares",
-      "benefit2": "Melhore a conectividade e descentralização da rede",
-      "benefit3": "Usa largura de banda ao retransmitir circuitos ativamente",
-      "enable": "Ativar Servidor Relay",
-      "disable": "Desativar Servidor Relay",
-      "start": "Iniciar Servidor",
-      "stop": "Parar Servidor",
-      "starting": "Iniciando...",
-      "enabling": "Ativando...",
-      "disabling": "Desativando...",
-      "activeMessage": "Seu servidor relay está ativo e ajudando pares!",
-      "earningReputation": "Você está ganhando reputação a cada conexão bem-sucedida.",
-      "aliasLabel": "Apelido do Servidor Relay (Nome Público)",
-      "aliasPlaceholder": "ex: Relay Rápido da Alice 🚀",
-      "aliasHint": "Este nome amigável aparecerá nos logs e quando outros nós conectarem através do seu relay",
-      "dhtNotRunning": "Rede DHT Não Está em Execução",
-      "dhtNotRunningHint": "Por favor, inicie a rede da página Rede primeiro.",
-      "broadcastingAs": "Transmitindo como:"
-    },
-    "client": {
-      "title": "Cliente AutoRelay",
-      "subtitle": "Conectar através de nós relay quando necessário",
-      "enableAutorelay": "Ativar Circuit Relay v2 (AutoRelay)",
-      "preferredRelays": "Nós Relay Preferidos (opcional)",
-      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\nUm multiendereço por linha",
-      "preferredRelaysHint": "Deixe vazio para usar nós bootstrap como relays",
-      "howItWorks": "Como funciona:",
-      "description": "O AutoRelay se conecta automaticamente através de nós relay quando você está atrás de um NAT ou firewall, garantindo que você possa sempre participar da rede."
-    },
-    "monitoring": {
-      "title": "Saúde e Monitoramento do Relay"
-    },
-    "errors": {
-      "dhtNotRunning": "DHT não está em execução. Por favor, inicie a rede da página ",
-      "toggleFailed": "Falha ao alternar servidor relay: {error}"
-    },
-    "monitor": {
-      "statsTitle": "Estatísticas do Pool de Relay",
-      "totalRelays": "Total de Relays",
-      "connected": "Conectados",
-      "healthy": "Saudáveis",
-      "totalErrors": "Total de Erros",
-      "avgHealthScore": "Pontuação Média de Saúde",
-      "activeRelayTitle": "Relay Ativo",
-      "connectedBadge": "Conectado",
-      "peerId": "ID do Par:",
-      "healthScore": "Pontuação de Saúde:",
-      "avgLatency": "Latência Média:",
-      "reservation": "Reserva:",
-      "successRate": "Taxa de Sucesso:",
-      "relayPoolTitle": "Pool de Relay",
-      "noRelaysInPool": "Nenhum relay no pool",
-      "primaryBadge": "Primário",
-      "state": "Estado:",
-      "latency": "Latência:",
-      "attempts": "Tentativas:",
-      "successes": "Sucessos:",
-      "failures": "Falhas:",
-      "lastSuccess": "Último sucesso:",
-      "recentErrorsLabel": "Erros Recentes:",
-      "recentErrorsTitle": "Erros Recentes",
-      "clearButton": "Limpar",
-      "relayLabel": "Relay:",
-      "retryLabel": "Tentar novamente:",
-      "errorTypes": {
-        "connectionRefused": "Conexão Recusada",
-        "timeout": "Tempo Esgotado",
-        "reservationFailed": "Reserva Falhou",
-        "expired": "Expirado",
-        "overloaded": "Sobrecarregado",
-        "unreachable": "Inalcançável",
-        "networkError": "Erro de Rede",
-        "authFailed": "Autenticação Falhou",
-        "protocolError": "Erro de Protocolo",
-        "unknown": "Desconhecido"
-      },
-      "time": {
-        "never": "Nunca",
-        "justNow": "Agora mesmo",
-        "minutesAgo": "{minutes}m atrás",
-        "hoursAgo": "{hours}h atrás",
-        "na": "N/D",
-        "expired": "Expirado",
-        "seconds": "{seconds}s",
-        "minutes": "{minutes}m",
-        "hours": "{hours}h"
-      }
-    },
-    "leaderboard": {
-      "title": "Melhores Servidores Relay",
-      "subtitle": "Classificação baseada em reputação de nós relay",
-      "refresh": "Atualizar",
-      "refreshing": "Atualizando...",
-      "loading": "Carregando dados de reputação de relay...",
-      "rank": "Classificação",
-      "peerId": "ID do Par",
-      "score": "Pontuação",
-      "circuits": "Circuitos",
-      "bandwidth": "Largura de Banda",
-      "uptime": "Tempo de Atividade",
-      "points": "pts",
-      "lastSeen": "visto pela última vez",
-      "totalRelays": "Total de Relays",
-      "badgedRelays": "Relays com Distintivo",
-      "totalCircuits": "Total de Circuitos",
-      "noRelays": "Nenhum Servidor Relay Encontrado",
-      "noRelaysDesc": "Comece a executar um servidor relay para aparecer na classificação"
     }
   },
   "upload": {
@@ -1769,8 +1596,7 @@
     },
     "settings": {
       "updated": "Configurações atualizadas!",
-      "networkingError": "Configurações salvas, mas a atualização de rede falhou",
-      "proxyRelayWarning": "Adicione pelo menos um proxy confiável antes de ativar Ocultar meu IP."
+      "networkingError": "Configurações salvas, mas a atualização de rede falhou"
     },
     "analytics": {
       "direction": {
@@ -1846,7 +1672,6 @@
       "goToUpload": "Ir para Compartilhar",
       "goToNetwork": "Ir para Rede",
       "goToMining": "Ir para Mineração",
-      "goToRelay": "Ir para Retransmissão",
       "goToAnalytics": "Ir para Análise",
       "goToReputation": "Ir para Reputação",
       "goToBlockchain": "Ir para Blockchain",
@@ -1884,7 +1709,6 @@
     }
   },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
-  "settings.diagnostics.circuitRelay": "Circuit Relay",
   "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
   "settings.diagnostics.diskSpace": "Disk Space",
   "settings.diagnostics.encryptionSupport": "Encryption Support",

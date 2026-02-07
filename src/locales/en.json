@@ -1,9 +1,6 @@
 {
   "settings.title": "Settings",
   "settings.subtitle": "Configure your Chiral Network preferences",
-  "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
-  "settings.autorelay.relays": "Preferred Relay Nodes",
-  "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
   "settings.searchPlaceholder": "Search settings...",
   "settings.diagnostics.title": "Diagnostics",
   "settings.diagnostics.description": "Run checks for environment, storage, and connectivity.",
@@ -21,7 +18,6 @@
   "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
   "settings.diagnostics.peerConnections": "Peer Connections",
   "settings.diagnostics.natTraversal": "NAT Traversal",
-  "settings.diagnostics.circuitRelay": "Circuit Relay",
   "settings.diagnostics.webrtcSupport": "WebRTC Support",
   "settings.diagnostics.proxyConfig": "Proxy Configuration",
   "settings.diagnostics.encryptionSupport": "Encryption Support",
@@ -171,41 +167,6 @@
           "private": "Reachability degraded. {summary}",
           "unknown": "Reachability status updated. {summary}"
         }
-      },
-      "relay": {
-        "title": "Relay Status",
-        "enabled": "AutoRelay Enabled",
-        "disabled": "AutoRelay Disabled",
-        "timeline": "AutoRelay timeline",
-        "enabledAt": "Last enabled",
-        "disabledAt": "Last disabled",
-        "noPeer": "Not connected to relay",
-        "activePeer": "Active Relay",
-        "status": "Status",
-        "lastSuccess": "Last successful reservation",
-        "lastFailure": "Last reservation failure",
-        "renewals": "Reservations renewed",
-        "evictions": "Reservations evicted",
-        "never": "Never",
-        "neverEnabled": "Never enabled",
-        "neverDisabled": "Never disabled",
-        "noEvictions": "No evictions",
-        "accepted": "Reservation accepted",
-        "pending": "Pending",
-        "failed": "Failed"
-      },
-      "dcutr": {
-        "title": "DCUtR Hole-Punching",
-        "enabled": "DCUtR enabled",
-        "disabled": "DCUtR disabled",
-        "attempts": "Hole-punch attempts",
-        "successes": "Successes",
-        "failures": "Failures",
-        "successRate": "Success rate",
-        "lastSuccess": "Last success",
-        "lastFailure": "Last failure",
-        "never": "Never",
-        "description": "Direct Connection Upgrade through Relay (DCUtR) enables NAT hole-punching to establish direct peer connections."
       }
     },
     "networkStatus": "Network Status",
@@ -346,11 +307,6 @@
         "tooltipUnavailable": "Multiaddress not available",
         "button": "Copy Address",
         "success": "Multiaddress copied!"
-      },
-      "toggleAutorelay": {
-        "tooltip": "Toggle automatic relay connections",
-        "buttonOn": "Relay: On",
-        "buttonOff": "Relay: Off"
       },
       "startStopDht": {
         "startTooltip": "Connect to the DHT network",
@@ -519,7 +475,6 @@
     "upload": "Upload",
     "torrents": "Torrents",
     "network": "Network",
-    "relay": "Relay",
     "mining": "Mining",
     "proxy": "Proxy",
     "proxySelfTest": "Proxy Self-Test",
@@ -1240,11 +1195,8 @@
     "refreshData": "Refresh Data",
     "hideAnalytics": "Hide Analytics",
     "showAnalytics": "Show Analytics",
-    "hideRelayLeaderboard": "Hide Relay Leaderboard",
-    "showRelayLeaderboard": "Show Relay Leaderboard",
     "loading": "Loading reputation data...",
     "viewPeers": "Peer Reputation",
-    "viewRelays": "Relay Leaderboard",
     "searchPeers": "Search Peers",
     "searchPlaceholder": "Search by peer ID...",
     "filters": "Filters",
@@ -1308,14 +1260,6 @@
       "MaliciousBehaviorReport": "Malicious Behavior Report",
       "FileShared": "File Shared"
     },
-    "myRelay": {
-      "title": "Your Relay Reputation",
-      "subtitle": "Your node is running as a relay server",
-      "rankOf": "Rank of {total}",
-      "reputationScore": "Reputation Score",
-      "successfulCircuits": "Successful Circuits",
-      "reservations": "Reservations"
-    },
     "pagination": {
       "showing": "Showing {start}-{end} of {total} peers",
       "previous": "Previous",
@@ -1335,124 +1279,6 @@
       "encryption": "Encryption",
       "supported": "Supported",
       "notSupported": "Not Supported"
-    }
-  },
-  "relay": {
-    "title": "Relay Infrastructure",
-    "subtitle": "Manage relay servers and network connectivity",
-    "server": {
-      "title": "Relay Server",
-      "subtitle": "Help peers connect through your node",
-      "running": "Running",
-      "stopped": "Stopped",
-      "description": "Run a relay server to help peers behind NATs connect to the network and earn reputation.",
-      "benefit1": "Earn reputation points for helping peers",
-      "benefit2": "Improve network connectivity and decentralization",
-      "benefit3": "Uses bandwidth when actively relaying circuits",
-      "enable": "Enable Relay Server",
-      "disable": "Disable Relay Server",
-      "start": "Start Server",
-      "stop": "Stop Server",
-      "starting": "Starting...",
-      "enabling": "Enabling...",
-      "disabling": "Disabling...",
-      "activeMessage": "Your relay server is active and helping peers!",
-      "earningReputation": "You're earning reputation for each successful connection.",
-      "aliasLabel": "Relay Server Alias (Public Name)",
-      "aliasPlaceholder": "e.g., Alice's Fast Relay 🚀",
-      "aliasHint": "This friendly name will appear in logs and when other nodes bootstrap through your relay",
-      "dhtNotRunning": "DHT Network Not Running",
-      "dhtNotRunningHint": "Please start the network from the Network page first.",
-      "broadcastingAs": "Broadcasting as:"
-    },
-    "client": {
-      "title": "AutoRelay Client",
-      "subtitle": "Connect through relay nodes when needed",
-      "enableAutorelay": "Enable Circuit Relay v2 (AutoRelay)",
-      "preferredRelays": "Preferred Relay Nodes (optional)",
-      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\nOne multiaddr per line",
-      "preferredRelaysHint": "Leave empty to use bootstrap nodes as relays",
-      "howItWorks": "How it works:",
-      "description": "AutoRelay automatically connects through relay nodes when you're behind a NAT or firewall, ensuring you can always participate in the network."
-    },
-    "monitoring": {
-      "title": "Relay Health & Monitoring"
-    },
-    "errors": {
-      "dhtNotRunning": "DHT is not running. Please start the network from the ",
-      "toggleFailed": "Failed to toggle relay server: {error}"
-    },
-    "monitor": {
-      "statsTitle": "Relay Pool Statistics",
-      "totalRelays": "Total Relays",
-      "connected": "Connected",
-      "healthy": "Healthy",
-      "totalErrors": "Total Errors",
-      "avgHealthScore": "Average Health Score",
-      "activeRelayTitle": "Active Relay",
-      "connectedBadge": "Connected",
-      "peerId": "Peer ID:",
-      "healthScore": "Health Score:",
-      "avgLatency": "Avg Latency:",
-      "reservation": "Reservation:",
-      "successRate": "Success Rate:",
-      "relayPoolTitle": "Relay Pool",
-      "noRelaysInPool": "No relays in pool",
-      "primaryBadge": "Primary",
-      "state": "State:",
-      "latency": "Latency:",
-      "attempts": "Attempts:",
-      "successes": "Successes:",
-      "failures": "Failures:",
-      "lastSuccess": "Last success:",
-      "recentErrorsLabel": "Recent Errors:",
-      "recentErrorsTitle": "Recent Errors",
-      "clearButton": "Clear",
-      "relayLabel": "Relay:",
-      "retryLabel": "Retry:",
-      "errorTypes": {
-        "connectionRefused": "Connection Refused",
-        "timeout": "Timeout",
-        "reservationFailed": "Reservation Failed",
-        "expired": "Expired",
-        "overloaded": "Overloaded",
-        "unreachable": "Unreachable",
-        "networkError": "Network Error",
-        "authFailed": "Auth Failed",
-        "protocolError": "Protocol Error",
-        "unknown": "Unknown"
-      },
-      "time": {
-        "never": "Never",
-        "justNow": "Just now",
-        "minutesAgo": "{minutes}m ago",
-        "hoursAgo": "{hours}h ago",
-        "na": "N/A",
-        "expired": "Expired",
-        "seconds": "{seconds}s",
-        "minutes": "{minutes}m",
-        "hours": "{hours}h"
-      }
-    },
-    "leaderboard": {
-      "title": "Top Relay Servers",
-      "subtitle": "Reputation-based ranking of relay nodes",
-      "refresh": "Refresh",
-      "refreshing": "Refreshing...",
-      "loading": "Loading relay reputation data...",
-      "rank": "Rank",
-      "peerId": "Peer ID",
-      "score": "Score",
-      "circuits": "Circuits",
-      "bandwidth": "Bandwidth",
-      "uptime": "Uptime",
-      "points": "pts",
-      "lastSeen": "last seen",
-      "totalRelays": "Total Relays",
-      "badgedRelays": "Badged Relays",
-      "totalCircuits": "Total Circuits",
-      "noRelays": "No Relay Servers Found",
-      "noRelaysDesc": "Start running a relay server to appear on the leaderboard"
     }
   },
   "upload": {
@@ -1832,8 +1658,7 @@
     },
     "settings": {
       "updated": "Settings Updated!",
-      "networkingError": "Settings saved, but networking update failed",
-      "proxyRelayWarning": "Add at least one trusted proxy relay before enabling Hide My IP."
+      "networkingError": "Settings saved, but networking update failed"
     },
     "analytics": {
       "direction": {
@@ -1939,7 +1764,6 @@
       "goToUpload": "Go to Upload",
       "goToNetwork": "Go to Network",
       "goToMining": "Go to Mining",
-      "goToRelay": "Go to Relay",
       "goToAnalytics": "Go to Analytics",
       "goToReputation": "Go to Reputation",
       "goToBlockchain": "Go to Blockchain",
