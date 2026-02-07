@@ -19,7 +19,12 @@
     History,
     ArrowUpRight,
     ArrowDownLeft,
-    Loader2
+    Loader2,
+    Zap,
+    Download,
+    ChevronDown,
+    ChevronUp,
+    File as FileIcon
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Account');
@@ -35,6 +40,13 @@
     timestamp: number;
     status: string;
     gasUsed: number;
+    // Enriched metadata
+    txType: string;          // "send", "receive", "speed_tier_payment", "unknown"
+    description: string;
+    fileName?: string;
+    fileHash?: string;
+    speedTier?: string;
+    recipientLabel?: string;
   }
 
   // State
@@ -54,6 +66,7 @@
   // Transaction history state
   let transactions = $state<Transaction[]>([]);
   let isLoadingHistory = $state(false);
+  let expandedTxHash = $state<string | null>(null);
 
 
   // Check if Tauri is available
@@ -184,6 +197,18 @@
 
       toasts.show(`Transaction sent! Hash: ${result.hash.slice(0, 10)}...`, 'success');
 
+      // Record metadata for enriched transaction history
+      try {
+        await invoke('record_transaction_meta', {
+          txHash: result.hash,
+          txType: 'send',
+          description: `💸 Sent ${sendAmount} CHR to ${recipientAddress.slice(0, 10)}...`,
+          recipientLabel: null,
+        });
+      } catch (e) {
+        log.warn('Failed to record tx metadata:', e);
+      }
+
       // Reset form
       recipientAddress = '';
       sendAmount = '';
@@ -250,6 +275,32 @@
   // Check if transaction is incoming
   function isIncoming(tx: Transaction): boolean {
     return tx.to.toLowerCase() === $walletAccount?.address.toLowerCase();
+  }
+
+  // Get transaction type icon and color
+  function getTxTypeStyle(tx: Transaction): { bgColor: string; iconColor: string } {
+    switch (tx.txType) {
+      case 'speed_tier_payment':
+        return { bgColor: 'bg-amber-100 dark:bg-amber-900/30', iconColor: 'text-amber-600 dark:text-amber-400' };
+      case 'receive':
+        return { bgColor: 'bg-green-100 dark:bg-green-900/30', iconColor: 'text-green-600 dark:text-green-400' };
+      case 'send':
+        return { bgColor: 'bg-red-100 dark:bg-red-900/30', iconColor: 'text-red-600 dark:text-red-400' };
+      default:
+        return isIncoming(tx)
+          ? { bgColor: 'bg-green-100 dark:bg-green-900/30', iconColor: 'text-green-600 dark:text-green-400' }
+          : { bgColor: 'bg-red-100 dark:bg-red-900/30', iconColor: 'text-red-600 dark:text-red-400' };
+    }
+  }
+
+  // Get transaction type label
+  function getTxTypeLabel(tx: Transaction): string {
+    switch (tx.txType) {
+      case 'speed_tier_payment': return 'Download Payment';
+      case 'send': return 'Sent';
+      case 'receive': return 'Received';
+      default: return isIncoming(tx) ? 'Received' : 'Sent';
+    }
   }
 
 </script>
@@ -454,37 +505,111 @@
           <p class="text-sm">Your transaction history will appear here</p>
         </div>
       {:else}
-        <div class="space-y-3 max-h-80 overflow-y-auto">
+        <div class="space-y-3 max-h-[500px] overflow-y-auto">
           {#each transactions as tx}
-            <div class="flex items-center gap-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-              <div class="p-2 {isIncoming(tx) ? 'bg-green-100 dark:bg-green-900/30' : 'bg-red-100 dark:bg-red-900/30'} rounded-full">
-                {#if isIncoming(tx)}
-                  <ArrowDownLeft class="w-5 h-5 text-green-600 dark:text-green-400" />
-                {:else}
-                  <ArrowUpRight class="w-5 h-5 text-red-600 dark:text-red-400" />
-                {/if}
-              </div>
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="font-medium {isIncoming(tx) ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-                    {isIncoming(tx) ? '+' : '-'}{tx.value} CHR
-                  </span>
-                  <span class="text-xs px-2 py-0.5 bg-gray-200 dark:bg-gray-600 dark:text-gray-300 rounded-full">{tx.status}</span>
-                </div>
-                <div class="text-sm text-gray-500 dark:text-gray-400 truncate">
-                  {isIncoming(tx) ? 'From:' : 'To:'} {formatAddress(isIncoming(tx) ? tx.from : tx.to)}
-                </div>
-                <div class="text-xs text-gray-400">
-                  Block #{tx.blockNumber} | {formatTimestamp(tx.timestamp)}
-                </div>
-              </div>
+            {@const style = getTxTypeStyle(tx)}
+            {@const isExpanded = expandedTxHash === tx.hash}
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+              <!-- Main row -->
               <button
-                onclick={() => navigator.clipboard.writeText(tx.hash)}
-                class="p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
-                title="Copy transaction hash"
+                onclick={() => expandedTxHash = isExpanded ? null : tx.hash}
+                class="w-full flex items-center gap-4 p-3 text-left"
               >
-                <Copy class="w-4 h-4 text-gray-400" />
+                <div class="p-2 {style.bgColor} rounded-full flex-shrink-0">
+                  {#if tx.txType === 'speed_tier_payment'}
+                    <Zap class="w-5 h-5 {style.iconColor}" />
+                  {:else if isIncoming(tx)}
+                    <ArrowDownLeft class="w-5 h-5 {style.iconColor}" />
+                  {:else}
+                    <ArrowUpRight class="w-5 h-5 {style.iconColor}" />
+                  {/if}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium {style.iconColor}">
+                      {isIncoming(tx) ? '+' : '-'}{tx.value} CHR
+                    </span>
+                    <span class="text-xs px-2 py-0.5 rounded-full {
+                      tx.txType === 'speed_tier_payment'
+                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300'
+                        : 'bg-gray-200 dark:bg-gray-600 dark:text-gray-300'
+                    }">
+                      {getTxTypeLabel(tx)}
+                    </span>
+                    <span class="text-xs px-2 py-0.5 bg-gray-200 dark:bg-gray-600 dark:text-gray-300 rounded-full">{tx.status}</span>
+                  </div>
+                  <p class="text-sm text-gray-600 dark:text-gray-300 mt-0.5 truncate">
+                    {tx.description || (isIncoming(tx) ? `From: ${formatAddress(tx.from)}` : `To: ${formatAddress(tx.to)}`)}
+                  </p>
+                  <div class="text-xs text-gray-400 mt-0.5">
+                    {formatTimestamp(tx.timestamp)}
+                  </div>
+                </div>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                  {#if isExpanded}
+                    <ChevronUp class="w-4 h-4 text-gray-400" />
+                  {:else}
+                    <ChevronDown class="w-4 h-4 text-gray-400" />
+                  {/if}
+                </div>
               </button>
+
+              <!-- Expanded details -->
+              {#if isExpanded}
+                <div class="px-4 pb-4 pt-1 border-t border-gray-200 dark:border-gray-600 space-y-2">
+                  <!-- File info for download payments -->
+                  {#if tx.fileName}
+                    <div class="flex items-center gap-2 p-2 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
+                      <FileIcon class="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium dark:text-white truncate">{tx.fileName}</p>
+                        {#if tx.speedTier}
+                          <p class="text-xs text-amber-600 dark:text-amber-400">⚡ {tx.speedTier.charAt(0).toUpperCase() + tx.speedTier.slice(1)} tier</p>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+
+                  <!-- Transaction details grid -->
+                  <div class="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span class="text-gray-400">From</span>
+                      <p class="font-mono text-gray-700 dark:text-gray-300 truncate">{tx.from}</p>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">To {tx.recipientLabel ? `(${tx.recipientLabel})` : ''}</span>
+                      <p class="font-mono text-gray-700 dark:text-gray-300 truncate">{tx.to}</p>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">Block</span>
+                      <p class="text-gray-700 dark:text-gray-300">#{tx.blockNumber}</p>
+                    </div>
+                    <div>
+                      <span class="text-gray-400">Gas Used</span>
+                      <p class="text-gray-700 dark:text-gray-300">{tx.gasUsed.toLocaleString()}</p>
+                    </div>
+                    {#if tx.fileHash}
+                      <div class="col-span-2">
+                        <span class="text-gray-400">File Hash</span>
+                        <p class="font-mono text-gray-700 dark:text-gray-300 truncate">{tx.fileHash}</p>
+                      </div>
+                    {/if}
+                    <div class="col-span-2">
+                      <span class="text-gray-400">Transaction Hash</span>
+                      <div class="flex items-center gap-2">
+                        <p class="font-mono text-gray-700 dark:text-gray-300 truncate flex-1">{tx.hash}</p>
+                        <button
+                          onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(tx.hash); toasts.show('Transaction hash copied', 'success'); }}
+                          class="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex-shrink-0"
+                          title="Copy transaction hash"
+                        >
+                          <Copy class="w-3.5 h-3.5 text-gray-400" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
