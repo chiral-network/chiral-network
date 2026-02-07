@@ -3,7 +3,7 @@ import { writable } from 'svelte/store';
 interface Toast {
   id: number;
   message: string;
-  type: 'success' | 'error' | 'info';
+  type: 'success' | 'error' | 'info' | 'warning';
 }
 
 function createToastStore() {
@@ -12,7 +12,7 @@ function createToastStore() {
 
   return {
     subscribe,
-    show: (message: string, type: 'success' | 'error' | 'info' = 'info', duration = 5000) => {
+    show: (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info', duration = 5000) => {
       const id = nextId++;
       const toast: Toast = { id, message, type };
 

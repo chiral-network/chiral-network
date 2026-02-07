@@ -4,7 +4,7 @@
 
   interface Props {
     message: string;
-    type?: 'success' | 'error' | 'info';
+    type?: 'success' | 'error' | 'info' | 'warning';
     index?: number;
     onClose: () => void;
   }
@@ -14,7 +14,8 @@
   const typeStyles = {
     success: 'bg-green-500',
     error: 'bg-red-500',
-    info: 'bg-blue-500'
+    info: 'bg-blue-500',
+    warning: 'bg-yellow-500'
   };
 
   // Calculate vertical offset based on index (each toast is ~56px tall + 8px gap)
