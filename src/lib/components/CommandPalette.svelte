@@ -169,7 +169,7 @@
         event.preventDefault();
         selectedIndex = Math.max(selectedIndex - 1, 0);
         break;
-      case 'Enter':
+      case '↵':
         event.preventDefault();
         if (filteredActions[selectedIndex]) {
           filteredActions[selectedIndex].action();
@@ -276,11 +276,11 @@
         <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
           <div class="flex items-center gap-4">
             <span class="flex items-center gap-1">
-              <kbd class="px-1.5 py-0.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded text-xs">Up/Down</kbd>
+              <kbd class="px-1.5 py-0.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded text-xs">↑↓</kbd>
               {$t('commandPalette.navigate')}
             </span>
             <span class="flex items-center gap-1">
-              <kbd class="px-1.5 py-0.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded text-xs">Enter</kbd>
+              <kbd class="px-1.5 py-0.5 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded text-xs">↵</kbd>
               {$t('commandPalette.select')}
             </span>
             <span class="flex items-center gap-1">
