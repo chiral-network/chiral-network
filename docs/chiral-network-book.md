@@ -75,7 +75,7 @@ The fundamental innovation of Chiral Network is the **complete decoupling of pay
 | ----------------------- | ------------------------------------------------------------------- |
 | **Decentralization**    | No centralized servers - all peer discovery via DHT                 |
 | **Economic Incentives** | Seeders earn cryptocurrency for sharing files                       |
-| **Privacy-First**       | Circuit Relay v2, AutoNAT v2, SOCKS5 proxy support                  |
+| **Privacy-First**       | AutoNAT v2, UPnP, SOCKS5 proxy support                             |
 | **Legitimate Use**      | Designed for personal, educational, and organizational file sharing |
 | **Non-Commercial**      | No marketplace, pricing, or trading features                        |
 
@@ -95,7 +95,7 @@ To maintain focus and legal compliance, Chiral Network explicitly does not imple
 
 ### 2.1 Fully Decentralized P2P
 
-All peer discovery happens through the Kademlia DHT. There are no centralized servers, trackers, or coordinators. Every node is an equal participant that can simultaneously seed, download, relay traffic, and mine blocks.
+All peer discovery happens through the Kademlia DHT. There are no centralized servers, trackers, or coordinators. Every node is an equal participant that can simultaneously seed, download, and mine blocks.
 
 ### 2.2 BitTorrent-Style Sharing
 
@@ -116,7 +116,6 @@ All nodes are equal peers. There are no special roles:
 
 - Any node can seed files and earn payments
 - Any node can download files and pay seeders
-- Any node can enable relay mode to help NAT'd peers
 - Any node can participate in mining
 
 ---
@@ -157,8 +156,6 @@ All nodes are equal peers. There are no special roles:
 | Technology           | Purpose                                 |
 | -------------------- | --------------------------------------- |
 | **AutoNAT v2**       | Reachability detection                  |
-| **Circuit Relay v2** | Traffic forwarding for NAT'd peers      |
-| **DCUtR**            | Direct Connection Upgrade through Relay |
 | **mDNS**             | Local peer discovery                    |
 | **UPnP**             | Automatic port forwarding               |
 
@@ -235,7 +232,6 @@ Tier 3: Network Layer
 ├─ Kademlia DHT (file discovery)
 ├─ Gossipsub (seeder & file information)
 ├─ Noise Protocol (encryption)
-├─ Circuit Relay v2 (NAT traversal)
 ├─ AutoNAT v2 (reachability detection)
 ├─ WebRTC (P2P data channels)
 └─ Bootstrap Nodes (peer discovery)
@@ -420,25 +416,20 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 
 ## Chapter 8: NAT Traversal
 
-### 8.1 Three-Layer Approach
+### 8.1 Two-Layer Approach
 
 **Layer 1: Direct Connection (Fastest)**
 
 - For publicly reachable peers
 - No NAT, no firewall restrictions
 - Lowest latency, highest bandwidth
+- UPnP automatic port forwarding when available
 
-**Layer 2: Hole Punching (DCUtR)**
+**Layer 2: SOCKS5 Proxy (Fallback)**
 
-- Direct Connection Upgrade through Relay
-- For symmetric NAT traversal
-- Uses UPnP when available
-
-**Layer 3: Circuit Relay v2 (Fallback)**
-
-- For restrictive NATs
-- End-to-end encrypted (relay cannot read data)
-- Trusted relay nodes only
+- For restrictive NATs where UPnP fails
+- Route P2P traffic through configured proxy
+- Compatible with Tor and other SOCKS5 proxies
 
 ### 8.2 AutoNAT v2
 
@@ -456,25 +447,7 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 - Confidence scoring (High/Medium/Low)
 - Reachability history tracking
 
-### 8.3 Circuit Relay v2 with AutoRelay
-
-**Purpose**: Forward traffic between NAT'd peers who cannot connect directly
-
-**How It Works**:
-
-1. NAT'd peer (A) requests reservation with relay (R)
-2. Relay R listens for incoming connections on A's behalf
-3. When peer B wants to connect to A, B connects to relay R
-4. Relay forwards traffic between A and B
-
-**Features**:
-
-- Decentralized: Any public node can opt-in to relay mode
-- End-to-end encrypted (relay cannot tamper)
-- Automatic relay candidate detection from bootstrap nodes
-- Dynamic relay reservation
-
-### 8.4 UPnP (Automatic Port Forwarding)
+### 8.3 UPnP (Automatic Port Forwarding)
 
 **How It Works**:
 
@@ -486,8 +459,7 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 
 ```
 1. Try UPnP → Direct connection if successful
-2. If failed → Hole Punching (DCUtR)
-3. If failed → Circuit Relay
+2. If failed → SOCKS5 proxy (if configured)
 ```
 
 ### 8.5 DHT Peer Cache Warm-Start
@@ -1220,7 +1192,7 @@ Encrypted Encrypted Encrypted Plain
 
 When enabled:
 
-- All traffic routed through relay/proxy
+- All traffic routed through proxy
 - IP address masked
 - Reputation persists per peer key
 - Rotating keys resets reputation
@@ -1244,11 +1216,10 @@ When enabled:
 | **Download**   | File download management        | Hash search, seeder selection, progress tracking   |
 | **Upload**     | Shared Files (instant seeding)  | Drag & drop, file versioning, bandwidth control    |
 | **Network**    | Peer discovery & DHT status     | Connected peers, bootstrap nodes, addresses        |
-| **Relay**      | Circuit Relay v2 configuration  | Server mode, AutoRelay, preferred relays           |
 | **Mining**     | CPU mining for network security | Hash rate, blocks found, rewards, power monitoring |
 | **Proxy**      | SOCKS5 proxy configuration      | Privacy routing, latency optimization              |
 | **Analytics**  | Usage statistics                | Bandwidth, storage, performance metrics            |
-| **Reputation** | Peer reputation system          | Trust levels, analytics, relay leaderboard         |
+| **Reputation** | Peer reputation system          | Trust levels, analytics                            |
 | **Account**    | Wallet management               | Balance, transactions, HD wallet, QR codes         |
 | **Settings**   | Comprehensive configuration     | Storage, network, privacy, i18n, diagnostics       |
 
@@ -1355,7 +1326,6 @@ src/lib/components/
 ├─ reputation/        # Reputation system
 │  ├─ ReputationCard.svelte
 │  ├─ ReputationAnalytics.svelte
-│  └─ RelayReputationLeaderboard.svelte
 └─ ui/                # UI primitives
    ├─ button.svelte
    ├─ card.svelte
@@ -1460,14 +1430,12 @@ On first launch, the application will:
 ### 26.4 Privacy Settings
 
 - **Proxy**: SOCKS5 proxy address
-- **Anonymous Mode**: Route all traffic through relay/proxy
+- **Anonymous Mode**: Route all traffic through proxy
 - **Encryption**: Force encryption for all transfers
 
 ### 26.5 NAT Traversal Settings
 
 - **AutoNAT**: Enable/disable, probe interval (10-300s)
-- **AutoRelay**: Enable/disable, preferred relay nodes
-- **Relay Server**: Enable to help NAT'd peers
 
 ### 26.6 Configuration Defaults
 
@@ -1492,7 +1460,7 @@ On first launch, the application will:
 
 1. **Environment**: Tauri vs web build, platform detection
 2. **Network**: DHT connectivity, peer count, bootstrap nodes
-3. **NAT Traversal**: AutoNAT v2, Circuit Relay v2 status
+3. **NAT Traversal**: AutoNAT v2 status
 4. **Storage**: Path validation, permissions, disk space
 5. **Security**: Proxy config, encryption capability
 
@@ -1511,7 +1479,7 @@ On first launch, the application will:
 | Files not downloading    | Verify hash, check seeders online        |
 | Mining not starting      | Ensure Geth initialized, check resources |
 | Wallet issues            | Verify mnemonic, check Geth sync         |
-| NAT/Relay issues         | Check diagnostics for AutoNAT status     |
+| NAT issues               | Check diagnostics for AutoNAT status     |
 
 ### 27.3 Debug Commands
 
@@ -1664,9 +1632,7 @@ npm run build
 | **AutoNAT**        | Protocol for detecting NAT reachability status                   |
 | **Bitswap**        | IPFS-inspired block exchange protocol                            |
 | **CID**            | Content Identifier - SHA-256 hash of file content                |
-| **Circuit Relay**  | Protocol for forwarding traffic through intermediate nodes       |
 | **Clef**           | Ethereum external signer for secure key management               |
-| **DCUtR**          | Direct Connection Upgrade through Relay - hole punching protocol |
 | **DHT**            | Distributed Hash Table - decentralized key-value store           |
 | **Geth**           | Go-Ethereum client for blockchain operations                     |
 | **HD Wallet**      | Hierarchical Deterministic wallet (BIP32/BIP39)                  |

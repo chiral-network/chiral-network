@@ -27,9 +27,8 @@ fn test_peer_cache_entry_from_metrics() {
         0.85,
         1700000000,
         false,
-        true,
     );
-    
+
     assert_eq!(entry.peer_id, "12D3KooWTest123");
     assert_eq!(entry.addresses.len(), 1);
     assert_eq!(entry.addresses[0], "/ip4/192.168.1.100/tcp/4001");
@@ -40,7 +39,6 @@ fn test_peer_cache_entry_from_metrics() {
     assert_eq!(entry.average_latency_ms, 50);
     assert_eq!(entry.reliability_score, 0.85);
     assert!(!entry.is_bootstrap);
-    assert!(entry.supports_relay);
 }
 
 #[test]
@@ -61,7 +59,6 @@ fn test_peer_cache_entry_is_stale() {
         total_bytes_transferred: 1024,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     };
     
@@ -78,7 +75,6 @@ fn test_peer_cache_entry_is_stale() {
         total_bytes_transferred: 1024,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     };
     
@@ -97,7 +93,6 @@ fn test_peer_cache_entry_merge_addresses() {
         total_bytes_transferred: 0,
         average_latency_ms: 0,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.5,
     };
     
@@ -114,7 +109,6 @@ fn test_peer_cache_entry_merge_addresses() {
         total_bytes_transferred: 0,
         average_latency_ms: 0,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.5,
     };
     
@@ -147,7 +141,6 @@ fn test_peer_cache_from_peers() {
             total_bytes_transferred: 1024,
             average_latency_ms: 50,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.8,
         },
     ];
@@ -179,7 +172,6 @@ fn test_peer_cache_filter_stale_peers() {
         total_bytes_transferred: 1024,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     });
     
@@ -194,7 +186,6 @@ fn test_peer_cache_filter_stale_peers() {
         total_bytes_transferred: 1024,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     });
     
@@ -209,7 +200,6 @@ fn test_peer_cache_filter_stale_peers() {
         total_bytes_transferred: 1024,
         average_latency_ms: 50,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.8,
     });
     
@@ -235,7 +225,6 @@ fn test_peer_cache_sort_and_limit() {
             total_bytes_transferred: 0,
             average_latency_ms: 0,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: (i as f64) / 150.0,
         });
     }
@@ -274,7 +263,6 @@ async fn test_peer_cache_save_and_load() {
         total_bytes_transferred: 5242880,
         average_latency_ms: 45,
         is_bootstrap: false,
-        supports_relay: true,
         reliability_score: 0.8,
     });
     
@@ -359,7 +347,6 @@ fn test_peer_cache_serialization() {
                 total_bytes_transferred: 5242880,
                 average_latency_ms: 45,
                 is_bootstrap: false,
-                supports_relay: true,
                 reliability_score: 0.8,
             },
         ],
@@ -397,7 +384,6 @@ fn test_peer_cache_edge_cases() {
         total_bytes_transferred: 0,
         average_latency_ms: 0,
         is_bootstrap: false,
-        supports_relay: false,
         reliability_score: 0.5,
     });
     single_cache.sort_and_limit();

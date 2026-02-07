@@ -10,15 +10,15 @@ This guide gives you a precise map of the project, how the parts fit together, h
 
 ## Main Components
 - **Front end (Svelte + Vite)**: UI screens, Svelte stores, and service wrappers under `src/lib/services` that orchestrate backend commands, downloads, and WebRTC sessions.
-- **Rust backend (Tauri)**: DHT node, file transfer, chunking/encryption, relay/auto-relay, DCUtR hole punching, WebRTC proxying, and blockchain plumbing exposed as Tauri commands (e.g., `start_dht_node`, `download_blocks_from_network`).
-- **Networking**: libp2p stack (Kademlia, identify, ping, relay, dcutr), Bitswap-style block exchange, WebRTC as a data path for WebTorrent compatibility, STUN-based ICE setup.
+- **Rust backend (Tauri)**: DHT node, file transfer, chunking/encryption, WebRTC proxying, and blockchain plumbing exposed as Tauri commands (e.g., `start_dht_node`, `download_blocks_from_network`).
+- **Networking**: libp2p stack (Kademlia, identify, ping), Bitswap-style block exchange, WebRTC as a data path for WebTorrent compatibility, STUN-based ICE setup.
 - **Storage/encryption**: Chunking, Merkle tree construction, AES key bundling; manifests flow to the UI for tracking, downloads reassemble via Rust.
 - **Wallet/blockchain**: ETH-compatible chain; UI signs with `ethers.js`, while settlement is decoupled from transfer protocols.
 
 ## Architecture & Relationships
 1. **UI layer** (pages and components) triggers actions through service singletons (`fileService`, `dhtService`, `encryptionService`, `walletService`, `createWebRTCSession`), keeping views light.
 2. **Service layer** validates inputs (paths, addresses), subscribes to Tauri events, and invokes Rust commands via `@tauri-apps/api`.
-3. **Rust layer** runs the libp2p swarm (DHT, relay/auto-relay, Bitswap), chunk/encrypt/decrypt, and emits events such as `published_file`, `file_content`, `found_file` back to the UI.
+3. **Rust layer** runs the libp2p swarm (DHT, Bitswap), chunk/encrypt/decrypt, and emits events such as `published_file`, `file_content`, `found_file` back to the UI.
 4. **Data flow**: UI → service → Tauri command → Rust subsystem → Tauri event → service → UI store/component.
 5. **Payment flow**: UI prepares and signs transactions; on-chain submission and settlement happen separately so transport protocol choice does not matter.
 
@@ -57,7 +57,7 @@ Use this when debugging the main loop of publish/search/download.
 ### src/lib/dht.ts
 - Types: `DhtConfig`, `FileMetadata`, `FileManifestForJs`, `DhtHealth`, NAT reachability enums.
 - Helpers: `encryptionService.encryptFile/decryptFile` wrap Tauri encryption commands.
-- `DhtService.start(config?)`: Boots DHT with optional NAT/relay/cache tuning; defaults to backend bootstrap nodes.
+- `DhtService.start(config?)`: Boots DHT with optional NAT/cache tuning; defaults to backend bootstrap nodes.
 - `stop()`: Stops DHT node and clears cached peer ID.
 - `publishFileToNetwork(filePath, price?)`: Subscribes to `published_file`, invokes `upload_file_to_network`, normalizes `fileHash`/`merkleRoot`, returns metadata.
 - `downloadFile(fileMetadata)`: Resolves download path (metadata or settings), ensures directories exist, subscribes to `file_content`, prepares Bitswap metadata (`merkleRoot`, `cids`, `isRoot` fallback), then calls `download_blocks_from_network`.
@@ -74,6 +74,6 @@ Use this when debugging the main loop of publish/search/download.
 - Data Structures: `Ed2kSourceInfo` struct (in `dht/models.rs`) for holding ed2k link metadata.
 - Protocol definitions: `KeyRequestProtocol`, `KeyRequestCodec`, `KeyRequest/KeyResponse` for exchanging encrypted key bundles tied to a Merkle root.
 - Error handling: `Ed2kError` for validating ed2k links.
-- Core services (further in file): libp2p swarm wiring (Kademlia DHT, relay/auto-relay, identify, dcutr, ping), Bitswap-style block exchange, chunking via `ChunkManager`, peer selection metrics, and command handlers that the Tauri layer exposes to the UI.
+- Core services (further in file): libp2p swarm wiring (Kademlia DHT, identify, ping), Bitswap-style block exchange, chunking via `ChunkManager`, peer selection metrics, and command handlers that the Tauri layer exposes to the UI.
 
 Use this as a map while you explore; it should help you jump to the right function, trace the critical file-sharing path, and understand how data and events move through the stack.
