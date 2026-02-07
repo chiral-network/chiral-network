@@ -3,6 +3,9 @@ import { listen } from '@tauri-apps/api/event';
 import { peers, networkStats, networkConnected } from './stores';
 import type { PeerInfo } from './stores';
 import { toasts } from './toastStore';
+import { logger } from './logger';
+
+const log = logger('DHT');
 
 class DhtService {
   private pollInterval: number | null = null;
@@ -14,12 +17,12 @@ class DhtService {
   async start(): Promise<void> {
     try {
       const result = await invoke<string>('start_dht');
-      console.log('DHT started:', result);
+      log.ok('DHT started:', result);
       networkConnected.set(true);
       
       // Listen for peer discovery events
       this.peerDiscoveryUnlisten = await listen<PeerInfo[]>('peer-discovered', (event) => {
-        console.log('Peers discovered:', event.payload);
+        log.info('Peers discovered:', event.payload);
         // The payload already has the correct structure from Rust
         peers.set(event.payload);
       });
@@ -43,10 +46,10 @@ class DhtService {
       // Get and log our peer ID
       const peerId = await this.getPeerId();
       if (peerId) {
-        console.log('Our Peer ID:', peerId);
+        log.info('Our Peer ID:', peerId);
       }
     } catch (error) {
-      console.error('Failed to start DHT:', error);
+      log.error('Failed to start DHT:', error);
       throw error;
     }
   }
@@ -82,7 +85,7 @@ class DhtService {
         this.pongReceivedUnlisten = null;
       }
     } catch (error) {
-      console.error('Failed to stop DHT:', error);
+      log.error('Failed to stop DHT:', error);
       throw error;
     }
   }
@@ -91,7 +94,7 @@ class DhtService {
     try {
       return await invoke<string | null>('get_peer_id');
     } catch (error) {
-      console.error('Failed to get peer ID:', error);
+      log.error('Failed to get peer ID:', error);
       return null;
     }
   }
@@ -99,10 +102,10 @@ class DhtService {
   async pingPeer(peerId: string): Promise<string> {
     try {
       const result = await invoke<string>('ping_peer', { peerId });
-      console.log('Ping result:', result);
+      log.ok('Ping result:', result);
       return result;
     } catch (error) {
-      console.error('Failed to ping peer:', error);
+      log.error('Failed to ping peer:', error);
       throw error;
     }
   }
@@ -130,22 +133,21 @@ class DhtService {
     try {
       const [peerList, stats] = await Promise.all([
         invoke<PeerInfo[]>('get_dht_peers'),
-        invoke<{ connected_peers: number; total_peers: number }>('get_network_stats')
+        invoke<{ connectedPeers: number; totalPeers: number }>('get_network_stats')
       ]);
-      
-      // Convert snake_case to camelCase
+
       const formattedPeers = peerList.map(peer => ({
         ...peer,
         lastSeen: new Date(peer.lastSeen)
       }));
-      
+
       peers.set(formattedPeers);
       networkStats.set({
-        connectedPeers: stats.connected_peers,
-        totalPeers: stats.total_peers
+        connectedPeers: stats.connectedPeers,
+        totalPeers: stats.totalPeers
       });
     } catch (error) {
-      console.error('Failed to update network info:', error);
+      log.error('Failed to update network info:', error);
     }
   }
 }
