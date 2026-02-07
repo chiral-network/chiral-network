@@ -273,9 +273,9 @@ describe("FileService", () => {
     });
 
     it("should handle unicode filenames", async () => {
-      const unicodeFile = new File(["content"], "测试文件_тест_🎉.txt");
+      const unicodeFile = new File(["content"], "测试文件_тест_[DONE].txt");
 
-      vi.mocked(invoke).mockResolvedValue("/tmp/测试文件_тест_🎉.txt");
+      vi.mocked(invoke).mockResolvedValue("/tmp/测试文件_тест_[DONE].txt");
 
       const { encryptionService } = await import("../src/lib/services/encryption");
       vi.mocked(encryptionService.encryptFile).mockResolvedValue(createMockManifest());
@@ -283,7 +283,7 @@ describe("FileService", () => {
       await service.uploadFile(unicodeFile);
 
       expect(invoke).toHaveBeenCalledWith("save_temp_file_for_upload", {
-        fileName: "测试文件_тест_🎉.txt",
+        fileName: "测试文件_тест_[DONE].txt",
         fileData: expect.any(Array),
       });
     });

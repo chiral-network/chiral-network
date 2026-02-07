@@ -50,7 +50,7 @@ async fn test_locating_data(server_url: &str, file_hash: &str) -> Result<String,
     // let seeder_url = select_best_seeder(seeders)?;
     
     // For test, we use the mock server URL directly
-    tracing::info!("📍 Locating data: Found seeder at {}", server_url);
+    tracing::info!("[LOC] Locating data: Found seeder at {}", server_url);
     Ok(server_url.to_string())
 }
 
@@ -66,7 +66,7 @@ async fn test_handshake(
     seeder_url: &str,
     file_hash: &str,
 ) -> Result<HttpFileMetadata, String> {
-    tracing::info!("🤝 Handshake: Fetching metadata from {}", seeder_url);
+    tracing::info!("[HANDSHAKE] Handshake: Fetching metadata from {}", seeder_url);
     
     // Fetch metadata from HTTP server
     let url = format!("{}/files/{}/metadata", seeder_url, file_hash);
@@ -84,7 +84,7 @@ async fn test_handshake(
         .map_err(|e| format!("Failed to parse metadata: {}", e))?;
     
     tracing::info!(
-        "✅ Handshake complete: {} ({} bytes, encrypted: {})",
+        "[OK] Handshake complete: {} ({} bytes, encrypted: {})",
         metadata.name,
         metadata.size,
         metadata.encrypted
@@ -107,7 +107,7 @@ async fn test_download(
     output_path: &PathBuf,
     expected_data: &[u8],
 ) -> Result<(), String> {
-    tracing::info!("⬇️  Download: Starting download from {}", seeder_url);
+    tracing::info!("[DOWN]  Download: Starting download from {}", seeder_url);
     
     // Create progress channel
     let (progress_tx, mut progress_rx) = mpsc::channel::<HttpDownloadProgress>(100);
@@ -183,7 +183,7 @@ async fn test_download(
         ));
     }
     
-    tracing::info!("✅ Download complete: File verified successfully");
+    tracing::info!("[OK] Download complete: File verified successfully");
     Ok(())
 }
 
@@ -211,7 +211,7 @@ async fn test_payment_checkpoint(
     // 5. Process payment
     // 6. Resume download
     
-    tracing::info!("💳 Payment checkpoint: Not yet implemented for HTTP downloads");
+    tracing::info!("[PAY] Payment checkpoint: Not yet implemented for HTTP downloads");
     Ok(())
 }
 
@@ -233,7 +233,7 @@ async fn test_http_download_complete_flow() {
     );
     
     let (server_url, _server_handle) = server.start().await.unwrap();
-    tracing::info!("🚀 Mock HTTP server started at {}", server_url);
+    tracing::info!("[START] Mock HTTP server started at {}", server_url);
     
     // Phase 1: Locating Data
     let seeder_url = test_locating_data(&server_url, &file_hash)
@@ -260,7 +260,7 @@ async fn test_http_download_complete_flow() {
     // Cleanup
     let _ = tokio::fs::remove_file(&output_path).await;
     
-    tracing::info!("✅ Complete HTTP download flow test passed");
+    tracing::info!("[OK] Complete HTTP download flow test passed");
 }
 
 /// Test download with retry logic (network errors)
@@ -488,6 +488,6 @@ async fn test_http_download_with_payment_checkpoint() {
     let result = test_payment_checkpoint("test_session", "test_hash", 10 * 1024 * 1024).await;
     assert!(result.is_ok());
     
-    tracing::info!("💳 Payment checkpoint test (placeholder) - will be implemented");
+    tracing::info!("[PAY] Payment checkpoint test (placeholder) - will be implemented");
 }
 

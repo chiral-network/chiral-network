@@ -55,7 +55,7 @@
   // Get reputation stars
   function getStars(score: number): string {
     const stars = Math.round(score * 5);
-    return '★'.repeat(stars) + '☆'.repeat(5 - stars);
+    return '*'.repeat(stars) + '*'.repeat(5 - stars);
   }
 
   // Auto-balance percentages when a peer is toggled

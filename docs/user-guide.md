@@ -45,8 +45,8 @@ The sidebar contains navigation to all pages:
 
 **Network Status** (top right):
 
-- 🟢 **Connected** - DHT network active
-- 🔴 **Disconnected** - No network connection
+- [GREEN] **Connected** - DHT network active
+- [!] **Disconnected** - No network connection
 
 ## Sharing Files
 
@@ -134,7 +134,7 @@ Save frequently used FTP servers for quick access.
 
 #### Adding a Bookmark
 
-1. **Navigate to Upload → FTP Settings** (or FTP Bookmarks section)
+1. **Navigate to Upload -> FTP Settings** (or FTP Bookmarks section)
 2. **Click "Add Bookmark"**
 3. **Enter bookmark details:**
    - Name (e.g., "Production Server")
@@ -265,7 +265,7 @@ Download files from FTP servers with automatic resume capability:
 **Download Location**:
 
 - Default: `~/ChiralNetwork/Downloads`
-- Change in Settings → Storage
+- Change in Settings -> Storage
 
 ## Network & Peers
 
@@ -384,7 +384,7 @@ View mining statistics:
 1. **Navigate to Account page**
 2. **Click "Create Wallet"**
 3. **Write down mnemonic phrase** (12 or 24 words)
-   - ⚠️ **CRITICAL**: This is your ONLY backup
+   - [WARN] **CRITICAL**: This is your ONLY backup
    - Store securely offline
    - Never share with anyone
 4. **Verify phrase** by re-entering
@@ -558,7 +558,7 @@ The Diagnostics tool runs comprehensive system health checks to help troubleshoo
 
 **Running Diagnostics**:
 
-1. Navigate to Settings → Diagnostics
+1. Navigate to Settings -> Diagnostics
 2. Click "Run diagnostics" button
 3. View categorized results
 
@@ -592,10 +592,10 @@ The Diagnostics tool runs comprehensive system health checks to help troubleshoo
 
 **Status Indicators**:
 
-- ✓ Green checkmark - Test passed
-- ⚠ Yellow warning - Needs attention but not critical
-- ✗ Red error - Test failed, requires action
-- ℹ Blue info - Informational status
+- [OK] Green checkmark - Test passed
+- [WARN] Yellow warning - Needs attention but not critical
+- [X] Red error - Test failed, requires action
+- [INFO] Blue info - Informational status
 
 **Export Report**:
 
@@ -650,7 +650,7 @@ View top relay servers:
 
 **Run Diagnostics First**:
 
-1. Go to Settings → Diagnostics
+1. Go to Settings -> Diagnostics
 2. Click "Run diagnostics"
 3. Review failed tests and warnings
 4. Follow specific troubleshooting steps below
@@ -692,14 +692,14 @@ View top relay servers:
 
 ### Security
 
-- ✅ Backup mnemonic phrase immediately
-- ✅ Use encryption for sensitive files
-- ✅ Verify file hashes before downloading
-- ✅ Keep application updated
-- ✅ Use strong device passwords
-- ❌ Never share mnemonic phrase
-- ❌ Never store keys digitally
-- ❌ Don't download from untrusted peers
+- [OK] Backup mnemonic phrase immediately
+- [OK] Use encryption for sensitive files
+- [OK] Verify file hashes before downloading
+- [OK] Keep application updated
+- [OK] Use strong device passwords
+- [X] Never share mnemonic phrase
+- [X] Never store keys digitally
+- [X] Don't download from untrusted peers
 
 ### Performance
 

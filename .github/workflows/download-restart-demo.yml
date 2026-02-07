@@ -42,20 +42,20 @@ jobs:
         run: |
           # Check that metadata file was created
           test -f demo/node-b-downloads/test-file.bin.meta.json
-          echo "✓ Metadata file exists"
+          echo "[OK] Metadata file exists"
 
           # Check that final file exists
           test -f demo/node-b-downloads/test-file.bin
-          echo "✓ Downloaded file exists"
+          echo "[OK] Downloaded file exists"
 
           # Verify file size matches
           ORIGINAL_SIZE=$(stat -f%z demo/test-file.bin 2>/dev/null || stat -c%s demo/test-file.bin)
           DOWNLOADED_SIZE=$(stat -f%z demo/node-b-downloads/test-file.bin 2>/dev/null || stat -c%s demo/node-b-downloads/test-file.bin)
 
           if [ "$ORIGINAL_SIZE" -eq "$DOWNLOADED_SIZE" ]; then
-            echo "✓ File size matches: $DOWNLOADED_SIZE bytes"
+            echo "[OK] File size matches: $DOWNLOADED_SIZE bytes"
           else
-            echo "✗ File size mismatch: expected $ORIGINAL_SIZE, got $DOWNLOADED_SIZE"
+            echo "[X] File size mismatch: expected $ORIGINAL_SIZE, got $DOWNLOADED_SIZE"
             exit 1
           fi
 
@@ -64,9 +64,9 @@ jobs:
           DOWNLOADED_HASH=$(shasum -a 256 demo/node-b-downloads/test-file.bin | awk '{print $1}')
 
           if [ "$ORIGINAL_HASH" = "$DOWNLOADED_HASH" ]; then
-            echo "✓ SHA-256 hash matches: $DOWNLOADED_HASH"
+            echo "[OK] SHA-256 hash matches: $DOWNLOADED_HASH"
           else
-            echo "✗ SHA-256 hash mismatch"
+            echo "[X] SHA-256 hash mismatch"
             echo "  Expected: $ORIGINAL_HASH"
             echo "  Got: $DOWNLOADED_HASH"
             exit 1

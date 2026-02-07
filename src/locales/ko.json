@@ -183,8 +183,8 @@
       "farthest": "멈",
       "online": "온라인",
       "offline": "오프라인",
-      "aToZ": "A → Z",
-      "zToA": "Z → A",
+      "aToZ": "A -> Z",
+      "zToA": "Z -> A",
       "anonymous": "익명",
       "unknown": "알 수 없음",
       "joined": "참여",
@@ -386,7 +386,7 @@
   "button": {
     "clearCache": "캐시 비우기",
     "clearing": "삭제 중...",
-    "cleared": "✓ 삭제 완료!"
+    "cleared": "[OK] 삭제 완료!"
   },
   "account": {
     "title": "계정",
@@ -586,8 +586,8 @@
     "from": "시작일",
     "to": "종료일",
     "sort": "정렬",
-    "sortNewest": "최신 → 오래된",
-    "sortOldest": "오래된 → 최신",
+    "sortNewest": "최신 -> 오래된",
+    "sortOldest": "오래된 -> 최신",
     "reset": "초기화"
   },
   "actionsGroup": {},
@@ -787,8 +787,8 @@
     },
     "errors": {
       "connectionTimeout": "연결 시간 초과",
-      "optimizationUnavailable": "❌ 최적화 상태를 사용할 수 없음",
-      "tauriUnavailable": "❌ Tauri API를 사용할 수 없습니다. 브라우저가 아닌 데스크톱 앱에서 이 테스트를 실행하세요."
+      "optimizationUnavailable": "[X] 최적화 상태를 사용할 수 없음",
+      "tauriUnavailable": "[X] Tauri API를 사용할 수 없습니다. 브라우저가 아닌 데스크톱 앱에서 이 테스트를 실행하세요."
     },
     "dialog": {
       "confirmRemoval": "제거 확인",
@@ -1022,7 +1022,7 @@
       "hoverTooltip": "{level}: {count}",
       "prev": "이전",
       "next": "다음",
-      "scoreFormat": "{score}/5.0 ⭐"
+      "scoreFormat": "{score}/5.0 *"
     },
     "pageTitle": "평판 시스템 - Chiral Network",
     "sortBy": "정렬 기준",
@@ -1112,7 +1112,7 @@
       "recipientPublicKey": "수신자 공개 키",
       "publicKeyPlaceholder": "수신자의 X25519 공개 키 입력 (64자리 16진수)",
       "publicKeyHint": "수신자의 X25519 공개 키를 입력하세요 (16진수 형식, 64자). 파일이 암호화되어 수신자만 해독할 수 있습니다. 비워두면 자신을 위해 암호화됩니다.",
-      "invalidPublicKey": "⚠️ 공개 키 형식이 잘못되었습니다. 64자리 16진수여야 합니다.",
+      "invalidPublicKey": "[WARN] 공개 키 형식이 잘못되었습니다. 64자리 16진수여야 합니다.",
       "encryptedBadge": "암호화됨"
     },
     "currentProtocol": "현재 프로토콜",
@@ -1134,8 +1134,8 @@
     "hashCopiedClipboard": "Merkle 해시가 클립보드에 복사되었습니다!",
     "desktopAppRequired": "데스크톱 앱 필요",
     "storageMonitoringDesktopOnly": "저장 공간 모니터링은 데스크톱 애플리케이션이 필요합니다",
-    "dropFilesHere": "✨ 여기에 파일을 드롭하세요!",
-    "uploadingFiles": "🔄 파일 업로드 중...",
+    "dropFilesHere": "[NEW] 여기에 파일을 드롭하세요!",
+    "uploadingFiles": "[SYNC] 파일 업로드 중...",
     "releaseToUpload": "파일을 즉시 업로드하려면 놓으세요",
     "dragDropWebNotAvailable": "웹 버전에서는 드래그 앤 드롭을 사용할 수 없습니다",
     "pleaseWaitProcessing": "파일 처리 중입니다. 잠시만 기다려주세요...",
@@ -1705,8 +1705,8 @@
       "forcedModeMining": "설정에서 순수 클라이언트 모드를 수동으로 활성화했습니다. 블록체인은 전체 동기화(약 10,000 블록) 대신 마지막 약 100개 블록만 동기화합니다. 채굴은 가능하지만 최소 저장 공간을 사용합니다.",
       "natDetected": "AutoNAT가 NAT 또는 제한적인 방화벽 뒤에 있음을 감지했습니다. 파일을 다운로드할 수 있지만 다른 피어에게 시드할 수 없습니다.",
       "natDetectedMining": "AutoNAT가 NAT 또는 제한적인 방화벽 뒤에 있음을 감지했습니다. 블록체인은 대역폭/저장 요구사항을 줄이기 위해 마지막 약 100개 블록만 동기화합니다. 감소된 저장 공간으로 채굴이 가능합니다.",
-      "settingsForced": "⚠️ 클라이언트 모드 강제: 파일을 시드하거나 DHT 서버 역할을 할 수 없습니다. 블록체인은 전체 동기화(약 10,000 블록) 대신 부분 동기화(마지막 약 100개 블록만)를 사용합니다. 감소된 저장 공간으로 채굴 가능. DHT 재시작 필요.",
-      "serverModeDisabled": "ℹ️ 클라이언트 모드가 강제될 때 서버 모드가 비활성화됩니다."
+      "settingsForced": "[WARN] 클라이언트 모드 강제: 파일을 시드하거나 DHT 서버 역할을 할 수 없습니다. 블록체인은 전체 동기화(약 10,000 블록) 대신 부분 동기화(마지막 약 100개 블록만)를 사용합니다. 감소된 저장 공간으로 채굴 가능. DHT 재시작 필요.",
+      "serverModeDisabled": "[INFO] 클라이언트 모드가 강제될 때 서버 모드가 비활성화됩니다."
     },
     "banner": {
       "title": {
@@ -1722,10 +1722,10 @@
         "defaultMining": "클라이언트 전용 모드입니다. 블록체인은 마지막 약 100개 블록만 동기화합니다(최소 저장 공간). 채굴이 가능합니다."
       },
       "help": {
-        "forced": "시드를 활성화하려면 설정 → 개발자 → DHT 클라이언트 모드에서 \"클라이언트 전용 모드 강제\"를 비활성화하세요.",
+        "forced": "시드를 활성화하려면 설정 -> 개발자 -> DHT 클라이언트 모드에서 \"클라이언트 전용 모드 강제\"를 비활성화하세요.",
         "nat": "파일은 여전히 로컬에 저장되지만 네트워크와 공유되지 않습니다. 시드를 활성화하려면 포트 포워딩을 구성하거나 공용 IP가 있는 VPN을 사용하세요.",
         "default": "네트워크 설정 또는 AutoNAT 구성을 확인하세요.",
-        "forcedMining": "전체 블록체인 동기화(10,000 블록)를 활성화하려면 설정 → 개발자에서 \"클라이언트 전용 모드 강제\"를 비활성화하세요.",
+        "forcedMining": "전체 블록체인 동기화(10,000 블록)를 활성화하려면 설정 -> 개발자에서 \"클라이언트 전용 모드 강제\"를 비활성화하세요.",
         "natMining": "전체 노드는 약 10,000개 블록을 동기화합니다. 업그레이드하려면 포트 포워딩을 구성하거나 공용 IP가 있는 VPN을 사용하여 공개적으로 접근 가능하게 되세요.",
         "defaultMining": "전체 기능을 위해 네트워크 설정 또는 AutoNAT 구성을 확인하세요."
       }

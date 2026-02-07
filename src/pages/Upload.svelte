@@ -1392,7 +1392,7 @@
     <Card class="p-4 bg-yellow-50 border-yellow-200">
       <div class="flex items-start gap-3">
         <div class="text-yellow-600 mt-0.5">
-          ⚠️
+          [WARN]
         </div>
         <div class="flex-1 space-y-2">
           <p class="text-sm font-semibold text-yellow-800">
@@ -1881,7 +1881,7 @@
       {#if clientModeReason === "forced" && $coalescedFiles.length > 0}
         <div class="mx-4 mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
           <div class="flex items-start gap-2">
-            <div class="text-amber-600 text-sm mt-0.5">⚠️</div>
+            <div class="text-amber-600 text-sm mt-0.5">[WARN]</div>
             <div class="flex-1">
               <p class="text-sm font-medium text-amber-800">
                 Seeding Disabled - Pure Client Mode Active

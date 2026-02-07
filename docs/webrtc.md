@@ -44,7 +44,7 @@ Chiral Network uses WebRTC (Web Real-Time Communication) for direct peer-to-peer
           │                │
 ┌─────────│────────────────│──────────────────────────────────────┐
 │         │                │              Seeder                   │
-│  ┌──────▼──────┐  ┌──────▼───────┐  ┌────────────────────────┐  │
+│  ┌──────[v]──────┐  ┌──────[v]───────┐  ┌────────────────────────┐  │
 │  │  Frontend   │  │  Signaling   │  │  File Transfer         │  │
 │  │  WebRTC     │──│  Service     │  │  Service               │  │
 │  │  Session    │  │  (DHT/WS)    │  │  - Chunk reading       │  │
@@ -121,7 +121,7 @@ To verify ICE is working correctly:
 
 1. Check that `srflx` (server reflexive) candidates are being gathered
 2. Verify connections work between peers on different networks
-3. Monitor for ICE connection state transitions: `checking` → `connected`
+3. Monitor for ICE connection state transitions: `checking` -> `connected`
 
 ### TURN Servers (Future)
 
@@ -144,37 +144,37 @@ RTCIceServer {
 ```
 Downloader                          DHT Network                         Seeder
     │                                    │                                 │
-    │──── Search for file hash ─────────►│                                 │
-    │                                    │◄──── File metadata published ───│
-    │◄─── Return seeder peer IDs ────────│                                 │
+    │──── Search for file hash ─────────[>]│                                 │
+    │                                    │[<]──── File metadata published ───│
+    │[<]─── Return seeder peer IDs ────────│                                 │
 ```
 
 ### 2. Signaling (Offer/Answer Exchange)
 ```
 Downloader                          SignalingService                    Seeder
     │                                    │                                 │
-    │──── Create WebRTC Offer ──────────►│                                 │
-    │                                    │───── Relay offer via DHT ──────►│
+    │──── Create WebRTC Offer ──────────[>]│                                 │
+    │                                    │───── Relay offer via DHT ──────[>]│
     │                                    │                                 │
-    │                                    │◄──── Create & send Answer ──────│
-    │◄─── Receive Answer ────────────────│                                 │
+    │                                    │[<]──── Create & send Answer ──────│
+    │[<]─── Receive Answer ────────────────│                                 │
     │                                    │                                 │
-    │◄─────────────── ICE Candidates Exchange ────────────────────────────►│
+    │[<]─────────────── ICE Candidates Exchange ────────────────────────────[>]│
 ```
 
 ### 3. File Transfer
 ```
 Downloader                          DataChannel                         Seeder
     │                                    │                                 │
-    │──── ManifestRequest ──────────────►│────────────────────────────────►│
-    │◄─── ManifestResponse ──────────────│◄────────────────────────────────│
+    │──── ManifestRequest ──────────────[>]│────────────────────────────────[>]│
+    │[<]─── ManifestResponse ──────────────│[<]────────────────────────────────│
     │                                    │                                 │
-    │──── FileRequest ──────────────────►│────────────────────────────────►│
+    │──── FileRequest ──────────────────[>]│────────────────────────────────[>]│
     │                                    │                                 │
-    │◄─── FileChunk[0] ──────────────────│◄────────────────────────────────│
-    │──── ChunkAck[0] ──────────────────►│────────────────────────────────►│
-    │◄─── FileChunk[1] ──────────────────│◄────────────────────────────────│
-    │──── ChunkAck[1] ──────────────────►│────────────────────────────────►│
+    │[<]─── FileChunk[0] ──────────────────│[<]────────────────────────────────│
+    │──── ChunkAck[0] ──────────────────[>]│────────────────────────────────[>]│
+    │[<]─── FileChunk[1] ──────────────────│[<]────────────────────────────────│
+    │──── ChunkAck[1] ──────────────────[>]│────────────────────────────────[>]│
     │            ...                     │            ...                  │
 ```
 
@@ -275,11 +275,11 @@ To prevent data channel overflow when transferring large files:
 ```
 Seeder                                              Downloader
   │                                                      │
-  │──── Chunk[0-9] (batch) ─────────────────────────────►│
+  │──── Chunk[0-9] (batch) ─────────────────────────────[>]│
   │                                                      │
-  │◄─── ACK[0], ACK[1], ... ACK[9] ──────────────────────│
+  │[<]─── ACK[0], ACK[1], ... ACK[9] ──────────────────────│
   │                                                      │
-  │──── Chunk[10-19] (next batch) ──────────────────────►│
+  │──── Chunk[10-19] (next batch) ──────────────────────[>]│
   │            ...                                       │
 ```
 
@@ -299,9 +299,9 @@ For files larger than 1MB, chunks are written directly to disk:
 │ Chunk0 │ Chunk1 │ Chunk2 │  ...   │ChunkN-1│  ChunkN   │
 │ 16KB   │ 16KB   │ 16KB   │        │ 16KB   │ <=16KB    │
 └────────┴────────┴────────┴────────┴────────┴───────────┘
-                          ↓
+                          v
                (on completion, rename to)
-                          ↓
+                          v
 ┌─────────────────────────────────────────────────────────┐
 │                     final_file.ext                       │
 └─────────────────────────────────────────────────────────┘

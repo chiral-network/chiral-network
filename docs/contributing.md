@@ -59,12 +59,12 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 
 | Priority | Type                          | Examples                                                | Review Speed             |
 | -------- | ----------------------------- | ------------------------------------------------------- | ------------------------ |
-| **1 🔴** | **Major Design/Docs**         | Architecture decisions, protocol specs, API contracts   | Thorough review required |
-| **2 🟠** | **Major Code/Critical Fixes** | Protocol implementations, security fixes, core features | Thorough review required |
-| **3 🟡** | **Minor Design/Docs**         | Examples, tutorials, typos, clarifications              | Faster review            |
-| **4 🟢** | **Minor Code**                | UI polish, code comments, small optimizations           | Fastest review           |
+| **1 [!]** | **Major Design/Docs**         | Architecture decisions, protocol specs, API contracts   | Thorough review required |
+| **2 [ORANGE]** | **Major Code/Critical Fixes** | Protocol implementations, security fixes, core features | Thorough review required |
+| **3 [YELLOW]** | **Minor Design/Docs**         | Examples, tutorials, typos, clarifications              | Faster review            |
+| **4 [GREEN]** | **Minor Code**                | UI polish, code comments, small optimizations           | Fastest review           |
 
-### Priority 1: Major Design/Documentation Work (HIGHEST) 🔴
+### Priority 1: Major Design/Documentation Work (HIGHEST) [!]
 
 - **Add major parts to design documentation**
   - Architecture decisions and system design
@@ -79,7 +79,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 
 **Why highest priority?** Design decisions affect everything. Getting the design right before implementation saves significant rework and prevents architectural mistakes.
 
-### Priority 2: Major Code Work or Critical Code Fixes 🟠
+### Priority 2: Major Code Work or Critical Code Fixes [ORANGE]
 
 - **Add major parts to codebase**
   - Core protocol implementations (HTTP, WebTorrent, BitTorrent, ed2k)
@@ -95,7 +95,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 
 **Why high priority?** Major features and critical bugs directly impact functionality and user experience.
 
-### Priority 3: Minor Design/Documentation Improvements 🟡
+### Priority 3: Minor Design/Documentation Improvements [YELLOW]
 
 - **Add minor parts to documentation**
   - Examples and tutorials
@@ -110,7 +110,7 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 
 **Why medium priority?** Documentation improvements help users but don't block development.
 
-### Priority 4: Minor Code Improvements (LOWEST) 🟢
+### Priority 4: Minor Code Improvements (LOWEST) [GREEN]
 
 - **Add minor features**
   - UI polish and minor UX improvements
@@ -135,27 +135,27 @@ Thank you for your interest in contributing to Chiral Network! This guide will h
 ### Workflow for Major Contributions
 
 ```
-1. Design Phase (Priority 1) 🔴
-   └─> Create issue → Discuss architecture → Update docs → Get approval
+1. Design Phase (Priority 1) [!]
+   └─> Create issue -> Discuss architecture -> Update docs -> Get approval
 
-2. Implementation Phase (Priority 2) 🟠
-   └─> Write code → Add tests → Update technical docs → Submit PR
+2. Implementation Phase (Priority 2) [ORANGE]
+   └─> Write code -> Add tests -> Update technical docs -> Submit PR
 
-3. Polish Phase (Priority 3-4) 🟡🟢
-   └─> Add examples → Fix minor issues → Improve UX → Optimize
+3. Polish Phase (Priority 3-4) [YELLOW][GREEN]
+   └─> Add examples -> Fix minor issues -> Improve UX -> Optimize
 ```
 
 ### Summary: Why This Priority Order?
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Priority 1 🔴: Design Right (Architecture First)       │
-│  ↓                                                       │
-│  Priority 2 🟠: Build Right (Implementation)            │
-│  ↓                                                       │
-│  Priority 3 🟡: Document Right (Examples/Clarity)       │
-│  ↓                                                       │
-│  Priority 4 🟢: Polish (UX/Performance)                 │
+│  Priority 1 [!]: Design Right (Architecture First)       │
+│  v                                                       │
+│  Priority 2 [ORANGE]: Build Right (Implementation)            │
+│  v                                                       │
+│  Priority 3 [YELLOW]: Document Right (Examples/Clarity)       │
+│  v                                                       │
+│  Priority 4 [GREEN]: Polish (UX/Performance)                 │
 └─────────────────────────────────────────────────────────┘
 
 Design mistakes are expensive to fix after implementation.
@@ -165,20 +165,24 @@ Get the design right first, then build, then polish.
 
 **Remember**:
 
-- ✅ Design before code (Priority 1 before Priority 2)
-- ✅ Critical before nice-to-have (Priority 1-2 before Priority 3-4)
-- ✅ Documentation updates required for all Priority 1-2 changes
-- ✅ Ask maintainers if unsure about priority level
+- [OK] Design before code (Priority 1 before Priority 2)
+- [OK] Critical before nice-to-have (Priority 1-2 before Priority 3-4)
+- [OK] Documentation updates required for all Priority 1-2 changes
+- [OK] Ask maintainers if unsure about priority level
 
 ## What NOT to Contribute
 
 **Please avoid**:
 
-- ❌ Centralized market features
-- ❌ Commercial tracking systems
-- ❌ Features that enable piracy
-- ❌ Global file search/discovery
-- ❌ Social features (likes, comments)
+- [X] External payment systems or advertising
+- [X] Commercial tracking systems
+- [X] Features that enable piracy
+- [X] Global file search/discovery
+- [X] Social features (likes, comments)
+
+**Welcome contributions**:
+- [OK] Chiral token-based download speed tiers
+- [OK] Token economy improvements (pricing, peer incentives)
 
 ## Getting Started
 
@@ -195,10 +199,10 @@ Follow the [Developer Setup Guide](developer-setup.md) to:
 
 **Follow Priority Order** (see [Contribution Priorities](#contribution-priorities) above):
 
-1. **Priority 1** 🔴: Major design/documentation work
-2. **Priority 2** 🟠: Major code work or critical fixes
-3. **Priority 3** 🟡: Minor documentation improvements
-4. **Priority 4** 🟢: Minor code improvements
+1. **Priority 1** [!]: Major design/documentation work
+2. **Priority 2** [ORANGE]: Major code work or critical fixes
+3. **Priority 3** [YELLOW]: Minor documentation improvements
+4. **Priority 4** [GREEN]: Minor code improvements
 
 **Good First Issues**:
 
@@ -435,7 +439,7 @@ Users reported confusion about NAT traversal configuration
 
 ### Review Process
 
-**Review Priority**: PRs are reviewed in priority order (Priority 1 → Priority 4)
+**Review Priority**: PRs are reviewed in priority order (Priority 1 -> Priority 4)
 
 1. **Automated checks** must pass:
    - TypeScript compilation
@@ -633,7 +637,7 @@ Any other relevant information
 
 1. Check existing issues/discussions
 2. Ensure alignment with project goals
-3. Consider if it fits non-commercial focus
+3. Consider if it fits the project's token economy and decentralized design
 
 ### Feature Request Template
 
@@ -723,4 +727,4 @@ If you have questions about contributing:
 
 ---
 
-Thank you for contributing to Chiral Network! 🙏
+Thank you for contributing to Chiral Network! 

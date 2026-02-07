@@ -28,10 +28,10 @@ cd "$PROJECT_DIR"
 
 if cargo test --lib p2p_chunk --no-fail-fast -- --test-threads=1 2>&1 | tee /tmp/cargo_test_output.log | tail -20; then
     CARGO_TESTS=$(grep -c "test.*ok" /tmp/cargo_test_output.log 2>/dev/null || echo "0")
-    echo -e "${GREEN}✓ Cargo tests passed: $CARGO_TESTS tests${NC}"
+    echo -e "${GREEN}[OK] Cargo tests passed: $CARGO_TESTS tests${NC}"
     TOTAL_PASS=$((TOTAL_PASS + 1))
 else
-    echo -e "${RED}✗ Cargo tests failed${NC}"
+    echo -e "${RED}[X] Cargo tests failed${NC}"
     TOTAL_FAIL=$((TOTAL_FAIL + 1))
 fi
 echo ""
@@ -46,18 +46,18 @@ if [ -f "$INTEGRATION_TEST" ]; then
     cd "$(dirname "$INTEGRATION_TEST")"
     if rustc "$(basename "$INTEGRATION_TEST")" -o /tmp/p2p_integration_test 2>&1 | tail -5; then
     if /tmp/p2p_integration_test 2>&1; then
-        echo -e "${GREEN}✓ Standalone integration tests passed${NC}"
+        echo -e "${GREEN}[OK] Standalone integration tests passed${NC}"
         TOTAL_PASS=$((TOTAL_PASS + 1))
     else
-        echo -e "${RED}✗ Standalone integration tests failed${NC}"
+        echo -e "${RED}[X] Standalone integration tests failed${NC}"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
     fi
     else
-        echo -e "${RED}✗ Failed to compile standalone test${NC}"
+        echo -e "${RED}[X] Failed to compile standalone test${NC}"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
     fi
 else
-    echo -e "${YELLOW}⚠ Standalone integration test not found at $INTEGRATION_TEST${NC}"
+    echo -e "${YELLOW}[WARN] Standalone integration test not found at $INTEGRATION_TEST${NC}"
 fi
 echo ""
 
@@ -68,14 +68,14 @@ echo -e "${YELLOW}═══ Running DHT Integration Test ═══${NC}"
 
 if [ -x "$SCRIPT_DIR/test_dht_integration.sh" ]; then
     if "$SCRIPT_DIR/test_dht_integration.sh" 2>&1; then
-        echo -e "${GREEN}✓ DHT integration tests passed${NC}"
+        echo -e "${GREEN}[OK] DHT integration tests passed${NC}"
         TOTAL_PASS=$((TOTAL_PASS + 1))
     else
-        echo -e "${RED}✗ DHT integration tests failed${NC}"
+        echo -e "${RED}[X] DHT integration tests failed${NC}"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
     fi
 else
-    echo -e "${YELLOW}⚠ DHT integration test not found${NC}"
+    echo -e "${YELLOW}[WARN] DHT integration test not found${NC}"
 fi
 echo ""
 
@@ -86,14 +86,14 @@ echo -e "${YELLOW}═══ Running REPL DHT Operations Test ═══${NC}"
 
 if [ -x "$SCRIPT_DIR/test_repl_dht_operations.sh" ]; then
     if "$SCRIPT_DIR/test_repl_dht_operations.sh" 2>&1; then
-        echo -e "${GREEN}✓ REPL DHT operations tests passed${NC}"
+        echo -e "${GREEN}[OK] REPL DHT operations tests passed${NC}"
         TOTAL_PASS=$((TOTAL_PASS + 1))
     else
-        echo -e "${RED}✗ REPL DHT operations tests failed${NC}"
+        echo -e "${RED}[X] REPL DHT operations tests failed${NC}"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
     fi
 else
-    echo -e "${YELLOW}⚠ REPL operations test not found${NC}"
+    echo -e "${YELLOW}[WARN] REPL operations test not found${NC}"
 fi
 echo ""
 

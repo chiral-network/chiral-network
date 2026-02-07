@@ -130,7 +130,7 @@ Handles all blockchain operations via **JSON-RPC**:
 1. Seeder or leecher triggers a payment event.
 2. Wallet (Clef) signs the transaction securely.
 3. Blockchain Service (Geth) submits the signed transaction via RPC.
-4. UI reflects transaction status: **pending** → **confirmed**.
+4. UI reflects transaction status: **pending** -> **confirmed**.
 
 ---
 
@@ -159,7 +159,7 @@ Handles all blockchain operations via **JSON-RPC**:
 ### 6.4 Earn for Seeding (Seeder Flow)
 
 1. Seeder advertises files with wallet address attached.
-2. Leecher initiates payment → Clef signs → Geth broadcasts.
+2. Leecher initiates payment -> Clef signs -> Geth broadcasts.
 3. Seeder account receives payment upon confirmation.
 4. Transaction + upload logs tracked locally.
 
@@ -186,12 +186,12 @@ Handles all blockchain operations via **JSON-RPC**:
 
 The **Wallet & Blockchain Layer** in Chiral Network now provides:
 
-- ✅ Ethereum-compatible wallet handled by **Clef**
-- ✅ Blockchain operations, mining, and transaction submission handled by **Geth**
-- ✅ Offline or RPC-based signing
-- ✅ Fully decoupled from file-sharing protocols
-- ✅ Minimal transaction states (`pending` / `confirmed`)
-- ✅ Extensible for future token and smart contract logic
+- [OK] Ethereum-compatible wallet handled by **Clef**
+- [OK] Blockchain operations, mining, and transaction submission handled by **Geth**
+- [OK] Offline or RPC-based signing
+- [OK] Fully decoupled from file-sharing protocols
+- [OK] Minimal transaction states (`pending` / `confirmed`)
+- [OK] Extensible for future token and smart contract logic
 
 ---
 

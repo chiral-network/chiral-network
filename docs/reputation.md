@@ -2,7 +2,7 @@
 
 > **Status:** MVP design for transaction-backed reputation with signed transaction message proofs.
 
-> **📘 For detailed information about signed transaction messages and non-payment complaint workflow, see [SIGNED_TRANSACTION_MESSAGES.md](./SIGNED_TRANSACTION_MESSAGES.md)**
+> **[DOC] For detailed information about signed transaction messages and non-payment complaint workflow, see [SIGNED_TRANSACTION_MESSAGES.md](./SIGNED_TRANSACTION_MESSAGES.md)**
 
 ## Overview
 
@@ -103,7 +103,7 @@ The transaction flow is designed to minimize blockchain interaction during the f
        │  5. Submit payment to BLOCKCHAIN                 │
        │──────────────┐                                   │
        │              │                                   │
-       │              ▼                                   │
+       │              [v]                                   │
        │     ┌──────────────┐                            │
        │     │  Blockchain  │                            │
        │     │ (tx recorded)│                            │
@@ -251,8 +251,8 @@ This creates an incentive for long-term, reliable seeders and makes it costly fo
 ### Reputation Calculation Flow
 
 1. Query DHT for recent activity (last N transactions)
-   ├─ If cache hit → Use cached score with timestamp
-   └─ If cache miss or stale → Continue to step 2
+   ├─ If cache hit -> Use cached score with timestamp
+   └─ If cache miss or stale -> Continue to step 2
 
 2. Query blockchain for full transaction history
    ├─ Count successful transactions (seeding + downloading)
@@ -314,7 +314,7 @@ Reliable penalties apply when a party can anchor their claim to the chain. For e
 
 Because these complaints rest on permanent chain data, they are treated as authoritative and can trigger automatic responses (e.g., lower trust buckets, blacklist thresholds) without waiting for additional reports.
 
-### Payment Handshake (Downloader → Seeder)
+### Payment Handshake (Downloader -> Seeder)
 
 Before any data transfer, the downloader MUST send a signed payment message to the seeder:
 payer_id = downloader’s peer/wallet ID
@@ -431,11 +431,11 @@ This is the most critical reputation scenario: a downloader receives a file but 
 - Multiple signed messages from different seeders = strong pattern of non-payment
 
 **Key Properties:**
-- ✅ Can't be forged (requires downloader's private key)
-- ✅ Can't be repudiated (signature proves authenticity)
-- ✅ Can't be reused (nonce + file_hash make each unique)
-- ✅ Can be verified by anyone (public key cryptography)
-- ✅ Doesn't require blockchain (works off-chain)
+- [OK] Can't be forged (requires downloader's private key)
+- [OK] Can't be repudiated (signature proves authenticity)
+- [OK] Can't be reused (nonce + file_hash make each unique)
+- [OK] Can be verified by anyone (public key cryptography)
+- [OK] Doesn't require blockchain (works off-chain)
 
 #### Seeder Protection Strategy
 
@@ -482,10 +482,10 @@ The design accepts that **malicious seeders** are harder to prove, so we protect
 4. Network Verification
    ├─ Any peer can query blockchain for tx_hash
    ├─ Transaction matches signed message parameters:
-   │   - from: A's address ✓
-   │   - to: B's address ✓
-   │   - amount: File price ✓
-   │   - timing: Within deadline ✓
+   │   - from: A's address [OK]
+   │   - to: B's address [OK]
+   │   - amount: File price [OK]
+   │   - timing: Within deadline [OK]
    └─ Conclusion: Payment exists, complaint is false
 
 5. Consequences for Malicious Seeder
@@ -1092,11 +1092,11 @@ async function validateDownloaderHandshake(
 ### Why This Works
 
 **Cryptographic Properties:**
-- ✅ **Unforgeable:** Only downloader's private key can create valid signature
-- ✅ **Non-repudiable:** Downloader can't deny agreeing to pay
-- ✅ **Verifiable:** Any peer can independently verify signature authenticity
-- ✅ **Unique:** Nonce + file hash prevent reuse or replay attacks
-- ✅ **Off-chain:** No blockchain delay or cost during file transfer
+- [OK] **Unforgeable:** Only downloader's private key can create valid signature
+- [OK] **Non-repudiable:** Downloader can't deny agreeing to pay
+- [OK] **Verifiable:** Any peer can independently verify signature authenticity
+- [OK] **Unique:** Nonce + file hash prevent reuse or replay attacks
+- [OK] **Off-chain:** No blockchain delay or cost during file transfer
 
 **Economic Incentives:**
 - Downloader loses reputation if they don't pay (blocked by future seeders)
