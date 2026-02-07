@@ -148,31 +148,29 @@ static BOOTSTRAP_CACHE: once_cell::sync::Lazy<Arc<RwLock<BootstrapCache>>> =
 /// The list includes primary and backup nodes across different regions for redundancy.
 pub fn get_bootstrap_nodes() -> Vec<BootstrapNode> {
     vec![
-        // Primary US East bootstrap node (Stony Brook infrastructure)
+        // Primary bootstrap node (Chiral Bootstrap Test server)
         BootstrapNode {
-            enode: "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303".to_string(),
-            description: "Primary US Bootstrap Node (Stony Brook)".to_string(),
+            enode: "enode://45cc5ba89142b2c82180986f411aa16dbfe6041043d1f7112f08e710f23fdeb7283551ec15ca9d23a0da91ac12e080e014f8c32230a8109d6d0b01be8ca71102@130.245.173.73:30303".to_string(),
+            description: "Primary Bootstrap Node (Chiral Test)".to_string(),
             region: "US East".to_string(),
             priority: 1,
             supports_discv5: true,
         },
-        // Secondary US West bootstrap node (Azure)
+        // Secondary US East bootstrap node (Stony Brook infrastructure)
         BootstrapNode {
-            enode: "enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303".to_string(),
-            description: "Secondary US Bootstrap Node (Azure West)".to_string(),
-            region: "US West".to_string(),
+            enode: "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303".to_string(),
+            description: "Secondary US Bootstrap Node (Stony Brook)".to_string(),
+            region: "US East".to_string(),
             priority: 2,
             supports_discv5: true,
         },
-        // Backup node - same region as primary for redundancy
-        // This uses the same IP but different node ID to represent a potential backup
-        // In production, this would be a separate physical node
+        // Backup US West bootstrap node (Azure)
         BootstrapNode {
-            enode: "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30304".to_string(),
-            description: "Backup US Bootstrap Node (Stony Brook Alt Port)".to_string(),
-            region: "US East".to_string(),
+            enode: "enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303".to_string(),
+            description: "Backup US Bootstrap Node (Azure West)".to_string(),
+            region: "US West".to_string(),
             priority: 3,
-            supports_discv5: false,
+            supports_discv5: true,
         },
     ]
 }

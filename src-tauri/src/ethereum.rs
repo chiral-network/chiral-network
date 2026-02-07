@@ -36,7 +36,7 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            rpc_endpoint: "http://127.0.0.1:8545".to_string(),
+            rpc_endpoint: "http://130.245.173.73:8545".to_string(),
             chain_id: *CHAIN_ID,
             network_id: *NETWORK_ID,
         }
@@ -47,7 +47,7 @@ impl Default for NetworkConfig {
 pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
     NetworkConfig {
         rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+            .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string()),
         chain_id: *CHAIN_ID,
         network_id: *NETWORK_ID,
     }
