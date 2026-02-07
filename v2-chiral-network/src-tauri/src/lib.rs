@@ -81,6 +81,26 @@ async fn get_network_stats(state: tauri::State<'_, AppState>) -> Result<dht::Net
 }
 
 #[tauri::command]
+async fn get_dht_health(state: tauri::State<'_, AppState>) -> Result<dht::DhtHealthInfo, String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        Ok(dht.get_health().await)
+    } else {
+        Ok(dht::DhtHealthInfo {
+            running: false,
+            peer_id: None,
+            listening_addresses: vec![],
+            connected_peer_count: 0,
+            kademlia_peers: 0,
+            bootstrap_nodes: vec![],
+            shared_files: 0,
+            protocols: vec![],
+        })
+    }
+}
+
+#[tauri::command]
 async fn get_peer_id(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     let dht_guard = state.dht.lock().await;
 
@@ -1756,6 +1776,7 @@ pub fn run() {
             get_dht_peers,
             get_network_stats,
             get_peer_id,
+            get_dht_health,
             ping_peer,
             send_file,
             accept_file_transfer,

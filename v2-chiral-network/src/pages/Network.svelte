@@ -3,7 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { peers, networkStats, networkConnected, walletAccount } from '$lib/stores';
-  import { dhtService } from '$lib/dhtService';
+  import { dhtService, type DhtHealthInfo } from '$lib/dhtService';
   import { toasts } from '$lib/toastStore';
   import {
     Play,
@@ -18,6 +18,7 @@
     Globe,
     Zap,
     Activity,
+    HeartPulse,
     ChevronDown,
     ChevronUp
   } from 'lucide-svelte';
@@ -79,6 +80,11 @@
   let bootstrapHealth = $state<BootstrapHealthReport | null>(null);
   let isCheckingBootstrap = $state(false);
   let showBootstrapDetails = $state(false);
+
+  // DHT Health State
+  let dhtHealth = $state<DhtHealthInfo | null>(null);
+  let isCheckingDhtHealth = $state(false);
+  let showDhtHealthDetails = $state(false);
 
   // Check if Tauri is available
   function isTauri(): boolean {
@@ -225,6 +231,19 @@
       }
     } catch (err) {
       log.debug('No cached bootstrap health available');
+    }
+  }
+
+  // DHT Health Check
+  async function checkDhtHealth() {
+    isCheckingDhtHealth = true;
+    try {
+      dhtHealth = await dhtService.getHealth();
+    } catch (err) {
+      log.error('Failed to check DHT health:', err);
+      toasts.show('Failed to check DHT health', 'error');
+    } finally {
+      isCheckingDhtHealth = false;
     }
   }
 
@@ -610,6 +629,132 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- DHT Health Check -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
+        <div class="p-2 {dhtHealth?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+          <HeartPulse class="w-6 h-6 {dhtHealth?.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
+        </div>
+        <div>
+          <h2 class="font-semibold dark:text-white">DHT Health Check</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Detailed P2P network diagnostics</p>
+        </div>
+      </div>
+      <button
+        onclick={checkDhtHealth}
+        disabled={isCheckingDhtHealth}
+        class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+      >
+        {#if isCheckingDhtHealth}
+          <Loader2 class="w-4 h-4 animate-spin" />
+          Checking...
+        {:else}
+          <HeartPulse class="w-4 h-4" />
+          Run Check
+        {/if}
+      </button>
+    </div>
+
+    {#if dhtHealth}
+      <!-- Status Overview -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
+          <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+            {dhtHealth.running ? 'Running' : 'Stopped'}
+          </p>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
+          <p class="text-lg font-bold dark:text-white">{dhtHealth.connectedPeerCount}</p>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
+          <p class="text-lg font-bold dark:text-white">{dhtHealth.kademliaPeers}</p>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
+          <p class="text-lg font-bold dark:text-white">{dhtHealth.sharedFiles}</p>
+        </div>
+      </div>
+
+      <!-- Expandable Details -->
+      <button
+        onclick={() => showDhtHealthDetails = !showDhtHealthDetails}
+        class="w-full flex items-center justify-between text-left border-t border-gray-200 dark:border-gray-700 pt-3"
+      >
+        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Details</span>
+        {#if showDhtHealthDetails}
+          <ChevronUp class="w-4 h-4 text-gray-400" />
+        {:else}
+          <ChevronDown class="w-4 h-4 text-gray-400" />
+        {/if}
+      </button>
+
+      {#if showDhtHealthDetails}
+        <div class="mt-3 space-y-3">
+          <!-- Peer ID -->
+          {#if dhtHealth.peerId}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Peer ID</p>
+              <p class="font-mono text-xs break-all dark:text-gray-300">{dhtHealth.peerId}</p>
+            </div>
+          {/if}
+
+          <!-- Listening Addresses -->
+          {#if dhtHealth.listeningAddresses.length > 0}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
+              <div class="space-y-1">
+                {#each dhtHealth.listeningAddresses as addr}
+                  <p class="font-mono text-xs break-all dark:text-gray-300">{addr}</p>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          <!-- Bootstrap Nodes -->
+          {#if dhtHealth.bootstrapNodes.length > 0}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">DHT Bootstrap Nodes</p>
+              <div class="space-y-1.5">
+                {#each dhtHealth.bootstrapNodes as node}
+                  <div class="flex items-center gap-2 text-xs">
+                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+                    <span class="font-mono break-all dark:text-gray-300">{node.address}</span>
+                    <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} shrink-0">
+                      {node.reachable ? 'Reachable' : 'Unreachable'}
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          <!-- Protocols -->
+          {#if dhtHealth.protocols.length > 0}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
+              <div class="flex flex-wrap gap-1.5">
+                {#each dhtHealth.protocols as protocol}
+                  <span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded-full font-mono">
+                    {protocol}
+                  </span>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+    {:else}
+      <div class="text-center py-6 text-gray-500 dark:text-gray-400">
+        <HeartPulse class="w-10 h-10 mx-auto mb-2 opacity-50" />
+        <p class="text-sm">Click "Run Check" to view DHT health details</p>
+      </div>
+    {/if}
   </div>
 
   <!-- Connected Peers -->
