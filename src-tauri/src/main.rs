@@ -1094,7 +1094,18 @@ async fn get_disk_space(path: String) -> Result<u64, String> {
 
 #[tauri::command]
 async fn get_account_balance(address: String) -> Result<String, String> {
-    get_balance(&address).await
+    tracing::info!("[get_account_balance] Querying balance for address: {}", address);
+    tracing::info!("[get_account_balance] Using RPC endpoint: {}", crate::ethereum::NETWORK_CONFIG.rpc_endpoint);
+    match get_balance(&address).await {
+        Ok(balance) => {
+            tracing::info!("[get_account_balance] Balance result for {}: {}", address, balance);
+            Ok(balance)
+        }
+        Err(e) => {
+            tracing::error!("[get_account_balance] Error getting balance for {}: {}", address, e);
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1335,12 +1346,14 @@ async fn is_geth_running(state: State<'_, AppState>) -> Result<bool, String> {
     // Check local Geth process first
     let geth = state.geth.lock().await;
     if geth.is_running() {
+        tracing::info!("[is_geth_running] Local Geth process is running");
         return Ok(true);
     }
     drop(geth);
 
     // Fall back to checking if the shared RPC endpoint is reachable
     let rpc_endpoint = &crate::ethereum::NETWORK_CONFIG.rpc_endpoint;
+    tracing::info!("[is_geth_running] No local Geth, checking shared RPC: {}", rpc_endpoint);
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
@@ -1355,8 +1368,15 @@ async fn is_geth_running(state: State<'_, AppState>) -> Result<bool, String> {
         .send()
         .await
     {
-        Ok(resp) => Ok(resp.status().is_success()),
-        Err(_) => Ok(false),
+        Ok(resp) => {
+            let success = resp.status().is_success();
+            tracing::info!("[is_geth_running] Shared RPC response status: {}, is_success: {}", resp.status(), success);
+            Ok(success)
+        },
+        Err(e) => {
+            tracing::warn!("[is_geth_running] Shared RPC unreachable: {}", e);
+            Ok(false)
+        },
     }
 }
 

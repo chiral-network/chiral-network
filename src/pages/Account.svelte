@@ -702,11 +702,16 @@
   })
 
   async function fetchBalance() {
-    if (!isTauri || !isGethRunning || !$etcAccount) return
+    console.log('[Account.fetchBalance] Called: isTauri=', isTauri, 'isGethRunning=', isGethRunning, 'etcAccount=', $etcAccount?.address);
+    if (!isTauri || !isGethRunning || !$etcAccount) {
+      console.log('[Account.fetchBalance] Skipping: isTauri=', isTauri, 'isGethRunning=', isGethRunning, 'hasAccount=', !!$etcAccount);
+      return;
+    }
     try {
       await walletService.refreshBalance()
+      console.log('[Account.fetchBalance] After refresh, wallet balance:', $wallet.balance);
     } catch (error) {
-      console.error('Failed to fetch balance:', error)
+      console.error('[Account.fetchBalance] Failed to fetch balance:', error)
     }
   }
 
