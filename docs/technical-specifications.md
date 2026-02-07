@@ -333,7 +333,7 @@ Transaction {
 Handshake {
   version: "1.0.0",
   network_id: 9001,
-  capabilities: ["seeding", "downloading", "dht", "relay"],
+  capabilities: ["seeding", "downloading", "dht"],
   timestamp: 1234567890,
   nonce: "random_bytes"
 }
