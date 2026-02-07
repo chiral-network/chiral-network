@@ -19,9 +19,6 @@ use std::collections::HashMap;
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
         "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
-        "/ip4/34.44.149.113/tcp/4001/p2p/12D3KooWETLNJUVLbkAbenbSPPdwN9ZLkBU3TLfyAeEUW2dsVptr".to_string(),
-        "/ip4/34.44.149.113/tcp/4002/p2p/12D3KooWGV5BUSYMhNMrhdPh9EUbuLrvAiDsMXEMRpGGvt4LQneA".to_string(), // relay-capable peer
-        "/ip4/130.245.173.105/tcp/4001/p2p/12D3KooWSDDA2jyo6Cynr7SHPfhdQoQazu1jdUEAp7rLKKKLqqTr".to_string(),
     ]
 }
 
@@ -867,7 +864,7 @@ mod tests {
     fn test_bootstrap_nodes_not_empty() {
         let nodes = get_bootstrap_nodes();
         assert!(!nodes.is_empty());
-        assert_eq!(nodes.len(), 4);
+        assert_eq!(nodes.len(), 1);
     }
 
     #[test]
