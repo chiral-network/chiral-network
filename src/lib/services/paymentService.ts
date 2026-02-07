@@ -28,14 +28,6 @@ import { reputationService } from "./reputationService";
 // })
 
 // Helper functions for localStorage persistence
-function saveWalletToStorage(walletData: any) {
-  try {
-    localStorage.setItem("chiral_wallet", JSON.stringify(walletData));
-  } catch (error) {
-    console.error("Failed to save wallet to localStorage:", error);
-  }
-}
-
 function saveTransactionsToStorage(txs: Transaction[]) {
   try {
     const serialized = JSON.stringify(txs);
@@ -45,16 +37,6 @@ function saveTransactionsToStorage(txs: Transaction[]) {
     );
   } catch (error) {
     console.error("Failed to save transactions to localStorage:", error);
-  }
-}
-
-function loadWalletFromStorage() {
-  try {
-    const saved = localStorage.getItem("chiral_wallet");
-    return saved ? JSON.parse(saved) : null;
-  } catch (error) {
-    console.error("Failed to load wallet from localStorage:", error);
-    return null;
   }
 }
 
@@ -106,13 +88,12 @@ export class PaymentService {
       return;
     }
 
-    // Load wallet from storage - localStorage is the source of truth
-    const savedWallet = loadWalletFromStorage();
-    if (savedWallet && typeof savedWallet.balance === "number") {
-      wallet.update((w) => ({ ...w, balance: savedWallet.balance }));
-    }
+    // Note: Do NOT load balance from localStorage here.
+    // The blockchain RPC is the source of truth for balance, not localStorage.
+    // Loading a cached balance would overwrite the fresh value from refreshBalance()
+    // and cause cross-device balance mismatches.
 
-    // Load transactions from storage
+    // Load transactions from storage (these are local payment records, not blockchain state)
     const savedTransactions = loadTransactionsFromStorage();
     if (savedTransactions.length > 0) {
       transactions.set(savedTransactions);
@@ -321,16 +302,11 @@ export class PaymentService {
         calculation: `${currentWallet.balance} - ${amount} = ${newBalance}`,
       });
 
-      wallet.update((w) => {
-        const updated = {
-          ...w,
-          balance: newBalance,
-          // Note: totalSpent is automatically calculated from transactions store
-        };
-        saveWalletToStorage(updated);
-        console.log("✅ Wallet store updated and saved to localStorage");
-        return updated;
-      });
+      wallet.update((w) => ({
+        ...w,
+        balance: newBalance,
+      }));
+      console.log("✅ Wallet store updated with new balance:", newBalance);
 
       // Create transaction record for downloader
       const newTransaction: Transaction = {
@@ -507,8 +483,8 @@ export class PaymentService {
         return updated;
       });
 
-      // Trigger wallet refresh to recalculate balance from transaction history
-      // Manually calculate balance for immediate UI feedback
+      // Update wallet totals from transaction history for immediate UI feedback.
+      // The actual balance will be refreshed from the blockchain RPC on the next poll.
       wallet.update((w) => {
         const allTxs = get(transactions);
         const totalReceived = allTxs
@@ -518,14 +494,11 @@ export class PaymentService {
           .filter((tx) => tx.status === "success" && tx.type === "sent")
           .reduce((sum, tx) => sum + tx.amount, 0);
 
-        const updated = {
+        return {
           ...w,
-          balance: parseFloat((totalReceived - totalSpent).toFixed(8)),
           totalEarned: totalReceived,
           totalSpent: totalSpent,
         };
-        saveWalletToStorage(updated);
-        return updated;
       });
 
       // Mark this payment as received
