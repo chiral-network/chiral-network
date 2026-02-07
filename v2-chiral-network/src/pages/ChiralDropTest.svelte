@@ -1,5 +1,7 @@
 <script lang="ts">
-  console.log('ChiralDrop test component loaded');
+  import { logger } from '$lib/logger';
+  const log = logger('ChiralDropTest');
+  log.info('ChiralDrop test component loaded');
 </script>
 
 <div class="container mx-auto p-6">
