@@ -13,10 +13,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
 use tokio::sync::Mutex;
-use url::Url;
+use tauri::Emitter;
 
 // ============================================================================
 // Configuration & Shared Resources
@@ -382,30 +380,12 @@ impl GethProcess {
     }
 
     pub fn is_running(&self) -> bool {
-        // First check if we have a tracked child process
-        if self.child.is_some() {
-            return true;
-        }
-
-        // IMPORTANT:
-        // This method is called from async contexts (tauri commands / startup tasks).
-        // Using `reqwest::blocking` here can panic ("Cannot drop a runtime...") because it creates
-        // an internal runtime that gets dropped on a tokio worker thread. So we keep this check
-        // lightweight and runtime-free: parse the URL and do a TCP connect.
-        let Ok(url) = Url::parse(&NETWORK_CONFIG.rpc_endpoint) else {
-            return false;
-        };
-        let Some(host) = url.host_str() else {
-            return false;
-        };
-        let port = url.port_or_known_default().unwrap_or(8545);
-        let addr = format!("{host}:{port}");
-        match addr.parse() {
-            Ok(sock_addr) => {
-                TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)).is_ok()
-            }
-            Err(_) => false,
-        }
+        // Only check if we have a tracked local child process.
+        // Do NOT probe the network — the shared RPC endpoint is a remote server,
+        // not a local Geth instance. Conflating the two causes incorrect behavior
+        // (e.g., skipping local Geth start, or reporting "running" when only the
+        // remote server is reachable).
+        self.child.is_some()
     }
 
     fn resolve_data_dir(&self, data_dir: &str) -> Result<PathBuf, String> {
