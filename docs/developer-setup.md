@@ -165,7 +165,7 @@ npm run tauri:dev
 
 #### Frontend Debugging
 
-- Open DevTools in Tauri window (Right-click → Inspect)
+- Open DevTools in Tauri window (Right-click -> Inspect)
 - Use browser console for logs
 - Svelte DevTools extension available
 
@@ -482,7 +482,7 @@ Follow conventional commits:
 
 ```typescript
 // Use Svelte DevTools
-// Open DevTools → Svelte tab
+// Open DevTools -> Svelte tab
 
 // Or manual timing
 console.time("operation");

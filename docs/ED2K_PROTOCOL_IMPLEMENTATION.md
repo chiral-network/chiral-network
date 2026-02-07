@@ -33,7 +33,7 @@ The protocol revolves around retrieving 256 KB sub-chunks from peers, combining 
 ### Rust Backend
 - `src/core/sources/ed2k/mod.rs`: Main module for ED2K logic.  
 - `src/core/sources/ed2k/client.rs`: Handles ED2K server communication and peer queries.  
-- `src/core/sources/ed2k/chunking.rs`: Defines 256 KB → 9.28 MB chunk assembly logic.  
+- `src/core/sources/ed2k/chunking.rs`: Defines 256 KB -> 9.28 MB chunk assembly logic.  
 - `src/core/sources/ed2k/types.rs`: ED2K metadata structs (hash, chunk map, peer description).  
 - `src/core/sources/common.rs`: Shared traits implemented by ED2K.  
 
@@ -88,13 +88,13 @@ For each 256 KB sub-chunk:
 Once all parts arrive:
 
 ```text
-[block0][block1]...[block35] → Combined chunk buffer
+[block0][block1]...[block35] -> Combined chunk buffer
 ```
 
 #### 4. Validate with MD4
 * Compute MD4(chunk)
 * Compare with expected ED2K chunk hash
-* If mismatch → mark peer unreliable → retry.
+* If mismatch -> mark peer unreliable -> retry.
 
 ---
 
@@ -172,7 +172,7 @@ The orchestrator integrates ED2K as a source by:
 * Resume & Partial Assembly: Incomplete chunks resume where left off
 
 ## Integration Points
-## Backend → Orchestrator
+## Backend -> Orchestrator
 Reports available peers and chunk availability maps
 
 ### Frontend

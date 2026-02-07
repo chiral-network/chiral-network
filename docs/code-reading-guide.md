@@ -19,15 +19,15 @@ This guide gives you a precise map of the project, how the parts fit together, h
 1. **UI layer** (pages and components) triggers actions through service singletons (`fileService`, `dhtService`, `encryptionService`, `walletService`, `createWebRTCSession`), keeping views light.
 2. **Service layer** validates inputs (paths, addresses), subscribes to Tauri events, and invokes Rust commands via `@tauri-apps/api`.
 3. **Rust layer** runs the libp2p swarm (DHT, Bitswap), chunk/encrypt/decrypt, and emits events such as `published_file`, `file_content`, `found_file` back to the UI.
-4. **Data flow**: UI → service → Tauri command → Rust subsystem → Tauri event → service → UI store/component.
+4. **Data flow**: UI -> service -> Tauri command -> Rust subsystem -> Tauri event -> service -> UI store/component.
 5. **Payment flow**: UI prepares and signs transactions; on-chain submission and settlement happen separately so transport protocol choice does not matter.
 
 ## Critical Path: File Sharing Flow
 Use this when debugging the main loop of publish/search/download.
-- **Initialization**: UI calls `fileService.initializeServices()` → starts Rust file transfer + fetches bootstrap nodes → `start_dht_node` → `dhtService.setPeerId`.
-- **Publish/seed**: UI selects file → Rust chunk/encrypt builds manifest → `dhtService.publishFileToNetwork` subscribes to `published_file` → triggers `upload_file_to_network` → event carries `fileHash`/`merkleRoot` → UI records metadata and advertises in DHT.
-- **Search/metadata**: UI calls `dhtService.searchFileMetadata(hash)` → sends `search_file_metadata` → waits for `found_file` → normalizes `fileHash`/`merkleRoot` → enriches with `get_file_seeders` → UI renders results.
-- **Download**: UI resolves output path → `dhtService.downloadFile(metadata)` ensures directories → subscribes to `file_content` → prepares Bitswap metadata (`cids`, `isRoot`) → invokes `download_blocks_from_network` → receives chunks, writes file, emits final metadata.
+- **Initialization**: UI calls `fileService.initializeServices()` -> starts Rust file transfer + fetches bootstrap nodes -> `start_dht_node` -> `dhtService.setPeerId`.
+- **Publish/seed**: UI selects file -> Rust chunk/encrypt builds manifest -> `dhtService.publishFileToNetwork` subscribes to `published_file` -> triggers `upload_file_to_network` -> event carries `fileHash`/`merkleRoot` -> UI records metadata and advertises in DHT.
+- **Search/metadata**: UI calls `dhtService.searchFileMetadata(hash)` -> sends `search_file_metadata` -> waits for `found_file` -> normalizes `fileHash`/`merkleRoot` -> enriches with `get_file_seeders` -> UI renders results.
+- **Download**: UI resolves output path -> `dhtService.downloadFile(metadata)` ensures directories -> subscribes to `file_content` -> prepares Bitswap metadata (`cids`, `isRoot`) -> invokes `download_blocks_from_network` -> receives chunks, writes file, emits final metadata.
 - **WebRTC path** (when WebTorrent or browser peers): `createWebRTCSession` sets up STUN, offer/answer, ICE candidates via signaling; data channel used as an alternate transport for chunks.
 
 ## Recommended Reading Order

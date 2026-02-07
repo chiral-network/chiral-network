@@ -76,22 +76,22 @@ async fn test_connect_to_gnu_ftp_anonymous() {
 
     match result {
         Ok(mut stream) => {
-            println!("✓ Successfully connected to ftp.gnu.org");
+            println!("[OK] Successfully connected to ftp.gnu.org");
 
             // Test getting working directory
             match downloader.get_working_directory(&mut stream).await {
-                Ok(pwd) => println!("✓ Working directory: {}", pwd),
-                Err(e) => println!("✗ PWD failed: {}", e),
+                Ok(pwd) => println!("[OK] Working directory: {}", pwd),
+                Err(e) => println!("[X] PWD failed: {}", e),
             }
 
             // Disconnect
             match downloader.disconnect(&mut stream).await {
-                Ok(_) => println!("✓ Disconnected successfully"),
-                Err(e) => println!("✗ Disconnect failed: {}", e),
+                Ok(_) => println!("[OK] Disconnected successfully"),
+                Err(e) => println!("[X] Disconnect failed: {}", e),
             }
         }
         Err(e) => {
-            println!("✗ Connection failed: {}", e);
+            println!("[X] Connection failed: {}", e);
             panic!("Failed to connect to ftp.gnu.org");
         }
     }
@@ -110,11 +110,11 @@ async fn test_passive_mode_connection() {
 
     match downloader.connect_and_login(&url, None).await {
         Ok(mut stream) => {
-            println!("✓ Passive mode connection successful");
+            println!("[OK] Passive mode connection successful");
             let _ = downloader.disconnect(&mut stream).await;
         }
         Err(e) => {
-            println!("✗ Passive mode failed: {}", e);
+            println!("[X] Passive mode failed: {}", e);
             panic!("Passive mode connection failed");
         }
     }
@@ -137,11 +137,11 @@ async fn test_get_file_size() {
     // Try to get size of README file (common on GNU FTP)
     match downloader.get_file_size(&mut stream, "/README").await {
         Ok(size) => {
-            println!("✓ File size: {} bytes", size);
+            println!("[OK] File size: {} bytes", size);
             assert!(size > 0, "File size should be positive");
         }
         Err(e) => {
-            println!("✗ SIZE command failed: {}", e);
+            println!("[X] SIZE command failed: {}", e);
         }
     }
 
@@ -164,10 +164,10 @@ async fn test_supports_resume_command() {
 
     match downloader.supports_resume(&mut stream).await {
         Ok(supported) => {
-            println!("✓ REST command support detected: {}", supported);
+            println!("[OK] REST command support detected: {}", supported);
         }
         Err(e) => {
-            println!("✗ Error testing REST support: {}", e);
+            println!("[X] Error testing REST support: {}", e);
         }
     }
 
@@ -194,7 +194,7 @@ async fn test_download_byte_range() {
         .await
     {
         Ok(data) => {
-            println!("✓ Downloaded {} bytes (requested 100)", data.len());
+            println!("[OK] Downloaded {} bytes (requested 100)", data.len());
             assert!(data.len() <= 100, "Should not exceed requested size");
             assert!(!data.is_empty(), "Should have downloaded some data");
 
@@ -203,7 +203,7 @@ async fn test_download_byte_range() {
             println!("Preview: {}", preview);
         }
         Err(e) => {
-            println!("✗ Range download failed: {}", e);
+            println!("[X] Range download failed: {}", e);
             panic!("Failed to download byte range");
         }
     }
@@ -240,11 +240,11 @@ async fn test_download_multiple_ranges() {
             .await
         {
             Ok(data) => {
-                println!("✓ Downloaded range {}-{}: {} bytes", start, start + size, data.len());
+                println!("[OK] Downloaded range {}-{}: {} bytes", start, start + size, data.len());
                 chunks.push(data);
             }
             Err(e) => {
-                println!("✗ Range {}-{} failed: {}", start, start + size, e);
+                println!("[X] Range {}-{} failed: {}", start, start + size, e);
                 panic!("Multi-range download failed");
             }
         }
@@ -252,7 +252,7 @@ async fn test_download_multiple_ranges() {
 
     // Reassemble
     let full_data: Vec<u8> = chunks.into_iter().flatten().collect();
-    println!("✓ Reassembled {} bytes from 3 ranges", full_data.len());
+    println!("[OK] Reassembled {} bytes from 3 ranges", full_data.len());
     assert_eq!(full_data.len(), 150, "Should have 150 bytes total");
 
     let _ = downloader.disconnect(&mut stream).await;
@@ -274,14 +274,14 @@ async fn test_list_directory() {
 
     match downloader.list_directory(&mut stream, "/").await {
         Ok(files) => {
-            println!("✓ Found {} entries in root directory", files.len());
+            println!("[OK] Found {} entries in root directory", files.len());
             for file in files.iter().take(10) {
                 println!("  - {}", file);
             }
             assert!(!files.is_empty(), "Directory should have entries");
         }
         Err(e) => {
-            println!("✗ Directory listing failed: {}", e);
+            println!("[X] Directory listing failed: {}", e);
         }
     }
 
@@ -308,11 +308,11 @@ async fn test_download_offset_from_middle() {
         .await
     {
         Ok(data) => {
-            println!("✓ Downloaded {} bytes from offset 500", data.len());
+            println!("[OK] Downloaded {} bytes from offset 500", data.len());
             assert!(data.len() <= 50);
         }
         Err(e) => {
-            println!("✗ Offset download failed: {}", e);
+            println!("[X] Offset download failed: {}", e);
         }
     }
 
@@ -349,11 +349,11 @@ async fn test_concurrent_connections() {
 
             match result {
                 Ok(data) => {
-                    println!("✓ Connection {} downloaded {} bytes", i, data.len());
+                    println!("[OK] Connection {} downloaded {} bytes", i, data.len());
                     Ok(data)
                 }
                 Err(e) => {
-                    println!("✗ Connection {} download failed: {}", i, e);
+                    println!("[X] Connection {} download failed: {}", i, e);
                     Err(e)
                 }
             }
@@ -372,7 +372,7 @@ async fn test_concurrent_connections() {
         }
     }
 
-    println!("✓ {} / 3 concurrent connections succeeded", success_count);
+    println!("[OK] {} / 3 concurrent connections succeeded", success_count);
     assert!(success_count >= 2, "At least 2 connections should succeed");
 }
 
@@ -404,10 +404,10 @@ async fn test_retry_on_timeout() {
 
     match result {
         Ok(data) => {
-            println!("✓ Download succeeded (possibly with retries): {} bytes", data.len());
+            println!("[OK] Download succeeded (possibly with retries): {} bytes", data.len());
         }
         Err(e) => {
-            println!("✗ Download failed after retries: {}", e);
+            println!("[X] Download failed after retries: {}", e);
         }
     }
 
@@ -434,7 +434,7 @@ async fn test_large_file_chunk() {
         .await
     {
         Ok(data) => {
-            println!("✓ Downloaded {} bytes (256KB chunk)", data.len());
+            println!("[OK] Downloaded {} bytes (256KB chunk)", data.len());
         }
         Err(e) => {
             // File might be smaller than 256KB
@@ -466,7 +466,7 @@ async fn test_change_directory() {
     // Try to change to a common directory
     match downloader.change_directory(&mut stream, "/gnu").await {
         Ok(_) => {
-            println!("✓ Changed directory to /gnu");
+            println!("[OK] Changed directory to /gnu");
 
             // Get new directory
             if let Ok(new_dir) = downloader.get_working_directory(&mut stream).await {
@@ -503,7 +503,7 @@ async fn test_error_handling_invalid_file() {
     assert!(result.is_err(), "Should fail for non-existent file");
 
     if let Err(e) = result {
-        println!("✓ Expected error for missing file: {}", e);
+        println!("[OK] Expected error for missing file: {}", e);
         assert!(
             e.contains("RETR") || e.contains("550") || e.contains("not found"),
             "Error should indicate file not found"

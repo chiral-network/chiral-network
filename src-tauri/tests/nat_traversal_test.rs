@@ -23,7 +23,7 @@ mod nat_traversal_tests {
         assert_eq!(settings["autonatProbeInterval"], 30);
         assert!(settings["autonatServers"].is_array());
 
-        println!("✅ NAT settings structure is correct");
+        println!("[OK] NAT settings structure is correct");
     }
 
     #[test]
@@ -38,7 +38,7 @@ mod nat_traversal_tests {
         let servers = settings["autonatServers"].as_array().unwrap();
         assert_eq!(servers.len(), 0);
 
-        println!("✅ Custom AutoNAT servers can be configured");
+        println!("[OK] Custom AutoNAT servers can be configured");
     }
 
     #[test]
@@ -61,7 +61,7 @@ mod nat_traversal_tests {
         });
         assert_eq!(settings_default["autonatProbeInterval"], 30);
 
-        println!("✅ Probe interval bounds are correct");
+        println!("[OK] Probe interval bounds are correct");
     }
 
     #[test]
@@ -73,7 +73,7 @@ mod nat_traversal_tests {
         });
 
         assert_eq!(settings["enableAutonat"], false);
-        println!("✅ AutoNAT can be disabled");
+        println!("[OK] AutoNAT can be disabled");
     }
 
     #[test]
@@ -95,6 +95,6 @@ mod nat_traversal_tests {
         let deserialized: serde_json::Value = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(original, deserialized);
-        println!("✅ Settings serialize/deserialize correctly");
+        println!("[OK] Settings serialize/deserialize correctly");
     }
 }

@@ -281,22 +281,22 @@ fn now_ms() -> u64 {
 ```
 User initiates magnet link download
     │
-    ▼
+    [v]
 TransferStarted
     │ (torrent added to session)
-    ▼
+    [v]
 SourceConnected
     │ (swarm connection established)
-    ▼
+    [v]
 TransferProgress ──────────────────┐
     │ (every 2 seconds)            │
-    ▼                              │ (loop until complete)
-TransferProgress ◄─────────────────┘
+    [v]                              │ (loop until complete)
+TransferProgress [<]─────────────────┘
     │
-    ▼
+    [v]
 SourceDisconnected
     │ (cleanup)
-    ▼
+    [v]
 TransferCompleted
 ```
 

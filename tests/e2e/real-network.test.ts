@@ -113,7 +113,7 @@ class RealE2ETestFramework {
    * Setup test environment
    */
   async setup(): Promise<void> {
-    console.log("🚀 Setting up real E2E test environment...");
+    console.log("[START] Setting up real E2E test environment...");
 
     const attach = process.env.E2E_ATTACH === "true";
     this.requirePayment = attach || process.env.E2E_REQUIRE_PAYMENT === "true";
@@ -132,7 +132,7 @@ class RealE2ETestFramework {
       // Spawn mode is best-effort. Note: the current Tauri binary enforces single-instance
       // via binding DHT port 4001, so running two nodes locally may not work.
       this.testDir = await fs.mkdtemp(path.join(os.tmpdir(), "chiral-e2e-"));
-      console.log(`📁 Test directory: ${this.testDir}`);
+      console.log(`[DIR] Test directory: ${this.testDir}`);
 
       const uploaderPort = Number(process.env.E2E_UPLOADER_API_PORT || "8081");
       const downloaderPort = Number(process.env.E2E_DOWNLOADER_API_PORT || "8082");
@@ -146,14 +146,14 @@ class RealE2ETestFramework {
       };
     }
 
-    console.log("✅ Configuration created");
+    console.log("[OK] Configuration created");
   }
 
   /**
    * Launch uploader node
    */
   async launchUploaderNode(): Promise<void> {
-    console.log("🔵 Launching uploader node...");
+    console.log("[*] Launching uploader node...");
 
     if (!this.uploaderConfig) throw new Error("Config not initialized");
     if (process.env.E2E_ATTACH === "true") return;
@@ -177,14 +177,14 @@ class RealE2ETestFramework {
 
     // Wait for node to be ready
     await this.waitForNodeReady(this.uploaderConfig.apiBaseUrl, startupTimeoutMs);
-    console.log("✅ Uploader node ready");
+    console.log("[OK] Uploader node ready");
   }
 
   /**
    * Launch downloader node
    */
   async launchDownloaderNode(): Promise<void> {
-    console.log("🟢 Launching downloader node...");
+    console.log("[GREEN] Launching downloader node...");
 
     if (!this.downloaderConfig) throw new Error("Config not initialized");
     if (process.env.E2E_ATTACH === "true") return;
@@ -206,11 +206,11 @@ class RealE2ETestFramework {
 
     // Wait for node to be ready
     await this.waitForNodeReady(this.downloaderConfig.apiBaseUrl, startupTimeoutMs);
-    console.log("✅ Downloader node ready");
+    console.log("[OK] Downloader node ready");
 
     // Wait for DHT connection
     await this.waitForDHTConnection(5000);
-    console.log("✅ Nodes connected via DHT");
+    console.log("[OK] Nodes connected via DHT");
   }
 
   /**
@@ -381,7 +381,7 @@ class RealE2ETestFramework {
     if (!this.uploaderConfig) throw new Error("Config not initialized");
 
     console.log(
-      `📤 Uploading file (generated on uploader): ${file.name} (${Math.round(
+      `[OUT] Uploading file (generated on uploader): ${file.name} (${Math.round(
         file.size / 1024 / 1024
       )}MB) via ${protocol}`
     );
@@ -416,7 +416,7 @@ class RealE2ETestFramework {
     if (typeof result?.bittorrentPort === "number") {
       this.torrentSeederPortByHash.set(result.fileHash, result.bittorrentPort);
     }
-    console.log(`✅ File uploaded. Hash: ${result.fileHash}`);
+    console.log(`[OK] File uploaded. Hash: ${result.fileHash}`);
 
     return result.fileHash;
   }
@@ -427,7 +427,7 @@ class RealE2ETestFramework {
   async searchFile(fileHash: string, timeout: number = 10000): Promise<any> {
     if (!this.downloaderConfig) throw new Error("Config not initialized");
 
-    console.log(`🔍 Searching for file: ${fileHash}`);
+    console.log(`[SEARCH] Searching for file: ${fileHash}`);
 
     const start = Date.now();
     const pollIntervalMs = 750;
@@ -459,7 +459,7 @@ class RealE2ETestFramework {
       const metadata = await response.json();
       if (metadata) {
         console.log(
-          `✅ File found. Seeders: ${metadata.seeders?.length || 0}`
+          `[OK] File found. Seeders: ${metadata.seeders?.length || 0}`
         );
         return metadata;
       }
@@ -484,7 +484,7 @@ class RealE2ETestFramework {
   ): Promise<string> {
     if (!this.downloaderConfig) throw new Error("Config not initialized");
 
-    console.log(`📥 Downloading file via ${protocol}: ${fileName}`);
+    console.log(`[IN] Downloading file via ${protocol}: ${fileName}`);
 
     // In real-network attach/cross-machine scenarios, the uploader's E2E API host is not always
     // the BitTorrent seeder public IP (it can be localhost/private). Allow an explicit override.
@@ -529,11 +529,11 @@ class RealE2ETestFramework {
 
     if (protocol === "HTTP" || !downloadId) {
       if (!result.verified) throw new Error("Downloaded file failed verification on node");
-      console.log(`✅ File downloaded to: ${downloadPath}`);
+      console.log(`[OK] File downloaded to: ${downloadPath}`);
       return downloadPath;
     }
 
-    console.log(`⏳ Download started (id=${downloadId})`);
+    console.log(`[WAIT] Download started (id=${downloadId})`);
     const waitTimeoutMs = this.getP2PDownloadTimeoutMs(protocol);
     const start = Date.now();
     let lastJob: any = null;
@@ -551,7 +551,7 @@ class RealE2ETestFramework {
       lastJob = job;
       if (job.status === "success") {
         if (!job.verified) throw new Error("Downloaded file failed verification on node");
-        console.log(`✅ File downloaded to: ${job.downloadPath}`);
+        console.log(`[OK] File downloaded to: ${job.downloadPath}`);
         return job.downloadPath;
       }
       if (job.status === "failed") {
@@ -663,7 +663,7 @@ class RealE2ETestFramework {
    * Verify payment was processed
    */
   async verifyPayment(fileHash: string): Promise<boolean> {
-    console.log(`💰 Verifying payment for file: ${fileHash}`);
+    console.log(`[PAY] Verifying payment for file: ${fileHash}`);
     // Kept for backwards-compat in the test harness; actual receipt polling happens in-test.
     void fileHash;
     return true;
@@ -673,7 +673,7 @@ class RealE2ETestFramework {
    * Cleanup test environment
    */
   async cleanup(): Promise<void> {
-    console.log("🧹 Cleaning up test environment...");
+    console.log("[CLEAN] Cleaning up test environment...");
 
     // Stop nodes
     if (this.uploaderNode) {
@@ -689,9 +689,9 @@ class RealE2ETestFramework {
     // Clean up test directory
     try {
       await fs.rm(this.testDir, { recursive: true, force: true });
-      console.log("✅ Cleanup complete");
+      console.log("[OK] Cleanup complete");
     } catch (error) {
-      console.warn("⚠️  Failed to remove test directory:", error);
+      console.warn("[WARN]  Failed to remove test directory:", error);
     }
   }
 
@@ -760,10 +760,10 @@ describe("Real E2E Tests (Two Actual Nodes)", () => {
       
       if (role === "uploader") {
         await framework.launchUploaderNode();
-        console.log("✅ Uploader node running. Waiting for downloader...");
+        console.log("[OK] Uploader node running. Waiting for downloader...");
       } else if (role === "downloader") {
         await framework.launchDownloaderNode();
-        console.log("✅ Downloader node running and connected.");
+        console.log("[OK] Downloader node running and connected.");
       } else {
         throw new Error("E2E_NODE_ROLE must be set to 'uploader' or 'downloader' in cross-machine mode");
       }

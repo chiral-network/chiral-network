@@ -79,16 +79,16 @@ This runs all test suites and provides a summary.
 
 | Feature | Unit Tests | Integration Tests | E2E Tests |
 |---------|------------|-------------------|-----------|
-| Chunk sizing | ✓ | ✓ | |
-| Hash verification | ✓ | ✓ | ✓ |
-| Merkle tree | ✓ | ✓ | |
-| State persistence | ✓ | ✓ | |
-| Corruption detection | ✓ | ✓ | |
-| Multi-peer coordinator | ✓ | ✓ | |
-| Peer stats/banning | ✓ | ✓ | |
-| DHT provider queries | | | ✓ |
-| DHT announcements | | | ✓ |
-| REPL commands | | | ✓ |
+| Chunk sizing | [OK] | [OK] | |
+| Hash verification | [OK] | [OK] | [OK] |
+| Merkle tree | [OK] | [OK] | |
+| State persistence | [OK] | [OK] | |
+| Corruption detection | [OK] | [OK] | |
+| Multi-peer coordinator | [OK] | [OK] | |
+| Peer stats/banning | [OK] | [OK] | |
+| DHT provider queries | | | [OK] |
+| DHT announcements | | | [OK] |
+| REPL commands | | | [OK] |
 
 ## Requirements
 

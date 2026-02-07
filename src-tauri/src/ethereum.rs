@@ -285,8 +285,8 @@ impl GethProcess {
         // Check if existing blockchain data has wrong chain ID
         if !needs_init {
             if let Err(chain_mismatch) = self.validate_chain_id(&data_path, *CHAIN_ID) {
-                eprintln!("⚠️  Chain ID mismatch detected: {}", chain_mismatch);
-                eprintln!("⚠️  Existing blockchain data is for wrong chain, will reinitialize...");
+                eprintln!("[WARN]  Chain ID mismatch detected: {}", chain_mismatch);
+                eprintln!("[WARN]  Existing blockchain data is for wrong chain, will reinitialize...");
                 needs_reinit = true;
             }
         }
@@ -309,7 +309,7 @@ impl GethProcess {
                         if line.contains("database corruption")
                             || line.contains("FATAL") && line.contains("chaindata")
                             || line.contains("corrupted") && line.contains("database") {
-                            eprintln!("⚠️  Detected corrupted blockchain, will reinitialize...");
+                            eprintln!("[WARN]  Detected corrupted blockchain, will reinitialize...");
                             needs_reinit = true;
                             break;
                         }
@@ -352,7 +352,7 @@ impl GethProcess {
                 eprintln!("Warning: Failed to write chain ID marker file: {}", e);
             }
 
-            eprintln!("✅ Blockchain initialized successfully with chain ID {}", *CHAIN_ID);
+            eprintln!("[OK] Blockchain initialized successfully with chain ID {}", *CHAIN_ID);
         }
 
         // Get bootstrap nodes - use cached/fallback to avoid blocking startup
@@ -455,7 +455,7 @@ impl GethProcess {
 
         self.child = Some(child);
 
-        eprintln!("✅ Geth process started successfully");
+        eprintln!("[OK] Geth process started successfully");
         eprintln!("    Logs: {}", log_path.display());
         eprintln!("    RPC: http://127.0.0.1:8545");
         eprintln!("    Waiting for RPC to be ready...");
@@ -476,10 +476,10 @@ impl GethProcess {
                 }
                 Ok(None) => {
                     // Process is still running - good!
-                    eprintln!("✅ Geth is running");
+                    eprintln!("[OK] Geth is running");
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Warning: Could not check geth process status: {}", e);
+                    eprintln!("[WARN]  Warning: Could not check geth process status: {}", e);
                 }
             }
         }
@@ -933,7 +933,7 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
-    tracing::info!("🔧 Setting up mining with etherbase: {}", miner_address);
+    tracing::info!("[CFG] Setting up mining with etherbase: {}", miner_address);
 
     // Ensure address has 0x prefix and is lowercase for consistency
     let formatted_address = if miner_address.starts_with("0x") {
@@ -996,9 +996,9 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
     // Log the actual coinbase being used
     match get_coinbase().await {
         Ok(coinbase) => {
-            tracing::info!("⛏️ Mining started! Rewards will go to: {}", coinbase);
+            tracing::info!("[MINE] Mining started! Rewards will go to: {}", coinbase);
             if coinbase.to_lowercase() != miner_address.to_lowercase() {
-                tracing::warn!("⚠️ WARNING: Coinbase {} does not match requested miner address {}!", 
+                tracing::warn!("[WARN] WARNING: Coinbase {} does not match requested miner address {}!", 
                     coinbase, miner_address);
             }
         },
@@ -1570,7 +1570,7 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
     for line in &lines {
         // Look for various block mining success patterns
         if line.contains("Successfully sealed new block")
-            || line.contains("🔨 mined potential block")
+            || line.contains("[BUILD] mined potential block")
             || line.contains("Block mined")
             || (line.contains("mined") && line.contains("block"))
         {
@@ -1766,7 +1766,7 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
 
 pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str) -> Result<u64, String> {
 
-    println!("🔍 get_mined_blocks_count called for address: {}", miner_address);
+    println!("[SEARCH] get_mined_blocks_count called for address: {}", miner_address);
 
     // Get the current block number
     let block_number_payload = json!({
@@ -1908,7 +1908,7 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
                 let new_total = existing_count + block_result;
                 counts.insert(miner_address.to_string(), new_total);
 
-                println!("🔍 Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
+                println!("[SEARCH] Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
                          new_total, scanned_blocks);
 
                 // Emit event to frontend for real-time UI updates
@@ -1937,7 +1937,7 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
     };
 
     // Return the cumulative count (existing + newly discovered)
-    println!("🔍 get_mined_blocks_count returning: {} total blocks for address: {} (discovered {} new, previous total: {})",
+    println!("[SEARCH] get_mined_blocks_count returning: {} total blocks for address: {} (discovered {} new, previous total: {})",
              final_total, miner_address, newly_discovered_blocks, current_cumulative);
     Ok(final_total)
 }
@@ -2551,7 +2551,7 @@ pub async fn send_transaction(
         Ok(count) => {
             tracing::info!("   Peer count: {}", count);
             if count == 0 {
-                tracing::warn!("   ⚠️ NO PEERS CONNECTED - transaction will not propagate!");
+                tracing::warn!("   [WARN] NO PEERS CONNECTED - transaction will not propagate!");
             }
         },
         Err(e) => tracing::error!("   Failed to get peer count: {}", e),
@@ -2588,7 +2588,7 @@ pub async fn send_transaction(
     
     tracing::info!("   Confirmed nonce: {}, Pending nonce: {}", confirmed_nonce, nonce);
     if nonce > confirmed_nonce {
-        tracing::warn!("   ⚠️ There are {} pending transactions for this address!", nonce - confirmed_nonce);
+        tracing::warn!("   [WARN] There are {} pending transactions for this address!", nonce - confirmed_nonce);
     }
 
     // Get the actual gas price to be used in the transaction
@@ -2638,7 +2638,7 @@ pub async fn send_transaction(
 
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
-    tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
+    tracing::info!("[OK] Transaction sent: {} from {} to {} amount {} CHIRAL", 
         tx_hash, from_address, to_address, amount_chiral);
     tracing::info!("   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000, Chain ID: {}", 
         nonce, gas_price, NETWORK_CONFIG.chain_id);
@@ -2680,7 +2680,7 @@ pub async fn send_transaction(
         Ok(peers) => {
             if let Some(peers_array) = peers.as_array() {
                 if peers_array.is_empty() {
-                    tracing::warn!("   ⚠️ NO PEERS - Transaction cannot propagate to other nodes!");
+                    tracing::warn!("   [WARN] NO PEERS - Transaction cannot propagate to other nodes!");
                 } else {
                     tracing::info!("   Connected to {} peer(s) - transaction should propagate", peers_array.len());
                     for peer in peers_array.iter().take(3) {  // Show first 3 peers
@@ -2699,7 +2699,7 @@ pub async fn send_transaction(
     // Try to get the transaction back to verify it's in the pool
     match get_transaction_by_hash(tx_hash.clone()).await {
         Ok(Some(tx_data)) => {
-            tracing::info!("✅ Transaction confirmed in local txpool: {}", tx_hash);
+            tracing::info!("[OK] Transaction confirmed in local txpool: {}", tx_hash);
             // Log the blockNumber - if it's null, tx is still pending
             if let Some(block) = tx_data.get("blockNumber") {
                 if block.is_null() {
@@ -2711,7 +2711,7 @@ pub async fn send_transaction(
                     let to_clone = to_address.to_string();
                     let amount_clone = amount_chiral;
                     tokio::spawn(async move {
-                        tracing::info!("🔍 Monitoring transaction {} for mining...", tx_hash_clone);
+                        tracing::info!("[SEARCH] Monitoring transaction {} for mining...", tx_hash_clone);
                         for attempt in 1..=60 {  // Monitor for up to 60 seconds
                             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                             
@@ -2728,13 +2728,13 @@ pub async fn send_transaction(
                                         .unwrap_or("?");
                                     
                                     if status == "0x1" {
-                                        tracing::info!("🎉 TRANSACTION MINED SUCCESSFULLY!");
+                                        tracing::info!("[DONE] TRANSACTION MINED SUCCESSFULLY!");
                                         tracing::info!("   Hash: {}", tx_hash_clone);
                                         tracing::info!("   Block: {}", block_num);
                                         tracing::info!("   From: {} -> To: {}", from_clone, to_clone);
                                         tracing::info!("   Amount: {} CHIRAL", amount_clone);
                                         tracing::info!("   Gas Used: {}", gas_used);
-                                        tracing::info!("   Status: SUCCESS ✅");
+                                        tracing::info!("   Status: SUCCESS [OK]");
                                         
                                         // Check balances after mining to verify transfer
                                         if let Ok(sender_balance) = get_balance(&from_clone).await {
@@ -2744,7 +2744,7 @@ pub async fn send_transaction(
                                             tracing::info!("   Receiver balance after: {} CHIRAL", receiver_balance);
                                         }
                                     } else {
-                                        tracing::error!("❌ TRANSACTION MINED BUT FAILED!");
+                                        tracing::error!("[X] TRANSACTION MINED BUT FAILED!");
                                         tracing::error!("   Hash: {}", tx_hash_clone);
                                         tracing::error!("   Block: {}", block_num);
                                         tracing::error!("   Status: {} (0x0 = failed, 0x1 = success)", status);
@@ -2763,7 +2763,7 @@ pub async fn send_transaction(
                                 }
                             }
                         }
-                        tracing::warn!("⚠️ Transaction {} still not mined after 60 seconds", tx_hash_clone);
+                        tracing::warn!("[WARN] Transaction {} still not mined after 60 seconds", tx_hash_clone);
                     });
                 } else {
                     tracing::info!("   Transaction is in block: {}", block);
@@ -2772,9 +2772,9 @@ pub async fn send_transaction(
                         if let Some(status) = receipt.get("status") {
                             let status_str = status.as_str().unwrap_or("");
                             if status_str == "0x1" {
-                                tracing::info!("   ✅ Transaction SUCCEEDED");
+                                tracing::info!("   [OK] Transaction SUCCEEDED");
                             } else {
-                                tracing::error!("   ❌ Transaction FAILED (status: {})", status_str);
+                                tracing::error!("   [X] Transaction FAILED (status: {})", status_str);
                             }
                         }
                     }
@@ -2782,10 +2782,10 @@ pub async fn send_transaction(
             }
         },
         Ok(None) => {
-            tracing::warn!("⚠️  Transaction NOT found in local txpool: {}", tx_hash);
+            tracing::warn!("[WARN]  Transaction NOT found in local txpool: {}", tx_hash);
         },
         Err(e) => {
-            tracing::error!("❌ Failed to verify transaction in txpool: {}", e);
+            tracing::error!("[X] Failed to verify transaction in txpool: {}", e);
         }
     }
 
@@ -2998,7 +2998,7 @@ pub async fn debug_network_tx() -> Result<String, String> {
         Ok(count) => {
             report.push_str(&format!("Peer count: {}\n", count));
             if count == 0 {
-                report.push_str("⚠️ WARNING: No peers connected! Transactions cannot propagate.\n");
+                report.push_str("[WARN] WARNING: No peers connected! Transactions cannot propagate.\n");
             }
         },
         Err(e) => report.push_str(&format!("Failed to get peer count: {}\n", e)),

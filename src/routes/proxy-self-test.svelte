@@ -184,7 +184,7 @@
       {#each $echoInbox as msg, i}
         <li class="text-sm">
           <span class="font-mono text-gray-600">[{i}]</span>
-          <span class="font-mono">{msg.from}</span> →
+          <span class="font-mono">{msg.from}</span> ->
           <span>{msg.text}</span>
           <span class="text-gray-500 ml-2">({new Date(msg.ts).toLocaleTimeString()})</span>
         </li>

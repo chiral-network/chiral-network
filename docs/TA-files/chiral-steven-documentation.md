@@ -36,7 +36,7 @@ Chiral Network is a **decentralized peer-to-peer file sharing platform**, with i
 
 ### Key Features Status
 
-✅ **Completed:**
+[OK] **Completed:**
 - Desktop UI (Svelte 5 + Tauri 2)
 - Basic P2P networking (libp2p integration)
 - Kademlia DHT integration
@@ -49,14 +49,14 @@ Chiral Network is a **decentralized peer-to-peer file sharing platform**, with i
 - Seeding registry for multi-protocol tracking
 - HTTP and FTP protocol handlers
 
-🚧 **In Progress:**
+[WIP] **In Progress:**
 - BitTorrent protocol completion
 - ed2k protocol refinement
 - Payment automation and verification
 - Enhanced protocol selection strategies
 - Reputation system maturity
 
-📅 **Planned:**
+[DATE] **Planned:**
 - Enhanced proxy services
 - CDN-like distribution
 - Browser extension support
@@ -73,7 +73,7 @@ Chiral Network is a **decentralized peer-to-peer file sharing platform**, with i
 │  Pages: Download, Upload, Network, Wallet, Settings    │
 └─────────────────┬───────────────────────────────────────┘
                   │
-                  ▼ Tauri Commands
+                  [v] Tauri Commands
 ┌─────────────────────────────────────────────────────────┐
 │              Backend (Rust/Tauri)                       │
 │  - DHT Service (peer discovery)                         │
@@ -84,7 +84,7 @@ Chiral Network is a **decentralized peer-to-peer file sharing platform**, with i
 └─────────────────┬───────────────────────────────────────┘
                   │
         ┌─────────┴─────────┐
-        ▼                   ▼
+        [v]                   [v]
 ┌──────────────┐    ┌──────────────┐
 │  libp2p      │    │  Blockchain  │
 │  Network     │    │  (Geth)      │
@@ -126,10 +126,10 @@ Chiral Network is a **decentralized peer-to-peer file sharing platform**, with i
   - `traits.rs`: Core traits (ProtocolHandler, DownloadOptions, SeedOptions)
   - `detection.rs`: ProtocolDetector - automatic protocol selection
   - `seeding.rs`: SeedingRegistry - multi-protocol seeding tracking
-  - `http.rs`: HTTP/HTTPS protocol handler (✅ Complete)
-  - `ftp.rs`: FTP/FTPS protocol handler (✅ Complete)
-  - `bittorrent.rs`: BitTorrent/WebTorrent handler (🚧 In Progress)
-  - `ed2k.rs`: eDonkey2000 protocol handler (🚧 In Progress)
+  - `http.rs`: HTTP/HTTPS protocol handler ([OK] Complete)
+  - `ftp.rs`: FTP/FTPS protocol handler ([OK] Complete)
+  - `bittorrent.rs`: BitTorrent/WebTorrent handler ([WIP] In Progress)
+  - `ed2k.rs`: eDonkey2000 protocol handler ([WIP] In Progress)
 
 - **Legacy Protocol Files** (being migrated):
   - `http_download.rs`, `ftp_client.rs`, `ftp_downloader.rs`
@@ -243,33 +243,33 @@ npm run tauri:build
 
 #### Publishing a File (Upload/Seed)
 ```
-User selects file → FileService.uploadFile()
-  → encryptionService.encryptFile() (chunks + encrypts)
-  → dhtService.publishFileToNetwork()
-  → Rust: upload_file_to_network command
-  → ChunkManager creates manifest
-  → DHT advertises availability
-  → Event: 'published_file' → UI updates
+User selects file -> FileService.uploadFile()
+  -> encryptionService.encryptFile() (chunks + encrypts)
+  -> dhtService.publishFileToNetwork()
+  -> Rust: upload_file_to_network command
+  -> ChunkManager creates manifest
+  -> DHT advertises availability
+  -> Event: 'published_file' -> UI updates
 ```
 
 #### Downloading a File
 ```
-User initiates download → dhtService.downloadFile()
-  → dhtService.searchFileMetadata() (find seeders)
-  → Rust: download_blocks_from_network command
-  → MultiSourceDownload coordinates parallel fetches
-  → Protocol handlers (HTTP/FTP/BitTorrent) fetch chunks
-  → Reassembly writes to disk
-  → Event: 'file_content' → UI updates progress
+User initiates download -> dhtService.downloadFile()
+  -> dhtService.searchFileMetadata() (find seeders)
+  -> Rust: download_blocks_from_network command
+  -> MultiSourceDownload coordinates parallel fetches
+  -> Protocol handlers (HTTP/FTP/BitTorrent) fetch chunks
+  -> Reassembly writes to disk
+  -> Event: 'file_content' -> UI updates progress
 ```
 
 #### Peer Discovery
 ```
-DHT node starts → connect to bootstrap nodes
-  → Periodic DHT queries for file hashes
-  → Kademlia routing table updates
-  → Relay/AutoRelay for NAT traversal
-  → WebRTC for direct browser connections
+DHT node starts -> connect to bootstrap nodes
+  -> Periodic DHT queries for file hashes
+  -> Kademlia routing table updates
+  -> Relay/AutoRelay for NAT traversal
+  -> WebRTC for direct browser connections
 ```
 
 ### Key Files by Feature
@@ -285,8 +285,8 @@ DHT node starts → connect to bootstrap nodes
 | Seeding | `pages/Upload.svelte` | `protocols/seeding.rs` (SeedingRegistry) |
 | HTTP Protocol | - | `protocols/http.rs` |
 | FTP Protocol | - | `protocols/ftp.rs` |
-| BitTorrent Protocol | - | `protocols/bittorrent.rs` (🚧) |
-| ed2k Protocol | - | `protocols/ed2k.rs` (🚧) |
+| BitTorrent Protocol | - | `protocols/bittorrent.rs` ([WIP]) |
+| ed2k Protocol | - | `protocols/ed2k.rs` ([WIP]) |
 | Reputation | `lib/reputationStore.ts` | `reputation.rs`, `peer_selection.rs` |
 | Settings | `pages/Settings.svelte` | `config/` modules |
 
@@ -373,11 +373,11 @@ export async function myNewFunction(param: string): Promise<string> {
 
 ### Debugging Network Issues
 
-1. **Check DHT Health**: Network page → view connected peers
+1. **Check DHT Health**: Network page -> view connected peers
 2. **Inspect Logs**: 
    - Frontend: Browser DevTools console
    - Backend: Terminal output or `chiral.log` file
-3. **Verify Bootstrap Nodes**: Settings → ensure bootstrap nodes are reachable
+3. **Verify Bootstrap Nodes**: Settings -> ensure bootstrap nodes are reachable
 4. **Test Protocols Individually**: Use curl/ftp client to verify endpoints
 5. **Monitor Relay Status**: Check if relay nodes are accepting connections
 
@@ -860,7 +860,7 @@ Chiral Network is an ambitious decentralized file sharing platform with a solid 
 
 Focus on understanding the core file transfer flow first, then branch out into specific protocols or features based on your interests and project needs. Don't hesitate to ask questions and contribute back to the documentation as you learn.
 
-**Happy coding!** 🚀
+**Happy coding!** [START]
 
 ---
 
