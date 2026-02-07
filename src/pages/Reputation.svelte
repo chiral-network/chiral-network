@@ -8,7 +8,6 @@
   } from "$lib/types/reputation";
   import ReputationCard from "$lib/components/ReputationCard.svelte";
   import ReputationAnalyticsComponent from "$lib/components/ReputationAnalytics.svelte";
-  import RelayReputationLeaderboard from "$lib/components/RelayReputationLeaderboard.svelte";
   import Card from "$lib/components/ui/card.svelte";
   import Button from "$lib/components/ui/button.svelte";
   import PeerSelectionService, {
@@ -19,31 +18,23 @@
 
   // LocalStorage keys for persisted UI state
   const STORAGE_KEY_SHOW_ANALYTICS = "chiral.reputation.showAnalytics";
-  const STORAGE_KEY_SHOW_RELAY_LEADERBOARD =
-    "chiral.reputation.showRelayLeaderboard";
-
   // Load persisted UI toggles from localStorage
   function loadPersistedToggles() {
     if (typeof window === "undefined")
-      return { showAnalytics: true, showRelayLeaderboard: true };
+      return { showAnalytics: true };
 
     try {
       const storedAnalytics = window.localStorage.getItem(
         STORAGE_KEY_SHOW_ANALYTICS,
       );
-      const storedLeaderboard = window.localStorage.getItem(
-        STORAGE_KEY_SHOW_RELAY_LEADERBOARD,
-      );
 
       return {
         showAnalytics:
           storedAnalytics !== null ? storedAnalytics === "true" : true,
-        showRelayLeaderboard:
-          storedLeaderboard !== null ? storedLeaderboard === "true" : true,
       };
     } catch (e) {
       console.warn("Failed to load persisted UI toggles:", e);
-      return { showAnalytics: true, showRelayLeaderboard: true };
+      return { showAnalytics: true };
     }
   }
 
@@ -85,13 +76,8 @@
   const peerScoreCache = new Map<string, { score: number; trustLevel: TrustLevel; timestamp: number }>();
   const SCORE_CACHE_TTL = 5000; // 5 seconds
   let showAnalytics = persistedToggles.showAnalytics;
-  let showRelayLeaderboard = persistedToggles.showRelayLeaderboard;
   let currentPage = 1;
   const peersPerPage = 8;
-
-  // Node's own relay reputation
-  let myPeerId: string | null = null;
-  let myRelayStats: any = null;
 
   // Filter states
   let isFilterOpen = false;
@@ -125,7 +111,6 @@
   // Persist UI toggles when they change (consolidated)
   $: {
     persistToggle(STORAGE_KEY_SHOW_ANALYTICS, showAnalytics);
-    persistToggle(STORAGE_KEY_SHOW_RELAY_LEADERBOARD, showRelayLeaderboard);
   }
 
   function openFilters() {
@@ -425,38 +410,6 @@
     }
   }
 
-  // Load node's own relay reputation
-  async function loadMyRelayStats() {
-    try {
-      // Get our peer ID
-      myPeerId = await invoke<string>("get_dht_peer_id");
-      if (!myPeerId) return;
-
-      // Get relay reputation stats
-      const stats = await invoke<any>("get_relay_reputation_stats", {
-        limit: 1000,
-      });
-
-      // Find our node in the stats
-      if (stats && stats.top_relays) {
-        const myIndex = stats.top_relays.findIndex(
-          (r: any) => r.peer_id === myPeerId,
-        );
-        if (myIndex !== -1) {
-          myRelayStats = {
-            ...stats.top_relays[myIndex],
-            rank: myIndex + 1,
-            totalRelays: stats.total_relays,
-          };
-        }
-      }
-    } catch (e) {
-      console.debug("Failed to load my relay stats:", e);
-      myPeerId = null;
-      myRelayStats = null;
-    }
-  }
-
   // Filter and sort peers
   $: filteredPeers = peers
     .filter((peer) => {
@@ -520,18 +473,15 @@
 
   onMount(() => {
     loadPeersFromBackend();
-    loadMyRelayStats();
     // Best-effort latency probe and follow-up refresh
     probePeerLatencies();
     // Refresh after a short delay to pick up new latency
     setTimeout(() => {
       loadPeersFromBackend();
-      loadMyRelayStats();
     }, 1500);
     // Periodic refresh to keep data live
     const interval = setInterval(() => {
       loadPeersFromBackend();
-      loadMyRelayStats();
     }, 10000);
 
     // Add escape key listener
@@ -547,7 +497,6 @@
   async function refreshData() {
     isLoading = true;
     await loadPeersFromBackend();
-    await loadMyRelayStats();
     isLoading = false;
   }
 </script>
@@ -586,15 +535,6 @@
             ? $t("reputation.hideAnalytics")
             : $t("reputation.showAnalytics")}
         </Button>
-        <Button
-          on:click={() => (showRelayLeaderboard = !showRelayLeaderboard)}
-          variant="outline"
-          class="w-full sm:w-auto"
-        >
-          {showRelayLeaderboard
-            ? $t("reputation.hideRelayLeaderboard")
-            : $t("reputation.showRelayLeaderboard")}
-        </Button>
       </div>
     </div>
   </div>
@@ -614,73 +554,6 @@
     {#if showAnalytics && analytics}
       <div class="mb-8">
         <ReputationAnalyticsComponent {analytics} />
-      </div>
-    {/if}
-
-    <!-- My Relay Status (if running as a relay) -->
-    {#if myRelayStats}
-      <Card
-        class="p-6 mb-8 bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-200"
-      >
-        <div class="flex items-start justify-between">
-          <div class="flex-1">
-            <div class="flex items-center gap-3 mb-4">
-              <span class="text-3xl">⚡</span>
-              <div>
-                <h3 class="text-xl font-bold text-gray-900">
-                  {$t("reputation.myRelay.title")}
-                </h3>
-                <p class="text-sm text-gray-600">
-                  {$t("reputation.myRelay.subtitle")}
-                </p>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div class="bg-white rounded-lg p-4 shadow-sm">
-                <div class="text-2xl font-bold text-blue-600">
-                  #{myRelayStats.rank}
-                </div>
-                <div class="text-xs text-gray-600">
-                  {$t("reputation.myRelay.rankOf", {
-                    total: myRelayStats.totalRelays,
-                  })}
-                </div>
-              </div>
-              <div class="bg-white rounded-lg p-4 shadow-sm">
-                <div class="text-2xl font-bold text-purple-600">
-                  {myRelayStats.reputation_score.toFixed(0)}
-                </div>
-                <div class="text-xs text-gray-600">
-                  {$t("reputation.myRelay.reputationScore")}
-                </div>
-              </div>
-              <div class="bg-white rounded-lg p-4 shadow-sm">
-                <div class="text-2xl font-bold text-green-600">
-                  {myRelayStats.circuits_successful}
-                </div>
-                <div class="text-xs text-gray-600">
-                  {$t("reputation.myRelay.successfulCircuits")}
-                </div>
-              </div>
-              <div class="bg-white rounded-lg p-4 shadow-sm">
-                <div class="text-2xl font-bold text-orange-600">
-                  {myRelayStats.reservations_accepted}
-                </div>
-                <div class="text-xs text-gray-600">
-                  {$t("reputation.myRelay.reservations")}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </Card>
-    {/if}
-
-    <!-- Relay Reputation Leaderboard -->
-    {#if showRelayLeaderboard}
-      <div class="mb-8">
-        <RelayReputationLeaderboard />
       </div>
     {/if}
 

@@ -438,27 +438,6 @@ async fn cmd_status(context: &ReplContext) -> Result<(), String> {
     println!("  │ {:<60} │", format!("AutoNAT: {}",
         if metrics.autonat_enabled { "Enabled" } else { "Disabled" }));
 
-    // Relay status
-    let relay_status = if metrics.active_relay_peer_id.is_some() {
-        format!("Active ({})", metrics.active_relay_peer_id.as_ref().unwrap())
-    } else {
-        "None".to_string()
-    };
-    println!("  │ {:<60} │", format!("Circuit Relay: {}", relay_status));
-
-    // DCUtR stats
-    if metrics.dcutr_enabled {
-        let success_rate = if metrics.dcutr_hole_punch_attempts > 0 {
-            (metrics.dcutr_hole_punch_successes as f64 / metrics.dcutr_hole_punch_attempts as f64) * 100.0
-        } else {
-            0.0
-        };
-        let rate_str = format!("{:.1}% ({}/{})", success_rate,
-            metrics.dcutr_hole_punch_successes,
-            metrics.dcutr_hole_punch_attempts);
-        println!("  │ {:<60} │", format!("DCUtR Success Rate: {}", rate_str));
-    }
-
     // File transfer stats
     if let Some(ft) = &context.file_transfer_service {
         let snapshot = ft.download_metrics_snapshot().await;
@@ -1273,7 +1252,7 @@ async fn cmd_config(args: &[&str], _context: &ReplContext) -> Result<(), String>
             println!("  │ {:<60} │", "  listen_port: 4001");
             println!("  │ {:<60} │", "  enable_upnp: true");
             println!("  │ {:<60} │", "  enable_autonat: true");
-            println!("  │ {:<60} │", "  enable_relay: true");
+            println!("  │ {:<60} │", "  enable_upnp: true");
             println!("  ├──────────────────────────────────────────────────────────────┤");
             println!("  │ {:<60} │", "Download Settings:");
             println!("  │ {:<60} │", "  max_concurrent_downloads: 3");
@@ -1712,16 +1691,7 @@ async fn export_metrics(context: &ReplContext, format: &str, output_path: Option
                     "reachability": format!("{:?}", metrics.reachability),
                     "reachability_confidence": format!("{:?}", metrics.reachability_confidence),
                     "autonat_enabled": metrics.autonat_enabled,
-                    "active_relay": metrics.active_relay_peer_id,
                     "observed_addresses": metrics.observed_addrs,
-                },
-                "dcutr": {
-                    "enabled": metrics.dcutr_enabled,
-                    "hole_punch_attempts": metrics.dcutr_hole_punch_attempts,
-                    "hole_punch_successes": metrics.dcutr_hole_punch_successes,
-                    "success_rate": if metrics.dcutr_hole_punch_attempts > 0 {
-                        (metrics.dcutr_hole_punch_successes as f64 / metrics.dcutr_hole_punch_attempts as f64) * 100.0
-                    } else { 0.0 }
                 }
             });
 
@@ -1731,15 +1701,12 @@ async fn export_metrics(context: &ReplContext, format: &str, output_path: Option
         }
         "csv" => {
             let csv_data = format!(
-                "timestamp,peer_id,connected_peers,reachability,autonat_enabled,dcutr_enabled,hole_punch_attempts,hole_punch_successes\n{},{},{},{:?},{},{},{},{}\n",
+                "timestamp,peer_id,connected_peers,reachability,autonat_enabled\n{},{},{},{:?},{}\n",
                 chrono::Utc::now().to_rfc3339(),
                 context.peer_id,
                 peers.len(),
                 metrics.reachability,
                 metrics.autonat_enabled,
-                metrics.dcutr_enabled,
-                metrics.dcutr_hole_punch_attempts,
-                metrics.dcutr_hole_punch_successes
             );
 
             std::fs::write(path, csv_data)
@@ -2126,15 +2093,6 @@ async fn cmd_report(args: &[&str], context: &ReplContext) -> Result<(), String> 
             println!("  │ {:<60} │", format!("  Connected Peers: {}", peers.len()));
             println!("  │ {:<60} │", format!("  Reachability: {:?}", metrics.reachability));
             println!("  │ {:<60} │", format!("  AutoNAT: {}", if metrics.autonat_enabled { "Enabled" } else { "Disabled" }));
-
-            if metrics.dcutr_enabled {
-                let success_rate = if metrics.dcutr_hole_punch_attempts > 0 {
-                    (metrics.dcutr_hole_punch_successes as f64 / metrics.dcutr_hole_punch_attempts as f64) * 100.0
-                } else {
-                    0.0
-                };
-                println!("  │ {:<60} │", format!("  DCUtR Success: {:.1}%", success_rate));
-            }
 
             // File transfer stats
             if let Some(ft) = &context.file_transfer_service {

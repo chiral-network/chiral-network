@@ -58,7 +58,6 @@ async fn test_extract_ftp_sources_from_metadata() {
         uploader_address: None,
         info_hash: None,
         trackers: None,
-        manifest: None,
     };
 
     // Test that metadata contains FTP sources

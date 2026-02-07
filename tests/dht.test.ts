@@ -176,46 +176,6 @@ describe("dht.ts", () => {
         );
       });
 
-      it("should start DHT with autorelay enabled", async () => {
-        mockInvoke
-          .mockResolvedValueOnce([])
-          .mockResolvedValueOnce("peer-id-relay");
-
-        await dhtService.start({
-          port: 4001,
-          enableAutorelay: true,
-          preferredRelays: ["relay1", "relay2"],
-        });
-
-        expect(mockInvoke).toHaveBeenCalledWith(
-          "start_dht_node",
-          expect.objectContaining({
-            enableAutorelay: true,
-            preferredRelays: ["relay1", "relay2"],
-          })
-        );
-      });
-
-      it("should start DHT with relay server enabled", async () => {
-        mockInvoke
-          .mockResolvedValueOnce([])
-          .mockResolvedValueOnce("peer-id-server");
-
-        await dhtService.start({
-          port: 4001,
-          enableRelayServer: true,
-          relayServerAlias: "my-relay-server",
-        });
-
-        expect(mockInvoke).toHaveBeenCalledWith(
-          "start_dht_node",
-          expect.objectContaining({
-            enableRelayServer: true,
-            relayServerAlias: "my-relay-server",
-          })
-        );
-      });
-
       it("should handle start errors and clear peerId", async () => {
         mockInvoke
           .mockResolvedValueOnce([])
@@ -250,17 +210,6 @@ describe("dht.ts", () => {
         expect(callArgs).not.toHaveProperty("proxyAddress");
       });
 
-      it("should ignore empty relay server alias", async () => {
-        mockInvoke.mockResolvedValueOnce([]).mockResolvedValueOnce("peer-id");
-
-        await dhtService.start({
-          port: 4001,
-          relayServerAlias: "   ",
-        });
-
-        const callArgs = mockInvoke.mock.calls[1][1] as Record<string, unknown>;
-        expect(callArgs).not.toHaveProperty("relayServerAlias");
-      });
     });
 
     describe("stop", () => {
@@ -651,29 +600,6 @@ describe("dht.ts", () => {
         observedAddrs: [],
         reachabilityHistory: [],
         autonatEnabled: true,
-        autorelayEnabled: false,
-        activeRelayPeerId: null,
-        relayReservationStatus: null,
-        lastReservationSuccess: null,
-        lastReservationFailure: null,
-        reservationRenewals: 0,
-        reservationEvictions: 0,
-        relayConnectionAttempts: 0,
-        relayConnectionSuccesses: 0,
-        relayConnectionFailures: 0,
-        lastRelayError: null,
-        lastRelayErrorType: null,
-        lastRelayErrorAt: null,
-        activeRelayCount: 0,
-        totalRelaysInPool: 0,
-        relayHealthScore: 0,
-        lastReservationRenewal: null,
-        dcutrEnabled: false,
-        dcutrHolePunchAttempts: 0,
-        dcutrHolePunchSuccesses: 0,
-        dcutrHolePunchFailures: 0,
-        lastDcutrSuccess: null,
-        lastDcutrFailure: null,
       };
 
       it("should get DHT health", async () => {
@@ -1026,60 +952,6 @@ describe("dht.ts", () => {
       });
     });
 
-    describe("getHealth - extended metrics", () => {
-      it("should return complete health metrics including DCUtR", async () => {
-        const completeHealth: DhtHealth = {
-          peerCount: 25,
-          lastBootstrap: Date.now(),
-          lastPeerEvent: Date.now(),
-          lastError: null,
-          lastErrorAt: null,
-          bootstrapFailures: 0,
-          listenAddrs: ["/ip4/127.0.0.1/tcp/4001"],
-          reachability: "public",
-          reachabilityConfidence: "high",
-          lastReachabilityChange: Date.now(),
-          lastProbeAt: Date.now(),
-          lastReachabilityError: null,
-          observedAddrs: ["/ip4/203.0.113.1/tcp/4001"],
-          reachabilityHistory: [
-            { state: "public", confidence: "high", timestamp: Date.now() },
-          ],
-          autonatEnabled: true,
-          autorelayEnabled: true,
-          activeRelayPeerId: "QmRelay123",
-          relayReservationStatus: "active",
-          lastReservationSuccess: Date.now(),
-          lastReservationFailure: null,
-          reservationRenewals: 5,
-          reservationEvictions: 0,
-          relayConnectionAttempts: 10,
-          relayConnectionSuccesses: 9,
-          relayConnectionFailures: 1,
-          lastRelayError: null,
-          lastRelayErrorType: null,
-          lastRelayErrorAt: null,
-          activeRelayCount: 3,
-          totalRelaysInPool: 5,
-          relayHealthScore: 0.9,
-          lastReservationRenewal: Date.now(),
-          dcutrEnabled: true,
-          dcutrHolePunchAttempts: 15,
-          dcutrHolePunchSuccesses: 12,
-          dcutrHolePunchFailures: 3,
-          lastDcutrSuccess: Date.now(),
-          lastDcutrFailure: Date.now() - 60000,
-        };
-
-        mockInvoke.mockResolvedValueOnce(completeHealth);
-
-        const health = await dhtService.getHealth();
-
-        expect(health).toEqual(completeHealth);
-        expect(health?.dcutrEnabled).toBe(true);
-        expect(health?.dcutrHolePunchSuccesses).toBe(12);
-      });
-    });
   });
 });
 

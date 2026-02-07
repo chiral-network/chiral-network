@@ -77,10 +77,6 @@ describe("SettingsBackupService", () => {
     enableAutonat: false,
     autonatProbeInterval: 30,
     autonatServers: [],
-    enableAutorelay: false,
-    preferredRelays: [],
-    enableRelayServer: false,
-    relayServerAlias: "",
     anonymousMode: false,
     shareAnalytics: true,
     enableNotifications: true,
@@ -427,7 +423,6 @@ describe("SettingsBackupService", () => {
     it("should handle null/undefined values in settings", async () => {
       const settings = createMockSettings({
         proxyAddress: undefined as any,
-        relayServerAlias: null as any,
       });
       const backup: SettingsBackup = {
         version: "1.0",

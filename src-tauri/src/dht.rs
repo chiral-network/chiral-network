@@ -2,7 +2,6 @@ pub mod models;
 // pub mod protocol;
 pub use self::models::*;
 use bon::Builder;
-use rand::seq::SliceRandom;
 // use self::protocol::*;
 use crate::config::CHAIN_ID;
 use crate::download_source::HttpSourceInfo;
@@ -220,14 +219,13 @@ use futures::io::{AsyncRead as FAsyncRead, AsyncWrite as FAsyncWrite};
 use futures::{AsyncReadExt as _, AsyncWriteExt as _};
 use futures_util::StreamExt;
 pub use multihash_codetable::{Code, MultihashDigest};
-use relay::client::Event as RelayClientEvent;
 use rs_merkle::{Hasher, MerkleTree};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -263,11 +261,8 @@ static LAST_CONNECTION_ERROR_LOG: AtomicU64 = AtomicU64::new(0);
 use libp2p::{
     autonat::v2,
     core::{
-        muxing::StreamMuxerBox,
-        // FIXED E0432: ListenerEvent is removed, only import what is available.
-        transport::{Boxed, DialOpts, ListenerId, Transport, TransportError, TransportEvent},
+        transport::{DialOpts, ListenerId, Transport, TransportError, TransportEvent},
     },
-    dcutr,
     identify::{self, Event as IdentifyEvent},
     identity,
     kad::{
@@ -278,7 +273,7 @@ use libp2p::{
     multiaddr::Protocol,
     noise,
     ping::{self, Behaviour as Ping, Event as PingEvent},
-    relay, request_response as rr,
+    request_response as rr,
     swarm::{behaviour::toggle, NetworkBehaviour, SwarmEvent},
     tcp, upnp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm, SwarmBuilder,
 };
@@ -303,9 +298,6 @@ struct DhtBehaviour {
     key_request: rr::Behaviour<KeyRequestCodec>,
     autonat_client: toggle::Toggle<v2::client::Behaviour>,
     autonat_server: toggle::Toggle<v2::server::Behaviour>,
-    relay_client: relay::client::Behaviour,
-    relay_server: toggle::Toggle<relay::Behaviour>,
-    dcutr: toggle::Toggle<dcutr::Behaviour>,
     upnp: toggle::Toggle<upnp::tokio::Behaviour>,
 }
 #[derive(Debug)]
@@ -320,9 +312,6 @@ pub enum DhtCommand {
     },
     SearchPeersByInfohash {
         info_hash: String,
-        sender: oneshot::Sender<Result<Vec<String>, String>>,
-    },
-    DiscoverRelays {
         sender: oneshot::Sender<Result<Vec<String>, String>>,
     },
     SearchFile {
@@ -482,10 +471,6 @@ pub enum DhtEvent {
     },
 }
 
-struct RelayState {
-    blacklist: HashSet<PeerId>,
-}
-
 // ------------ Proxy Manager Structs and Enums ------------
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyMode {
@@ -509,8 +494,6 @@ struct ProxyManager {
     targets: std::collections::HashSet<PeerId>,
     capable: std::collections::HashSet<PeerId>,
     online: std::collections::HashSet<PeerId>,
-    relay_pending: std::collections::HashSet<PeerId>,
-    relay_ready: std::collections::HashSet<PeerId>,
     // Privacy routing state
     privacy_routing_enabled: bool,
     trusted_proxy_nodes: std::collections::HashSet<PeerId>,
@@ -538,28 +521,12 @@ impl ProxyManager {
         self.targets.remove(id);
         self.capable.remove(id);
         self.online.remove(id);
-        self.relay_pending.remove(id);
-        self.relay_ready.remove(id);
         self.trusted_proxy_nodes.remove(id);
         self.manual_trusted.remove(id);
     }
     fn is_proxy(&self, id: &PeerId) -> bool {
         self.targets.contains(id) || self.capable.contains(id)
     }
-    fn mark_relay_pending(&mut self, id: PeerId) -> bool {
-        if self.relay_ready.contains(&id) {
-            return false;
-        }
-        self.relay_pending.insert(id)
-    }
-    fn mark_relay_ready(&mut self, id: PeerId) -> bool {
-        self.relay_pending.remove(&id);
-        self.relay_ready.insert(id)
-    }
-    fn has_relay_request(&self, id: &PeerId) -> bool {
-        self.relay_pending.contains(id) || self.relay_ready.contains(id)
-    }
-
     // Privacy routing methods
     fn enable_privacy_routing(&mut self, mode: PrivacyMode) {
         self.privacy_routing_enabled = mode != PrivacyMode::Off;
@@ -635,8 +602,6 @@ impl Default for ProxyManager {
             targets: std::collections::HashSet::new(),
             capable: std::collections::HashSet::new(),
             online: std::collections::HashSet::new(),
-            relay_pending: std::collections::HashSet::new(),
-            relay_ready: std::collections::HashSet::new(),
             privacy_routing_enabled: false,
             trusted_proxy_nodes: std::collections::HashSet::new(),
             privacy_mode: PrivacyMode::Off,
@@ -1036,71 +1001,6 @@ impl Transport for Socks5Transport {
     }
 }
 
-enum RelayTransportOutput {
-    Relay(relay::client::Connection),
-    Direct(Box<dyn AsyncIo>),
-}
-
-impl FAsyncRead for RelayTransportOutput {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        // SAFETY: We never move the inner value after pinning, so projecting via
-        // `get_unchecked_mut` and re-pinning each variant is sound.
-        unsafe {
-            match self.get_unchecked_mut() {
-                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_read(cx, buf),
-                RelayTransportOutput::Direct(stream) => {
-                    Pin::new_unchecked(stream.as_mut()).poll_read(cx, buf)
-                }
-            }
-        }
-    }
-}
-
-impl FAsyncWrite for RelayTransportOutput {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<Result<usize, std::io::Error>> {
-        unsafe {
-            match self.get_unchecked_mut() {
-                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_write(cx, buf),
-                RelayTransportOutput::Direct(stream) => {
-                    Pin::new_unchecked(stream.as_mut()).poll_write(cx, buf)
-                }
-            }
-        }
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        // SAFETY: See comment in `poll_read`; variants remain pinned in place.
-        unsafe {
-            match self.get_unchecked_mut() {
-                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_flush(cx),
-                RelayTransportOutput::Direct(stream) => {
-                    Pin::new_unchecked(stream.as_mut()).poll_flush(cx)
-                }
-            }
-        }
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
-        // SAFETY: See comment in `poll_read`; variants remain pinned in place.
-        unsafe {
-            match self.get_unchecked_mut() {
-                RelayTransportOutput::Relay(conn) => Pin::new_unchecked(conn).poll_close(cx),
-                RelayTransportOutput::Direct(stream) => {
-                    Pin::new_unchecked(stream.as_mut()).poll_close(cx)
-                }
-            }
-        }
-    }
-}
-
 impl DhtMetricsSnapshot {
     fn from(metrics: DhtMetrics, peer_count: usize) -> Self {
         fn to_secs(ts: SystemTime) -> Option<u64> {
@@ -1122,32 +1022,8 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history,
             autonat_enabled,
-            // AutoRelay metrics
-            autorelay_enabled,
-            last_autorelay_enabled_at,
-            last_autorelay_disabled_at,
-            active_relay_peer_id,
-            relay_reservation_status,
-            last_reservation_success,
-            last_reservation_failure,
-            reservation_renewals,
-            reservation_evictions,
-            // DCUtR metrics
-            dcutr_enabled,
-            dcutr_hole_punch_attempts,
-            dcutr_hole_punch_successes,
-            dcutr_hole_punch_failures,
-            last_dcutr_success,
-            last_dcutr_failure,
             ..
         } = metrics;
-
-        // Derive relay listen addresses (those that include p2p-circuit)
-        let relay_listen_addrs: Vec<String> = listen_addrs
-            .iter()
-            .filter(|a| a.contains("p2p-circuit"))
-            .cloned()
-            .collect();
 
         let history: Vec<NatHistoryItem> = reachability_history
             .into_iter()
@@ -1172,7 +1048,6 @@ impl DhtMetricsSnapshot {
             last_error_at: last_error_at.and_then(to_secs),
             bootstrap_failures,
             listen_addrs,
-            relay_listen_addrs,
             reachability: reachability_state,
             reachability_confidence,
             last_reachability_change: last_reachability_change.and_then(to_secs),
@@ -1181,23 +1056,6 @@ impl DhtMetricsSnapshot {
             observed_addrs,
             reachability_history: history,
             autonat_enabled,
-            // AutoRelay metrics
-            autorelay_enabled,
-            last_autorelay_enabled_at: last_autorelay_enabled_at.and_then(to_secs),
-            last_autorelay_disabled_at: last_autorelay_disabled_at.and_then(to_secs),
-            active_relay_peer_id,
-            relay_reservation_status,
-            last_reservation_success: last_reservation_success.and_then(to_secs),
-            last_reservation_failure: last_reservation_failure.and_then(to_secs),
-            reservation_renewals,
-            reservation_evictions,
-            // DCUtR metrics
-            dcutr_enabled,
-            dcutr_hole_punch_attempts,
-            dcutr_hole_punch_successes,
-            dcutr_hole_punch_failures,
-            last_dcutr_success: last_dcutr_success.and_then(to_secs),
-            last_dcutr_failure: last_dcutr_failure.and_then(to_secs),
         }
     }
 }
@@ -1351,144 +1209,24 @@ async fn run_dht_node(
         >,
     >,
     pending_search_queries: Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>>,
-    pending_relay_discoveries: Arc<
-        Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Vec<String>, String>>>>,
-    >,
     is_bootstrap: bool,
-    enable_autorelay: bool,
-    relay_candidates: HashSet<String>,
     chunk_size: usize,
     bootstrap_peer_ids: HashSet<PeerId>,
     pure_client_mode: bool,
     force_server_mode: bool,
 ) {
-    // Track peers that support relay (discovered via identify protocol)
-    let relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
     let mut dht_maintenance_interval = tokio::time::interval(Duration::from_secs(30 * 60));
     dht_maintenance_interval.tick().await;
-    // Periodic relay discovery interval (every 5 minutes if autorelay is enabled)
-    let mut relay_discovery_interval = if enable_autorelay {
-        tokio::time::interval(Duration::from_secs(5 * 60))
-    } else {
-        tokio::time::interval(Duration::from_secs(24 * 60 * 60)) // 24 hours if disabled
-    };
-    relay_discovery_interval.tick().await;
-    // Periodic bootstrap interval
-
-    /// Creates a proper circuit relay address for connecting through a relay peer
-    /// Returns a properly formatted Multiaddr for circuit relay connections
-    fn create_circuit_relay_address(
-        relay_peer_id: &PeerId,
-        target_peer_id: &PeerId,
-    ) -> Result<Multiaddr, String> {
-        // For Circuit Relay v2, the address format is typically:
-        // /p2p/{relay_peer_id}/p2p-circuit
-        // The target peer is specified in the relay reservation/request
-
-        let relay_addr = Multiaddr::empty()
-            .with(Protocol::P2p(*relay_peer_id))
-            .with(Protocol::P2pCircuit);
-
-        // Validate the constructed address
-        if relay_addr.to_string().contains(&relay_peer_id.to_string()) {
-            info!("Created circuit relay address: {}", relay_addr);
-            Ok(relay_addr)
-        } else {
-            Err(format!(
-                "Failed to create valid circuit relay address for relay {}",
-                relay_peer_id
-            ))
-        }
-    }
-
-    /// Enhanced circuit relay address creation with multiple fallback strategies
-    fn create_circuit_relay_address_robust(
-        relay_peer_id: &PeerId,
-        target_peer_id: &PeerId,
-    ) -> Multiaddr {
-        // Strategy 1: Standard Circuit Relay v2 address
-        match create_circuit_relay_address(relay_peer_id, target_peer_id) {
-            Ok(addr) => return addr,
-            Err(e) => {
-                warn!("Standard relay address creation failed: {}", e);
-            }
-        }
-
-        // Strategy 2: Try with relay port specification (if available)
-        // Some relay implementations may require explicit port specification
-        let relay_with_port = Multiaddr::empty()
-            .with(Protocol::P2p(*relay_peer_id))
-            .with(Protocol::Tcp(4001)) // Default libp2p port
-            .with(Protocol::P2pCircuit);
-
-        if relay_with_port
-            .to_string()
-            .contains(&relay_peer_id.to_string())
-        {
-            info!(
-                "Created circuit relay address with port: {}",
-                relay_with_port
-            );
-            return relay_with_port;
-        }
-
-        // Strategy 3: Fallback to basic circuit address
-        warn!("Using basic fallback circuit relay address construction");
-        Multiaddr::empty()
-            .with(Protocol::P2p(*relay_peer_id))
-            .with(Protocol::P2pCircuit)
-    }
 
     let mut shutdown_ack: Option<oneshot::Sender<()>> = None;
     let mut ping_failures: HashMap<PeerId, u8> = HashMap::new();
-    let mut relay_blacklist: HashSet<PeerId> = HashSet::new();
-    let mut relay_cooldown: HashMap<PeerId, Instant> = HashMap::new();
-    let mut last_tried_relay: Option<PeerId> = None;
 
     let queries: HashMap<beetswap::QueryId, u32> = HashMap::new();
     let downloaded_chunks: HashMap<usize, Vec<u8>> = HashMap::new();
     let current_metadata: Option<FileMetadata> = None;
 
-    #[derive(Debug, Clone, Copy)]
-    enum RelayErrClass {
-        Permanent,
-        Transient,
-    }
-
-    fn classify_err_str(s: &str) -> RelayErrClass {
-        if s.contains("Reservation(Unsupported)") || s.contains("Denied") {
-            RelayErrClass::Permanent
-        } else {
-            RelayErrClass::Transient
-        }
-    }
-
-    fn parse_peer_id_from_ma(ma: &Multiaddr) -> Option<PeerId> {
-        use libp2p::multiaddr::Protocol;
-        let mut out = None;
-        for p in ma.iter() {
-            if let Protocol::P2p(mh) = p {
-                if let Ok(pid) = PeerId::from_multihash(mh.into()) {
-                    out = Some(pid);
-                }
-            }
-        }
-        out
-    }
-
     'outer: loop {
         tokio::select! {
-                            // Periodic relay discovery - automatically discover relay providers in DHT
-                            _ = relay_discovery_interval.tick(), if enable_autorelay => {
-                                info!("🔍 Starting periodic relay discovery");
-                                let relay_key = kad::RecordKey::new(b"chiral:service:relay");
-                                let query_id = swarm.behaviour_mut().kademlia.get_providers(relay_key);
-                                // Store a dummy sender - we'll handle results in handle_kademlia_event
-                                // The discovered relays will be automatically used by relay client when needed
-                                info!("🔍 Periodic relay discovery started (QueryId: {:?})", query_id);
-                            }
-
                             cmd = cmd_rx.recv() => {
                                 match cmd {
                                     Some(DhtCommand::Shutdown(ack)) => {
@@ -1746,14 +1484,14 @@ async fn run_dht_node(
 
                                             // 4. Announce self as provider (only if we have dialable addrs)
                                             if !swarm_has_dialable_addr(&swarm) {
-                                                warn!("🛑 Not registering encrypted file {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)", metadata.merkle_root);
+                                                warn!("🛑 Not registering encrypted file {} as provider: no dialable address (set CHIRAL_PUBLIC_IP or enable UPnP)", metadata.merkle_root);
                                                 {
                                                     let mut pending = pending_provider_registrations.lock().await;
                                                     pending.insert(metadata.merkle_root.clone());
                                                 }
                                                 let _ = event_tx
                                                     .send(DhtEvent::Warning(format!(
-                                                        "Not registering {} as provider: no dialable address (enable AutoRelay or set CHIRAL_PUBLIC_IP)",
+                                                        "Not registering {} as provider: no dialable address (set CHIRAL_PUBLIC_IP or enable UPnP)",
                                                         metadata.merkle_root
                                                     )))
                                                     .await;
@@ -2050,12 +1788,6 @@ async fn run_dht_node(
                                             }
                                         }
                                     }
-                                    Some(DhtCommand::DiscoverRelays { sender }) => {
-                                        let relay_key = kad::RecordKey::new(&b"chiral:service:relay");
-                                        let query_id = swarm.behaviour_mut().kademlia.get_providers(relay_key);
-                                        pending_relay_discoveries.lock().await.insert(query_id, sender);
-                                        info!("🔍 Started discovery for relay services (QueryId: {:?})", query_id);
-                                    }
                                     Some(DhtCommand::ConnectPeer(addr)) => {
                                         info!("Attempting to connect to: {}", addr);
                                         if let Ok(multiaddr) = addr.parse::<Multiaddr>() {
@@ -2077,184 +1809,9 @@ async fn run_dht_node(
                                                     }
                                                 });
 
-                                                // If private IP detected, try relay connection via any relay-capable peer
-                                                if has_private_ip {
-                                                    info!("🔍 Detected private IP address in {}", multiaddr);
-
-                                                    // Get list of relay-capable peers we've discovered
-                                                    let relay_peers = relay_capable_peers.lock().await;
-
-                                                    if !relay_peers.is_empty() {
-                                                        info!("🔄 Found {} relay-capable peers, attempting relay connection", relay_peers.len());
-
-                                                        // Try to use the first available relay-capable peer
-                                                        // Clone the data we need before dropping the lock
-                                                        let relay_option = relay_peers.iter().next().map(|(id, addrs)| {
-                                                            (*id, addrs.first().cloned())
-                                                        });
-
-                                                        drop(relay_peers); // Release lock before dialing
-
-                                                        if let Some((relay_peer_id, Some(relay_addr))) = relay_option {
-                                                            info!("📡 Attempting to connect to {} via relay peer {}", peer_id, relay_peer_id);
-
-                                                            // Build proper circuit relay address
-                                                            // Format: /ip4/{relay_ip}/tcp/{relay_port}/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}
-                                                            let mut circuit_addr = relay_addr.clone();
-
-                                                            // Ensure the relay address includes the relay peer ID
-                                                            if !circuit_addr.iter().any(|p| matches!(p, Protocol::P2p(_))) {
-                                                                circuit_addr.push(Protocol::P2p(relay_peer_id));
-                                                            }
-
-                                                            circuit_addr.push(Protocol::P2pCircuit);
-                                                            circuit_addr.push(Protocol::P2p(peer_id));
-
-                                                            info!("  Using relay circuit address: {}", circuit_addr);
-
-                                                            match swarm.dial(circuit_addr.clone()) {
-                                                                Ok(_) => {
-                                                                    info!("✓ Relay connection requested successfully");
-                                                                    let _ = event_tx.send(DhtEvent::Info(format!(
-                                                                        "Connecting to private network peer {} via relay {}", peer_id, relay_peer_id
-                                                                    ))).await;
-                                                                    continue; // Skip direct dial, use relay only
-                                                                }
-                                                                Err(e) => {
-                                                                    warn!("Relay connection failed: {}, falling back to direct dial", e);
-                                                                    // Fall through to direct dial attempt
-                                                                }
-                                                            }
-                                                        }
-                                                    } else {
-                                                        drop(relay_peers); // Release lock
-                                                        info!("⚠️ No relay-capable peers discovered yet. Trying direct connection.");
-                                                        info!("   Tip: Enable 'Relay Server' in Settings to help others connect!");
-                                                    }
-                                                }
                                                 {
                                                     let mut mgr = proxy_mgr.lock().await;
                                                     mgr.set_target(peer_id.clone());
-                                                    let use_proxy_routing = mgr.is_privacy_routing_enabled();
-
-                                                    if use_proxy_routing {
-                                                        if let Some(proxy_peer_id) = mgr.select_proxy_for_routing(&peer_id) {
-                                                            drop(mgr);
-
-                                                            info!(
-                                                                "Using privacy routing through proxy {} to reach {}",
-                                                                proxy_peer_id, peer_id
-                                                            );
-
-                                                            let circuit_addr =
-                                                                create_circuit_relay_address_robust(&proxy_peer_id, &peer_id);
-                                                            info!(
-                                                                "Attempting circuit relay connection via {} to {}",
-                                                                proxy_peer_id, peer_id
-                                                            );
-
-                                                            match swarm.dial(circuit_addr.clone()) {
-                                                                Ok(_) => {
-                                                                    info!(
-                                                                        "Requested circuit relay connection to {} via proxy {}",
-                                                                        peer_id, proxy_peer_id
-                                                                    );
-                                                                    continue;
-                                                                }
-                                                                Err(e) => {
-                                                                    error!(
-                                                                        "Failed to dial via circuit relay {}: {}",
-                                                                        circuit_addr, e
-                                                                    );
-                                                                    let _ = event_tx
-                                                                        .send(DhtEvent::Error(format!(
-                                                                            "Circuit relay failed: {}",
-                                                                            e
-                                                                        )))
-                                                                        .await;
-                                                                    if {
-                                                                        let mgr = proxy_mgr.lock().await;
-                                                                        mgr.privacy_mode() == PrivacyMode::Strict
-                                                                    } {
-                                                                        {
-                                                                            let mut mgr = proxy_mgr.lock().await;
-                                                                            mgr.clear_target(&peer_id);
-                                                                        }
-                                                                        continue;
-                                                                    }
-                                                                }
-                                                            }
-                                                        } else {
-                                                            drop(mgr);
-                                                            warn!(
-                                                                "No suitable proxy available for privacy routing to {}",
-                                                                peer_id
-                                                            );
-                                                            let _ = event_tx
-                                                                .send(DhtEvent::Error(format!(
-                                                                    "No trusted proxy available to reach {}",
-                                                                    peer_id
-                                                                )))
-                                                                .await;
-                                                            if {
-                                                                let mgr = proxy_mgr.lock().await;
-                                                                mgr.privacy_mode() == PrivacyMode::Strict
-                                                            } {
-                                                                {
-                                                                    let mut mgr = proxy_mgr.lock().await;
-                                                                    mgr.clear_target(&peer_id);
-                                                                }
-                                                                continue;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                let should_request = {
-                                                    let mut mgr = proxy_mgr.lock().await;
-                                                    let should_request = !mgr.has_relay_request(&peer_id);
-                                                    if should_request {
-                                                        mgr.mark_relay_pending(peer_id.clone());
-                                                    }
-                                                    should_request
-                                                };
-                                                // boostraps should be public IPs, so they should not advertise themselves using relay.
-                                                if !is_bootstrap & should_request {
-                                                    if let Some(relay_addr) = build_relay_listen_addr(&multiaddr) {
-                                                        match swarm.listen_on(relay_addr.clone()) {
-                                                            Ok(_) => {
-                                                                info!("Requested relay reservation via {}", relay_addr);
-                                                                let _ = event_tx
-                                                                    .send(DhtEvent::ProxyStatus {
-                                                                        id: peer_id.to_string(),
-                                                                        address: relay_addr.to_string(),
-                                                                        status: "relay_pending".into(),
-                                                                        latency_ms: None,
-                                                                        error: None,
-                                                                    })
-                                                                    .await;
-                                                            }
-                                                            Err(err) => {
-                                                                warn!(
-                                                                    "Failed to request relay reservation via {}: {}",
-                                                                    relay_addr, err
-                                                                );
-                                                                let mut mgr = proxy_mgr.lock().await;
-                                                                mgr.relay_pending.remove(&peer_id);
-                                                                let _ = event_tx
-                                                                    .send(DhtEvent::ProxyStatus {
-                                                                        id: peer_id.to_string(),
-                                                                        address: relay_addr.to_string(),
-                                                                        status: "relay_error".into(),
-                                                                        latency_ms: None,
-                                                                        error: Some(err.to_string()),
-                                                                    })
-                                                                    .await;
-                                                            }
-                                                        }
-                                                    } else {
-                                                        warn!("Cannot derive relay listen address from {}", multiaddr);
-                                                    }
                                                 }
 
                                                 match swarm.dial(multiaddr.clone()) {
@@ -2545,7 +2102,6 @@ async fn run_dht_node(
                                             &file_metadata_cache,
                                             &pending_dht_queries,
                                             &pending_search_queries,
-                                            &pending_relay_discoveries,
                                         )
                                         .await;
                                     }
@@ -2555,11 +2111,8 @@ async fn run_dht_node(
                                             &mut swarm,
                                             &event_tx,
                                             metrics.clone(),
-                                            enable_autorelay,
-                                            &relay_candidates,
                                             &proxy_mgr,
                                             &peer_selection,
-                                            relay_capable_peers.clone(),
                                             &peer_id,
                                         )
                                         .await;
@@ -2567,201 +2120,6 @@ async fn run_dht_node(
                                     SwarmEvent::Behaviour(DhtBehaviourEvent::Mdns(mdns_event)) if !is_bootstrap => {
                                         if !is_bootstrap{
                                             handle_mdns_event(mdns_event, &mut swarm, &event_tx, &peer_id).await;
-                                        }
-                                    }
-                                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(relay_event)) if !is_bootstrap => {
-                                        match relay_event {
-                                            RelayClientEvent::ReservationReqAccepted { relay_peer_id, .. } => {
-                                                info!("✅ Relay reservation accepted from {}", relay_peer_id);
-                                                let mut mgr = proxy_mgr.lock().await;
-                                                let newly_ready = mgr.mark_relay_ready(relay_peer_id);
-                                                drop(mgr);
-
-                                                // Update AutoRelay metrics
-                                                {
-                                                    let mut m = metrics.lock().await;
-                                                    m.active_relay_peer_id = Some(relay_peer_id.to_string());
-                                                    m.relay_reservation_status = Some("accepted".to_string());
-                                                    m.last_reservation_success = Some(SystemTime::now());
-                                                    m.reservation_renewals += 1;
-                                                }
-
-                                                if newly_ready {
-                                                    let _ = event_tx
-                                                        .send(DhtEvent::ProxyStatus {
-                                                            id: relay_peer_id.to_string(),
-                                                            address: String::new(),
-                                                            status: "relay_ready".into(),
-                                                            latency_ms: None,
-                                                            error: None,
-                                                        })
-                                                        .await;
-                                                    let _ = event_tx
-                                                        .send(DhtEvent::Info(format!(
-                                                            "Connected to relay: {}",
-                                                            relay_peer_id
-                                                        )))
-                                                        .await;
-                                                }
-                                            }
-                                            RelayClientEvent::OutboundCircuitEstablished { relay_peer_id, .. } => {
-                                                info!("🔗 Outbound relay circuit established via {}", relay_peer_id);
-                                                proxy_mgr.lock().await.set_online(relay_peer_id);
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ProxyStatus {
-                                                        id: relay_peer_id.to_string(),
-                                                        address: String::new(),
-                                                        status: "relay_circuit".into(),
-                                                        latency_ms: None,
-                                                        error: None,
-                                                    })
-                                                    .await;
-                                            }
-                                            RelayClientEvent::InboundCircuitEstablished { src_peer_id, .. } => {
-                                                info!("📥 Inbound relay circuit established from {}", src_peer_id);
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ProxyStatus {
-                                                        id: src_peer_id.to_string(),
-                                                        address: String::new(),
-                                                        status: "relay_inbound".into(),
-                                                        latency_ms: None,
-                                                        error: None,
-                                                    })
-                                                    .await;
-                                            }
-                                        }
-                                    }
-                                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayServer(relay_server_event)) if !is_bootstrap => {
-                                        use relay::Event as RelayEvent;
-                                        match relay_server_event {
-                                            RelayEvent::ReservationReqAccepted { src_peer_id, .. } => {
-                                                info!("🔁 Relay server: Accepted reservation from {}", src_peer_id);
-                                                let _ = event_tx
-                                                    .send(DhtEvent::Info(format!(
-                                                        "Acting as relay for peer {}",
-                                                        src_peer_id
-                                                    )))
-                                                    .await;
-
-                                                // Emit reputation event
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ReputationEvent {
-                                                        peer_id: src_peer_id.to_string(),
-                                                        event_type: "RelayReservationAccepted".to_string(),
-                                                        impact: 5.0,
-                                                        data: serde_json::json!({
-                                                            "timestamp": SystemTime::now()
-                                                                .duration_since(UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_secs(),
-                                                        }),
-                                                    })
-                                                    .await;
-                                            }
-                                            RelayEvent::ReservationReqDenied { src_peer_id, .. } => {
-                                                debug!("🔁 Relay server: Denied reservation from {}", src_peer_id);
-
-                                                // Emit reputation event
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ReputationEvent {
-                                                        peer_id: src_peer_id.to_string(),
-                                                        event_type: "RelayRefused".to_string(),
-                                                        impact: -2.0,
-                                                        data: serde_json::json!({
-                                                            "reason": "reservation_denied",
-                                                            "timestamp": SystemTime::now()
-                                                                .duration_since(UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_secs(),
-                                                        }),
-                                                    })
-                                                    .await;
-                                            }
-                                            RelayEvent::ReservationTimedOut { src_peer_id } => {
-                                                debug!("🔁 Relay server: Reservation timed out for {}", src_peer_id);
-
-                                                // Emit reputation event
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ReputationEvent {
-                                                        peer_id: src_peer_id.to_string(),
-                                                        event_type: "RelayTimeout".to_string(),
-                                                        impact: -10.0,
-                                                        data: serde_json::json!({
-                                                            "reason": "reservation_timeout",
-                                                            "timestamp": SystemTime::now()
-                                                                .duration_since(UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_secs(),
-                                                        }),
-                                                    })
-                                                    .await;
-                                            }
-                                            RelayEvent::CircuitReqDenied { src_peer_id, dst_peer_id, .. } => {
-                                                debug!("🔁 Relay server: Denied circuit from {} to {}", src_peer_id, dst_peer_id);
-
-                                                // Emit reputation event
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ReputationEvent {
-                                                        peer_id: src_peer_id.to_string(),
-                                                        event_type: "RelayRefused".to_string(),
-                                                        impact: -2.0,
-                                                        data: serde_json::json!({
-                                                            "reason": "circuit_denied",
-                                                            "dst_peer_id": dst_peer_id.to_string(),
-                                                            "timestamp": SystemTime::now()
-                                                                .duration_since(UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_secs(),
-                                                        }),
-                                                    })
-                                                    .await;
-                                            }
-                                            RelayEvent::CircuitReqAccepted { src_peer_id, dst_peer_id, .. } => {
-                                                info!("🔁 Relay server: Established circuit from {} to {}", src_peer_id, dst_peer_id);
-                                                let _ = event_tx
-                                                    .send(DhtEvent::Info(format!(
-                                                        "Relaying traffic from {} to {}",
-                                                        src_peer_id, dst_peer_id
-                                                    )))
-                                                    .await;
-
-                                                // Emit reputation event
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ReputationEvent {
-                                                        peer_id: src_peer_id.to_string(),
-                                                        event_type: "RelayCircuitEstablished".to_string(),
-                                                        impact: 10.0,
-                                                        data: serde_json::json!({
-                                                            "dst_peer_id": dst_peer_id.to_string(),
-                                                            "timestamp": SystemTime::now()
-                                                                .duration_since(UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_secs(),
-                                                        }),
-                                                    })
-                                                    .await;
-                                            }
-                                            RelayEvent::CircuitClosed { src_peer_id, dst_peer_id, .. } => {
-                                                debug!("🔁 Relay server: Circuit closed between {} and {}", src_peer_id, dst_peer_id);
-
-                                                // Emit reputation event
-                                                let _ = event_tx
-                                                    .send(DhtEvent::ReputationEvent {
-                                                        peer_id: src_peer_id.to_string(),
-                                                        event_type: "RelayCircuitSuccessful".to_string(),
-                                                        impact: 15.0,
-                                                        data: serde_json::json!({
-                                                            "dst_peer_id": dst_peer_id.to_string(),
-                                                            "timestamp": SystemTime::now()
-                                                                .duration_since(UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_secs(),
-                                                        }),
-                                                    })
-                                                    .await;
-                                            }
-                                            // Handle deprecated relay events (libp2p handles logging internally)
-                                            _ => {}
                                         }
                                     }
                                     // Bitswap handler is enabled in E2E runs (or when CHIRAL_ENABLE_BITSWAP is set).
@@ -3186,9 +2544,6 @@ async fn run_dht_node(
                                     SwarmEvent::Behaviour(DhtBehaviourEvent::AutonatServer(ev)) if !is_bootstrap => {
                                         debug!(?ev, "AutoNAT server event");
                                     }
-                                    SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(ev)) if !is_bootstrap => {
-                                        handle_dcutr_event(ev, &metrics, &event_tx).await;
-                                    }
                                     SwarmEvent::Behaviour(DhtBehaviourEvent::Upnp(upnp_event)) => {
                                         handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
                                     }
@@ -3202,7 +2557,6 @@ async fn run_dht_node(
                                     }
                                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, .. } => {
                                         let remote_addr = endpoint.get_remote_address().clone();
-                                        let is_relay = remote_addr.iter().any(|p| matches!(p, Protocol::P2pCircuit));
 
                                         // Initialize peer metrics for smart selection
                                         {
@@ -3229,13 +2583,7 @@ async fn run_dht_node(
                                             m.last_success = Some(SystemTime::now());
                                         }
 
-                                        // Log connection type for diagnostics
-                                        if is_relay {
-                                            info!("✅ Connected to {} via relay (connection #{})", peer_id, num_established);
-                                            debug!("   Relay address: {}", remote_addr);
-                                        } else {
-                                            info!("✅ Connected to {} via direct connection (connection #{})", peer_id, num_established);
-                                        }
+                                        info!("✅ Connected to {} (connection #{})", peer_id, num_established);
                                         info!("   Total connected peers: {}", peers_count);
 
                                         let _ = event_tx
@@ -3283,15 +2631,8 @@ async fn run_dht_node(
                                                     m.record_listen_addr(&address);
                                                 }
 
-                                                // Only advertise if it doesn't contain nested relay circuits
-                                                let circuit_count = address.iter().filter(|p| matches!(p, Protocol::P2pCircuit)).count();
-
-                                                if circuit_count <= 1 {
-                                                    swarm.add_external_address(address.clone());
-                                                    info!("✅ Advertising reachable address: {}", address);
-                                                } else {
-                                                    debug!("Skipping nested relay circuit address: {}", address);
-                                                }
+                                                swarm.add_external_address(address.clone());
+                                                info!("✅ Advertising reachable address: {}", address);
                                             }
                                         }
                                     }
@@ -3304,56 +2645,6 @@ async fn run_dht_node(
                                         if let Some(pid) = peer_id {
                                             let is_bootstrap = bootstrap_peer_ids.contains(&pid);
                                             let error_str = error.to_string();
-
-                                            // Check if this is a NAT/connection refused error that could benefit from relay
-                                            let should_try_relay = !is_bootstrap &&
-                                                (error_str.contains("Connection refused") ||
-                                                 error_str.contains("Timeout") ||
-                                                 error_str.contains("unreachable"));
-
-                                            // Try relay connection as fallback for NAT traversal
-                                            if should_try_relay {
-                                                let relay_peers_guard = relay_capable_peers.lock().await;
-                                                if !relay_peers_guard.is_empty() {
-                                                    // Get the first available relay
-                                                    if let Some((relay_peer_id, addrs)) = relay_peers_guard.iter().next() {
-                                                        if let Some(relay_addr) = addrs.first() {
-                                                            let relay_id = *relay_peer_id;
-                                                            let relay_address = relay_addr.clone();
-                                                            drop(relay_peers_guard);
-
-                                                            info!("📡 Direct connection to {} failed, attempting relay via {}", pid, relay_id);
-
-                                                            // Build circuit relay address
-                                                            let mut circuit_addr = relay_address;
-                                                            if !circuit_addr.iter().any(|p| matches!(p, Protocol::P2p(_))) {
-                                                                circuit_addr.push(Protocol::P2p(relay_id));
-                                                            }
-                                                            circuit_addr.push(Protocol::P2pCircuit);
-                                                            circuit_addr.push(Protocol::P2p(pid));
-
-                                                            match swarm.dial(circuit_addr.clone()) {
-                                                                Ok(_) => {
-                                                                    info!("✅ Relay connection initiated to {} via {}", pid, relay_id);
-                                                                    let _ = event_tx.send(DhtEvent::Info(format!(
-                                                                        "Trying relay connection to {} via {}", pid, relay_id
-                                                                    ))).await;
-                                                                }
-                                                                Err(e) => {
-                                                                    warn!("❌ Relay connection also failed: {}", e);
-                                                                }
-                                                            }
-                                                        } else {
-                                                            drop(relay_peers_guard);
-                                                        }
-                                                    } else {
-                                                        drop(relay_peers_guard);
-                                                    }
-                                                } else {
-                                                    drop(relay_peers_guard);
-                                                    info!("⚠️ No relay peers available for NAT traversal to {}", pid);
-                                                }
-                                            }
 
                                             swarm.behaviour_mut().kademlia.remove_peer(&pid);
                                             // Only log error for addresses that should be reachable
@@ -3661,24 +2952,12 @@ async fn run_dht_node(
                                         }
                                     }
                                     SwarmEvent::ListenerClosed { reason, .. } if !is_bootstrap => {
-                                        if !is_bootstrap{
                                         if reason.is_ok() {
                                             trace!("ListenerClosed Ok; ignoring");
                                         } else {
                                             let s = format!("{:?}", reason);
-                                            if let Some(pid) = last_tried_relay.take() {
-                                                match classify_err_str(&s) {
-                                                    RelayErrClass::Permanent => {
-                                                        relay_blacklist.insert(pid);
-                                                        warn!("🧱 {} marked permanent (unsupported/denied)", pid);
-                                                    }
-                                                    RelayErrClass::Transient => {
-                                                        relay_cooldown.insert(pid, Instant::now() + Duration::from_secs(600));
-                                                        warn!("⏳ {} cooldown 10m (transient failure): {}", pid, s);
-                                                    }
-                                                }
-                                            }
-                                        }}
+                                            warn!("Listener closed with error: {}", s);
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -3871,28 +3150,6 @@ fn addr_to_socket_addr(addr: &libp2p::Multiaddr) -> Option<SocketAddr> {
     }
 }
 
-pub fn build_relay_listen_addr(base: &Multiaddr) -> Option<Multiaddr> {
-    let mut out = base.clone();
-    let has_p2p = out.iter().any(|p| matches!(p, Protocol::P2p(_)));
-    if !has_p2p {
-        return None;
-    }
-    out.push(Protocol::P2pCircuit);
-    Some(out)
-}
-
-fn is_relay_candidate(peer_id: &PeerId, relay_candidates: &HashSet<String>) -> bool {
-    if relay_candidates.is_empty() {
-        return false;
-    }
-
-    let peer_str = peer_id.to_string();
-    relay_candidates.iter().any(|candidate| {
-        // Check if the candidate multiaddr contains this peer ID
-        candidate.contains(&peer_str)
-    })
-}
-
 fn peer_id_from_multiaddr_str(s: &str) -> Option<PeerId> {
     if let Ok(ma) = s.parse::<Multiaddr>() {
         let mut last_p2p: Option<PeerId> = None;
@@ -3908,101 +3165,6 @@ fn peer_id_from_multiaddr_str(s: &str) -> Option<PeerId> {
 
     if let Ok(pid) = s.parse::<PeerId>() {
         return Some(pid);
-    }
-    None
-}
-
-fn should_try_relay(
-    pid: &PeerId,
-    relay_candidates: &HashSet<String>,
-    blacklist: &HashSet<PeerId>,
-    cooldown: &HashMap<PeerId, Instant>,
-) -> bool {
-    // 1) Check if the peer ID is in the preferred/bootstrap candidates
-    if relay_candidates.is_empty() {
-        return false;
-    }
-    let peer_str = pid.to_string();
-    let in_candidates = relay_candidates.iter().any(|cand| cand.contains(&peer_str));
-    if !in_candidates {
-        return false;
-    }
-    // 2) Check permanent blacklist
-    if blacklist.contains(pid) {
-        tracing::debug!("skip blacklisted relay candidate {}", pid);
-        return false;
-    }
-    // 3) Check cooldown
-    if let Some(until) = cooldown.get(pid) {
-        if Instant::now() < *until {
-            tracing::debug!("skip cooldown relay candidate {} until {:?}", pid, until);
-            return false;
-        }
-    }
-    true
-}
-
-/// candidates(HashSet<String>) → (PeerId, Multiaddr)
-fn filter_relay_candidates(
-    relay_candidates: &HashSet<String>,
-    blacklist: &HashSet<PeerId>,
-    cooldown: &HashMap<PeerId, Instant>,
-) -> Vec<(PeerId, Multiaddr)> {
-    let now = Instant::now();
-    let mut out = Vec::new();
-    for cand in relay_candidates {
-        if let Ok(ma) = cand.parse::<Multiaddr>() {
-            // Skip unreachable addresses (localhost/private IPs)
-            if !ma_plausibly_reachable(&ma) {
-                tracing::debug!("Skipping unreachable relay candidate: {}", ma);
-                continue;
-            }
-
-            // PeerId extraction
-            let mut pid_opt: Option<PeerId> = None;
-            for p in ma.iter() {
-                if let Protocol::P2p(mh) = p {
-                    if let Ok(pid) = PeerId::from_multihash(mh.into()) {
-                        pid_opt = Some(pid);
-                    }
-                }
-            }
-            if let Some(pid) = pid_opt {
-                if !blacklist.contains(&pid) {
-                    if let Some(until) = cooldown.get(&pid) {
-                        if Instant::now() < *until {
-                            tracing::debug!(
-                                "skip cooldown relay candidate {} until {:?}",
-                                pid,
-                                until
-                            );
-                            continue;
-                        }
-                    }
-                    out.push((pid, ma.clone()));
-                } else {
-                    tracing::debug!("skip blacklisted relay candidate {}", pid);
-                }
-            }
-        }
-    }
-    out
-}
-
-fn extract_relay_peer(address: &Multiaddr) -> Option<PeerId> {
-    use libp2p::multiaddr::Protocol;
-
-    let mut last_p2p: Option<PeerId> = None;
-    for protocol in address.iter() {
-        match protocol {
-            Protocol::P2p(peer_id) => {
-                last_p2p = Some(peer_id.clone());
-            }
-            Protocol::P2pCircuit => {
-                return last_p2p.clone();
-            }
-            _ => {}
-        }
     }
     None
 }
@@ -4048,9 +3210,6 @@ async fn handle_kademlia_event(
         Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Option<Vec<u8>>, String>>>>,
     >,
     pending_search_queries: &Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>>,
-    pending_relay_discoveries: &Arc<
-        Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Vec<String>, String>>>>,
-    >,
 ) {
     match event {
         KademliaEvent::RoutingUpdated { peer, .. } => {
@@ -4602,47 +3761,6 @@ async fn handle_kademlia_event(
                     match process_result {
                         Ok(kad::GetProvidersOk::FoundProviders { key, providers }) => {
                             info!("The array is: {:?}", providers);
-                            // Check if this is a relay discovery query
-                            let mut pending_relays = pending_relay_discoveries.lock().await;
-                            if let Some(sender) = pending_relays.remove(&id) {
-                                // Clone providers before consuming them
-                                let providers_clone: Vec<PeerId> =
-                                    providers.iter().cloned().collect();
-                                let peers: Vec<String> =
-                                    providers_clone.iter().map(|p| p.to_string()).collect();
-                                info!("✅ Discovered {} relay service providers", peers.len());
-
-                                // Log discovered relay providers
-                                for provider_peer_id in &providers_clone {
-                                    info!("📡 Discovered relay provider: {}", provider_peer_id);
-                                    // Try to find the peer in the routing table to get their addresses
-                                    // This helps the relay client discover addresses for these providers
-                                    swarm
-                                        .behaviour_mut()
-                                        .kademlia
-                                        .get_closest_peers(*provider_peer_id);
-                                }
-
-                                let _ = sender.send(Ok(peers));
-                                return;
-                            }
-
-                            // Handle periodic relay discovery (no sender - just log and use)
-                            // Check if this is a periodic discovery by checking if the key matches relay service key
-                            let key_bytes = key.as_ref();
-                            if key_bytes == b"chiral:service:relay" {
-                                info!("✅ Discovered {} relay service providers via periodic discovery", providers.len());
-                                for provider_peer_id in &providers {
-                                    info!("📡 Discovered relay provider: {} (will be used automatically)", provider_peer_id);
-                                    // Try to find the peer to get their addresses
-                                    swarm
-                                        .behaviour_mut()
-                                        .kademlia
-                                        .get_closest_peers(*provider_peer_id);
-                                }
-                                // Continue processing - don't return early for periodic discoveries
-                            }
-                            drop(pending_relays);
 
                             let file_hash = String::from_utf8_lossy(key.as_ref()).to_string();
 
@@ -4686,15 +3804,6 @@ async fn handle_kademlia_event(
                             }
                         }
                         Ok(kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. }) => {
-                            // Check if this is a relay discovery query
-                            let mut pending_relays = pending_relay_discoveries.lock().await;
-                            if let Some(sender) = pending_relays.remove(&id) {
-                                info!("⚠️ No relay service providers found");
-                                let _ = sender.send(Ok(Vec::new()));
-                                return;
-                            }
-                            drop(pending_relays);
-
                             // Check if we have a pending query for this ID to get the file hash
                             let mut queries = get_providers_queries.lock().await;
                             if let Some((file_hash, _)) = queries.remove(&id) {
@@ -4772,11 +3881,8 @@ async fn handle_identify_event(
     swarm: &mut Swarm<DhtBehaviour>,
     event_tx: &mpsc::Sender<DhtEvent>,
     metrics: Arc<Mutex<DhtMetrics>>,
-    enable_autorelay: bool,
-    relay_candidates: &HashSet<String>,
     proxy_mgr: &ProxyMgr,
     peer_selection: &Arc<Mutex<PeerSelectionService>>,
-    relay_capable_peers: Arc<Mutex<HashMap<PeerId, Vec<Multiaddr>>>>,
     local_peer_id: &PeerId,
 ) {
     match event {
@@ -4796,7 +3902,6 @@ async fn handle_identify_event(
                 for addr in info.listen_addrs.clone() {
                     // Filter out loopback and private addresses (like Docker 172.17.x.x IPs)
                     // Only add addresses that are plausibly reachable from the internet
-                    // or are relay circuit addresses
                     if ma_plausibly_reachable(&addr) {
                         swarm.behaviour_mut().kademlia.add_address(&peer_id, addr);
                         added_reachable = true;
@@ -4808,7 +3913,7 @@ async fn handle_identify_event(
                     }
                 }
 
-                // If nothing was added (no public/relay addrs), keep a single non-loopback
+                // If nothing was added (no public addrs), keep a single non-loopback
                 // address as a fallback to avoid ending up with an empty address set.
                 if !added_reachable {
                     if let Some(fallback) = info
@@ -4833,136 +3938,6 @@ async fn handle_identify_event(
                 return;
             }
 
-            let hop_proto = "/libp2p/circuit/relay/0.2.0/hop";
-            let supports_relay = info
-                .protocols
-                .clone()
-                .iter()
-                .any(|p| p.as_ref() == hop_proto);
-
-            if supports_relay {
-                // Store this peer as relay-capable with its listen addresses
-                let reachable_addrs: Vec<Multiaddr> = info
-                    .listen_addrs
-                    .iter()
-                    .filter(|addr| ma_plausibly_reachable(addr))
-                    .cloned()
-                    .collect();
-
-                // Store supported protocols in PeerMetrics
-                {
-                    let mut metrics = {
-                        let selection = peer_selection.lock().await;
-                        selection.get_peer_metrics(&peer_id.to_string()).cloned()
-                    }
-                    .unwrap_or_else(|| PeerMetrics::new(peer_id.to_string(), "".to_string()));
-
-                    metrics.protocols = info.protocols.iter().map(|p| p.to_string()).collect();
-                    peer_selection.lock().await.update_peer_metrics(metrics);
-                }
-
-                // randomly pick a relay address to avoid stressing a single relay
-                let mut indices: Vec<usize> = (0..reachable_addrs.len()).collect();
-                indices.shuffle(&mut rand::thread_rng());
-
-                let mut success = false;
-
-                for i in indices {
-                    let addr = &reachable_addrs[i];
-
-                    // Only process base addresses (no circuit relay protocols)
-                    // This prevents nested relay circuits
-                    if addr.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
-                        debug!(
-                            "Skipping relay address that already contains p2p-circuit: {}",
-                            addr
-                        );
-                        continue;
-                    }
-
-                    let relay_addr = addr
-                        .clone()
-                        .with(Protocol::P2p(peer_id))
-                        .with(Protocol::P2pCircuit);
-
-                    match swarm.listen_on(relay_addr.clone()) {
-                        Ok(_) => {
-                            info!("Success: Listening on relay address {}: {}", i + 1, addr);
-
-                            // Don't manually advertise here - NewListenAddr event will handle it
-                            // This prevents creating nested relay circuits
-                            // libp2p will emit NewListenAddr with the complete circuit address
-
-                            success = true;
-                            break; // Exit the loop immediately on success
-                        }
-                        Err(e) => {
-                            // Log the failure but continue to the next iteration
-                            info!("Failed relay address {} ({}): {}", i + 1, addr, e);
-                        }
-                    }
-                }
-
-                if !success {
-                    info!(
-                        "Could not listen on any addresses for relay peer {}",
-                        peer_id
-                    );
-                }
-            }
-
-            // let listen_addrs = info.listen_addrs.clone();
-
-            // // identify::Event::Received { peer_id, info, .. } => { ... }
-            // // Only log and process reachable addresses (filters out localhost/private IPs)
-            // for addr in info.listen_addrs.iter() {
-            //     // if ma_plausibly_reachable(addr) {
-            //     info!("  📍 Peer {} listen addr: {}", peer_id, addr);
-            //     swarm
-            //         .behaviour_mut()
-            //         .kademlia
-            //         .add_address(&peer_id, addr.clone());
-            //     // } else {
-            //     //     debug!(
-            //     //         "⏭️ Ignoring unreachable listen addr from {}: {}",
-            //     //         peer_id, addr
-            //     //     );
-            //     // }
-
-            //     // Relay Setting: from candidate's "public base", create /p2p-circuit
-            //     if enable_autorelay && is_relay_candidate(&peer_id, relay_candidates) {
-            //         if let Some(base_str) = relay_candidates
-            //             .iter()
-            //             .find(|s| s.contains(&peer_id.to_string()))
-            //         {
-            //             if let Ok(base) = base_str.parse::<Multiaddr>() {
-            //                 // Skip unreachable relay addresses (localhost/private IPs)
-            //                 if !ma_plausibly_reachable(&base) {
-            //                     debug!("⏭️  Skipping unreachable relay base address: {}", base);
-            //                 } else if let Some(relay_addr) = build_relay_listen_addr(&base) {
-            //                     info!(
-            //                         "📡 Attempting to listen via relay {} at {}",
-            //                         peer_id, relay_addr
-            //                     );
-            //                     if let Err(e) = swarm.listen_on(relay_addr.clone()) {
-            //                         warn!(
-            //                             "Failed to listen on relay address {}: {}",
-            //                             relay_addr, e
-            //                         );
-            //                     } else {
-            //                         info!("📡 Attempting to listen via relay peer {}", peer_id);
-            //                     }
-            //                 } else {
-            //                     debug!("⚠️ Could not derive relay listen addr from base: {}", base);
-            //                 }
-            //             } else {
-            //                 debug!("⚠️ Invalid relay base multiaddr: {}", base_str);
-            //             }
-            //         } else {
-            //             debug!("⚠️ No relay base in preferred_relays for {}", peer_id);
-            //         }
-            //     }
-            // }
         }
         IdentifyEvent::Pushed { peer_id, info, .. } => {}
         IdentifyEvent::Sent { peer_id, .. } => {
@@ -5073,16 +4048,6 @@ async fn handle_autonat_client_event(
                 "AutoNAT probe succeeded"
             );
 
-            // If we are public, and we have the relay server enabled (even if standby), advertise it!
-            if let Some(_) = swarm.behaviour().relay_server.as_ref() {
-                let relay_key = kad::RecordKey::new(b"chiral:service:relay");
-                if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(relay_key) {
-                    warn!("Failed to advertise relay service: {}", e);
-                } else {
-                    info!("✅ Started providing relay service in DHT (Public IP confirmed)");
-                }
-            }
-
             (
                 NatReachabilityState::Public,
                 Some(format!(
@@ -5115,32 +4080,6 @@ async fn handle_autonat_client_event(
     let was_public = metrics_guard.reachability_state == NatReachabilityState::Public;
     drop(metrics_guard);
 
-    // If we just became public and have relay server enabled, advertise it in DHT
-    if state == NatReachabilityState::Public && !was_public {
-        // Check if relay server is enabled (even if in standby mode)
-        if swarm.behaviour_mut().relay_server.as_ref().is_some() {
-            let relay_key = kad::RecordKey::new(b"chiral:service:relay");
-            match swarm.behaviour_mut().kademlia.start_providing(relay_key) {
-                Ok(query_id) => {
-                    info!(
-                        "✅ Enabled relay server behavior due to public IP detection (query_id: {:?})",
-                        query_id
-                    );
-                    info!("📡 Started providing relay service in DHT");
-                    let _ = event_tx
-                        .send(DhtEvent::Info(
-                            "Relay server enabled and advertised in DHT due to public IP detection"
-                                .to_string(),
-                        ))
-                        .await;
-                }
-                Err(e) => {
-                    warn!("Failed to advertise relay service in DHT: {}", e);
-                }
-            }
-        }
-    }
-
     let _ = event_tx
         .send(DhtEvent::NatStatus {
             state: nat_state,
@@ -5149,92 +4088,6 @@ async fn handle_autonat_client_event(
             summary,
         })
         .await;
-}
-
-async fn handle_dcutr_event(
-    event: dcutr::Event,
-    metrics: &Arc<Mutex<DhtMetrics>>,
-    event_tx: &mpsc::Sender<DhtEvent>,
-) {
-    let mut metrics_guard = metrics.lock().await;
-    // if !metrics_guard.dcutr_enabled {
-    //     return;
-    // }
-
-    let dcutr::Event {
-        remote_peer_id,
-        result,
-    } = event;
-
-    metrics_guard.dcutr_hole_punch_attempts += 1;
-
-    match result {
-        Ok(_connection_id) => {
-            metrics_guard.dcutr_hole_punch_successes += 1;
-            metrics_guard.last_dcutr_success = Some(SystemTime::now());
-            let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
-                metrics_guard.dcutr_hole_punch_successes as f64
-                    / metrics_guard.dcutr_hole_punch_attempts as f64
-                    * 100.0
-            } else {
-                0.0
-            };
-            info!(
-                peer = %remote_peer_id,
-                successes = metrics_guard.dcutr_hole_punch_successes,
-                attempts = metrics_guard.dcutr_hole_punch_attempts,
-                success_rate = format!("{:.1}%", success_rate),
-                "🎯 DCUtR: hole-punch succeeded, upgraded to direct connection"
-            );
-            drop(metrics_guard);
-            let _ = event_tx
-                .send(DhtEvent::Info(format!(
-                    "✓ Direct connection established with {} via hole-punching",
-                    remote_peer_id
-                )))
-                .await;
-        }
-        Err(error) => {
-            metrics_guard.dcutr_hole_punch_failures += 1;
-            metrics_guard.last_dcutr_failure = Some(SystemTime::now());
-            let success_rate = if metrics_guard.dcutr_hole_punch_attempts > 0 {
-                metrics_guard.dcutr_hole_punch_successes as f64
-                    / metrics_guard.dcutr_hole_punch_attempts as f64
-                    * 100.0
-            } else {
-                0.0
-            };
-            let attempts = metrics_guard.dcutr_hole_punch_attempts;
-            let failures = metrics_guard.dcutr_hole_punch_failures;
-
-            // Only log as warning if this is a repeated failure
-            if failures % 3 == 0 {
-                warn!(
-                    peer = %remote_peer_id,
-                    error = %error,
-                    failures = failures,
-                    success_rate = format!("{:.1}%", success_rate),
-                    "DCUtR: hole-punch failed (will continue using relay)"
-                );
-            } else {
-                debug!(
-                    peer = %remote_peer_id,
-                    error = %error,
-                    "DCUtR: hole-punch attempt failed, using relay fallback"
-                );
-            }
-            drop(metrics_guard);
-            // Don't send UI warning for every failure - relay still works
-            if success_rate < 20.0 && attempts > 10 {
-                let _ = event_tx
-                    .send(DhtEvent::Info(format!(
-                        "Using relay connections (direct upgrade rate: {:.0}%)",
-                        success_rate
-                    )))
-                    .await;
-            }
-        }
-    }
 }
 
 async fn handle_upnp_event(
@@ -5271,11 +4124,9 @@ async fn handle_upnp_event(
             warn!("⚠️  UPnP: No UPnP gateway found on network");
             warn!("    - Make sure your router supports UPnP/IGD");
             warn!("    - Check if UPnP is enabled in router settings");
-            warn!("    - Falling back to relay connections");
-
             let _ = event_tx
                 .send(DhtEvent::Info(
-                    "UPnP not available - using relay for NAT traversal".to_string(),
+                    "UPnP not available on this network".to_string(),
                 ))
                 .await;
         }
@@ -5368,29 +4219,6 @@ async fn handle_external_addr_confirmed(
         );
     }
 
-    // If we have relay server enabled (even if in standby mode), advertise it in DHT
-    if swarm.behaviour_mut().relay_server.as_ref().is_some() {
-        let relay_key = kad::RecordKey::new(b"chiral:service:relay");
-        match swarm.behaviour_mut().kademlia.start_providing(relay_key) {
-            Ok(query_id) => {
-                info!(
-                    "✅ Enabled relay server behavior due to public IP detection (query_id: {:?})",
-                    query_id
-                );
-                info!("📡 Started providing relay service in DHT");
-                let _ = event_tx
-                    .send(DhtEvent::Info(
-                        "Relay server enabled and advertised in DHT due to public IP detection"
-                            .to_string(),
-                    ))
-                    .await;
-            }
-            Err(e) => {
-                warn!("Failed to advertise relay service in DHT: {}", e);
-            }
-        }
-    }
-
     if nat_enabled {
         let _ = event_tx
             .send(DhtEvent::NatStatus {
@@ -5398,31 +4226,6 @@ async fn handle_external_addr_confirmed(
                 confidence,
                 last_error,
                 summary: summary.clone(),
-            })
-            .await;
-    }
-
-    if let Some(relay_peer_id) = extract_relay_peer(addr) {
-        // Update relay metrics to reflect an active (listening) relay external address
-        if let Ok(mut m) = metrics.try_lock() {
-            m.active_relay_peer_id = Some(relay_peer_id.to_string());
-            m.relay_reservation_status = Some("active".to_string());
-        }
-        let mut mgr = proxy_mgr.lock().await;
-        let newly_ready = mgr.mark_relay_ready(relay_peer_id.clone());
-        drop(mgr);
-        let status = if newly_ready {
-            "relay_ready"
-        } else {
-            "relay_address"
-        };
-        let _ = event_tx
-            .send(DhtEvent::ProxyStatus {
-                id: relay_peer_id.to_string(),
-                address: addr.to_string(),
-                status: status.into(),
-                latency_ms: None,
-                error: None,
             })
             .await;
     }
@@ -5464,108 +4267,12 @@ async fn handle_external_addr_expired(
         }
     }
 
-    if let Some(relay_peer_id) = extract_relay_peer(addr) {
-        // Mark relay as expired in metrics
-        if let Ok(mut m) = metrics.try_lock() {
-            m.relay_reservation_status = Some("expired".to_string());
-            m.active_relay_peer_id = None;
-            m.reservation_evictions = m.reservation_evictions.saturating_add(1);
-        }
-        let mut mgr = proxy_mgr.lock().await;
-        mgr.relay_ready.remove(&relay_peer_id);
-        mgr.relay_pending.remove(&relay_peer_id);
-        drop(mgr);
-        let _ = event_tx
-            .send(DhtEvent::ProxyStatus {
-                id: relay_peer_id.to_string(),
-                address: addr.to_string(),
-                status: "relay_expired".into(),
-                latency_ms: None,
-                error: None,
-            })
-            .await;
-    }
 }
 
 impl Socks5Transport {
     pub fn new(proxy: SocketAddr) -> Self {
         Self { proxy }
     }
-}
-
-/// Build a libp2p transport, optionally tunneling through a SOCKS5 proxy.
-/// - Output type is unified to (PeerId, StreamMuxerBox).
-/// - Dial preference: Relay first, then Direct TCP (or SOCKS5 TCP if proxy is set).
-pub fn build_transport_with_relay(
-    keypair: &identity::Keypair,
-    relay_transport: relay::client::Transport,
-    proxy_address: Option<String>,
-) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn Error>> {
-    use libp2p::{
-        core::{muxing::StreamMuxerBox, transport::Boxed, upgrade::Version},
-        noise, tcp, yamux, Transport as _,
-    };
-    use std::{io, net::SocketAddr, time::Duration};
-
-    // === Upgrade stack for direct TCP/SOCKS5 paths ===
-    let noise_cfg = noise::Config::new(keypair)?;
-    let yamux_cfg = yamux::Config::default();
-
-    // TCP/SOCKS5 → (PeerId, StreamMuxerBox)
-    let into_muxed = |t: Boxed<Box<dyn AsyncIo>>| {
-        t.upgrade(Version::V1Lazy)
-            .authenticate(noise_cfg.clone())
-            .multiplex(yamux_cfg.clone())
-            .timeout(Duration::from_secs(20))
-            .map(|(peer, muxer), _| (peer, StreamMuxerBox::new(muxer)))
-            .boxed()
-    };
-
-    // --- Direct TCP path ---
-    let tcp_base: Boxed<Box<dyn AsyncIo>> =
-        tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
-            .map(|s, _| -> Box<dyn AsyncIo> { Box::new(s.0.compat()) })
-            .boxed();
-
-    // --- SOCKS5 path (optional) ---
-    let direct_tcp_muxed: Boxed<(PeerId, StreamMuxerBox)> = match proxy_address {
-        Some(proxy) => {
-            info!(
-                "SOCKS5 enabled. Routing all P2P TCP dialing traffic via {}",
-                proxy
-            );
-            let proxy_addr: SocketAddr = proxy.parse().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Invalid proxy address: {}", e),
-                )
-            })?;
-            let socks5: Boxed<Box<dyn AsyncIo>> = Socks5Transport::new(proxy_addr).boxed();
-            into_muxed(socks5)
-        }
-        None => into_muxed(tcp_base),
-    };
-
-    // --- Relay path: Connection → (PeerId, StreamMuxerBox)
-    // Apply the same upgrade stack to the relay transport
-    let relay_muxed: Boxed<(PeerId, StreamMuxerBox)> = relay_transport
-        .upgrade(Version::V1Lazy)
-        .authenticate(noise_cfg.clone())
-        .multiplex(yamux_cfg.clone())
-        .timeout(Duration::from_secs(20))
-        .map(|(peer, muxer), _| (peer, StreamMuxerBox::new(muxer)))
-        .boxed();
-
-    // --- Combine: Relay first, then Direct ---
-    let layered: Boxed<(PeerId, StreamMuxerBox)> =
-        libp2p::core::transport::OrTransport::new(relay_muxed, direct_tcp_muxed)
-            .map(|either, _| match either {
-                futures::future::Either::Left(v) => v,
-                futures::future::Either::Right(v) => v,
-            })
-            .boxed();
-
-    Ok(layered)
 }
 
 impl DhtService {
@@ -5853,20 +4560,12 @@ pub struct DhtConfig<'a> {
     pub chunk_size_kb: Option<usize>,
     pub cache_size_mb: Option<usize>,
     #[builder(default)]
-    pub enable_autorelay: bool,
-    #[builder(default)]
-    pub preferred_relays: Vec<String>,
-    #[builder(default)]
-    pub enable_relay_server: bool,
-    #[builder(default)]
     pub enable_upnp: bool,
     pub blockstore_db_path: Option<&'a Path>,
     #[builder(default)]
     pub pure_client_mode: bool,
     #[builder(default)]
     pub force_server_mode: bool,
-    pub last_autorelay_enabled_at: Option<SystemTime>,
-    pub last_autorelay_disabled_at: Option<SystemTime>,
     pub publish_ttl: Option<Duration>,
 }
 
@@ -5886,25 +4585,12 @@ impl DhtService {
         chunk_manager: Option<Arc<ChunkManager>>,
         chunk_size_kb: Option<usize>, // Chunk size in KB (default 256)
         cache_size_mb: Option<usize>, // Cache size in MB (default 1024)
-        enable_autorelay: bool,
-        preferred_relays: Vec<String>,
-        enable_relay_server: bool,
         enable_upnp: bool,
         blockstore_db_path: Option<&Path>,
-        last_autorelay_enabled_at: Option<SystemTime>,
-        last_autorelay_disabled_at: Option<SystemTime>,
         pure_client_mode: bool,
         force_server_mode: bool,
         publish_ttl: Option<Duration>,
     ) -> Result<Self, Box<dyn Error>> {
-        // Respect user-configured AutoRelay preference (allow env to force-disable)
-        let mut final_enable_autorelay = enable_autorelay;
-        info!("AutoRelay requested: {}", enable_autorelay);
-        if std::env::var("CHIRAL_DISABLE_AUTORELAY").ok().as_deref() == Some("1") {
-            final_enable_autorelay = false;
-            info!("AutoRelay disabled via env CHIRAL_DISABLE_AUTORELAY=1");
-        }
-        info!("AutoRelay enabled (final): {}", final_enable_autorelay);
         // Convert chunk size from KB to bytes
         let chunk_size = chunk_size_kb.unwrap_or(256) * 1024; // Default 256 KB
         let cache_size = cache_size_mb.unwrap_or(1024); // Default 1024 MB
@@ -6056,36 +4742,9 @@ impl DhtService {
         };
 
         let bitswap = beetswap::Behaviour::new(blockstore);
-        let (relay_transport, relay_client_behaviour) = relay::client::new(local_peer_id);
         let autonat_client_toggle = toggle::Toggle::from(autonat_client_behaviour);
         let autonat_server_toggle = toggle::Toggle::from(autonat_server_behaviour);
         let mdns_toggle = toggle::Toggle::from(mdns_opt);
-
-        // DCUtR with optimized configuration for better hole-punching success
-        // Key improvements:
-        // - Always enabled for maximum connectivity
-        // - Works in conjunction with relay for coordination
-        // - Attempts direct connection upgrade after relay establishment
-        info!("🔓 DCUtR enabled with enhanced hole-punching strategy");
-        let dcutr_toggle = toggle::Toggle::from(Some(dcutr::Behaviour::new(local_peer_id)));
-
-        // Relay server configuration
-        // Relay server configuration
-        // Enable relay server if explicitly requested OR if AutoNAT is enabled (to allow auto-relay on public IP)
-        let relay_server_behaviour = if enable_relay_server || enable_autonat {
-            if enable_relay_server {
-                info!("🔁 Relay server enabled - this node can relay traffic for others");
-            } else {
-                info!("🔁 Relay server initialized (standby) - will be advertised if public IP is detected");
-            }
-            Some(relay::Behaviour::new(
-                local_peer_id,
-                relay::Config::default(),
-            ))
-        } else {
-            None
-        };
-        let relay_server_toggle = toggle::Toggle::from(relay_server_behaviour);
 
         // UPnP configuration for automatic port mapping
         let upnp_behaviour = if enable_upnp {
@@ -6107,55 +4766,6 @@ impl DhtService {
             autonat_targets.extend(bootstrap_set.iter().cloned());
         }
 
-        // Configure AutoRelay relay candidate discovery (use finalized flag)
-        // Filter out unreachable addresses (localhost/private IPs) from relay candidates
-        let relay_candidates: HashSet<String> = if final_enable_autorelay {
-            let raw_candidates = if !preferred_relays.is_empty() {
-                info!(
-                    "🔗 AutoRelay enabled with {} preferred relays",
-                    preferred_relays.len()
-                );
-                preferred_relays.into_iter().collect::<Vec<_>>()
-            } else {
-                info!(
-                    "🔗 AutoRelay enabled, using {} bootstrap nodes as relay candidates",
-                    bootstrap_set.len()
-                );
-                bootstrap_set.iter().cloned().collect::<Vec<_>>()
-            };
-
-            // Filter out unreachable addresses from relay candidates
-            let filtered: HashSet<String> = raw_candidates
-                .into_iter()
-                .filter(|addr_str| {
-                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                        if ma_plausibly_reachable(&addr) {
-                            true
-                        } else {
-                            warn!("⏭️  Excluding unreachable relay candidate: {}", addr_str);
-                            false
-                        }
-                    } else {
-                        warn!("⚠️ Invalid relay candidate address: {}", addr_str);
-                        false
-                    }
-                })
-                .collect();
-
-            if filtered.is_empty() {
-                warn!("⚠️ No reachable relay candidates available after filtering");
-            } else {
-                info!("✅ Using {} reachable relay candidates", filtered.len());
-                for (i, relay) in filtered.iter().enumerate().take(5) {
-                    info!("   Relay {}: {}", i + 1, relay);
-                }
-            }
-
-            filtered
-        } else {
-            HashSet::new()
-        };
-
         // Create the swarm
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
@@ -6165,8 +4775,7 @@ impl DhtService {
                 yamux::Config::default,
             )?
             // .with_quic() seems to destablize peer connect/download, disabled for now until solution
-            .with_relay_client(noise::Config::new, yamux::Config::default)?
-            .with_behaviour(move |_, relay_client_behaviour: relay::client::Behaviour| {
+            .with_behaviour(move |_| {
                 // Configure ping with more aggressive keep-alive to prevent connection drops
                 let ping_config = ping::Config::new()
                     .with_interval(Duration::from_secs(15)) // Ping every 15 seconds (default is 15s)
@@ -6183,9 +4792,6 @@ impl DhtService {
                     key_request,
                     autonat_client: autonat_client_toggle,
                     autonat_server: autonat_server_toggle,
-                    relay_client: relay_client_behaviour,
-                    relay_server: relay_server_toggle,
-                    dcutr: dcutr_toggle,
                     upnp: upnp_toggle,
                 }
             })?
@@ -6230,7 +4836,7 @@ impl DhtService {
             }
         }
 
-        // ---- advertise external addresses so relay reservations include routable addrs
+        // ---- advertise external addresses so peers can reach us
         let mut ext_addrs: Vec<Multiaddr> = Vec::new();
 
         // 1) If CHIRAL_PUBLIC_IP is set, use it as the advertised external address
@@ -6249,14 +4855,14 @@ impl DhtService {
 
         // Connect to bootstrap nodes
         // NOTE: Bootstrap nodes are explicitly configured, so we trust them
-        // and don't filter based on reachability (important for relay servers and local testing)
+        // and don't filter based on reachability (important for local testing)
         let mut successful_connections = 0;
         let total_bootstrap_nodes = bootstrap_nodes.len();
         for bootstrap_addr in &bootstrap_nodes {
             if let Ok(addr) = bootstrap_addr.parse::<Multiaddr>() {
                 // WAN Mode: skip unroutable bootstrap addresses
                 // LAN Mode: allow private/loopback addresses for local development and testing
-                let wan_mode = enable_autonat || enable_autorelay;
+                let wan_mode = enable_autonat;
                 if wan_mode && !ma_plausibly_reachable(&addr) {
                     warn!(
                         "⏭️  [WAN Mode] Skipping unreachable bootstrap addr: {}",
@@ -6354,24 +4960,9 @@ impl DhtService {
         // Add this initialization around line 6100 after pending_dht_queries:
         let pending_search_queries: Arc<Mutex<HashMap<kad::QueryId, PendingSearchQuery>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let pending_relay_discoveries: Arc<
-            Mutex<HashMap<kad::QueryId, oneshot::Sender<Result<Vec<String>, String>>>>,
-        > = Arc::new(Mutex::new(HashMap::new()));
-
         {
             let mut guard = metrics.lock().await;
             guard.autonat_enabled = enable_autonat;
-            guard.autorelay_enabled = final_enable_autorelay;
-            guard.last_autorelay_enabled_at = last_autorelay_enabled_at;
-            guard.last_autorelay_disabled_at = last_autorelay_disabled_at;
-            guard.dcutr_enabled = enable_autonat; // DCUtR enabled when AutoNAT is enabled
-            let now = SystemTime::now();
-            if final_enable_autorelay {
-                // Always record a fresh enable time when AutoRelay is turned on
-                guard.last_autorelay_enabled_at = Some(now);
-            } else {
-                guard.last_autorelay_disabled_at = Some(now);
-            }
         }
 
         // Spawn the Dht node task
@@ -6408,10 +4999,7 @@ impl DhtService {
             pending_dht_queries.clone(),
             pending_key_requests.clone(),
             pending_search_queries.clone(),
-            pending_relay_discoveries.clone(),
             is_bootstrap,
-            final_enable_autorelay,
-            relay_candidates,
             chunk_size,
             bootstrap_peer_ids,
             pure_client_mode,
@@ -6467,13 +5055,8 @@ impl DhtService {
             chunk_manager,
             config.chunk_size_kb,
             config.cache_size_mb,
-            config.enable_autorelay,
-            config.preferred_relays,
-            config.enable_relay_server,
             config.enable_upnp,
             config.blockstore_db_path,
-            config.last_autorelay_enabled_at,
-            config.last_autorelay_disabled_at,
             config.pure_client_mode,
             config.force_server_mode,
             config.publish_ttl,
@@ -7265,14 +5848,6 @@ impl DhtService {
         DhtMetricsSnapshot::from(metrics, peer_count)
     }
 
-    pub async fn autorelay_history(&self) -> (Option<SystemTime>, Option<SystemTime>) {
-        let metrics = self.metrics.lock().await;
-        (
-            metrics.last_autorelay_enabled_at.clone(),
-            metrics.last_autorelay_disabled_at.clone(),
-        )
-    }
-
     pub async fn store_block(&self, cid: Cid, data: Vec<u8>) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::StoreBlock { cid, data })
@@ -7553,7 +6128,7 @@ impl DhtService {
         }
 
         // Wait for connections to establish with polling.
-        // Default is conservative (5s) but real networks (relay/NAT) can need longer.
+        // Default is conservative (5s) but real networks can need longer.
         let total_wait_ms: u64 = std::env::var("E2E_SEEDER_CONNECT_WAIT_MS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -8132,14 +6707,9 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 }
 
 /// If multiaddr can be plausibly reached from this machine
-/// - Relay paths (p2p-circuit) are allowed
 /// - IPv4 loopback (127.0.0.1) is REJECTED (not reachable from remote peers)
 /// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
-    // Relay paths are allowed
-    if ma.iter().any(|p| matches!(p, Protocol::P2pCircuit)) {
-        return true;
-    }
     // Only consider IPv4 (IPv6 can be added if needed)
     if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
         // Reject loopback addresses - they're not reachable from remote peers
@@ -8162,8 +6732,7 @@ fn ma_non_loopback_ipv4(ma: &Multiaddr) -> bool {
     false
 }
 
-/// Returns true if the swarm currently has at least one dialable address
-/// (either a public IP or a relay circuit).
+/// Returns true if the swarm currently has at least one dialable address.
 fn swarm_has_dialable_addr(swarm: &Swarm<DhtBehaviour>) -> bool {
     // External addresses (with scores) are the authoritative list to advertise
     if swarm
@@ -8173,7 +6742,7 @@ fn swarm_has_dialable_addr(swarm: &Swarm<DhtBehaviour>) -> bool {
         return true;
     }
 
-    // As a fallback, look at current listeners (may include relay circuit addrs)
+    // As a fallback, look at current listeners
     swarm.listeners().any(|addr| ma_plausibly_reachable(addr))
 }
 

@@ -11,7 +11,7 @@ Chiral Network is a decentralized peer-to-peer file sharing application that com
 1. **Fully Decentralized P2P**: No centralized servers - all peer discovery via DHT
 2. **BitTorrent-Style Sharing**: Files immediately start seeding when added (no "upload" step)
 3. **Non-Commercial**: No marketplace, pricing, or trading features to prevent misuse
-4. **Privacy-First**: Circuit Relay v2, AutoNAT v2, SOCKS5 proxy support, anonymous mode
+4. **Privacy-First**: AutoNAT v2, SOCKS5 proxy support, anonymous mode
 5. **Legitimate Use Only**: Designed for personal, educational, and organizational file sharing
 6. **Blockchain Integration**: Separate Ethereum-compatible network with Geth integration
 
@@ -38,8 +38,7 @@ Chiral Network is a decentralized peer-to-peer file sharing application that com
 - **WebRTC**: Direct peer-to-peer data channels for file transfers
 - **NAT Traversal**:
   - AutoNAT v2 for reachability detection
-  - Circuit Relay v2 with AutoRelay for NAT'd peers
-  - DCUtR (Direct Connection Upgrade through Relay) for hole punching
+  - UPnP port mapping
   - mDNS for local peer discovery
 - **Noise Protocol**: Cryptographic transport security
 - **Bitswap Protocol**: Efficient block exchange
@@ -59,11 +58,10 @@ The application uses client-side routing with the following pages:
 1. **Download** (default page) - File download management with search, history, and peer selection
 2. **Upload** - "Shared Files" page - instant seeding interface with drag & drop
 3. **Network** - Peer discovery, DHT status, NAT traversal monitoring
-4. **Relay** - Circuit Relay v2 configuration (server mode + client mode)
-5. **Mining** - CPU mining for network security (proof-of-work)
+4. **Mining** - CPU mining for network security (proof-of-work)
 6. **Proxy** - SOCKS5 proxy configuration and privacy routing
 7. **Analytics** - Usage statistics, bandwidth tracking, performance metrics
-8. **Reputation** - Peer reputation system with analytics and relay leaderboard
+8. **Reputation** - Peer reputation system with analytics
 9. **Account** - Wallet management, HD wallet support, transaction history
 10. **Settings** - Comprehensive configuration (storage, network, privacy, bandwidth scheduling, diagnostics, i18n)
 
@@ -111,7 +109,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 
 **FileItem**: Supports multiple states (downloading, paused, completed, seeding, queued, canceled, failed), priority levels, encryption status, file versioning, multi-CID support, and visual ordering.
 
-**AppSettings**: Includes storage management, bandwidth limits (including bandwidth scheduling), network configuration (port, UPnP, NAT), proxy settings (SOCKS5), privacy modes, NAT traversal settings (AutoNAT v2, Circuit Relay v2, relay server mode), DHT configuration, notification preferences, and i18n.
+**AppSettings**: Includes storage management, bandwidth limits (including bandwidth scheduling), network configuration (port, UPnP, NAT), proxy settings (SOCKS5), privacy modes, NAT traversal settings (AutoNAT v2), DHT configuration, notification preferences, and i18n.
 
 **MiningState**: Tracks hash rate, rewards, blocks found, thread allocation, mining history for charts, recent blocks, and session persistence.
 
@@ -137,23 +135,8 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Analytics dashboard with trust level distribution
   - Filtering by trust level, encryption support, uptime
   - Sorting by score, interactions, last seen
-  - Relay reputation leaderboard
-  - Personal relay stats (if running as relay server)
 
-### 3. Circuit Relay Infrastructure
-- **Page**: `src/pages/Relay.svelte`
-- **Configuration**:
-  - Relay Server Mode: Enable node to act as relay for NAT'd peers
-  - AutoRelay Client: Automatically find and use relay nodes
-  - Preferred Relays: Manual relay node configuration
-- **Features**:
-  - Circuit Relay v2 support
-  - Reservation management
-  - Relay health monitoring
-  - Reputation earning for relay operators
-  - Headless CLI support (`--enable-autorelay`, `--relay`, etc.)
-
-### 4. HD Wallet Implementation
+### 3. HD Wallet Implementation
 - **Location**: `src/lib/wallet/`
 - **Components**:
   - `bip32.ts` - Hierarchical Deterministic wallet derivation
@@ -166,7 +149,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - `AccountList.svelte` - Account management
 - **Features**: QR code support, multiple accounts, secure key management
 
-### 5. DHT & libp2p Integration
+### 4. DHT & libp2p Integration
 - **Location**: `src/lib/dht.ts`
 - **Backend**: Rust-based libp2p v0.54
 - **Features**:
@@ -175,11 +158,10 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Bootstrap node support
   - File metadata publishing/retrieval
   - NAT reachability detection (AutoNAT v2)
-  - Circuit relay support
   - Observed address tracking
   - Health monitoring
 
-### 6. WebRTC File Transfers
+### 5. WebRTC File Transfers
 - **Service**: `src/lib/services/webrtcService.ts`
 - **Signaling**: `src/lib/services/signalingService.ts`
 - **P2P Transfer**: `src/lib/services/p2pFileTransfer.ts`
@@ -191,7 +173,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Progress tracking
   - Connection state management
 
-### 7. Multi-Source Downloads
+### 6. Multi-Source Downloads
 - **Service**: `src/lib/services/multiSourceDownloadService.ts`
 - **Features**:
   - Parallel chunk downloads from multiple peers
@@ -200,7 +182,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Automatic failover
   - Chunk verification
 
-### 8. Bandwidth Scheduling
+### 7. Bandwidth Scheduling
 - **Service**: `src/lib/services/bandwidthScheduler.ts`
 - **Interface**: `BandwidthScheduleEntry` in stores
 - **Features**:
@@ -211,7 +193,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Enable/disable toggle
   - Automatic schedule application
 
-### 9. File Encryption
+### 8. File Encryption
 - **Service**: `src/lib/services/encryption.ts`
 - **Algorithm**: AES-256-GCM with PBKDF2 key derivation
 - **Features**:
@@ -221,7 +203,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Key fingerprinting
   - Manifest-based chunk tracking
 
-### 10. Download Search & History
+### 9. Download Search & History
 - **Components**:
   - `DownloadSearchSection.svelte`
   - `SearchHistoryPanel.svelte`
@@ -235,12 +217,12 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Seeder/leecher display
   - Quick re-download
 
-### 11. Geth Integration
+### 10. Geth Integration
 - **Service**: `src/lib/services/gethService.ts`
 - **Component**: `GethDownloader.svelte`, `GethStatusCard.svelte`
 - **Features**: Ethereum node integration, transaction handling, blockchain operations
 
-### 12. Advanced Services
+### 11. Advanced Services
 
 #### Analytics Service (`analyticsService.ts`)
 - Bandwidth tracking (upload/download)
@@ -273,17 +255,17 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - `diagnosticsService.ts` - Comprehensive system health checks
   - 13 diagnostic tests across 5 categories
   - Environment, network, storage, security, system checks
-  - Real-time DHT, AutoNAT, Circuit Relay status
+  - Real-time DHT, AutoNAT status
   - Storage validation and disk space monitoring
   - Encryption capability and WebRTC support testing
   - Exportable text reports for troubleshooting
 
-### 13. Smart Contracts
+### 12. Smart Contracts
 - **Location**: `src/lib/services/ProofOfStorage.sol`
 - **Purpose**: Proof of Storage consensus mechanism
 - **Language**: Solidity
 
-### 14. UI Components
+### 13. UI Components
 
 #### Core Components
 - `Modal.svelte` - Reusable modal dialog
@@ -296,7 +278,6 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 #### Reputation Components
 - `ReputationCard.svelte` - Individual peer reputation display
 - `ReputationAnalytics.svelte` - System-wide reputation analytics
-- `RelayReputationLeaderboard.svelte` - Top relay nodes
 
 #### Geo/Network Components
 - `GeoDistributionCard.svelte` - Geographic distribution visualization
@@ -306,14 +287,14 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - `badge.svelte`, `progress.svelte`, `dropDown.svelte`
 - `Expandable.svelte`
 
-### 15. System Diagnostics
+### 14. System Diagnostics
 - **Service**: `src/lib/services/diagnosticsService.ts`
 - **Location**: Settings → Diagnostics section
 - **Features**:
   - 13 comprehensive health checks across 5 categories
   - Environment detection (Tauri vs web build)
   - Network health (DHT connectivity, peer count, bootstrap nodes)
-  - NAT traversal status (AutoNAT v2, Circuit Relay v2)
+  - NAT traversal status (AutoNAT v2)
   - Storage validation (path, permissions, disk space)
   - Security checks (proxy config, encryption capability)
   - System tests (WebRTC support, bandwidth limits, LocalStorage)
@@ -322,7 +303,7 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
   - Graceful handling of non-existent directories
   - Parent directory fallback for disk space checks
 
-### 16. Advanced FTP Features
+### 15. Advanced FTP Features
 - **Module**: `src-tauri/src/ftp_client.rs`
 - **Bookmarks**: `src-tauri/src/ftp_bookmarks.rs`
 - **Commands**: 11 new Tauri commands for FTP operations
@@ -378,10 +359,8 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 
 ### NAT Traversal Architecture
 1. **AutoNAT v2**: Automatic reachability detection with confidence scoring
-2. **Circuit Relay v2**: Relay reservation for NAT'd peers
-3. **DCUtR**: Hole punching for direct connections
-4. **mDNS**: Local network peer discovery
-5. **SOCKS5 Proxy**: Privacy-focused routing
+2. **mDNS**: Local network peer discovery
+3. **SOCKS5 Proxy**: Privacy-focused routing
 
 ### Routing System
 - **Router**: `@mateothegreat/svelte5-router`
@@ -539,9 +518,8 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - Private key protection
 
 ### Privacy Features
-- Anonymous mode with mandatory relay/proxy routing
+- Anonymous mode with mandatory proxy routing
 - SOCKS5 proxy support
-- Circuit Relay v2 for IP hiding
 - Encrypted file transfers
 - No analytics tracking in anonymous mode
 
@@ -580,7 +558,6 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 - [ ] Advanced compression for network traffic
 - [ ] Database indexing for faster searches
 - [ ] Enhanced file versioning UI
-- [ ] Advanced relay discovery mechanisms
 - [ ] Improved geolocation accuracy
 - [ ] Mobile app version
 - [ ] Hardware wallet support
@@ -618,7 +595,6 @@ activeTransfers: Map<>               // P2P/WebRTC transfer tracking
 
 **What we DO support** (limited to file sharing):
 - ✅ SOCKS5 proxy support (use existing proxies like Tor)
-- ✅ Circuit Relay v2 (for NAT traversal, not anonymity)
 - ✅ File encryption (protect file content)
 - ✅ Anonymous mode (hide IP during P2P file transfers only)
 
@@ -667,7 +643,7 @@ npm run check            # TypeScript type check
 6. **Mining not starting**: Check Geth service is initialized
 7. **Tauri invoke errors**: Ensure backend commands are registered
 8. **Storage path errors**: Diagnostics will show if directory is missing/inaccessible
-9. **NAT/Relay issues**: Check diagnostics for AutoNAT and Circuit Relay status
+9. **NAT issues**: Check diagnostics for AutoNAT status
 
 ### Debug Commands
 
@@ -740,7 +716,6 @@ src/
 │   ├── Network.svelte
 │   ├── NotFound.svelte
 │   ├── Proxy.svelte
-│   ├── Relay.svelte
 │   ├── Reputation.svelte
 │   ├── Settings.svelte
 │   └── Upload.svelte

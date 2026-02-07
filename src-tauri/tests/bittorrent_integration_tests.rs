@@ -16,7 +16,7 @@ async fn test_start_download_fallback_to_public() {
     let download_path = temp_dir.path().to_path_buf();
 
     let dht_service = Arc::new(
-        DhtService::new(DhtConfig::test_config(), None, None, None)
+        DhtService::new(DhtConfig::builder().build(), None, None, None)
             .await
             .expect("Failed to create DHT service for test"),
     );
@@ -50,7 +50,7 @@ async fn test_integration_protocol_handler_download_linux_distro() {
 
     // Create a DHT service for the test
     let dht_service = Arc::new(
-        DhtService::new(DhtConfig::test_config(), None, None, None)
+        DhtService::new(DhtConfig::builder().build(), None, None, None)
             .await
             .expect("Failed to create DHT service for test"),
     );
@@ -89,7 +89,7 @@ async fn test_integration_seed_file() {
 
     // Create a DHT service for the test
     let dht_service = Arc::new(
-        DhtService::new(DhtConfig::test_config(), None, None, None)
+        DhtService::new(DhtConfig::builder().build(), None, None, None)
             .await
             .expect("Failed to create DHT service for test"),
     );

@@ -664,10 +664,6 @@ export interface AppSettings {
   enableAutonat: boolean; // AutoNAT reachability detection
   autonatProbeInterval: number; // Seconds between AutoNAT probes
   autonatServers: string[]; // Custom AutoNAT server multiaddrs
-  enableAutorelay: boolean; // Circuit Relay v2 with AutoRelay (renamed from enableAutoRelay)
-  preferredRelays: string[]; // Preferred relay node multiaddrs
-  enableRelayServer: boolean; // Act as a relay server for other peers
-  relayServerAlias: string; // Public alias/name for your relay server (appears in logs and bootstrapping)
   pureClientMode: boolean; // Pure DHT client mode - cannot seed files or act as DHT server (for hard NAT environments)
   forceServerMode: boolean; // Force DHT server mode - act as DHT server even behind NAT (for testing/development)
   anonymousMode: boolean;
@@ -720,10 +716,6 @@ export const settings = writable<AppSettings>({
   enableAutonat: true, // Disabled by default - enable if you need NAT detection
   autonatProbeInterval: 30, // 30 seconds default
   autonatServers: [], // Use bootstrap nodes by default
-  enableAutorelay: true, // Enabled by default - allows relay connections for NAT traversal
-  preferredRelays: [], // Use bootstrap nodes as relays by default
-  enableRelayServer: false, // Disabled by default - enable to help relay traffic for others
-  relayServerAlias: "", // Empty by default - user can set a friendly name
   pureClientMode: false, // Disabled by default - full DHT peer mode
   forceServerMode: false, // Disabled by default - automatic mode detection
   anonymousMode: false,

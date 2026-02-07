@@ -133,41 +133,6 @@
           "private": "Accesibilidad degradada. {summary}",
           "unknown": "Estado de accesibilidad actualizado. {summary}"
         }
-      },
-      "dcutr": {
-        "title": "Perforación de NAT DCUtR",
-        "enabled": "DCUtR habilitado",
-        "disabled": "DCUtR deshabilitado",
-        "attempts": "Intentos de perforación",
-        "successes": "Éxitos",
-        "failures": "Fallos",
-        "successRate": "Tasa de éxito",
-        "lastSuccess": "Último éxito",
-        "lastFailure": "Último fallo",
-        "never": "Nunca",
-        "description": "La actualización de conexión directa a través de relé (DCUtR) habilita la perforación de NAT para establecer conexiones directas entre pares."
-      },
-      "relay": {
-        "title": "Estado del Relay",
-        "enabled": "AutoRelay Activado",
-        "disabled": "AutoRelay Desactivado",
-        "timeline": "AutoRelay timeline",
-        "enabledAt": "Last enabled",
-        "disabledAt": "Last disabled",
-        "noPeer": "No conectado al relay",
-        "activePeer": "Relay Activo",
-        "status": "Estado",
-        "lastSuccess": "Última reserva exitosa",
-        "lastFailure": "Última reserva fallida",
-        "renewals": "Reservas renovadas",
-        "evictions": "Reservas desalojadas",
-        "never": "Nunca",
-        "neverEnabled": "Never enabled",
-        "neverDisabled": "Never disabled",
-        "noEvictions": "Sin desalojos",
-        "accepted": "Reserva aceptada",
-        "pending": "Pendiente",
-        "failed": "Fallido"
       }
     },
     "networkStatus": "Estado de la red",
@@ -309,11 +274,6 @@
         "button": "Copiar Dirección",
         "success": "¡Multidirección copiada!"
       },
-      "toggleAutorelay": {
-        "tooltip": "Alternar conexiones de retransmisión automática",
-        "buttonOn": "Relay: Activo",
-        "buttonOff": "Relay: Inactivo"
-      },
       "startStopDht": {
         "startTooltip": "Conectar a la red DHT",
         "stopTooltip": "Desconectar de la red DHT",
@@ -345,7 +305,6 @@
     "upload": "Subir",
     "torrents": "Torrents",
     "network": "Red",
-    "relay": "Relé",
     "mining": "Minería",
     "proxy": "Proxy",
     "proxySelfTest": "Proxy Self-Test",
@@ -1038,8 +997,6 @@
     "refreshData": "Actualizar datos",
     "hideAnalytics": "Ocultar análisis",
     "showAnalytics": "Mostrar análisis",
-    "hideRelayLeaderboard": "Ocultar tabla de clasificación de relays",
-    "showRelayLeaderboard": "Mostrar tabla de clasificación de relays",
     "loading": "Cargando datos de reputación...",
     "searchPeers": "Buscar pares",
     "searchPlaceholder": "Buscar por ID de par...",
@@ -1100,14 +1057,6 @@
       "MaliciousBehaviorReport": "Reporte de comportamiento malicioso",
       "FileShared": "Archivo compartido"
     },
-    "myRelay": {
-      "title": "Tu reputación como relay",
-      "subtitle": "Tu nodo está funcionando como servidor relay",
-      "rankOf": "Rango de {total}",
-      "reputationScore": "Puntuación de reputación",
-      "successfulCircuits": "Circuitos exitosos",
-      "reservations": "Reservas"
-    },
     "pagination": {
       "showing": "Mostrando {start}-{end} de {total} pares",
       "previous": "Anterior",
@@ -1127,124 +1076,6 @@
       "encryption": "Cifrado",
       "supported": "Soportado",
       "notSupported": "No soportado"
-    }
-  },
-  "relay": {
-    "title": "Infraestructura de Relay",
-    "subtitle": "Gestiona servidores relay y conectividad de red",
-    "server": {
-      "title": "Servidor Relay",
-      "subtitle": "Ayuda a los pares a conectarse a través de tu nodo",
-      "running": "En ejecución",
-      "stopped": "Detenido",
-      "description": "Ejecuta un servidor relay para ayudar a los pares detrás de NATs a conectarse a la red y ganar reputación.",
-      "benefit1": "Gana puntos de reputación ayudando a los pares",
-      "benefit2": "Mejora la conectividad y descentralización de la red",
-      "benefit3": "Usa ancho de banda al retransmitir circuitos activamente",
-      "enable": "Habilitar servidor relay",
-      "disable": "Deshabilitar servidor relay",
-      "start": "Iniciar servidor",
-      "stop": "Detener servidor",
-      "starting": "Iniciando...",
-      "enabling": "Habilitando...",
-      "disabling": "Deshabilitando...",
-      "activeMessage": "¡Tu servidor relay está activo y ayudando a los pares!",
-      "earningReputation": "Estás ganando reputación por cada conexión exitosa.",
-      "aliasLabel": "Alias del servidor relay (nombre público)",
-      "aliasPlaceholder": "ej., Relay Rápido de Alice 🚀",
-      "aliasHint": "Este nombre amigable aparecerá en los registros y cuando otros nodos se conecten a través de tu relay",
-      "dhtNotRunning": "Red DHT no está en ejecución",
-      "dhtNotRunningHint": "Por favor, inicia la red desde la página de Red primero.",
-      "broadcastingAs": "Transmitiendo como:"
-    },
-    "client": {
-      "title": "Cliente AutoRelay",
-      "subtitle": "Conecta a través de nodos relay cuando sea necesario",
-      "enableAutorelay": "Habilitar Circuit Relay v2 (AutoRelay)",
-      "preferredRelays": "Nodos relay preferidos (opcional)",
-      "preferredRelaysPlaceholder": "/ip4/relay.example.com/tcp/4001/p2p/QmRelayId\nUna multidirección por línea",
-      "preferredRelaysHint": "Dejar vacío para usar nodos bootstrap como relays",
-      "howItWorks": "Cómo funciona:",
-      "description": "AutoRelay se conecta automáticamente a través de nodos relay cuando estás detrás de un NAT o firewall, asegurando que siempre puedas participar en la red."
-    },
-    "monitoring": {
-      "title": "Monitoreo y salud del relay"
-    },
-    "errors": {
-      "dhtNotRunning": "DHT no está en ejecución. Por favor, inicia la red primero desde la página de Red.",
-      "toggleFailed": "Error al cambiar el servidor relay: {error}"
-    },
-    "monitor": {
-      "statsTitle": "Estadísticas del grupo de relay",
-      "totalRelays": "Total de relays",
-      "connected": "Conectados",
-      "healthy": "Saludables",
-      "totalErrors": "Total de errores",
-      "avgHealthScore": "Puntuación de salud promedio",
-      "activeRelayTitle": "Relay activo",
-      "connectedBadge": "Conectado",
-      "peerId": "ID de par:",
-      "healthScore": "Puntuación de salud:",
-      "avgLatency": "Latencia promedio:",
-      "reservation": "Reserva:",
-      "successRate": "Tasa de éxito:",
-      "relayPoolTitle": "Grupo de relay",
-      "noRelaysInPool": "No hay relays en el grupo",
-      "primaryBadge": "Principal",
-      "state": "Estado:",
-      "latency": "Latencia:",
-      "attempts": "Intentos:",
-      "successes": "Éxitos:",
-      "failures": "Fallos:",
-      "lastSuccess": "Último éxito:",
-      "recentErrorsLabel": "Errores recientes:",
-      "recentErrorsTitle": "Errores recientes",
-      "clearButton": "Limpiar",
-      "relayLabel": "Relay:",
-      "retryLabel": "Reintentar:",
-      "errorTypes": {
-        "connectionRefused": "Conexión rechazada",
-        "timeout": "Tiempo agotado",
-        "reservationFailed": "Reserva fallida",
-        "expired": "Expirado",
-        "overloaded": "Sobrecargado",
-        "unreachable": "Inalcanzable",
-        "networkError": "Error de red",
-        "authFailed": "Autenticación fallida",
-        "protocolError": "Error de protocolo",
-        "unknown": "Desconocido"
-      },
-      "time": {
-        "never": "Nunca",
-        "justNow": "Justo ahora",
-        "minutesAgo": "hace {minutes}m",
-        "hoursAgo": "hace {hours}h",
-        "na": "N/D",
-        "expired": "Expirado",
-        "seconds": "{seconds}s",
-        "minutes": "{minutes}m",
-        "hours": "{hours}h"
-      }
-    },
-    "leaderboard": {
-      "title": "Mejores servidores relay",
-      "subtitle": "Clasificación basada en reputación de nodos relay",
-      "refresh": "Actualizar",
-      "refreshing": "Actualizando...",
-      "loading": "Cargando datos de reputación de relay...",
-      "rank": "Rango",
-      "peerId": "ID de par",
-      "score": "Puntuación",
-      "circuits": "Circuitos",
-      "bandwidth": "Ancho de banda",
-      "uptime": "Tiempo activo",
-      "points": "pts",
-      "lastSeen": "visto por última vez",
-      "totalRelays": "Total de relays",
-      "badgedRelays": "Relays con insignia",
-      "totalCircuits": "Total de circuitos",
-      "noRelays": "No se encontraron servidores relay",
-      "noRelaysDesc": "Comienza a ejecutar un servidor relay para aparecer en la clasificación"
     }
   },
   "download": {
@@ -1663,8 +1494,7 @@
     },
     "settings": {
       "updated": "¡Configuración actualizada!",
-      "networkingError": "La configuración se guardó, pero la actualización de red falló",
-      "proxyRelayWarning": "Agrega al menos un retransmisor proxy de confianza antes de habilitar Ocultar mi IP."
+      "networkingError": "La configuración se guardó, pero la actualización de red falló"
     },
     "analytics": {
       "direction": {
@@ -1741,137 +1571,11 @@
       "goToUpload": "Ir a Compartir",
       "goToNetwork": "Ir a Red",
       "goToMining": "Ir a Minería",
-      "goToRelay": "Ir a Relay",
       "goToAnalytics": "Ir a Analítica",
       "goToReputation": "Ir a Reputación",
       "goToBlockchain": "Ir a Blockchain",
       "goToAccount": "Ir a Cuenta",
       "goToSettings": "Ir a Configuración"
-    }
-  },
-  "downloadHistory": {
-    "title": "Download History",
-    "subtitle": "View and manage your download history",
-    "showHistory": "Show History",
-    "hideHistory": "Hide History",
-    "empty": "No download history yet",
-    "emptyDescription": "Completed, failed, and canceled downloads will appear here",
-    "search": "Search history...",
-    "filterAll": "All",
-    "filterCompleted": "Completed",
-    "filterFailed": "Failed",
-    "filterCanceled": "Canceled",
-    "redownload": "Re-download",
-    "remove": "Remove",
-    "clearHistory": "Clear History",
-    "clearFailed": "Clear Failed",
-    "clearCanceled": "Clear Canceled",
-    "exportHistory": "Export History",
-    "importHistory": "Import History",
-    "confirmClear": "Are you sure you want to clear all download history? This cannot be undone.",
-    "confirmClearFailed": "Clear all failed downloads from history?",
-    "confirmClearCanceled": "Clear all canceled downloads from history?",
-    "stats": {
-      "total": "Total Downloads",
-      "completed": "Completed",
-      "failed": "Failed",
-      "canceled": "Canceled",
-      "totalSize": "Total Size",
-      "totalPrice": "Total Spent"
-    },
-    "messages": {
-      "historyCleared": "Download history cleared",
-      "failedCleared": "Failed downloads cleared",
-      "canceledCleared": "Canceled downloads cleared",
-      "entryRemoved": "Entry removed from history",
-      "exportSuccess": "History exported successfully",
-      "importSuccess": "Imported {count} history entries",
-      "importError": "Failed to import history: {error}",
-      "redownloadStarted": "Re-downloading {name}..."
-    }
-  },
-  "settingsBackup": {
-    "title": "Backup & Restore",
-    "description": "Export or import your settings configuration",
-    "export": "Export Settings",
-    "import": "Import Settings",
-    "exportButton": "Export Settings",
-    "importButton": "Import Settings",
-    "downloadBackup": "Download Backup File",
-    "selectFile": "Select Backup File",
-    "merge": "Merge with Current Settings",
-    "replace": "Replace All Settings",
-    "autoBackup": "Automatic Backups",
-    "autoBackupDescription": "Automatic backups are created before major changes",
-    "restoreAutoBackup": "Restore",
-    "messages": {
-      "exportSuccess": "Settings exported successfully",
-      "exportError": "Failed to export settings: {error}",
-      "importSuccess": "Settings imported successfully",
-      "importWarnings": "Settings imported with warnings: {warnings}",
-      "importError": "Failed to import settings: {error}",
-      "autoBackupCreated": "Automatic backup created",
-      "autoBackupRestored": "Settings restored from backup",
-      "invalidFile": "Invalid backup file format",
-      "confirmReplace": "This will replace all current settings. Continue?"
-    }
-  },
-  "shortcuts": {
-    "title": "Atajos de Teclado",
-    "close": "Cerrar",
-    "tip": "Presione ? o F1 en cualquier momento para ver esta ayuda",
-    "categories": {
-      "navigation": "Navegación",
-      "application": "Aplicación",
-      "window": "Ventana"
-    },
-    "navigation": {
-      "download": "Ir a página de Descargas",
-      "upload": "Ir a página de Compartir",
-      "network": "Ir a página de Red",
-      "mining": "Ir a página de Minería",
-      "account": "Ir a página de Cuenta",
-      "settings": "Abrir Configuración"
-    },
-    "application": {
-      "commandPalette": "Abrir Paleta de Comandos",
-      "showHelp": "Mostrar atajos de teclado",
-      "closeModal": "Cerrar modal/diálogo",
-      "refresh": "Actualizar página actual",
-      "reload": "Recargar aplicación"
-    },
-    "window": {
-      "fullscreen": "Alternar pantalla completa",
-      "quit": "Salir de la aplicación"
-    }
-  },
-  "shortcuts": {
-    "title": "Atajos de Teclado",
-    "close": "Cerrar",
-    "tip": "Presione ? o F1 en cualquier momento para ver esta ayuda",
-    "categories": {
-      "navigation": "Navegación",
-      "application": "Aplicación",
-      "window": "Ventana"
-    },
-    "navigation": {
-      "download": "Ir a página de Descargas",
-      "upload": "Ir a página de Compartir",
-      "network": "Ir a página de Red",
-      "mining": "Ir a página de Minería",
-      "account": "Ir a página de Cuenta",
-      "settings": "Abrir Configuración"
-    },
-    "application": {
-      "commandPalette": "Abrir Paleta de Comandos",
-      "showHelp": "Mostrar atajos de teclado",
-      "closeModal": "Cerrar modal/diálogo",
-      "refresh": "Actualizar página actual",
-      "reload": "Recargar aplicación"
-    },
-    "window": {
-      "fullscreen": "Alternar pantalla completa",
-      "quit": "Salir de la aplicación"
     }
   },
   "downloadHistory": {
@@ -1939,11 +1643,36 @@
       "restart": "Es posible que deba reiniciar la aplicación para que algunos cambios surtan efecto."
     }
   },
-  "settings.autorelay.description": "Enter relay node addresses (one per line). Leave empty to use bootstrap nodes.",
-  "settings.autorelay.enable": "Enable AutoRelay (Circuit Relay v2)",
-  "settings.autorelay.relays": "Preferred Relay Nodes",
+  "shortcuts": {
+    "title": "Atajos de Teclado",
+    "close": "Cerrar",
+    "tip": "Presione ? o F1 en cualquier momento para ver esta ayuda",
+    "categories": {
+      "navigation": "Navegación",
+      "application": "Aplicación",
+      "window": "Ventana"
+    },
+    "navigation": {
+      "download": "Ir a página de Descargas",
+      "upload": "Ir a página de Compartir",
+      "network": "Ir a página de Red",
+      "mining": "Ir a página de Minería",
+      "account": "Ir a página de Cuenta",
+      "settings": "Abrir Configuración"
+    },
+    "application": {
+      "commandPalette": "Abrir Paleta de Comandos",
+      "showHelp": "Mostrar atajos de teclado",
+      "closeModal": "Cerrar modal/diálogo",
+      "refresh": "Actualizar página actual",
+      "reload": "Recargar aplicación"
+    },
+    "window": {
+      "fullscreen": "Alternar pantalla completa",
+      "quit": "Salir de la aplicación"
+    }
+  },
   "settings.diagnostics.bandwidthLimits": "Bandwidth Limits",
-  "settings.diagnostics.circuitRelay": "Circuit Relay",
   "settings.diagnostics.dhtConnectivity": "DHT Connectivity",
   "settings.diagnostics.diskSpace": "Disk Space",
   "settings.diagnostics.encryptionSupport": "Encryption Support",

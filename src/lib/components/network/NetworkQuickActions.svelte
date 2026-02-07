@@ -9,8 +9,7 @@
     UserPlus, 
     Clipboard, 
     Link, 
-    Radio, 
-    Play, 
+    Play,
     Square,
     Zap 
   } from 'lucide-svelte';
@@ -23,8 +22,6 @@
   export let dhtHealth: DhtHealth | null = null;
   export let dhtStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected';
   export let discoveryRunning = false;
-  export let autorelayEnabled = false;
-
   const dispatch = createEventDispatcher();
   let newPeerAddress = '';
 
@@ -70,10 +67,6 @@
       dispatch('addPeer', { address });
       newPeerAddress = '';
     }
-  }
-
-  function handleToggleAutorelay() {
-    dispatch('toggleAutorelay');
   }
 
   function handleStartDht() {
@@ -135,20 +128,6 @@
       {discoveryRunning 
         ? $t('network.quickActions.discoverPeers.discovering')
         : $t('network.quickActions.discoverPeers.button')}
-    </Button>
-
-    <!-- Toggle AutoRelay -->
-    <Button 
-      variant={autorelayEnabled ? 'default' : 'outline'}
-      size="sm"
-      on:click={handleToggleAutorelay}
-      title={$t('network.quickActions.toggleAutorelay.tooltip')}
-      class={autorelayEnabled ? 'bg-emerald-600 hover:bg-emerald-700' : ''}
-    >
-      <Radio class="h-4 w-4 mr-1.5" />
-      {autorelayEnabled 
-        ? $t('network.quickActions.toggleAutorelay.buttonOn')
-        : $t('network.quickActions.toggleAutorelay.buttonOff')}
     </Button>
 
     <!-- Start/Stop DHT -->

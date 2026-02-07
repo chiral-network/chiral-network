@@ -1894,23 +1894,6 @@
         </div>
       {/if}
       
-      <!-- NAT Info Banner - Shows relay is active -->
-      {#if clientModeReason === "nat" && $coalescedFiles.length > 0}
-        <div class="mx-4 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <div class="flex items-start gap-2">
-            <div class="text-blue-600 text-sm mt-0.5">ℹ️</div>
-            <div class="flex-1">
-              <p class="text-sm font-medium text-blue-800">
-                Files Shared via Relay Servers
-              </p>
-              <p class="text-xs text-blue-700 mt-1">
-                Your files are being shared through relay servers because you're behind NAT. Other peers can still download from you. For faster direct connections, enable UPnP in Settings.
-              </p>
-            </div>
-          </div>
-        </div>
-      {/if}
-
       <!-- File List -->
       {#if $coalescedFiles.length > 0}
         <div class="space-y-3 relative px-4">

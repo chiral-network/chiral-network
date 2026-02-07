@@ -392,23 +392,6 @@ pub struct DhtMetrics {
     pub success_streak: u32,
     pub failure_streak: u32,
     pub autonat_enabled: bool,
-    // AutoRelay metrics
-    pub autorelay_enabled: bool,
-    pub last_autorelay_enabled_at: Option<SystemTime>,
-    pub last_autorelay_disabled_at: Option<SystemTime>,
-    pub active_relay_peer_id: Option<String>,
-    pub relay_reservation_status: Option<String>,
-    pub last_reservation_success: Option<SystemTime>,
-    pub last_reservation_failure: Option<SystemTime>,
-    pub reservation_renewals: u64,
-    pub reservation_evictions: u64,
-    // DCUtR metrics
-    pub dcutr_enabled: bool,
-    pub dcutr_hole_punch_attempts: u64,
-    pub dcutr_hole_punch_successes: u64,
-    pub dcutr_hole_punch_failures: u64,
-    pub last_dcutr_success: Option<SystemTime>,
-    pub last_dcutr_failure: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -421,7 +404,6 @@ pub struct DhtMetricsSnapshot {
     pub last_error_at: Option<u64>,
     pub bootstrap_failures: u64,
     pub listen_addrs: Vec<String>,
-    pub relay_listen_addrs: Vec<String>,
     pub reachability: NatReachabilityState,
     pub reachability_confidence: NatConfidence,
     pub last_reachability_change: Option<u64>,
@@ -430,21 +412,4 @@ pub struct DhtMetricsSnapshot {
     pub observed_addrs: Vec<String>,
     pub reachability_history: Vec<NatHistoryItem>,
     pub autonat_enabled: bool,
-    // AutoRelay metrics
-    pub autorelay_enabled: bool,
-    pub last_autorelay_enabled_at: Option<u64>,
-    pub last_autorelay_disabled_at: Option<u64>,
-    pub active_relay_peer_id: Option<String>,
-    pub relay_reservation_status: Option<String>,
-    pub last_reservation_success: Option<u64>,
-    pub last_reservation_failure: Option<u64>,
-    pub reservation_renewals: u64,
-    pub reservation_evictions: u64,
-    // DCUtR metrics
-    pub dcutr_enabled: bool,
-    pub dcutr_hole_punch_attempts: u64,
-    pub dcutr_hole_punch_successes: u64,
-    pub dcutr_hole_punch_failures: u64,
-    pub last_dcutr_success: Option<u64>,
-    pub last_dcutr_failure: Option<u64>,
 }

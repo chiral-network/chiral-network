@@ -392,7 +392,7 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics
         .split(inner);
 
     // Get real data from metrics or show loading
-    let (peer_count, reachability, nat_status, autonat_status, relay_status, dcutr_stats) =
+    let (peer_count, reachability, nat_status, autonat_status) =
         if let Some(m) = metrics {
             let peer_count = m.connected_peers.len();
             let reachability = format!("{:?}", m.dht_metrics.reachability);
@@ -406,24 +406,9 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics
             } else {
                 "Disabled".to_string()
             };
-            let relay_status = if let Some(relay_id) = &m.dht_metrics.active_relay_peer_id {
-                format!("Active ({}...)", &relay_id[..12])
-            } else {
-                "None".to_string()
-            };
-            let dcutr_stats = if m.dht_metrics.dcutr_enabled {
-                let success_rate = if m.dht_metrics.dcutr_hole_punch_attempts > 0 {
-                    (m.dht_metrics.dcutr_hole_punch_successes as f64 / m.dht_metrics.dcutr_hole_punch_attempts as f64) * 100.0
-                } else {
-                    0.0
-                };
-                format!("{:.1}% ({}/{})", success_rate, m.dht_metrics.dcutr_hole_punch_successes, m.dht_metrics.dcutr_hole_punch_attempts)
-            } else {
-                "Disabled".to_string()
-            };
-            (peer_count, reachability, nat_status, autonat_status, relay_status, dcutr_stats)
+            (peer_count, reachability, nat_status, autonat_status)
         } else {
-            (0, "Loading...".to_string(), "Loading...".to_string(), "Loading...".to_string(), "Loading...".to_string(), "Loading...".to_string())
+            (0, "Loading...".to_string(), "Loading...".to_string(), "Loading...".to_string())
         };
 
     // Network info with real data
@@ -443,14 +428,6 @@ fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics
         Line::from(vec![
             Span::styled("AutoNAT: ", Style::default().fg(Color::Gray)),
             Span::styled(autonat_status, Style::default().fg(Color::Yellow)),
-        ]),
-        Line::from(vec![
-            Span::styled("Circuit Relay: ", Style::default().fg(Color::Gray)),
-            Span::styled(relay_status, Style::default().fg(Color::Green)),
-        ]),
-        Line::from(vec![
-            Span::styled("DCUtR Success: ", Style::default().fg(Color::Gray)),
-            Span::styled(dcutr_stats, Style::default().fg(Color::Cyan)),
         ]),
     ];
 

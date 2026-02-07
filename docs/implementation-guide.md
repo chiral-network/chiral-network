@@ -442,7 +442,7 @@ To keep discovery healthy, run at least one headless instance flagged as the boo
 
 The script builds (if necessary) and launches `chiral-network --headless --is-bootstrap`, which:
 
-- Disables provider record storage and AutoRelay so the node stays focused on routing DHT traffic
+- Disables provider record storage so the node stays focused on routing DHT traffic
 - Starts the bundled Geth process when `--enable-geth` (or `ENABLE_GETH=true`) is supplied so the bootstrap host maintains local chain state; keep mining disabled so this node remains a neutral router
 
 Regular peers should omit `--is-bootstrap`; they rely on the configured `bootstrap_nodes` list to dial the bootstrap instance and populate their routing tables.
@@ -463,44 +463,6 @@ Regular peers should omit `--is-bootstrap`; they rely on the configured `bootstr
   addresses with copy affordances, and the last few probe summaries. Toasts are
   emitted when reachability changes (restored, degraded, reset) to give desktop
   operators immediate feedback.
-
-### AutoRelay & reservation management
-
-- AutoRelay behavior is disabled by default in GUI mode. Users can enable it
-  to automatically discover and use relay servers for NAT traversal.
-- The relay client listens for Circuit Relay v2 reservations from discovered
-  relay candidates (bootstrap nodes by default, or custom relays via `--relay`).
-- When a peer is identified as a relay candidate (via `identify` protocol), the
-  node attempts to listen on a relay circuit address to enable inbound connections
-  from NAT-restricted peers.
-- Relay reservation events (accepted, renewed, evicted) are tracked in metrics:
-  - `active_relay_peer_id`: PeerId of the current relay server
-  - `relay_reservation_status`: Current reservation state (accepted/pending/failed)
-  - `reservation_renewals`: Counter for successful reservation renewals
-  - `reservation_evictions`: Counter for reservations lost/evicted
-- The Network → DHT page displays a "Relay Status" card showing:
-  - AutoRelay enabled/disabled badge
-  - Active relay peer ID (truncated for display)
-  - Reservation status and renewal counters
-  - Last successful reservation and eviction timestamps
-- Headless mode supports:
-  - `--disable-autorelay` to turn off AutoRelay behavior
-  - `--relay <multiaddr>` to specify preferred relay servers (repeatable)
-- Info-level log messages emit when relay reservations are accepted or circuits
-  are established, including relay peer IDs for debugging.
-
-### DCUtR hole-punching
-
-- DCUtR (Direct Connection Upgrade through Relay) behavior is automatically
-  enabled when AutoNAT is active, allowing peers behind NATs to coordinate
-  simultaneous hole-punching attempts via relay servers.
-- The `--show-dcutr` flag prints periodic DCUtR metrics in headless mode,
-  including hole-punch attempts, successes, failures, and success rate.
-- The Network → DHT page displays a "DCUtR Hole-Punching" card showing real-time
-  metrics: total attempts, successes (green), failures (red), success rate
-  percentage, enabled/disabled badge, and timestamps for last success/failure.
-- DCUtR events are logged at the `info` level with peer IDs and relay addresses,
-  and emit `DhtEvent::Info` or `DhtEvent::Warning` messages for UI feedback.
 
 ### Local download resilience & tracing
 

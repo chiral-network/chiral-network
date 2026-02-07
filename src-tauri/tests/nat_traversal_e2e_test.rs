@@ -219,38 +219,6 @@ async fn test_file_publish_and_search() {
 }
 
 #[tokio::test]
-async fn test_dcutr_enabled() {
-    println!("🧪 Testing DCUtR (hole-punching) is enabled...");
-
-    // Create service with AutoNAT enabled (DCUtR requires AutoNAT)
-    let service = DhtService::new(DhtConfig::test_config(), None, None, None)
-        .await
-        .expect("Failed to create service");
-
-    sleep(Duration::from_secs(1)).await;
-
-    // Get metrics to verify DCUtR is enabled
-    let metrics = service.metrics_snapshot().await;
-    println!("✅ DCUtR enabled: {}", metrics.dcutr_enabled);
-    assert!(
-        metrics.dcutr_enabled,
-        "DCUtR should be enabled when AutoNAT is enabled"
-    );
-
-    println!(
-        "✅ DCUtR metrics: attempts={}, successes={}, failures={}",
-        metrics.dcutr_hole_punch_attempts,
-        metrics.dcutr_hole_punch_successes,
-        metrics.dcutr_hole_punch_failures
-    );
-
-    // Cleanup
-    let _ = service.shutdown().await;
-
-    println!("✅ DCUtR enabled test passed!");
-}
-
-#[tokio::test]
 async fn test_multiple_autonat_servers() {
     println!("🧪 Testing multiple AutoNAT servers configuration...");
 
@@ -470,6 +438,7 @@ async fn test_nat_resilience_connection_fallback() {
         DhtConfig::builder()
             .bootstrap_nodes(invalid_bootstrap)
             .build(),
+        None,
         None,
         None,
     )

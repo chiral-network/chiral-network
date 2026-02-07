@@ -418,13 +418,13 @@ Added examples and clarifications to NAT traversal documentation
 
 ## Why
 
-Users reported confusion about Circuit Relay v2 configuration
+Users reported confusion about NAT traversal configuration
 
 ## How
 
 - Added step-by-step setup examples
 - Created troubleshooting section
-- Added diagrams for relay flow
+- Added diagrams for NAT traversal flow
 
 ## Testing
 
