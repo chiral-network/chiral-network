@@ -80,10 +80,31 @@
   let isCheckingBootstrap = $state(false);
   let showBootstrapDetails = $state(false);
 
+  // "Connecting to network" message auto-dismiss
+  let showGethConnectingMsg = $state(false);
+  let gethConnectingTimeout: ReturnType<typeof setTimeout> | null = null;
+
   // DHT Health State
   let dhtHealth = $state<DhtHealthInfo | null>(null);
   let isCheckingDhtHealth = $state(false);
   let showDhtHealthDetails = $state(false);
+
+  // Show "connecting" message only when Geth is running with 0 peers, auto-dismiss after 30s
+  $effect(() => {
+    if (gethStatus?.running && gethStatus?.peerCount === 0) {
+      showGethConnectingMsg = true;
+      if (gethConnectingTimeout) clearTimeout(gethConnectingTimeout);
+      gethConnectingTimeout = setTimeout(() => {
+        showGethConnectingMsg = false;
+      }, 30000);
+    } else {
+      showGethConnectingMsg = false;
+      if (gethConnectingTimeout) {
+        clearTimeout(gethConnectingTimeout);
+        gethConnectingTimeout = null;
+      }
+    }
+  });
 
   // Check if Tauri is available
   function isTauri(): boolean {
@@ -116,6 +137,9 @@
     }
     if (unlistenDownload) {
       unlistenDownload();
+    }
+    if (gethConnectingTimeout) {
+      clearTimeout(gethConnectingTimeout);
     }
   });
 
@@ -458,8 +482,8 @@
         {/if}
       </div>
 
-      <!-- Bootstrap Info -->
-      {#if gethStatus?.running && gethStatus?.peerCount === 0}
+      <!-- Connecting Info -->
+      {#if showGethConnectingMsg}
         <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
           <p class="text-sm text-blue-800 dark:text-blue-300">
             <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
@@ -468,62 +492,78 @@
         </div>
       {/if}
 
-      <!-- Bootstrap Node Health -->
+      <!-- Bootstrap Health Check -->
       <div class="mt-4 border-t border-gray-200 dark:border-gray-700 pt-4">
-        <button
-          onclick={() => showBootstrapDetails = !showBootstrapDetails}
-          class="w-full flex items-center justify-between text-left"
-        >
+        <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <Activity class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Bootstrap Nodes</span>
-            {#if bootstrapHealth}
-              <span class="px-2 py-0.5 text-xs rounded-full {bootstrapHealth.isHealthy ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'}">
-                {bootstrapHealth.healthyNodes}/{bootstrapHealth.totalNodes} healthy
-              </span>
-            {/if}
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Bootstrap Health Check</span>
           </div>
-          {#if showBootstrapDetails}
-            <ChevronUp class="w-4 h-4 text-gray-400" />
-          {:else}
-            <ChevronDown class="w-4 h-4 text-gray-400" />
-          {/if}
-        </button>
+          <button
+            onclick={checkBootstrapHealth}
+            disabled={isCheckingBootstrap}
+            class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+          >
+            {#if isCheckingBootstrap}
+              <Loader2 class="w-3 h-3 animate-spin" />
+            {:else}
+              <Activity class="w-3 h-3" />
+            {/if}
+            Run Check
+          </button>
+        </div>
 
-        {#if showBootstrapDetails}
-          <div class="mt-3 space-y-2">
-            <div class="flex justify-end mb-2">
-              <button
-                onclick={checkBootstrapHealth}
-                disabled={isCheckingBootstrap}
-                class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
-              >
-                {#if isCheckingBootstrap}
-                  <Loader2 class="w-3 h-3 animate-spin" />
-                {:else}
-                  <RefreshCw class="w-3 h-3" />
-                {/if}
-                Check Health
-              </button>
+        {#if bootstrapHealth}
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
+              <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+                {bootstrapHealth.isHealthy ? 'Healthy' : 'Degraded'}
+              </p>
             </div>
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Healthy Nodes</p>
+              <p class="text-sm font-bold dark:text-white">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
+            </div>
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
+              <p class="text-sm font-bold dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
+            </div>
+          </div>
 
-            {#if bootstrapHealth}
+          <!-- Expandable Node Details -->
+          <button
+            onclick={() => showBootstrapDetails = !showBootstrapDetails}
+            class="w-full flex items-center justify-between text-left py-2"
+          >
+            <span class="text-xs text-gray-500 dark:text-gray-400">Node Details</span>
+            {#if showBootstrapDetails}
+              <ChevronUp class="w-4 h-4 text-gray-400" />
+            {:else}
+              <ChevronDown class="w-4 h-4 text-gray-400" />
+            {/if}
+          </button>
+
+          {#if showBootstrapDetails}
+            <div class="space-y-2">
               {#each bootstrapHealth.nodes as node}
-                <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm">
+                <div class="flex items-center justify-between p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
                   <div class="flex items-center gap-2">
-                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'}"></div>
+                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
                     <div>
-                      <span class="font-medium dark:text-white">{node.name}</span>
-                      <span class="text-gray-500 dark:text-gray-400 text-xs ml-1">({node.region})</span>
+                      <span class="font-medium dark:text-white text-sm">{node.name}</span>
+                      <span class="text-gray-500 dark:text-gray-400 ml-1">({node.region})</span>
                     </div>
                   </div>
-                  <div class="text-right">
+                  <div class="text-right shrink-0">
                     {#if node.reachable && node.latencyMs}
                       <span class="text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
                     {:else if node.error}
-                      <span class="text-red-500 dark:text-red-400 text-xs">{node.error}</span>
+                      <span class="text-red-500 dark:text-red-400">{node.error}</span>
                     {:else}
-                      <span class="text-gray-400">—</span>
+                      <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+                        {node.reachable ? 'Reachable' : 'Unreachable'}
+                      </span>
                     {/if}
                   </div>
                 </div>
@@ -537,12 +577,12 @@
                   </p>
                 </div>
               {/if}
-            {:else}
-              <p class="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
-                Click "Check Health" to test bootstrap node connectivity
-              </p>
-            {/if}
-          </div>
+            </div>
+          {/if}
+        {:else}
+          <p class="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
+            Click "Run Check" to test bootstrap node connectivity
+          </p>
         {/if}
       </div>
     {/if}
