@@ -16,7 +16,6 @@
     Check,
     Loader2,
     Globe,
-    Zap,
     Activity,
     HeartPulse,
     ChevronDown,
@@ -549,31 +548,57 @@
     {/if}
   </div>
 
-  <!-- P2P Network Section -->
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-      <div class="flex items-center gap-3 mb-4">
+  <!-- P2P Network (DHT) Section -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <!-- Header with status and controls -->
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-3">
         <div class="p-2 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
           <Globe class="w-6 h-6 {$networkConnected ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
         </div>
         <div>
           <h2 class="font-semibold dark:text-white">P2P Network (DHT)</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">File sharing peer discovery</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Kademlia DHT file sharing and peer discovery</p>
         </div>
       </div>
-
-      <div class="flex items-center gap-3 mb-4">
-        <div class="w-3 h-3 rounded-full {$networkConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}"></div>
-        <span class="font-medium dark:text-white">{$networkConnected ? 'Connected' : 'Disconnected'}</span>
+      <div class="flex items-center gap-2">
+        <span class="flex items-center gap-2 px-3 py-1 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'} rounded-full text-sm">
+          <span class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}"></span>
+          {$networkConnected ? 'Connected' : 'Disconnected'}
+        </span>
       </div>
+    </div>
 
-      {#if localPeerId}
-        <div class="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
-          <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Your Peer ID:</div>
-          <div class="font-mono text-xs break-all dark:text-gray-300">{localPeerId}</div>
-        </div>
-      {/if}
+    <!-- Stats Grid -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400">DHT Peers</p>
+        <p class="text-lg font-bold dark:text-white">{$networkStats.connectedPeers}</p>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400">Discovered Peers</p>
+        <p class="text-lg font-bold dark:text-white">{$networkStats.totalPeers}</p>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
+        <p class="text-lg font-bold dark:text-white">{gethStatus?.peerCount || 0}</p>
+      </div>
+      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
+        <p class="text-lg font-bold dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+      </div>
+    </div>
 
+    <!-- Peer ID -->
+    {#if localPeerId}
+      <div class="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+        <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Your Peer ID</div>
+        <div class="font-mono text-xs break-all dark:text-gray-300">{localPeerId}</div>
+      </div>
+    {/if}
+
+    <!-- Connect/Disconnect -->
+    <div class="mb-4">
       {#if $networkConnected}
         <button
           onclick={disconnectFromNetwork}
@@ -599,208 +624,162 @@
       {/if}
     </div>
 
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-      <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-          <Zap class="w-6 h-6 text-purple-600 dark:text-purple-400" />
+    <!-- Health Check -->
+    <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <HeartPulse class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Health Check</span>
         </div>
-        <div>
-          <h2 class="font-semibold dark:text-white">Network Statistics</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Current network status</p>
-        </div>
-      </div>
-
-      <div class="space-y-3">
-        <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-          <span class="text-sm text-gray-600 dark:text-gray-400">DHT Peers</span>
-          <span class="font-medium dark:text-white">{$networkStats.connectedPeers}</span>
-        </div>
-        <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-          <span class="text-sm text-gray-600 dark:text-gray-400">Discovered Peers</span>
-          <span class="font-medium dark:text-white">{$networkStats.totalPeers}</span>
-        </div>
-        <div class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700">
-          <span class="text-sm text-gray-600 dark:text-gray-400">Blockchain Peers</span>
-          <span class="font-medium dark:text-white">{gethStatus?.peerCount || 0}</span>
-        </div>
-        <div class="flex justify-between items-center py-2">
-          <span class="text-sm text-gray-600 dark:text-gray-400">Block Height</span>
-          <span class="font-medium dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- DHT Health Check -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <div class="p-2 {dhtHealth?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
-          <HeartPulse class="w-6 h-6 {dhtHealth?.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
-        </div>
-        <div>
-          <h2 class="font-semibold dark:text-white">DHT Health Check</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Detailed P2P network diagnostics</p>
-        </div>
-      </div>
-      <button
-        onclick={checkDhtHealth}
-        disabled={isCheckingDhtHealth}
-        class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
-      >
-        {#if isCheckingDhtHealth}
-          <Loader2 class="w-4 h-4 animate-spin" />
-          Checking...
-        {:else}
-          <HeartPulse class="w-4 h-4" />
+        <button
+          onclick={checkDhtHealth}
+          disabled={isCheckingDhtHealth}
+          class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+        >
+          {#if isCheckingDhtHealth}
+            <Loader2 class="w-3 h-3 animate-spin" />
+          {:else}
+            <HeartPulse class="w-3 h-3" />
+          {/if}
           Run Check
-        {/if}
-      </button>
-    </div>
-
-    {#if dhtHealth}
-      <!-- Status Overview -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-          <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-            {dhtHealth.running ? 'Running' : 'Stopped'}
-          </p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
-          <p class="text-lg font-bold dark:text-white">{dhtHealth.connectedPeerCount}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
-          <p class="text-lg font-bold dark:text-white">{dhtHealth.kademliaPeers}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
-          <p class="text-lg font-bold dark:text-white">{dhtHealth.sharedFiles}</p>
-        </div>
+        </button>
       </div>
 
-      <!-- Expandable Details -->
-      <button
-        onclick={() => showDhtHealthDetails = !showDhtHealthDetails}
-        class="w-full flex items-center justify-between text-left border-t border-gray-200 dark:border-gray-700 pt-3"
-      >
-        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Details</span>
+      {#if dhtHealth}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
+            <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+              {dhtHealth.running ? 'Running' : 'Stopped'}
+            </p>
+          </div>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
+            <p class="text-sm font-bold dark:text-white">{dhtHealth.connectedPeerCount}</p>
+          </div>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
+            <p class="text-sm font-bold dark:text-white">{dhtHealth.kademliaPeers}</p>
+          </div>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
+            <p class="text-sm font-bold dark:text-white">{dhtHealth.sharedFiles}</p>
+          </div>
+        </div>
+
+        <!-- Expandable Details -->
+        <button
+          onclick={() => showDhtHealthDetails = !showDhtHealthDetails}
+          class="w-full flex items-center justify-between text-left py-2"
+        >
+          <span class="text-xs text-gray-500 dark:text-gray-400">Advanced Details</span>
+          {#if showDhtHealthDetails}
+            <ChevronUp class="w-4 h-4 text-gray-400" />
+          {:else}
+            <ChevronDown class="w-4 h-4 text-gray-400" />
+          {/if}
+        </button>
+
         {#if showDhtHealthDetails}
-          <ChevronUp class="w-4 h-4 text-gray-400" />
-        {:else}
-          <ChevronDown class="w-4 h-4 text-gray-400" />
-        {/if}
-      </button>
-
-      {#if showDhtHealthDetails}
-        <div class="mt-3 space-y-3">
-          <!-- Peer ID -->
-          {#if dhtHealth.peerId}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Peer ID</p>
-              <p class="font-mono text-xs break-all dark:text-gray-300">{dhtHealth.peerId}</p>
-            </div>
-          {/if}
-
-          <!-- Listening Addresses -->
-          {#if dhtHealth.listeningAddresses.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
-              <div class="space-y-1">
-                {#each dhtHealth.listeningAddresses as addr}
-                  <p class="font-mono text-xs break-all dark:text-gray-300">{addr}</p>
-                {/each}
+          <div class="space-y-2">
+            {#if dhtHealth.peerId}
+              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Peer ID</p>
+                <p class="font-mono text-xs break-all dark:text-gray-300">{dhtHealth.peerId}</p>
               </div>
-            </div>
-          {/if}
+            {/if}
 
-          <!-- Bootstrap Nodes -->
-          {#if dhtHealth.bootstrapNodes.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">DHT Bootstrap Nodes</p>
-              <div class="space-y-1.5">
-                {#each dhtHealth.bootstrapNodes as node}
-                  <div class="flex items-center gap-2 text-xs">
-                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                    <span class="font-mono break-all dark:text-gray-300">{node.address}</span>
-                    <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} shrink-0">
-                      {node.reachable ? 'Reachable' : 'Unreachable'}
-                    </span>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/if}
-
-          <!-- Protocols -->
-          {#if dhtHealth.protocols.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
-              <div class="flex flex-wrap gap-1.5">
-                {#each dhtHealth.protocols as protocol}
-                  <span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded-full font-mono">
-                    {protocol}
-                  </span>
-                {/each}
-              </div>
-            </div>
-          {/if}
-        </div>
-      {/if}
-    {:else}
-      <div class="text-center py-6 text-gray-500 dark:text-gray-400">
-        <HeartPulse class="w-10 h-10 mx-auto mb-2 opacity-50" />
-        <p class="text-sm">Click "Run Check" to view DHT health details</p>
-      </div>
-    {/if}
-  </div>
-
-  <!-- Connected Peers -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-    <div class="flex items-center gap-3 mb-4">
-      <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-        <Radio class="w-6 h-6 text-blue-600 dark:text-blue-400" />
-      </div>
-      <div>
-        <h2 class="font-semibold dark:text-white">Connected DHT Peers</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Peers discovered via mDNS</p>
-      </div>
-    </div>
-
-    {#if $peers.length === 0}
-      <div class="text-center py-8 text-gray-500 dark:text-gray-400">
-        <Globe class="w-12 h-12 mx-auto mb-2 opacity-50" />
-        <p>No peers connected</p>
-        <p class="text-sm">Connect to the P2P network to discover peers</p>
-      </div>
-    {:else}
-      <div class="space-y-2">
-        {#each $peers as peer}
-          <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-            <div class="flex items-start justify-between gap-3">
-              <div class="flex-1 min-w-0">
-                <div class="font-mono text-sm break-all dark:text-gray-200">{peer.id}</div>
-                {#if peer.address}
-                  <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Address: {peer.address}</div>
-                {/if}
-                <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Last seen: {formatDate(peer.lastSeen)}
+            {#if dhtHealth.listeningAddresses.length > 0}
+              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
+                <div class="space-y-1">
+                  {#each dhtHealth.listeningAddresses as addr}
+                    <p class="font-mono text-xs break-all dark:text-gray-300">{addr}</p>
+                  {/each}
                 </div>
               </div>
-              <button
-                onclick={() => pingPeer(peer.id)}
-                class="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition shrink-0"
-                title="Ping this peer"
-              >
-                <Radio class="w-3 h-3" />
-                <span>Ping</span>
-              </button>
-            </div>
+            {/if}
+
+            {#if dhtHealth.bootstrapNodes.length > 0}
+              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">DHT Bootstrap Nodes</p>
+                <div class="space-y-1.5">
+                  {#each dhtHealth.bootstrapNodes as node}
+                    <div class="flex items-center gap-2 text-xs">
+                      <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+                      <span class="font-mono break-all dark:text-gray-300">{node.address}</span>
+                      <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} shrink-0">
+                        {node.reachable ? 'Reachable' : 'Unreachable'}
+                      </span>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            {#if dhtHealth.protocols.length > 0}
+              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
+                <div class="flex flex-wrap gap-1.5">
+                  {#each dhtHealth.protocols as protocol}
+                    <span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded-full font-mono">
+                      {protocol}
+                    </span>
+                  {/each}
+                </div>
+              </div>
+            {/if}
           </div>
-        {/each}
+        {/if}
+      {:else}
+        <p class="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
+          Click "Run Check" to view DHT health diagnostics
+        </p>
+      {/if}
+    </div>
+
+    <!-- Connected Peers -->
+    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+      <div class="flex items-center gap-2 mb-3">
+        <Radio class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Connected Peers</span>
+        <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+          {$peers.length}
+        </span>
       </div>
-    {/if}
+
+      {#if $peers.length === 0}
+        <div class="text-center py-4 text-gray-500 dark:text-gray-400">
+          <p class="text-sm">No peers connected</p>
+          <p class="text-xs">Connect to the P2P network to discover peers</p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          {#each $peers as peer}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <div class="font-mono text-sm break-all dark:text-gray-200">{peer.id}</div>
+                  {#if peer.address}
+                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Address: {peer.address}</div>
+                  {/if}
+                  <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Last seen: {formatDate(peer.lastSeen)}
+                  </div>
+                </div>
+                <button
+                  onclick={() => pingPeer(peer.id)}
+                  class="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition shrink-0"
+                  title="Ping this peer"
+                >
+                  <Radio class="w-3 h-3" />
+                  <span>Ping</span>
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
