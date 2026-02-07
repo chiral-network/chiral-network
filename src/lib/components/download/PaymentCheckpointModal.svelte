@@ -123,7 +123,7 @@
         onclick={handleClose}
         class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
       >
-        ✕
+        [X]
       </button>
     </div>
 
@@ -211,7 +211,7 @@
         </div>
         {#if !canAffordIncremental}
           <div class="mt-2 text-xs text-red-600 dark:text-red-400">
-            ⚠️ Insufficient balance for checkpoint payment
+            [WARN] Insufficient balance for checkpoint payment
           </div>
         {/if}
       </div>
@@ -262,7 +262,7 @@
 
       <!-- Info Note -->
       <div class="text-xs text-gray-500 dark:text-gray-400 text-center">
-        💡 Download will resume automatically after payment is confirmed
+        [HINT] Download will resume automatically after payment is confirmed
       </div>
     {/if}
   </div>

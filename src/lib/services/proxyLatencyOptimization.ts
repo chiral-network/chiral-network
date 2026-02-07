@@ -213,16 +213,16 @@ export class ProxyLatencyOptimizationService {
     try {
       const isAvailable = await this.isTauriAvailable();
       if (!isAvailable) {
-        return "⚠️ Running in browser mode - Tauri API unavailable";
+        return "[WARN] Running in browser mode - Tauri API unavailable";
       }
       
       const isOptimized = await this.getOptimizationStatus();
       return isOptimized 
-        ? "✅ Proxy latency optimization enabled"
-        : "⚠️ No optimal proxies available";
+        ? "[OK] Proxy latency optimization enabled"
+        : "[WARN] No optimal proxies available";
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      return `❌ Error: ${errorMessage}`;
+      return `[X] Error: ${errorMessage}`;
     }
   }
 
@@ -231,9 +231,9 @@ export class ProxyLatencyOptimizationService {
    */
   static logProxyPerformance(proxyId: string, latencyMs?: number): void {
     if (latencyMs !== undefined) {
-      console.log(`🚀 Proxy ${proxyId} latency: ${latencyMs}ms`);
+      console.log(`[START] Proxy ${proxyId} latency: ${latencyMs}ms`);
     } else {
-      console.log(`❌ Proxy ${proxyId} offline or unavailable`);
+      console.log(`[X] Proxy ${proxyId} offline or unavailable`);
     }
   }
 }

@@ -12,6 +12,26 @@ Chiral Network implements a BitTorrent-like file sharing model with instant seed
   - **Backend**: payment services, wallet handling, and transaction logging,
   - **Network layers**: DHT discovery, seeding, and transport protocols.
 - Maintain modular separation between **data transmission** and **payment verification**.
+- Support **tiered download speeds** — rate-limited free tier with paid Chiral token tiers for faster downloads.
+
+---
+
+## **Download Speed Tiers**
+
+Downloads are rate-limited by default. Users can pay Chiral tokens for faster download speeds:
+
+| Tier     | Speed        | Cost                  |
+| -------- | ------------ | --------------------- |
+| Free     | Baseline     | None                  |
+| Standard | 2x baseline  | Chiral tokens per MB  |
+| Premium  | 5x baseline  | Chiral tokens per MB  |
+| Ultra    | Uncapped     | Chiral tokens per MB  |
+
+- **All payments use Chiral tokens** via the existing wallet/blockchain infrastructure
+- **Decentralized** — tokens transfer peer-to-peer between downloader and seeder, no central payment server
+- **Seeders earn more** for serving higher-tier downloads, incentivizing network participation
+- **Tier selection is per-download** — users choose their speed tier when starting each download
+- **Rate limiting is enforced by the seeder** — the seeder throttles upload bandwidth based on the tier paid
 
 ---
 
@@ -231,7 +251,7 @@ Large files are split into chunks:
 
 Control when files are seeded:
 
-1. **Navigate to Settings** → Bandwidth Scheduling
+1. **Navigate to Settings** -> Bandwidth Scheduling
 2. **Create schedules** with:
    - Time ranges (HH:MM format)
    - Days of week
@@ -342,8 +362,8 @@ Objective: Maintain a single global configuration for determining the Chiral-to-
 ##### Example Control Logic:
 
 - Serve first 10 MB as initial handshake segment.
-- If no payment received after 10 MB → stop serving.
-- If payment received → continue serving.
+- If no payment received after 10 MB -> stop serving.
+- If payment received -> continue serving.
 - Download resumes with incremental payments:
   - 1 MB --> pay Chiral
   - 2 MB --> pay Chiral
@@ -354,20 +374,20 @@ Objective: Maintain a single global configuration for determining the Chiral-to-
 
 | Mode                     | Description                                 | Recommended For                                 |
 | ------------------------ | ------------------------------------------- | ----------------------------------------------- |
-| **Exponential Scaling**  | Payments grow as trust builds (1→2→4→8 MB). | Typical use case, balances risk and efficiency. |
+| **Exponential Scaling**  | Payments grow as trust builds (1->2->4->8 MB). | Typical use case, balances risk and efficiency. |
 | **Full Upfront Payment** | Pay entire file price at once.              | Trusted seeders or verified peers.              |
 
 Potential Protocol Message Specification:
 | Message Type | Direction | Description |
 | ------------------- | ----------------------- | ---------------------------------------------- |
-| `PRICE_QUERY` | Downloader → DHT | Request global Chiral price and file rate |
-| `PRICE_RESPONSE` | DHT → Downloader | Return computed price per MB |
-| `PAYMENT_INIT` | Downloader → Seeder | Initiate payment session |
-| `PAYMENT_ACK` | Seeder → Downloader | Confirm receipt of Chiral payment |
-| `CHUNK_REQUEST` | Downloader → Seeder | Request data chunk (N MB) |
-| `CHUNK_DELIVER` | Seeder → Downloader | Serve chunk upon payment confirmation |
-| `PAYMENT_FAILURE` | Seeder → Downloader | Stop serving due to missing or invalid payment |
-| `REPUTATION_UPDATE` | Seeder/Downloader → DHT | Submit peer trust rating |
+| `PRICE_QUERY` | Downloader -> DHT | Request global Chiral price and file rate |
+| `PRICE_RESPONSE` | DHT -> Downloader | Return computed price per MB |
+| `PAYMENT_INIT` | Downloader -> Seeder | Initiate payment session |
+| `PAYMENT_ACK` | Seeder -> Downloader | Confirm receipt of Chiral payment |
+| `CHUNK_REQUEST` | Downloader -> Seeder | Request data chunk (N MB) |
+| `CHUNK_DELIVER` | Seeder -> Downloader | Serve chunk upon payment confirmation |
+| `PAYMENT_FAILURE` | Seeder -> Downloader | Stop serving due to missing or invalid payment |
+| `REPUTATION_UPDATE` | Seeder/Downloader -> DHT | Submit peer trust rating |
 
 ##### Payment Flow Protocol
 

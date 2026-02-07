@@ -1,6 +1,6 @@
 /**
  * @fileoverview End-to-End Scenario Test
- * Tests the complete file sharing lifecycle: Upload → Publish → Search → Download → Pay
+ * Tests the complete file sharing lifecycle: Upload -> Publish -> Search -> Download -> Pay
  * 
  * This comprehensive test simulates the entire flow between two nodes:
  * 1. Uploader: Creates file, uploads, and publishes metadata to DHT
@@ -68,7 +68,7 @@ describe("End-to-End Scenario Tests", () => {
   });
 
   describe("Complete WebRTC Flow", () => {
-    it("should complete full Upload → Publish → Search → Download → Pay cycle with WebRTC", async () => {
+    it("should complete full Upload -> Publish -> Search -> Download -> Pay cycle with WebRTC", async () => {
       // === PHASE 1: UPLOAD ===
       const uploaderPeer = TestDataFactory.createMockPeers(1, "WebRTC")[0];
       const testFile = TestDataFactory.createMockFile("document.pdf", 3 * 1024 * 1024); // 3MB
@@ -276,7 +276,7 @@ describe("End-to-End Scenario Tests", () => {
   });
 
   describe("Complete Bitswap Flow", () => {
-    it("should complete full Upload → Publish → Search → Download → Pay cycle with Bitswap", async () => {
+    it("should complete full Upload -> Publish -> Search -> Download -> Pay cycle with Bitswap", async () => {
       // === PHASE 1: UPLOAD ===
       const uploaderPeer = TestDataFactory.createMockPeers(1, "Bitswap")[0];
       const testFile = TestDataFactory.createMockFile("archive.zip", 5 * 1024 * 1024); // 5MB

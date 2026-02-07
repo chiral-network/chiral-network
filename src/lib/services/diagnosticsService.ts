@@ -867,10 +867,10 @@ class DiagnosticsService {
 
         categoryResults.forEach((result) => {
           const statusIcon = {
-            pass: "✓",
-            fail: "✗",
-            warn: "⚠",
-            info: "ℹ",
+            pass: "[OK]",
+            fail: "[X]",
+            warn: "[WARN]",
+            info: "[INFO]",
           }[result.status];
 
           lines.push(`  ${statusIcon} ${result.label}: ${result.details || result.error || "no details"}`);

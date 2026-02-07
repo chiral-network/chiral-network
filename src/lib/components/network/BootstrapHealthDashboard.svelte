@@ -333,7 +333,7 @@
 
                 {#if node.error}
                   <div class="mt-2 text-sm text-red-600 dark:text-red-400">
-                    ⚠️ {node.error}
+                    [WARN] {node.error}
                   </div>
                 {/if}
 

@@ -248,7 +248,7 @@ describe('ReputationCard Component', () => {
     it('should display flag emoji for country', () => {
       const peer = {
         country: 'US',
-        flag: '🇺🇸'
+        flag: 'US'
       };
 
       expect(peer.flag).toBeDefined();

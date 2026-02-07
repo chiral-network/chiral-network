@@ -102,7 +102,7 @@ export class FileService {
     // Construct full file path using join for proper path handling
     const outputPath = await join(downloadDir, fileName);
 
-    console.log("✅ Starting download to:", outputPath);
+    console.log("[OK] Starting download to:", outputPath);
 
     // Call the backend with the validated path
     await invoke("download_file_from_network", {

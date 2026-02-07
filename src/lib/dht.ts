@@ -296,7 +296,7 @@ export class DhtService {
 
       try {
         console.log(
-          "🔽 DhtService.downloadFile: Invoking download_blocks_from_network with:",
+          "[DL] DhtService.downloadFile: Invoking download_blocks_from_network with:",
           {
             merkleRoot: fileMetadata.merkleRoot,
             fileHash: fileMetadata.fileHash,
@@ -312,7 +312,7 @@ export class DhtService {
         });
       } catch (error) {
         console.error(
-          "🔽 Frontend: download_blocks_from_network invoke failed:",
+          "[DL] Frontend: download_blocks_from_network invoke failed:",
           error
         );
         throw error;
@@ -321,7 +321,7 @@ export class DhtService {
       // Wait until the event arrives
       return await metadataPromise;
     } catch (error) {
-      console.error("🔽 Frontend: Failed to download file:", error);
+      console.error("[DL] Frontend: Failed to download file:", error);
       throw error;
     }
   }
@@ -437,7 +437,7 @@ export class DhtService {
 
     try {
       // Trigger the backend search and wait for the direct result
-      console.log("🔍 Frontend calling search_file_metadata for:", trimmed);
+      console.log("[SEARCH] Frontend calling search_file_metadata for:", trimmed);
       const metadata = await invoke<FileMetadata | null>(
         "search_file_metadata",
         {
@@ -446,7 +446,7 @@ export class DhtService {
         }
       );
       console.log(
-        "🔍 Frontend received direct result from search_file_metadata:",
+        "[SEARCH] Frontend received direct result from search_file_metadata:",
         metadata
       );
 

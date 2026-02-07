@@ -7,13 +7,13 @@ Chiral Network is a BitTorrent-like peer-to-peer file storage and sharing system
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build Status](https://github.com/chiral-network/chiral-network/workflows/test/badge.svg)](https://github.com/chiral-network/chiral-network/actions)
 
-## ✨ Features
+## [NEW] Features
 
-- 🌐 **Fully Decentralized** - No central servers, DHT-based discovery
-- ⚡ **Multi-Source Downloads** - Parallel downloads from multiple peers
-- 🎯 **Reputation System** - Intelligent peer selection based on reliability
+- [NET] **Fully Decentralized** - No central servers, DHT-based discovery
+- [FAST] **Multi-Source Downloads** - Parallel downloads from multiple peers
+- [TARGET] **Reputation System** - Intelligent peer selection based on reliability
 
-## 🚀 Quick Start
+## [START] Quick Start
 
 ### Installation
 
@@ -32,7 +32,7 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-## 📚 Documentation
+## [DOCS] Documentation
 
 ### Getting Started
 
@@ -48,9 +48,9 @@ npm run tauri:build
 
 ### More
 
-📖 **[Full Documentation Index](docs/index.md)**
+[GUIDE] **[Full Documentation Index](docs/index.md)**
 
-## 🤝 Contributing
+## [HANDSHAKE] Contributing
 
 We welcome contributions! Please read our [Contributing Guide](docs/contributing.md) for:
 
@@ -61,7 +61,7 @@ We welcome contributions! Please read our [Contributing Guide](docs/contributing
 
 See our [Roadmap](docs/roadmap.md) for planned features and development phases.
 
-## 🐛 Troubleshooting
+## [BUG] Troubleshooting
 
 ### Common Issues
 
@@ -85,22 +85,22 @@ See our [Roadmap](docs/roadmap.md) for planned features and development phases.
 
 See [User Guide - Troubleshooting](docs/user-guide.md#troubleshooting) for more.
 
-## 📄 License
+## [FILE] License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 📞 Support
+## [SUPPORT] Support
 
 - **Documentation**: [docs/](docs/index.md)
 - **Issues**: [GitHub Issues](https://github.com/chiral-network/chiral-network/issues)
 - **Discussions**: [Zulip](https://brooknet.zulipchat.com/join/f3jj4k2okvlfpu5vykz5kkk5/)
 
-## ⚠️ Disclaimer
+## [WARN] Disclaimer
 
 Chiral Network is designed for legitimate file storage and sharing. Users are responsible for ensuring they have the rights to share any content they upload. The platform uses a fully decentralized architecture to ensure true peer-to-peer operation.
 
 ---
 
-**Built with ❤️ for a decentralized, privacy-focused future**
+**Built with  for a decentralized, privacy-focused future**
 
 [Documentation](docs/index.md) • [Contributing](docs/contributing.md) • [License](LICENSE) • [GitHub](https://github.com/chiral-network/chiral-network)

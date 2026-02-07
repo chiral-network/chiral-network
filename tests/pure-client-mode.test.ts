@@ -184,7 +184,7 @@ describe('Pure-Client Mode - Upload Restrictions', () => {
   });
 
   describe('Mode Transitions', () => {
-    it('should handle enable → disable → enable transitions correctly', () => {
+    it('should handle enable -> disable -> enable transitions correctly', () => {
       // Start disabled
       settings.update(s => ({ ...s, pureClientMode: false }));
       expect(get(settings).pureClientMode).toBe(false);
@@ -265,7 +265,7 @@ describe('Pure-Client Mode - Integration Scenarios', () => {
   it('should allow full download workflow in pure-client mode', () => {
     settings.update(s => ({ ...s, pureClientMode: true }));
 
-    // Workflow: Search → Download → Pay
+    // Workflow: Search -> Download -> Pay
     const canSearch = true;
     const canDownload = true;
     const canPay = true;
@@ -280,7 +280,7 @@ describe('Pure-Client Mode - Integration Scenarios', () => {
 
     const currentSettings = get(settings);
 
-    // Workflow: Select File → Upload → Seed
+    // Workflow: Select File -> Upload -> Seed
     const canUpload = !currentSettings.pureClientMode;
     const canSeed = !currentSettings.pureClientMode;
 
