@@ -790,6 +790,9 @@ pub fn get_account_from_private_key(private_key_hex: &str) -> Result<EthAccount,
 }
 
 pub async fn get_balance(address: &str) -> Result<String, String> {
+    let rpc_endpoint = &NETWORK_CONFIG.rpc_endpoint;
+    tracing::info!("[get_balance] Requesting balance for {} from RPC: {}", address, rpc_endpoint);
+
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_getBalance",
@@ -798,18 +801,30 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&NETWORK_CONFIG.rpc_endpoint)
+        .post(rpc_endpoint)
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("[get_balance] Failed to send request to {}: {}", rpc_endpoint, e);
+            format!("Failed to send request: {}", e)
+        })?;
+
+    let status = response.status();
+    tracing::info!("[get_balance] RPC response status: {}", status);
 
     let json_response: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("[get_balance] Failed to parse JSON response: {}", e);
+            format!("Failed to parse response: {}", e)
+        })?;
+
+    tracing::info!("[get_balance] Raw JSON response: {}", json_response);
 
     if let Some(error) = json_response.get("error") {
+        tracing::error!("[get_balance] RPC returned error: {}", error);
         return Err(format!("RPC error: {}", error));
     }
 
@@ -823,8 +838,8 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 
     // Convert wei to ether (1 ether = 10^18 wei)
     let balance_ether = balance_wei as f64 / 1e18;
-    
-    tracing::debug!("💰 Balance for {}: {} (raw: {})", address, balance_ether, balance_hex);
+
+    tracing::info!("[get_balance] Balance for {}: {} ETH (hex: {}, wei: {})", address, balance_ether, balance_hex, balance_wei);
 
     Ok(format!("{:.6}", balance_ether))
 }
