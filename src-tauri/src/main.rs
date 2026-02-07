@@ -459,7 +459,7 @@ async fn start_geth_node(
 ) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
-    let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
+    let rpc_url = rpc_url.unwrap_or_else(|| crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone());
     *state.rpc_url.lock().await = rpc_url.clone();
 
     geth.start(
@@ -9274,7 +9274,7 @@ fn main() {
             miner_address: Mutex::new(None),
             active_account: Arc::new(Mutex::new(None)),
             active_account_private_key: Arc::new(Mutex::new(None)),
-            rpc_url: Mutex::new("http://127.0.0.1:8545".to_string()),
+            rpc_url: Mutex::new(crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone()),
             dht: Mutex::new(Some(dht_service_arc.clone())),
             file_transfer: Mutex::new(None),
             webrtc: Mutex::new(None),
