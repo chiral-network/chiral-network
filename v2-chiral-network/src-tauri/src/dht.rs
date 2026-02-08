@@ -784,34 +784,42 @@ async fn verify_payment_on_chain(
         return Ok(false);
     }
 
-    // Verify transaction receipt (confirmed)
-    let receipt_resp = client
-        .post(&rpc_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "eth_getTransactionReceipt",
-            "params": [tx_hash],
-            "id": 2
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("RPC receipt request failed: {}", e))?;
+    // Verify transaction receipt (confirmed) — retry up to 30 times (30 seconds)
+    // since the transaction may not be mined immediately
+    let max_retries = 30;
+    for attempt in 0..max_retries {
+        let receipt_resp = client
+            .post(&rpc_url)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getTransactionReceipt",
+                "params": [tx_hash],
+                "id": 2
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("RPC receipt request failed: {}", e))?;
 
-    let receipt_json: serde_json::Value = receipt_resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse receipt: {}", e))?;
+        let receipt_json: serde_json::Value = receipt_resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse receipt: {}", e))?;
 
-    let receipt = receipt_json.get("result");
-    if receipt.is_none() || receipt.unwrap().is_null() {
-        return Err("Transaction not yet confirmed".to_string());
+        let receipt = receipt_json.get("result");
+        if receipt.is_some() && !receipt.unwrap().is_null() {
+            let status = receipt.unwrap().get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0x0");
+            return Ok(status == "0x1");
+        }
+
+        if attempt < max_retries - 1 {
+            println!("⏳ Payment tx {} not confirmed yet, retrying ({}/{})", tx_hash, attempt + 1, max_retries);
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
     }
 
-    let status = receipt.unwrap().get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0x0");
-
-    Ok(status == "0x1")
+    Err("Transaction not confirmed after 30 seconds".to_string())
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
