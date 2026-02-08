@@ -695,7 +695,9 @@ name = "chiral-network-v2"
 version = "2.0.0"
 dependencies = [
  "aes-gcm",
+ "async-trait",
  "base64 0.21.7",
+ "cbor4ii",
  "dirs 5.0.1",
  "ed25519-dalek",
  "futures",
