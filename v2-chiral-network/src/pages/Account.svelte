@@ -282,6 +282,10 @@
     switch (tx.txType) {
       case 'speed_tier_payment':
         return { bgColor: 'bg-amber-100 dark:bg-amber-900/30', iconColor: 'text-amber-600 dark:text-amber-400' };
+      case 'file_payment':
+        return { bgColor: 'bg-purple-100 dark:bg-purple-900/30', iconColor: 'text-purple-600 dark:text-purple-400' };
+      case 'file_sale':
+        return { bgColor: 'bg-emerald-100 dark:bg-emerald-900/30', iconColor: 'text-emerald-600 dark:text-emerald-400' };
       case 'receive':
         return { bgColor: 'bg-green-100 dark:bg-green-900/30', iconColor: 'text-green-600 dark:text-green-400' };
       case 'send':
@@ -297,6 +301,8 @@
   function getTxTypeLabel(tx: Transaction): string {
     switch (tx.txType) {
       case 'speed_tier_payment': return 'Download Payment';
+      case 'file_payment': return 'File Purchase';
+      case 'file_sale': return 'File Sale';
       case 'send': return 'Sent';
       case 'receive': return 'Received';
       default: return isIncoming(tx) ? 'Received' : 'Sent';
@@ -518,6 +524,8 @@
                 <div class="p-2 {style.bgColor} rounded-full flex-shrink-0">
                   {#if tx.txType === 'speed_tier_payment'}
                     <Zap class="w-5 h-5 {style.iconColor}" />
+                  {:else if tx.txType === 'file_payment' || tx.txType === 'file_sale'}
+                    <FileIcon class="w-5 h-5 {style.iconColor}" />
                   {:else if isIncoming(tx)}
                     <ArrowDownLeft class="w-5 h-5 {style.iconColor}" />
                   {:else}
@@ -532,7 +540,11 @@
                     <span class="text-xs px-2 py-0.5 rounded-full {
                       tx.txType === 'speed_tier_payment'
                         ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300'
-                        : 'bg-gray-200 dark:bg-gray-600 dark:text-gray-300'
+                        : tx.txType === 'file_payment'
+                          ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300'
+                          : tx.txType === 'file_sale'
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300'
+                            : 'bg-gray-200 dark:bg-gray-600 dark:text-gray-300'
                     }">
                       {getTxTypeLabel(tx)}
                     </span>
