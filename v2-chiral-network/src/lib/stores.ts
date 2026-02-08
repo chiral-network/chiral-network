@@ -35,12 +35,14 @@ export interface AppSettings {
   theme: ThemeMode;
   reducedMotion: boolean;
   compactMode: boolean;
+  downloadDirectory: string; // empty string = system default Downloads folder
 }
 
 const defaultSettings: AppSettings = {
   theme: 'system',
   reducedMotion: false,
-  compactMode: false
+  compactMode: false,
+  downloadDirectory: ''
 };
 
 function createSettingsStore() {

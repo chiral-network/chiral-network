@@ -28,6 +28,7 @@ pub struct AppState {
     pub encryption_keypair: Arc<Mutex<Option<EncryptionKeypair>>>,
     pub download_tiers: Arc<Mutex<HashMap<String, SpeedTier>>>, // request_id -> speed tier
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
+    pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
 }
 
 #[tauri::command]
@@ -41,7 +42,7 @@ async fn start_dht(
         return Err("DHT already running".to_string());
     }
 
-    let dht = Arc::new(DhtService::new(state.file_transfer.clone(), state.download_tiers.clone()));
+    let dht = Arc::new(DhtService::new(state.file_transfer.clone(), state.download_tiers.clone(), state.download_directory.clone()));
     let result = dht.start(app.clone()).await?;
     *dht_guard = Some(dht);
 
@@ -153,8 +154,9 @@ async fn accept_file_transfer(
     state: tauri::State<'_, AppState>,
     transfer_id: String,
 ) -> Result<String, String> {
+    let custom_dir = state.download_directory.lock().await.clone();
     let file_transfer = state.file_transfer.lock().await;
-    file_transfer.accept_transfer(app, transfer_id).await
+    file_transfer.accept_transfer(app, transfer_id, custom_dir).await
 }
 
 #[tauri::command]
@@ -256,6 +258,69 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
             Ok(vec![])
         }
     }
+}
+
+#[tauri::command]
+async fn pick_download_directory() -> Result<Option<String>, String> {
+    use rfd::FileDialog;
+
+    let dir = FileDialog::new()
+        .set_title("Choose Download Directory")
+        .pick_folder();
+
+    Ok(dir.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+async fn set_download_directory(
+    state: tauri::State<'_, AppState>,
+    path: Option<String>,
+) -> Result<(), String> {
+    // Validate the path exists if provided
+    if let Some(ref p) = path {
+        if !p.is_empty() {
+            let path_buf = std::path::Path::new(p);
+            if !path_buf.exists() {
+                return Err(format!("Directory does not exist: {}", p));
+            }
+            if !path_buf.is_dir() {
+                return Err(format!("Path is not a directory: {}", p));
+            }
+        }
+    }
+
+    let mut dir = state.download_directory.lock().await;
+    *dir = path.filter(|p| !p.is_empty());
+    println!("📁 Download directory set to: {:?}", *dir);
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_download_directory(
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let dir = state.download_directory.lock().await;
+    match dir.as_ref() {
+        Some(path) => Ok(path.clone()),
+        None => {
+            // Return system default
+            Ok(dirs::download_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default())
+        }
+    }
+}
+
+/// Helper to get the effective download directory from AppState
+fn get_effective_download_dir(custom_dir: &Option<String>) -> Result<std::path::PathBuf, String> {
+    if let Some(ref dir) = custom_dir {
+        let path = std::path::PathBuf::from(dir);
+        if path.exists() && path.is_dir() {
+            return Ok(path);
+        }
+        println!("⚠️ Custom download directory '{}' is invalid, falling back to system default", dir);
+    }
+    dirs::download_dir().ok_or_else(|| "Could not find downloads directory".to_string())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -481,8 +546,8 @@ async fn start_download(
             println!("📁 File found in local cache");
 
             // Save to downloads folder (rate-limited even for cached files)
-            let downloads_dir = dirs::download_dir()
-                .ok_or("Could not find downloads directory")?;
+            let custom_dir = state.download_directory.lock().await.clone();
+            let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
             let request_id = format!("local-{}", &file_hash[..8]);
 
@@ -1996,6 +2061,7 @@ pub fn run() {
             encryption_keypair: Arc::new(Mutex::new(None)),
             download_tiers: Arc::new(Mutex::new(HashMap::new())),
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
+            download_directory: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -2015,6 +2081,9 @@ pub fn run() {
             get_available_storage,
             get_file_size,
             open_file_dialog,
+            pick_download_directory,
+            set_download_directory,
+            get_download_directory,
             publish_file,
             search_file,
             start_download,
