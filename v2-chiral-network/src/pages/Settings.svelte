@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { settings, isDarkMode, type ThemeMode } from '$lib/stores';
+  import { settings, isDarkMode, type ThemeMode, type NotificationSettings } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import {
     Sun,
@@ -13,7 +13,8 @@
     Check,
     FolderOpen,
     HardDrive,
-    X
+    X,
+    Bell
   } from 'lucide-svelte';
 
   let isTauri = $state(false);
@@ -85,6 +86,27 @@
   function toggleCompactMode() {
     settings.update((s) => ({ ...s, compactMode: !s.compactMode }));
   }
+
+  function toggleNotification(key: keyof NotificationSettings) {
+    settings.update((s) => ({
+      ...s,
+      notifications: {
+        ...s.notifications,
+        [key]: !s.notifications[key]
+      }
+    }));
+  }
+
+  const notificationOptions: { key: keyof NotificationSettings; label: string; description: string }[] = [
+    { key: 'downloadComplete', label: 'Download Complete', description: 'When a file finishes downloading' },
+    { key: 'downloadFailed', label: 'Download Failed', description: 'When a file download fails' },
+    { key: 'peerConnected', label: 'Peer Connected', description: 'When a new peer connects to you' },
+    { key: 'peerDisconnected', label: 'Peer Disconnected', description: 'When a peer disconnects from you' },
+    { key: 'miningBlock', label: 'Mining Block Found', description: 'When you mine a new block' },
+    { key: 'paymentReceived', label: 'Payment Received', description: 'When you receive a CHR payment for a file' },
+    { key: 'networkStatus', label: 'Network Status', description: 'Connection and disconnection events' },
+    { key: 'fileShared', label: 'File Shared', description: 'When someone starts downloading your shared file' }
+  ];
 
   function resetSettings() {
     settings.reset();
@@ -245,6 +267,43 @@
       </div>
     </div>
   {/if}
+
+  <!-- Notification Settings Section -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="p-2 bg-amber-100 dark:bg-amber-900 rounded-lg">
+        <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
+      </div>
+      <div>
+        <h2 class="font-semibold text-lg dark:text-white">Notifications</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Choose which notifications and toast popups to show</p>
+      </div>
+    </div>
+
+    <div class="space-y-0">
+      {#each notificationOptions as option, i}
+        <div class="flex items-center justify-between py-4 {i > 0 ? 'border-t border-gray-200 dark:border-gray-700' : ''}">
+          <div>
+            <p class="font-medium text-gray-900 dark:text-white">{option.label}</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">{option.description}</p>
+          </div>
+          <button
+            onclick={() => toggleNotification(option.key)}
+            class="relative w-12 h-6 rounded-full transition-colors
+              {$settings.notifications?.[option.key] ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}"
+            role="switch"
+            aria-checked={$settings.notifications?.[option.key] ?? true}
+            aria-label="Toggle {option.label}"
+          >
+            <span
+              class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
+                {$settings.notifications?.[option.key] ? 'translate-x-6' : 'translate-x-0'}"
+            ></span>
+          </button>
+        </div>
+      {/each}
+    </div>
+  </div>
 
   <!-- Preview Section -->
   <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
