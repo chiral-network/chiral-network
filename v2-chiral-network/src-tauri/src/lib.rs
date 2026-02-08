@@ -1437,10 +1437,11 @@ async fn send_transaction(
     let nonce = parse_hex_u64(nonce_json["result"].as_str().unwrap_or("0x0"));
 
     // Get sender balance to verify they have enough
+    // Use "pending" to account for in-flight transactions consuming funds
     let balance_payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_getBalance",
-        "params": [&from_address, "latest"],
+        "params": [&from_address, "pending"],
         "id": 1
     });
 
@@ -1575,13 +1576,58 @@ async fn send_transaction(
 
     println!("📥 RPC Response: {}", send_json);
 
+    // Handle RPC errors with retry for transient conditions
     if let Some(error) = send_json.get("error") {
         let error_msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("");
-        // "already known" means the tx is already in the mempool — treat as success
-        if error_msg != "already known" {
+
+        if error_msg == "already known" {
+            // Transaction is already in the mempool — treat as success
+            println!("⚠️ Transaction already in mempool, proceeding");
+        } else if error_msg.contains("overdraft") {
+            // Pending transactions consuming balance — wait for them to clear and retry
+            println!("⚠️ Overdraft due to pending txs, waiting for confirmation...");
+            for attempt in 1..=15 {
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                println!("⏳ Retry attempt {}/15...", attempt);
+
+                // Re-send the same signed transaction
+                let retry_resp = client
+                    .post(&default_rpc_endpoint())
+                    .json(&send_payload)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Retry failed: {}", e))?;
+
+                let retry_json: serde_json::Value = retry_resp.json().await
+                    .map_err(|e| format!("Failed to parse retry response: {}", e))?;
+
+                if retry_json.get("result").is_some() && !retry_json["result"].is_null() {
+                    println!("✅ Transaction accepted on retry {}", attempt);
+                    let tx_hash = retry_json["result"].as_str().unwrap().to_string();
+                    println!("✅ Transaction submitted: {}", tx_hash);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    return Ok(SendTransactionResult {
+                        hash: tx_hash,
+                        status: "pending".to_string(),
+                    });
+                }
+
+                let retry_msg = retry_json.get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("");
+
+                if retry_msg == "already known" {
+                    println!("⚠️ Transaction now in mempool on retry {}", attempt);
+                    break;
+                }
+                if !retry_msg.contains("overdraft") {
+                    return Err(format!("Transaction failed on retry: {}", retry_json.get("error").unwrap()));
+                }
+            }
+        } else {
             return Err(format!("Transaction failed: {}", error));
         }
-        println!("⚠️ Transaction already in mempool, proceeding");
     }
 
     // Compute tx hash from the signed transaction bytes
@@ -1589,7 +1635,7 @@ async fn send_transaction(
     let tx_hash = if let Some(hash) = send_json["result"].as_str() {
         hash.to_string()
     } else {
-        // Compute hash from signed transaction for "already known" case
+        // Compute hash from signed transaction for "already known" / overdraft-retry case
         let tx_bytes = hex::decode(signed_tx_hex.trim_start_matches("0x"))
             .map_err(|e| format!("Failed to decode signed tx: {}", e))?;
         format!("0x{}", hex::encode(keccak256(&tx_bytes)))
