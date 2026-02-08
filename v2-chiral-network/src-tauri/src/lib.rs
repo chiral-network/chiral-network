@@ -142,7 +142,9 @@ async fn send_file(
     price_wei: Option<String>,
     sender_wallet: Option<String>,
     file_hash: Option<String>,
+    file_size: Option<u64>,
 ) -> Result<(), String> {
+    let actual_size = file_size.unwrap_or(file_data.len() as u64);
     let dht_guard = state.dht.lock().await;
 
     if let Some(dht) = dht_guard.as_ref() {
@@ -154,6 +156,7 @@ async fn send_file(
             price_wei.unwrap_or_default(),
             sender_wallet.unwrap_or_default(),
             file_hash.unwrap_or_default(),
+            actual_size,
         ).await
     } else {
         Err("DHT not running".to_string())
@@ -442,6 +445,93 @@ async fn publish_file(
         dht.put_dht_value(dht_key, metadata_json).await?;
 
         println!("File metadata published to DHT: {}", merkle_root);
+    } else {
+        println!("DHT not running, file hash computed but not published to network");
+    }
+
+    Ok(PublishResult { merkle_root })
+}
+
+/// Publish file from raw bytes (for ChiralDrop paid transfers where file data comes from the browser)
+#[tauri::command]
+async fn publish_file_data(
+    state: tauri::State<'_, AppState>,
+    file_name: String,
+    file_data: Vec<u8>,
+    price_chr: Option<String>,
+    wallet_address: Option<String>,
+) -> Result<PublishResult, String> {
+    let file_size = file_data.len() as u64;
+
+    // Compute SHA-256 hash
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(&file_data);
+    let hash = hasher.finalize();
+    let merkle_root = hex::encode(hash);
+
+    println!("Publishing file from data: {} with hash: {}", file_name, merkle_root);
+
+    // Store file data in memory for serving to peers
+    {
+        let mut storage = state.file_storage.lock().await;
+        storage.insert(merkle_root.clone(), file_data);
+    }
+
+    // Get DHT service and peer ID
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+
+        // Parse price from CHR to wei
+        let price_wei_val = if let Some(ref price) = price_chr {
+            if price.is_empty() || price == "0" {
+                0u128
+            } else {
+                parse_chr_to_wei(price)?
+            }
+        } else {
+            0u128
+        };
+
+        let wallet_addr = wallet_address.unwrap_or_default();
+
+        if price_wei_val > 0 && wallet_addr.is_empty() {
+            return Err("Wallet address is required when setting a file price".to_string());
+        }
+
+        // Register the file for sharing (use hash as path since data is in memory)
+        dht.register_shared_file(
+            merkle_root.clone(),
+            format!("memory:{}", merkle_root),
+            file_name.clone(),
+            file_size,
+            price_wei_val,
+            wallet_addr.clone(),
+        ).await;
+
+        // Create file metadata
+        let metadata = FileMetadata {
+            hash: merkle_root.clone(),
+            file_name: file_name.clone(),
+            file_size,
+            protocol: "WebRTC".to_string(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            peer_id: peer_id.clone(),
+            price_wei: price_wei_val.to_string(),
+            wallet_address: wallet_addr,
+        };
+
+        // Serialize and store in DHT
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        let dht_key = format!("chiral_file_{}", merkle_root);
+        dht.put_dht_value(dht_key, metadata_json).await?;
+
+        println!("File data published to DHT: {}", merkle_root);
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -2166,7 +2256,8 @@ async fn send_encrypted_file(
     if let Some(dht) = dht_guard.as_ref() {
         // Prefix file name with .encrypted to indicate it's encrypted
         let encrypted_file_name = format!("{}.encrypted", file_name);
-        dht.send_file(peer_id, transfer_id, encrypted_file_name, encrypted_json, String::new(), String::new(), String::new()).await
+        let size = encrypted_json.len() as u64;
+        dht.send_file(peer_id, transfer_id, encrypted_file_name, encrypted_json, String::new(), String::new(), String::new(), size).await
     } else {
         Err("DHT not running".to_string())
     }
@@ -2246,6 +2337,7 @@ pub fn run() {
             set_download_directory,
             get_download_directory,
             publish_file,
+            publish_file_data,
             search_file,
             start_download,
             calculate_download_cost,
