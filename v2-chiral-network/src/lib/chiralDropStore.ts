@@ -24,6 +24,8 @@ export interface FileTransfer {
   senderWallet?: string;
   fileHash?: string;
   paymentTxHash?: string;
+  balanceBefore?: string;
+  balanceAfter?: string;
 }
 
 export interface NearbyPeer {
@@ -158,13 +160,21 @@ export function updateTransferPayment(id: string, txHash: string) {
   );
 }
 
-export function updateTransferByFileHash(fileHash: string, status: FileTransfer['status'], txHash?: string) {
+export function updateTransferByFileHash(
+  fileHash: string,
+  status: FileTransfer['status'],
+  txHash?: string,
+  balanceBefore?: string,
+  balanceAfter?: string,
+) {
   // Find in pending by fileHash
   const pending = get(pendingTransfers);
   const transfer = pending.find((t) => t.fileHash === fileHash);
   if (transfer) {
     const updates: Partial<FileTransfer> = { status };
     if (txHash) updates.paymentTxHash = txHash;
+    if (balanceBefore) updates.balanceBefore = balanceBefore;
+    if (balanceAfter) updates.balanceAfter = balanceAfter;
     pendingTransfers.update((transfers) =>
       transfers.map((t) => t.fileHash === fileHash ? { ...t, ...updates } : t)
     );
@@ -175,11 +185,13 @@ export function updateTransferByFileHash(fileHash: string, status: FileTransfer[
     return;
   }
   // Also check history (may already be there from acceptTransfer)
-  if (txHash) {
-    transferHistory.update((history) =>
-      history.map((t) => t.fileHash === fileHash ? { ...t, paymentTxHash: txHash, status } : t)
-    );
-  }
+  const historyUpdates: Partial<FileTransfer> = { status };
+  if (txHash) historyUpdates.paymentTxHash = txHash;
+  if (balanceBefore) historyUpdates.balanceBefore = balanceBefore;
+  if (balanceAfter) historyUpdates.balanceAfter = balanceAfter;
+  transferHistory.update((history) =>
+    history.map((t) => t.fileHash === fileHash ? { ...t, ...historyUpdates } : t)
+  );
 }
 
 export function acceptTransfer(id: string) {
