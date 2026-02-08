@@ -13,9 +13,8 @@
     AlertTriangle,
     Loader2,
     Globe,
-    Thermometer,
     Gauge,
-    Bolt,
+    Blocks,
     Coins,
     Clock,
     Cpu
@@ -60,9 +59,6 @@
   let miningElapsed = $state('00:00:00');
   let elapsedInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Estimated stats (simulated from hash rate)
-  let estimatedTemp = $state(0);
-  let estimatedWattage = $state(0);
 
   // Save thread count whenever it changes
   $effect(() => {
@@ -94,19 +90,6 @@
     }
   });
 
-  // Update estimated stats when mining status changes
-  $effect(() => {
-    if (miningStatus?.mining) {
-      const hr = miningStatus.hashRate || 0;
-      // Estimate CPU temperature based on thread count (baseline 45C + thread contribution)
-      estimatedTemp = Math.round(45 + miningThreads * 8 + Math.random() * 3);
-      // Estimate wattage: ~15W per thread under mining load
-      estimatedWattage = Math.round(15 * miningThreads + Math.random() * 5);
-    } else {
-      estimatedTemp = 0;
-      estimatedWattage = 0;
-    }
-  });
 
   function updateElapsed() {
     if (!miningStartTime) return;
@@ -322,20 +305,11 @@
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
           <div class="flex items-center gap-2 mb-2">
-            <Thermometer class="w-4 h-4 text-red-500" />
-            <span class="text-sm text-gray-600 dark:text-gray-400">CPU Temperature</span>
+            <Blocks class="w-4 h-4 text-red-500" />
+            <span class="text-sm text-gray-600 dark:text-gray-400">Block Height</span>
           </div>
           <p class="text-2xl font-bold dark:text-white">
-            {miningStatus?.mining ? `~${estimatedTemp}°C` : '--'}
-          </p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
-          <div class="flex items-center gap-2 mb-2">
-            <Bolt class="w-4 h-4 text-blue-500" />
-            <span class="text-sm text-gray-600 dark:text-gray-400">Power Draw</span>
-          </div>
-          <p class="text-2xl font-bold dark:text-white">
-            {miningStatus?.mining ? `~${estimatedWattage}W` : '--'}
+            {gethStatus?.currentBlock?.toLocaleString() ?? '0'}
           </p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
