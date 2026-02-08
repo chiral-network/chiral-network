@@ -270,6 +270,10 @@ pub struct GethProcess {
     child: Option<Child>,
     data_dir: PathBuf,
     downloader: GethDownloader,
+    /// Last observed block number for hashrate estimation
+    last_block: u64,
+    /// Timestamp (seconds since epoch) when last_block was observed
+    last_block_time: u64,
 }
 
 impl GethProcess {
@@ -283,6 +287,8 @@ impl GethProcess {
             child: None,
             data_dir,
             downloader: GethDownloader::new(),
+            last_block: 0,
+            last_block_time: 0,
         }
     }
 
@@ -586,13 +592,9 @@ impl GethProcess {
             return Err("Cannot mine: local Geth node is not running. Start the node from the Network page first.".to_string());
         }
         let client = reqwest::Client::new();
-        println!("⛏️  Starting miner with {} thread(s) via RPC to {}", threads, self.effective_rpc_endpoint());
-        let result = self.rpc_call(&client, "miner_start", serde_json::json!([threads])).await;
-        match &result {
-            Ok(val) => println!("⛏️  miner_start response: {}", val),
-            Err(e) => println!("⛏️  miner_start error: {}", e),
-        }
-        result.map(|_| ())
+        self.rpc_call(&client, "miner_start", serde_json::json!([threads]))
+            .await
+            .map(|_| ())
     }
 
     /// Stop mining
@@ -604,54 +606,74 @@ impl GethProcess {
     }
 
     /// Get mining status
-    pub async fn get_mining_status(&self) -> Result<MiningStatus, String> {
+    /// Note: eth_hashrate returns 0 for Geth's internal CPU miner (known upstream issue).
+    /// We estimate hashrate from block difficulty / block time instead.
+    pub async fn get_mining_status(&mut self) -> Result<MiningStatus, String> {
         let client = reqwest::Client::new();
 
         let mining = match self.rpc_call(&client, "eth_mining", serde_json::json!([])).await {
-            Ok(result) => {
-                let val = result.as_bool().unwrap_or(false);
-                println!("⛏️  eth_mining: {} (raw: {})", val, result);
-                val
-            }
-            Err(e) => {
-                println!("⛏️  eth_mining error: {}", e);
-                false
-            }
+            Ok(result) => result.as_bool().unwrap_or(false),
+            Err(_) => false,
         };
 
-        // Try multiple methods to get hash rate
-        // 1. ethash_getHashrate (Core-Geth specific)
-        let ethash_hr = self.rpc_call(&client, "ethash_getHashrate", serde_json::json!([])).await;
-        println!("⛏️  ethash_getHashrate: {:?}", ethash_hr);
+        // Estimate hashrate from block production:
+        // hashrate ≈ difficulty / block_time
+        let mut hash_rate: u64 = 0;
 
-        // 2. eth_hashrate (standard)
-        let eth_hr = self.rpc_call(&client, "eth_hashrate", serde_json::json!([])).await;
-        println!("⛏️  eth_hashrate: {:?}", eth_hr);
-
-        // 3. miner_getHashrate (alternative Core-Geth method)
-        let miner_hr = self.rpc_call(&client, "miner_getHashrate", serde_json::json!([])).await;
-        println!("⛏️  miner_getHashrate: {:?}", miner_hr);
-
-        // Pick the first non-zero result
-        let hash_rate = [&ethash_hr, &eth_hr, &miner_hr]
-            .iter()
-            .filter_map(|r| r.as_ref().ok())
-            .filter_map(|result| {
-                // Try parsing as hex string first
-                if let Some(hex) = result.as_str() {
-                    let parsed = u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                    if parsed > 0 { return Some(parsed); }
+        if mining {
+            // Get current block number
+            let current_block = match self.rpc_call(&client, "eth_blockNumber", serde_json::json!([])).await {
+                Ok(result) => {
+                    let hex = result.as_str().unwrap_or("0x0");
+                    u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
                 }
-                // Try parsing as number directly
-                if let Some(n) = result.as_u64() {
-                    if n > 0 { return Some(n); }
-                }
-                None
-            })
-            .next()
-            .unwrap_or(0);
+                Err(_) => 0,
+            };
 
-        println!("⛏️  Final hash_rate: {}", hash_rate);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            if current_block > 0 {
+                // Get the latest block's difficulty
+                let difficulty = match self.rpc_call(
+                    &client,
+                    "eth_getBlockByNumber",
+                    serde_json::json!(["latest", false]),
+                ).await {
+                    Ok(result) => {
+                        result.get("difficulty")
+                            .and_then(|d| d.as_str())
+                            .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
+                            .unwrap_or(0)
+                    }
+                    Err(_) => 0,
+                };
+
+                if self.last_block > 0 && current_block > self.last_block && self.last_block_time > 0 {
+                    // We have a previous measurement — compute hashrate from blocks mined
+                    let blocks_mined = current_block - self.last_block;
+                    let elapsed = now.saturating_sub(self.last_block_time);
+                    if elapsed > 0 && difficulty > 0 {
+                        // hashrate = (blocks_mined * difficulty) / elapsed_seconds
+                        hash_rate = (blocks_mined as u128 * difficulty as u128 / elapsed as u128) as u64;
+                    }
+                } else if difficulty > 0 {
+                    // First poll or no block change yet — estimate from difficulty alone
+                    // Assume a ~13 second target block time as baseline
+                    hash_rate = difficulty / 13;
+                }
+
+                // Update tracking
+                self.last_block = current_block;
+                self.last_block_time = now;
+            }
+        } else {
+            // Not mining — reset tracking
+            self.last_block = 0;
+            self.last_block_time = 0;
+        }
 
         let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await
         {
