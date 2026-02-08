@@ -23,7 +23,7 @@
     Download,
     ExternalLink
   } from 'lucide-svelte';
-  import { networkConnected } from '$lib/stores';
+  import { networkConnected, walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
   const log = logger('Upload');
@@ -112,6 +112,7 @@
     seeders: number;
     uploadDate: Date;
     filePath: string;
+    priceChr: string;
   }
 
   // State
@@ -120,6 +121,7 @@
   let selectedProtocol = $state<Protocol>('WebRTC');
   let sharedFiles = $state<SharedFile[]>([]);
   let showUploadHistory = $state(true);
+  let filePrice = $state('');
 
   // Storage info
   let availableStorage = $state<number | null>(null);
@@ -218,11 +220,21 @@
           log.warn('Could not get file size:', e);
         }
 
-        // Publish to DHT with selected protocol
+        // Publish to DHT with selected protocol and pricing
+        const priceChr = filePrice && parseFloat(filePrice) > 0 ? filePrice : undefined;
+        const walletAddr = $walletAccount?.address;
+
+        if (priceChr && !walletAddr) {
+          toasts.show('Connect your wallet to set a file price', 'error');
+          continue;
+        }
+
         const result = await invoke<{ merkleRoot: string }>('publish_file', {
           filePath,
           fileName,
-          protocol: selectedProtocol
+          protocol: selectedProtocol,
+          priceChr: priceChr || null,
+          walletAddress: priceChr ? walletAddr : null,
         });
 
         const newFile: SharedFile = {
@@ -234,7 +246,8 @@
           fileType: getFileType(fileName),
           seeders: 1,
           uploadDate: new Date(),
-          filePath
+          filePath,
+          priceChr: priceChr || '0',
         };
 
         sharedFiles = [...sharedFiles, newFile];
@@ -370,7 +383,9 @@
             fileHash: file.hash,
             filePath: file.filePath,
             fileName: file.name,
-            fileSize: file.size
+            fileSize: file.size,
+            priceChr: file.priceChr && file.priceChr !== '0' ? file.priceChr : null,
+            walletAddress: file.priceChr && file.priceChr !== '0' ? $walletAccount?.address : null,
           });
           log.info(`Re-registered shared file: ${file.name}`);
         } catch (e) {
@@ -527,6 +542,34 @@
     </div>
   </div>
 
+  <!-- File Price -->
+  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+    <div class="flex items-center justify-between">
+      <div>
+        <p class="text-sm font-semibold text-gray-900 dark:text-white">File Price</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Set a price in CHR tokens (leave empty for free)</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input
+          type="number"
+          min="0"
+          step="0.001"
+          placeholder="0 (free)"
+          bind:value={filePrice}
+          class="w-40 px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+        <span class="text-sm text-gray-500 dark:text-gray-400">CHR</span>
+      </div>
+    </div>
+    {#if filePrice && parseFloat(filePrice) > 0 && !$walletAccount}
+      <div class="mt-3 p-2 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg">
+        <p class="text-xs text-amber-700 dark:text-amber-400">
+          Connect your wallet on the Account page to receive payments for file downloads.
+        </p>
+      </div>
+    {/if}
+  </div>
+
   <!-- Drop Zone -->
   <div
     role="button"
@@ -638,6 +681,15 @@
                     <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(file.protocol)}">
                       {file.protocol}
                     </span>
+                    {#if file.priceChr && file.priceChr !== '0'}
+                      <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                        {file.priceChr} CHR
+                      </span>
+                    {:else}
+                      <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                        Free
+                      </span>
+                    {/if}
                   </div>
 
                   <div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">

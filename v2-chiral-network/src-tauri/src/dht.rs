@@ -14,10 +14,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use std::str::FromStr;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use sha2::{Sha256, Digest};
+use std::io::{Read as _, Seek as _, SeekFrom};
 
-/// Custom CBOR codec with higher size limits than the default libp2p one.
-/// The built-in libp2p cbor codec limits responses to 10 MB, which is too small
-/// for file transfers. This codec allows up to 2 GB responses.
+/// Custom CBOR codec with appropriate size limits for chunked file transfers.
+/// Individual chunks are 256 KB, but FileInfo responses can be large for big files
+/// (chunk hashes array). 32 MB covers files up to ~100 GB.
 mod cbor_codec {
     use async_trait::async_trait;
     use cbor4ii::core::error::DecodeError;
@@ -27,10 +30,10 @@ mod cbor_codec {
     use serde::{de::DeserializeOwned, Serialize};
     use std::{collections::TryReserveError, convert::Infallible, io, marker::PhantomData};
 
-    /// Max request size: 10 MB (requests are just metadata like file hashes)
-    const REQUEST_SIZE_MAXIMUM: u64 = 10 * 1024 * 1024;
-    /// Max response size: 2 GB (responses carry file data)
-    const RESPONSE_SIZE_MAXIMUM: u64 = 2 * 1024 * 1024 * 1024;
+    /// Max request size: 1 MB (requests are small metadata)
+    const REQUEST_SIZE_MAXIMUM: u64 = 1 * 1024 * 1024;
+    /// Max response size: 32 MB (FileInfo with chunk hashes for large files)
+    const RESPONSE_SIZE_MAXIMUM: u64 = 32 * 1024 * 1024;
 
     pub type Behaviour<Req, Resp> = request_response::Behaviour<Codec<Req, Resp>>;
 
@@ -183,20 +186,67 @@ pub struct FileTransferResponse {
     pub error: Option<String>,
 }
 
-// File request protocol messages (for requesting files by hash)
+/// Chunk size for file transfers: 256 KB
+const CHUNK_SIZE: usize = 256 * 1024;
+/// Maximum retries per chunk before aborting
+const MAX_CHUNK_RETRIES: u8 = 3;
+
+// Chunked file request protocol messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileRequestMessage {
-    pub request_id: String,
-    pub file_hash: String,
+pub enum ChunkRequest {
+    /// Ask the seeder for file metadata and chunk manifest
+    FileInfo {
+        request_id: String,
+        file_hash: String,
+    },
+    /// Ask for a specific chunk by index
+    Chunk {
+        request_id: String,
+        file_hash: String,
+        chunk_index: u32,
+    },
+    /// Send proof of payment to seeder
+    PaymentProof {
+        request_id: String,
+        file_hash: String,
+        payment_tx: String,
+        payer_address: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileRequestResponse {
-    pub request_id: String,
-    pub file_hash: String,
-    pub file_name: String,
-    pub file_data: Option<Vec<u8>>,
-    pub error: Option<String>,
+pub enum ChunkResponse {
+    /// File metadata with per-chunk SHA-256 hashes
+    FileInfo {
+        request_id: String,
+        file_hash: String,
+        file_name: String,
+        file_size: u64,
+        chunk_size: u32,
+        total_chunks: u32,
+        chunk_hashes: Vec<String>,
+        /// Price in wei as string (u128 as string for CBOR safety)
+        price_wei: String,
+        /// Seeder's wallet address for payment
+        wallet_address: String,
+        error: Option<String>,
+    },
+    /// A single chunk of file data
+    Chunk {
+        request_id: String,
+        file_hash: String,
+        chunk_index: u32,
+        chunk_data: Option<Vec<u8>>,
+        chunk_hash: String,
+        error: Option<String>,
+    },
+    /// Acknowledgement of payment verification
+    PaymentAck {
+        request_id: String,
+        file_hash: String,
+        accepted: bool,
+        error: Option<String>,
+    },
 }
 
 enum SwarmCommand {
@@ -207,10 +257,16 @@ enum SwarmCommand {
         file_name: String,
         file_data: Vec<u8>,
     },
-    RequestFile {
+    RequestFileInfo {
         peer_id: PeerId,
         request_id: String,
         file_hash: String,
+    },
+    RequestChunk {
+        peer_id: PeerId,
+        request_id: String,
+        file_hash: String,
+        chunk_index: u32,
     },
     PutDhtValue {
         key: String,
@@ -227,6 +283,13 @@ enum SwarmCommand {
     CheckPeerConnected {
         peer_id: PeerId,
         response_tx: tokio::sync::oneshot::Sender<bool>,
+    },
+    SendPaymentProof {
+        peer_id: PeerId,
+        request_id: String,
+        file_hash: String,
+        payment_tx: String,
+        payer_address: String,
     },
 }
 
@@ -274,7 +337,7 @@ struct DhtBehaviour {
     identify: identify::Behaviour,
     ping_protocol: request_response::cbor::Behaviour<PingRequest, PingResponse>,
     file_transfer: cbor_codec::Behaviour<FileTransferRequest, FileTransferResponse>,
-    file_request: cbor_codec::Behaviour<FileRequestMessage, FileRequestResponse>,
+    file_request: cbor_codec::Behaviour<ChunkRequest, ChunkResponse>,
 }
 
 /// Map of file hash -> file path for files we're seeding
@@ -285,6 +348,12 @@ pub struct SharedFileInfo {
     pub file_path: String,
     pub file_name: String,
     pub file_size: u64,
+    /// Cached chunk hashes, computed lazily on first FileInfo request
+    pub chunk_hashes: Option<Vec<String>>,
+    /// Price in wei (0 = free)
+    pub price_wei: u128,
+    /// Seeder's wallet address for receiving payment
+    pub wallet_address: String,
 }
 
 /// Map of request_id -> SpeedTier for rate-limited downloads
@@ -292,6 +361,65 @@ pub type DownloadTiersMap = Arc<Mutex<HashMap<String, SpeedTier>>>;
 
 /// Shared reference to the custom download directory setting
 pub type DownloadDirectoryRef = Arc<Mutex<Option<String>>>;
+
+/// Credentials for sending payment during download (wallet address + private key)
+#[derive(Clone, Debug)]
+pub struct DownloadCredentials {
+    pub wallet_address: String,
+    pub private_key: String,
+}
+
+/// Map of request_id -> download credentials for payment during chunked transfer
+pub type DownloadCredentialsMap = Arc<Mutex<HashMap<String, DownloadCredentials>>>;
+
+/// Tracks an in-progress chunked download on the downloader side
+struct ActiveChunkedDownload {
+    request_id: String,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    total_chunks: u32,
+    chunk_hashes: Vec<String>,
+    received_chunks: Vec<bool>,
+    output_path: PathBuf,
+    bytes_written: u64,
+    peer_id: PeerId,
+    tier: SpeedTier,
+    retry_counts: Vec<u8>,
+    current_chunk_index: u32,
+    start_time: std::time::Instant,
+    /// Seeder's price in wei (0 = free)
+    price_wei: u128,
+    /// Seeder's wallet address
+    seeder_wallet: String,
+    /// Whether payment has been confirmed by seeder
+    payment_confirmed: bool,
+}
+
+/// Map of request_id -> active chunked download state
+type ActiveDownloadsMap = HashMap<String, ActiveChunkedDownload>;
+
+/// Compute SHA-256 hashes for each chunk of a file
+fn compute_chunk_hashes(file_path: &str) -> Result<Vec<String>, String> {
+    let mut file = std::fs::File::open(file_path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+    let metadata = file.metadata()
+        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+    let file_size = metadata.len();
+    let total_chunks = ((file_size as usize + CHUNK_SIZE - 1) / CHUNK_SIZE) as u32;
+    let mut hashes = Vec::with_capacity(total_chunks as usize);
+
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    for _ in 0..total_chunks {
+        let bytes_read = file.read(&mut buf)
+            .map_err(|e| format!("Failed to read chunk: {}", e))?;
+        let mut hasher = Sha256::new();
+        hasher.update(&buf[..bytes_read]);
+        hashes.push(hex::encode(hasher.finalize()));
+    }
+
+    Ok(hashes)
+}
 
 pub struct DhtService {
     peers: Arc<Mutex<Vec<PeerInfo>>>,
@@ -302,6 +430,8 @@ pub struct DhtService {
     shared_files: SharedFilesMap,
     download_tiers: DownloadTiersMap,
     download_directory: DownloadDirectoryRef,
+    active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
+    download_credentials: DownloadCredentialsMap,
 }
 
 impl DhtService {
@@ -309,6 +439,7 @@ impl DhtService {
         file_transfer_service: Arc<Mutex<crate::file_transfer::FileTransferService>>,
         download_tiers: DownloadTiersMap,
         download_directory: DownloadDirectoryRef,
+        download_credentials: DownloadCredentialsMap,
     ) -> Self {
         Self {
             peers: Arc::new(Mutex::new(Vec::new())),
@@ -319,21 +450,32 @@ impl DhtService {
             shared_files: Arc::new(Mutex::new(std::collections::HashMap::new())),
             download_tiers,
             download_directory,
+            active_downloads: Arc::new(Mutex::new(HashMap::new())),
+            download_credentials,
         }
     }
 
     /// Register a file for sharing (seeding)
-    pub async fn register_shared_file(&self, file_hash: String, file_path: String, file_name: String, file_size: u64) {
+    pub async fn register_shared_file(&self, file_hash: String, file_path: String, file_name: String, file_size: u64, price_wei: u128, wallet_address: String) {
         let mut shared = self.shared_files.lock().await;
         println!("=== REGISTERING SHARED FILE ===");
         println!("  Name: {}", file_name);
         println!("  Hash: {}", file_hash);
         println!("  Path: {}", file_path);
         println!("  Size: {} bytes", file_size);
+        if price_wei > 0 {
+            println!("  Price: {} wei", price_wei);
+            println!("  Wallet: {}", wallet_address);
+        } else {
+            println!("  Price: Free");
+        }
         shared.insert(file_hash.clone(), SharedFileInfo {
             file_path,
             file_name,
             file_size,
+            chunk_hashes: None,
+            price_wei,
+            wallet_address,
         });
         println!("  Total shared files now: {}", shared.len());
         println!("================================");
@@ -381,9 +523,11 @@ impl DhtService {
         let shared_files_clone = self.shared_files.clone();
         let download_tiers_clone = self.download_tiers.clone();
         let download_dir_clone = self.download_directory.clone();
+        let active_downloads_clone = self.active_downloads.clone();
+        let download_credentials_clone = self.download_credentials.clone();
 
         tokio::spawn(async move {
-            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone, download_tiers_clone, download_dir_clone).await;
+            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone, download_tiers_clone, download_dir_clone, active_downloads_clone, download_credentials_clone).await;
         });
         
         Ok(format!("DHT started with peer ID: {}", peer_id))
@@ -545,12 +689,12 @@ impl DhtService {
         }
     }
 
-    /// Request a file from a remote peer by hash
+    /// Request a file from a remote peer by hash (initiates chunked transfer)
     pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
-            tx.send(SwarmCommand::RequestFile {
+            tx.send(SwarmCommand::RequestFileInfo {
                 peer_id: peer_id_parsed,
                 request_id,
                 file_hash,
@@ -560,6 +704,90 @@ impl DhtService {
             Err("DHT not running".to_string())
         }
     }
+}
+
+/// Verify a payment transaction on-chain.
+/// Checks that the transaction was sent to the expected recipient with at least the expected value.
+async fn verify_payment_on_chain(
+    tx_hash: &str,
+    expected_recipient: &str,
+    expected_min_wei: u128,
+) -> Result<bool, String> {
+    let rpc_url = crate::geth::rpc_endpoint();
+    let client = reqwest::Client::new();
+
+    // Get transaction by hash
+    let tx_resp = client
+        .post(&rpc_url)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getTransactionByHash",
+            "params": [tx_hash],
+            "id": 1
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {}", e))?;
+
+    let tx_json: serde_json::Value = tx_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+
+    let tx = tx_json.get("result").ok_or("Transaction not found")?;
+    if tx.is_null() {
+        return Err("Transaction not found on-chain".to_string());
+    }
+
+    // Check recipient
+    let to = tx.get("to")
+        .and_then(|v| v.as_str())
+        .ok_or("Transaction has no recipient")?;
+
+    if to.to_lowercase() != expected_recipient.to_lowercase() {
+        return Ok(false);
+    }
+
+    // Check value
+    let value_hex = tx.get("value")
+        .and_then(|v| v.as_str())
+        .ok_or("Transaction has no value")?;
+    let value_hex = value_hex.strip_prefix("0x").unwrap_or(value_hex);
+    let value = u128::from_str_radix(value_hex, 16)
+        .map_err(|e| format!("Failed to parse value: {}", e))?;
+
+    if value < expected_min_wei {
+        return Ok(false);
+    }
+
+    // Verify transaction receipt (confirmed)
+    let receipt_resp = client
+        .post(&rpc_url)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getTransactionReceipt",
+            "params": [tx_hash],
+            "id": 2
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("RPC receipt request failed: {}", e))?;
+
+    let receipt_json: serde_json::Value = receipt_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse receipt: {}", e))?;
+
+    let receipt = receipt_json.get("result");
+    if receipt.is_none() || receipt.unwrap().is_null() {
+        return Err("Transaction not yet confirmed".to_string());
+    }
+
+    let status = receipt.unwrap().get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x0");
+
+    Ok(status == "0x1")
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
@@ -606,7 +834,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     );
 
     let file_request = cbor_codec::Behaviour::new(
-        [(StreamProtocol::new("/chiral/file-request/1.0.0"), request_response::ProtocolSupport::Full)],
+        [(StreamProtocol::new("/chiral/file-request/3.0.0"), request_response::ProtocolSupport::Full)],
         request_response::Config::default(),
     );
 
@@ -662,9 +890,13 @@ async fn event_loop(
     shared_files: SharedFilesMap,
     download_tiers: DownloadTiersMap,
     download_directory: DownloadDirectoryRef,
+    active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
+    download_credentials: DownloadCredentialsMap,
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
+    // Map libp2p OutboundRequestId -> our request_id for failure correlation
+    let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
     
     loop {
         let running = *is_running.lock().await;
@@ -676,7 +908,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
@@ -773,7 +1005,7 @@ async fn event_loop(
                             "/chiral/id/1.0.0".to_string(),
                             "/chiral/ping/1.0.0".to_string(),
                             "/chiral/file-transfer/1.0.0".to_string(),
-                            "/chiral/file-request/1.0.0".to_string(),
+                            "/chiral/file-request/3.0.0".to_string(),
                             "/ipfs/kad/1.0.0".to_string(),
                         ];
 
@@ -792,19 +1024,15 @@ async fn event_loop(
                         let is_connected = swarm.is_connected(&peer_id);
                         let _ = response_tx.send(is_connected);
                     }
-                    SwarmCommand::RequestFile { peer_id, request_id, file_hash } => {
-                        println!("Requesting file {} from peer {}", file_hash, peer_id);
+                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash } => {
+                        println!("Requesting file info for {} from peer {}", file_hash, peer_id);
 
                         // Check if peer is actually connected before sending request
                         if !swarm.is_connected(&peer_id) {
                             println!("⚠️ Peer {} is not connected, attempting to dial...", peer_id);
-                            // Try to dial the peer - libp2p may know their address from DHT/Kademlia
                             match swarm.dial(peer_id) {
                                 Ok(_) => {
                                     println!("📡 Dialing peer {}...", peer_id);
-                                    // Give a short window for connection to establish
-                                    // The request will be sent, but if the peer is truly offline,
-                                    // libp2p will emit OutboundFailure
                                 }
                                 Err(e) => {
                                     println!("❌ Cannot reach peer {}: {:?}", peer_id, e);
@@ -818,17 +1046,38 @@ async fn event_loop(
                             }
                         }
 
-                        let request = FileRequestMessage {
+                        let request = ChunkRequest::FileInfo {
                             request_id: request_id.clone(),
                             file_hash: file_hash.clone(),
                         };
                         let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                        println!("File request sent with ID: {:?}", req_id);
+                        outbound_request_map.insert(req_id, request_id.clone());
+                        println!("File info request sent with ID: {:?}", req_id);
                         let _ = app.emit("file-request-sent", serde_json::json!({
                             "requestId": request_id,
                             "fileHash": file_hash,
                             "peerId": peer_id.to_string()
                         }));
+                    }
+                    SwarmCommand::RequestChunk { peer_id, request_id, file_hash, chunk_index } => {
+                        let request = ChunkRequest::Chunk {
+                            request_id: request_id.clone(),
+                            file_hash: file_hash.clone(),
+                            chunk_index,
+                        };
+                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                        outbound_request_map.insert(req_id, request_id.clone());
+                    }
+                    SwarmCommand::SendPaymentProof { peer_id, request_id, file_hash, payment_tx, payer_address } => {
+                        println!("💰 Sending payment proof to peer {}: tx={}", peer_id, payment_tx);
+                        let request = ChunkRequest::PaymentProof {
+                            request_id: request_id.clone(),
+                            file_hash: file_hash.clone(),
+                            payment_tx,
+                            payer_address,
+                        };
+                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                        outbound_request_map.insert(req_id, request_id);
                     }
                 }
             }
@@ -848,6 +1097,9 @@ async fn handle_behaviour_event(
     shared_files: &SharedFilesMap,
     download_tiers: &DownloadTiersMap,
     download_directory: &DownloadDirectoryRef,
+    active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
+    outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
+    download_credentials: &DownloadCredentialsMap,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -1048,136 +1300,660 @@ async fn handle_behaviour_event(
             match event {
                 Event::Message { peer, message } => {
                     match message {
+                        // === SEEDER SIDE: Handle incoming requests ===
                         request_response::Message::Request { request, channel, .. } => {
-                            println!("Received file request from {}: hash={}", peer, request.file_hash);
+                            match request {
+                                ChunkRequest::FileInfo { request_id, file_hash } => {
+                                    println!("📋 Received FileInfo request from {}: hash={}", peer, file_hash);
+                                    let mut shared = shared_files.lock().await;
 
-                            // Look up the file in our shared files
-                            let shared = shared_files.lock().await;
+                                    let response = if let Some(file_info) = shared.get_mut(&file_hash) {
+                                        // Compute chunk hashes if not cached
+                                        if file_info.chunk_hashes.is_none() {
+                                            println!("Computing chunk hashes for {}...", file_info.file_name);
+                                            match compute_chunk_hashes(&file_info.file_path) {
+                                                Ok(hashes) => {
+                                                    file_info.chunk_hashes = Some(hashes);
+                                                }
+                                                Err(e) => {
+                                                    println!("Failed to compute chunk hashes: {}", e);
+                                                    let resp = ChunkResponse::FileInfo {
+                                                        request_id,
+                                                        file_hash,
+                                                        file_name: file_info.file_name.clone(),
+                                                        file_size: 0,
+                                                        chunk_size: CHUNK_SIZE as u32,
+                                                        total_chunks: 0,
+                                                        chunk_hashes: vec![],
+                                                        price_wei: "0".to_string(),
+                                                        wallet_address: String::new(),
+                                                        error: Some(format!("Failed to read file: {}", e)),
+                                                    };
+                                                    drop(shared);
+                                                    let _ = swarm.behaviour_mut().file_request.send_response(channel, resp);
+                                                    return;
+                                                }
+                                            }
+                                        }
 
-                            // Debug: print all shared files
-                            println!("Currently sharing {} files:", shared.len());
-                            for (hash, info) in shared.iter() {
-                                println!("  - {} (hash: {})", info.file_name, hash);
-                            }
+                                        let chunk_hashes = file_info.chunk_hashes.as_ref().unwrap();
+                                        let price_str = file_info.price_wei.to_string();
+                                        let wallet = file_info.wallet_address.clone();
+                                        println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
+                                                 file_info.file_name, file_info.file_size, chunk_hashes.len(), price_str, peer);
 
-                            let response = if let Some(file_info) = shared.get(&request.file_hash) {
-                                // Read the file and send it
-                                match std::fs::read(&file_info.file_path) {
-                                    Ok(file_data) => {
-                                        println!("Serving file {} ({} bytes) to peer {}", file_info.file_name, file_data.len(), peer);
-                                        FileRequestResponse {
-                                            request_id: request.request_id.clone(),
-                                            file_hash: request.file_hash.clone(),
+                                        ChunkResponse::FileInfo {
+                                            request_id,
+                                            file_hash,
                                             file_name: file_info.file_name.clone(),
-                                            file_data: Some(file_data),
+                                            file_size: file_info.file_size,
+                                            chunk_size: CHUNK_SIZE as u32,
+                                            total_chunks: chunk_hashes.len() as u32,
+                                            chunk_hashes: chunk_hashes.clone(),
+                                            price_wei: price_str,
+                                            wallet_address: wallet,
                                             error: None,
                                         }
-                                    }
-                                    Err(e) => {
-                                        println!("Failed to read file {}: {}", file_info.file_path, e);
-                                        FileRequestResponse {
-                                            request_id: request.request_id.clone(),
-                                            file_hash: request.file_hash.clone(),
-                                            file_name: file_info.file_name.clone(),
-                                            file_data: None,
-                                            error: Some(format!("Failed to read file: {}", e)),
+                                    } else {
+                                        println!("File not found: {}", file_hash);
+                                        ChunkResponse::FileInfo {
+                                            request_id,
+                                            file_hash,
+                                            file_name: String::new(),
+                                            file_size: 0,
+                                            chunk_size: CHUNK_SIZE as u32,
+                                            total_chunks: 0,
+                                            chunk_hashes: vec![],
+                                            price_wei: "0".to_string(),
+                                            wallet_address: String::new(),
+                                            error: Some("File not found".to_string()),
                                         }
+                                    };
+                                    drop(shared);
+
+                                    if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
+                                        println!("Failed to send FileInfo response: {:?}", e);
                                     }
                                 }
-                            } else {
-                                println!("File not found: {}", request.file_hash);
-                                FileRequestResponse {
-                                    request_id: request.request_id.clone(),
-                                    file_hash: request.file_hash.clone(),
-                                    file_name: String::new(),
-                                    file_data: None,
-                                    error: Some("File not found".to_string()),
-                                }
-                            };
-                            drop(shared);
+                                ChunkRequest::Chunk { request_id, file_hash, chunk_index } => {
+                                    let shared = shared_files.lock().await;
 
-                            if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
-                                println!("Failed to send file request response: {:?}", e);
+                                    let response = if let Some(file_info) = shared.get(&file_hash) {
+                                        // Read the specific chunk from disk
+                                        let offset = chunk_index as u64 * CHUNK_SIZE as u64;
+                                        match std::fs::File::open(&file_info.file_path) {
+                                            Ok(mut file) => {
+                                                if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                                                    ChunkResponse::Chunk {
+                                                        request_id,
+                                                        file_hash,
+                                                        chunk_index,
+                                                        chunk_data: None,
+                                                        chunk_hash: String::new(),
+                                                        error: Some(format!("Failed to seek: {}", e)),
+                                                    }
+                                                } else {
+                                                    let mut buf = vec![0u8; CHUNK_SIZE];
+                                                    match file.read(&mut buf) {
+                                                        Ok(bytes_read) => {
+                                                            buf.truncate(bytes_read);
+                                                            let mut hasher = Sha256::new();
+                                                            hasher.update(&buf);
+                                                            let chunk_hash = hex::encode(hasher.finalize());
+                                                            ChunkResponse::Chunk {
+                                                                request_id,
+                                                                file_hash,
+                                                                chunk_index,
+                                                                chunk_data: Some(buf),
+                                                                chunk_hash,
+                                                                error: None,
+                                                            }
+                                                        }
+                                                        Err(e) => ChunkResponse::Chunk {
+                                                            request_id,
+                                                            file_hash,
+                                                            chunk_index,
+                                                            chunk_data: None,
+                                                            chunk_hash: String::new(),
+                                                            error: Some(format!("Failed to read chunk: {}", e)),
+                                                        },
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => ChunkResponse::Chunk {
+                                                request_id,
+                                                file_hash,
+                                                chunk_index,
+                                                chunk_data: None,
+                                                chunk_hash: String::new(),
+                                                error: Some(format!("Failed to open file: {}", e)),
+                                            },
+                                        }
+                                    } else {
+                                        ChunkResponse::Chunk {
+                                            request_id,
+                                            file_hash,
+                                            chunk_index,
+                                            chunk_data: None,
+                                            chunk_hash: String::new(),
+                                            error: Some("File not found".to_string()),
+                                        }
+                                    };
+                                    drop(shared);
+
+                                    if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
+                                        println!("Failed to send chunk response: {:?}", e);
+                                    }
+                                }
+                                ChunkRequest::PaymentProof { request_id, file_hash, payment_tx, payer_address } => {
+                                    println!("💰 Received payment proof from {}: tx={}, payer={}", peer, payment_tx, payer_address);
+                                    let shared = shared_files.lock().await;
+
+                                    let response = if let Some(file_info) = shared.get(&file_hash) {
+                                        if file_info.price_wei == 0 {
+                                            // Free file — no payment needed, accept
+                                            ChunkResponse::PaymentAck {
+                                                request_id,
+                                                file_hash,
+                                                accepted: true,
+                                                error: None,
+                                            }
+                                        } else {
+                                            // Verify payment on-chain
+                                            let expected_wallet = file_info.wallet_address.clone();
+                                            let expected_price = file_info.price_wei;
+                                            drop(shared);
+
+                                            match verify_payment_on_chain(&payment_tx, &expected_wallet, expected_price).await {
+                                                Ok(true) => {
+                                                    println!("✅ Payment verified for {} from {}", file_hash, payer_address);
+                                                    ChunkResponse::PaymentAck {
+                                                        request_id,
+                                                        file_hash,
+                                                        accepted: true,
+                                                        error: None,
+                                                    }
+                                                }
+                                                Ok(false) => {
+                                                    println!("❌ Payment verification failed for {}", file_hash);
+                                                    ChunkResponse::PaymentAck {
+                                                        request_id,
+                                                        file_hash,
+                                                        accepted: false,
+                                                        error: Some("Payment verification failed: insufficient amount or wrong recipient".to_string()),
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    println!("❌ Payment verification error: {}", e);
+                                                    ChunkResponse::PaymentAck {
+                                                        request_id,
+                                                        file_hash,
+                                                        accepted: false,
+                                                        error: Some(format!("Payment verification error: {}", e)),
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        drop(shared);
+                                        ChunkResponse::PaymentAck {
+                                            request_id,
+                                            file_hash,
+                                            accepted: false,
+                                            error: Some("File not found".to_string()),
+                                        }
+                                    };
+
+                                    if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
+                                        println!("Failed to send PaymentAck response: {:?}", e);
+                                    }
+                                }
                             }
                         }
-                        request_response::Message::Response { response, .. } => {
-                            println!("📥 Received file response from {}: hash={}, success={}",
-                                     peer, response.file_hash, response.file_data.is_some());
+                        // === DOWNLOADER SIDE: Handle incoming responses ===
+                        request_response::Message::Response { response, request_id: outbound_req_id, .. } => {
+                            // Clean up outbound request mapping
+                            outbound_request_map.remove(&outbound_req_id);
 
-                            if let Some(file_data) = response.file_data {
-                                // Look up speed tier for this download
-                                let tier = {
-                                    let mut tiers = download_tiers.lock().await;
-                                    tiers.remove(&response.request_id).unwrap_or(SpeedTier::Free)
-                                };
+                            match response {
+                                ChunkResponse::FileInfo { request_id, file_hash, file_name, file_size, chunk_size: _, total_chunks, chunk_hashes, price_wei, wallet_address, error } => {
+                                    if let Some(err) = error {
+                                        println!("❌ FileInfo error: {}", err);
+                                        let mut tiers = download_tiers.lock().await;
+                                        tiers.remove(&request_id);
+                                        let _ = app.emit("file-download-failed", serde_json::json!({
+                                            "requestId": request_id,
+                                            "fileHash": file_hash,
+                                            "error": err
+                                        }));
+                                        return;
+                                    }
 
-                                // Save the file to download directory with rate limiting
-                                let custom_dir = download_directory.lock().await.clone();
-                                let downloads_dir_result = if let Some(ref dir) = custom_dir {
-                                    let p = std::path::PathBuf::from(dir);
-                                    if p.exists() && p.is_dir() { Some(p) } else { dirs::download_dir() }
-                                } else {
-                                    dirs::download_dir()
-                                };
-                                if let Some(downloads_dir) = downloads_dir_result {
-                                    let file_name = if response.file_name.is_empty() {
-                                        format!("{}.download", &response.file_hash[..8])
-                                    } else {
-                                        response.file_name.clone()
+                                    let price: u128 = price_wei.parse().unwrap_or(0);
+                                    println!("📋 Received FileInfo: {} ({} bytes, {} chunks, price={} wei)", file_name, file_size, total_chunks, price);
+
+                                    // Get speed tier
+                                    let tier = {
+                                        let tiers = download_tiers.lock().await;
+                                        tiers.get(&request_id).cloned().unwrap_or(SpeedTier::Free)
                                     };
-                                    let file_path = downloads_dir.join(&file_name);
 
-                                    // Spawn rate-limited write task
-                                    let app_clone = app.clone();
-                                    let request_id = response.request_id.clone();
-                                    let file_hash = response.file_hash.clone();
-                                    let file_name_clone = file_name.clone();
+                                    // Determine output path
+                                    let custom_dir = download_directory.lock().await.clone();
+                                    let downloads_dir = if let Some(ref dir) = custom_dir {
+                                        let p = PathBuf::from(dir);
+                                        if p.exists() && p.is_dir() { p } else {
+                                            dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
+                                        }
+                                    } else {
+                                        dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
+                                    };
 
-                                    tokio::spawn(async move {
-                                        println!("⚡ Writing file with {:?} tier rate limiting", tier);
-                                        match crate::speed_tiers::rate_limited_write(
-                                            &app_clone, &file_path, &file_data, &tier,
-                                            &request_id, &file_hash, &file_name_clone,
-                                        ).await {
-                                            Ok(_) => {
-                                                println!("✅ File saved to: {:?}", file_path);
-                                                let _ = app_clone.emit("file-download-complete", serde_json::json!({
-                                                    "requestId": request_id,
-                                                    "fileHash": file_hash,
-                                                    "fileName": file_name_clone,
-                                                    "filePath": file_path.to_string_lossy(),
-                                                    "fileSize": file_data.len(),
-                                                    "status": "completed"
-                                                }));
+                                    let output_name = if file_name.is_empty() {
+                                        format!("{}.download", &file_hash[..std::cmp::min(8, file_hash.len())])
+                                    } else {
+                                        file_name.clone()
+                                    };
+                                    let output_path = downloads_dir.join(&output_name);
+
+                                    // Create empty output file
+                                    if let Err(e) = std::fs::File::create(&output_path) {
+                                        println!("❌ Failed to create output file: {}", e);
+                                        let _ = app.emit("file-download-failed", serde_json::json!({
+                                            "requestId": request_id,
+                                            "fileHash": file_hash,
+                                            "error": format!("Failed to create output file: {}", e)
+                                        }));
+                                        return;
+                                    }
+
+                                    // Create active download state
+                                    let download = ActiveChunkedDownload {
+                                        request_id: request_id.clone(),
+                                        file_hash: file_hash.clone(),
+                                        file_name: output_name,
+                                        file_size,
+                                        total_chunks,
+                                        chunk_hashes,
+                                        received_chunks: vec![false; total_chunks as usize],
+                                        output_path: output_path.clone(),
+                                        bytes_written: 0,
+                                        peer_id: peer,
+                                        tier,
+                                        retry_counts: vec![0u8; total_chunks as usize],
+                                        current_chunk_index: 0,
+                                        start_time: std::time::Instant::now(),
+                                        price_wei: price,
+                                        seeder_wallet: wallet_address.clone(),
+                                        payment_confirmed: price == 0,
+                                    };
+
+                                    {
+                                        let mut downloads = active_downloads.lock().await;
+                                        downloads.insert(request_id.clone(), download);
+                                    }
+
+                                    if price > 0 {
+                                        // Paid file: send payment to seeder, then send proof
+                                        println!("💰 File requires payment of {} wei to {}", price, wallet_address);
+                                        let _ = app.emit("file-payment-processing", serde_json::json!({
+                                            "requestId": request_id,
+                                            "fileHash": file_hash,
+                                            "priceWei": price_wei,
+                                            "walletAddress": wallet_address
+                                        }));
+
+                                        // Get download credentials for this request
+                                        let creds = {
+                                            let creds_map = download_credentials.lock().await;
+                                            creds_map.get(&request_id).cloned()
+                                        };
+
+                                        if let Some(creds) = creds {
+                                            // Convert wei to CHR for send_transaction
+                                            let cost_chr = crate::speed_tiers::format_wei_as_chr(price);
+
+                                            // Send payment transaction
+                                            match crate::send_payment_transaction(
+                                                &creds.wallet_address,
+                                                &wallet_address,
+                                                &cost_chr,
+                                                &creds.private_key,
+                                            ).await {
+                                                Ok(tx_hash) => {
+                                                    println!("💰 Payment sent: tx={}", tx_hash);
+                                                    // Send payment proof to seeder
+                                                    let request = ChunkRequest::PaymentProof {
+                                                        request_id: request_id.clone(),
+                                                        file_hash: file_hash.clone(),
+                                                        payment_tx: tx_hash,
+                                                        payer_address: creds.wallet_address.clone(),
+                                                    };
+                                                    let req_id = swarm.behaviour_mut().file_request.send_request(&peer, request);
+                                                    outbound_request_map.insert(req_id, request_id);
+                                                }
+                                                Err(e) => {
+                                                    println!("❌ Payment failed: {}", e);
+                                                    let mut downloads = active_downloads.lock().await;
+                                                    if let Some(dl) = downloads.remove(&request_id) {
+                                                        let _ = std::fs::remove_file(&dl.output_path);
+                                                    }
+                                                    let mut tiers = download_tiers.lock().await;
+                                                    tiers.remove(&request_id);
+                                                    let _ = app.emit("file-download-failed", serde_json::json!({
+                                                        "requestId": request_id,
+                                                        "fileHash": file_hash,
+                                                        "error": format!("Payment failed: {}", e)
+                                                    }));
+                                                }
                                             }
-                                            Err(e) => {
-                                                println!("❌ Failed to save file: {}", e);
-                                                let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                        } else {
+                                            println!("❌ No wallet credentials for paid download");
+                                            let mut downloads = active_downloads.lock().await;
+                                            if let Some(dl) = downloads.remove(&request_id) {
+                                                let _ = std::fs::remove_file(&dl.output_path);
+                                            }
+                                            let mut tiers = download_tiers.lock().await;
+                                            tiers.remove(&request_id);
+                                            let _ = app.emit("file-download-failed", serde_json::json!({
+                                                "requestId": request_id,
+                                                "fileHash": file_hash,
+                                                "error": "Wallet not connected. Connect your wallet to download paid files."
+                                            }));
+                                        }
+                                    } else {
+                                        // Free file: request the first chunk immediately
+                                        let request = ChunkRequest::Chunk {
+                                            request_id: request_id.clone(),
+                                            file_hash: file_hash.clone(),
+                                            chunk_index: 0,
+                                        };
+                                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer, request);
+                                        outbound_request_map.insert(req_id, request_id);
+                                    }
+                                }
+                                ChunkResponse::Chunk { request_id, file_hash, chunk_index, chunk_data, chunk_hash, error } => {
+                                    if let Some(err) = error {
+                                        println!("❌ Chunk {} error: {}", chunk_index, err);
+                                        // Check if we should retry
+                                        let mut downloads = active_downloads.lock().await;
+                                        if let Some(dl) = downloads.get_mut(&request_id) {
+                                            dl.retry_counts[chunk_index as usize] += 1;
+                                            if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
+                                                println!("🔄 Retrying chunk {} (attempt {})", chunk_index, dl.retry_counts[chunk_index as usize]);
+                                                let peer_id = dl.peer_id;
+                                                let fh = dl.file_hash.clone();
+                                                let rid = dl.request_id.clone();
+                                                drop(downloads);
+                                                let request = ChunkRequest::Chunk { request_id: rid.clone(), file_hash: fh, chunk_index };
+                                                let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                                outbound_request_map.insert(req_id, rid);
+                                            } else {
+                                                // Max retries exceeded — abort
+                                                let dl = downloads.remove(&request_id).unwrap();
+                                                let _ = std::fs::remove_file(&dl.output_path);
+                                                let mut tiers = download_tiers.lock().await;
+                                                tiers.remove(&request_id);
+                                                drop(downloads);
+                                                let _ = app.emit("file-download-failed", serde_json::json!({
                                                     "requestId": request_id,
                                                     "fileHash": file_hash,
-                                                    "error": format!("Failed to save file: {}", e)
+                                                    "error": format!("Chunk {} failed after {} retries: {}", chunk_index, MAX_CHUNK_RETRIES, err)
                                                 }));
                                             }
                                         }
-                                    });
+                                        return;
+                                    }
+
+                                    let chunk_data = match chunk_data {
+                                        Some(data) => data,
+                                        None => {
+                                            println!("❌ Chunk {} has no data and no error", chunk_index);
+                                            return;
+                                        }
+                                    };
+
+                                    // Verify chunk hash against manifest
+                                    let mut downloads = active_downloads.lock().await;
+                                    if let Some(dl) = downloads.get_mut(&request_id) {
+                                        let expected_hash = &dl.chunk_hashes[chunk_index as usize];
+                                        let mut hasher = Sha256::new();
+                                        hasher.update(&chunk_data);
+                                        let computed_hash = hex::encode(hasher.finalize());
+
+                                        if computed_hash != *expected_hash || computed_hash != chunk_hash {
+                                            println!("❌ Chunk {} hash mismatch! Expected: {}, Got: {}", chunk_index, expected_hash, computed_hash);
+                                            dl.retry_counts[chunk_index as usize] += 1;
+                                            if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
+                                                println!("🔄 Retrying chunk {} due to hash mismatch", chunk_index);
+                                                let peer_id = dl.peer_id;
+                                                let fh = dl.file_hash.clone();
+                                                let rid = dl.request_id.clone();
+                                                drop(downloads);
+                                                let request = ChunkRequest::Chunk { request_id: rid.clone(), file_hash: fh, chunk_index };
+                                                let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                                outbound_request_map.insert(req_id, rid);
+                                            } else {
+                                                let dl = downloads.remove(&request_id).unwrap();
+                                                let _ = std::fs::remove_file(&dl.output_path);
+                                                let mut tiers = download_tiers.lock().await;
+                                                tiers.remove(&request_id);
+                                                drop(downloads);
+                                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                                    "requestId": request_id,
+                                                    "fileHash": file_hash,
+                                                    "error": format!("Chunk {} failed integrity check after {} retries", chunk_index, MAX_CHUNK_RETRIES)
+                                                }));
+                                            }
+                                            return;
+                                        }
+
+                                        // Write chunk to file (append)
+                                        use std::io::Write;
+                                        let write_result = std::fs::OpenOptions::new()
+                                            .append(true)
+                                            .open(&dl.output_path)
+                                            .and_then(|mut f| f.write_all(&chunk_data));
+
+                                        if let Err(e) = write_result {
+                                            println!("❌ Failed to write chunk {}: {}", chunk_index, e);
+                                            let dl = downloads.remove(&request_id).unwrap();
+                                            let _ = std::fs::remove_file(&dl.output_path);
+                                            let mut tiers = download_tiers.lock().await;
+                                            tiers.remove(&request_id);
+                                            drop(downloads);
+                                            let _ = app.emit("file-download-failed", serde_json::json!({
+                                                "requestId": request_id,
+                                                "fileHash": file_hash,
+                                                "error": format!("Failed to write chunk: {}", e)
+                                            }));
+                                            return;
+                                        }
+
+                                        dl.received_chunks[chunk_index as usize] = true;
+                                        dl.bytes_written += chunk_data.len() as u64;
+                                        dl.current_chunk_index = chunk_index + 1;
+
+                                        // Emit progress
+                                        let progress = (dl.bytes_written as f64 / dl.file_size as f64) * 100.0;
+                                        let elapsed = dl.start_time.elapsed().as_secs_f64();
+                                        let speed_bps = if elapsed > 0.0 { (dl.bytes_written as f64 / elapsed) as u64 } else { 0 };
+                                        let _ = app.emit("download-progress", serde_json::json!({
+                                            "requestId": dl.request_id,
+                                            "fileHash": dl.file_hash,
+                                            "fileName": dl.file_name,
+                                            "bytesWritten": dl.bytes_written,
+                                            "totalBytes": dl.file_size,
+                                            "speedBps": speed_bps,
+                                            "progress": progress
+                                        }));
+
+                                        // Check if all chunks received
+                                        if dl.current_chunk_index >= dl.total_chunks {
+                                            // All chunks received — verify full file hash
+                                            let output_path = dl.output_path.clone();
+                                            let expected_file_hash = dl.file_hash.clone();
+                                            let request_id_clone = dl.request_id.clone();
+                                            let file_name_clone = dl.file_name.clone();
+                                            let file_size = dl.file_size;
+                                            let _ = downloads.remove(&request_id);
+                                            let mut tiers = download_tiers.lock().await;
+                                            tiers.remove(&request_id_clone);
+                                            drop(tiers);
+                                            drop(downloads);
+
+                                            // Verify full file SHA-256
+                                            let app_clone = app.clone();
+                                            tokio::spawn(async move {
+                                                match tokio::task::spawn_blocking(move || {
+                                                    let mut file = std::fs::File::open(&output_path)?;
+                                                    let mut hasher = Sha256::new();
+                                                    let mut buf = vec![0u8; 256 * 1024];
+                                                    loop {
+                                                        let n = file.read(&mut buf)?;
+                                                        if n == 0 { break; }
+                                                        hasher.update(&buf[..n]);
+                                                    }
+                                                    Ok::<(String, PathBuf), std::io::Error>((hex::encode(hasher.finalize()), output_path))
+                                                }).await {
+                                                    Ok(Ok((computed_hash, output_path))) => {
+                                                        if computed_hash == expected_file_hash {
+                                                            println!("✅ File verified and saved: {:?}", output_path);
+                                                            let _ = app_clone.emit("file-download-complete", serde_json::json!({
+                                                                "requestId": request_id_clone,
+                                                                "fileHash": expected_file_hash,
+                                                                "fileName": file_name_clone,
+                                                                "filePath": output_path.to_string_lossy(),
+                                                                "fileSize": file_size,
+                                                                "status": "completed"
+                                                            }));
+                                                        } else {
+                                                            println!("❌ Full file hash mismatch! Expected: {}, Got: {}", expected_file_hash, computed_hash);
+                                                            let _ = std::fs::remove_file(&output_path);
+                                                            let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                                                "requestId": request_id_clone,
+                                                                "fileHash": expected_file_hash,
+                                                                "error": "File integrity verification failed — hash mismatch after all chunks received"
+                                                            }));
+                                                        }
+                                                    }
+                                                    Ok(Err(e)) => {
+                                                        println!("❌ Failed to verify file: {}", e);
+                                                        let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                                            "requestId": request_id_clone,
+                                                            "fileHash": expected_file_hash,
+                                                            "error": format!("Failed to verify file: {}", e)
+                                                        }));
+                                                    }
+                                                    Err(e) => {
+                                                        println!("❌ Verification task panicked: {}", e);
+                                                        let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                                            "requestId": request_id_clone,
+                                                            "fileHash": expected_file_hash,
+                                                            "error": format!("Verification task failed: {}", e)
+                                                        }));
+                                                    }
+                                                }
+                                            });
+                                        } else {
+                                            // Request next chunk after rate-limit delay
+                                            let peer_id = dl.peer_id;
+                                            let fh = dl.file_hash.clone();
+                                            let rid = dl.request_id.clone();
+                                            let next_index = dl.current_chunk_index;
+                                            let tier = dl.tier.clone();
+                                            drop(downloads);
+
+                                            // Apply rate-limit delay
+                                            if let Some(delay) = crate::speed_tiers::chunk_request_delay(CHUNK_SIZE as u32, &tier) {
+                                                tokio::time::sleep(delay).await;
+                                            }
+
+                                            let request = ChunkRequest::Chunk {
+                                                request_id: rid.clone(),
+                                                file_hash: fh,
+                                                chunk_index: next_index,
+                                            };
+                                            let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                            outbound_request_map.insert(req_id, rid);
+                                        }
+                                    }
                                 }
-                            } else {
-                                // Clean up tier entry on failure
-                                {
-                                    let mut tiers = download_tiers.lock().await;
-                                    tiers.remove(&response.request_id);
+                                ChunkResponse::PaymentAck { request_id, file_hash, accepted, error } => {
+                                    if !accepted {
+                                        let err_msg = error.unwrap_or_else(|| "Payment rejected by seeder".to_string());
+                                        println!("❌ Payment rejected for {}: {}", file_hash, err_msg);
+                                        let mut downloads = active_downloads.lock().await;
+                                        if let Some(dl) = downloads.remove(&request_id) {
+                                            let _ = std::fs::remove_file(&dl.output_path);
+                                        }
+                                        let mut tiers = download_tiers.lock().await;
+                                        tiers.remove(&request_id);
+                                        let _ = app.emit("file-download-failed", serde_json::json!({
+                                            "requestId": request_id,
+                                            "fileHash": file_hash,
+                                            "error": err_msg
+                                        }));
+                                        return;
+                                    }
+
+                                    println!("✅ Payment accepted for {}, starting chunk download", file_hash);
+
+                                    // Mark payment confirmed and request first chunk
+                                    let mut downloads = active_downloads.lock().await;
+                                    if let Some(dl) = downloads.get_mut(&request_id) {
+                                        dl.payment_confirmed = true;
+                                        let peer_id = dl.peer_id;
+                                        let fh = dl.file_hash.clone();
+                                        let rid = dl.request_id.clone();
+                                        drop(downloads);
+
+                                        let request = ChunkRequest::Chunk {
+                                            request_id: rid.clone(),
+                                            file_hash: fh,
+                                            chunk_index: 0,
+                                        };
+                                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                        outbound_request_map.insert(req_id, rid);
+                                    }
                                 }
-                                let _ = app.emit("file-download-failed", serde_json::json!({
-                                    "requestId": response.request_id,
-                                    "fileHash": response.file_hash,
-                                    "error": response.error.unwrap_or_else(|| "Unknown error".to_string())
-                                }));
                             }
                         }
                     }
                 }
-                Event::OutboundFailure { peer, error, .. } => {
+                Event::OutboundFailure { peer, error, request_id: outbound_req_id, .. } => {
+                    let our_request_id = outbound_request_map.remove(&outbound_req_id);
                     let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
+
+                    if let Some(request_id) = our_request_id {
+                        let mut downloads = active_downloads.lock().await;
+                        if let Some(dl) = downloads.get_mut(&request_id) {
+                            let chunk_index = dl.current_chunk_index.saturating_sub(1).max(0);
+                            dl.retry_counts[chunk_index as usize] += 1;
+
+                            if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
+                                println!("🔄 Retrying chunk {} after outbound failure (attempt {})", chunk_index, dl.retry_counts[chunk_index as usize]);
+                                let peer_id = dl.peer_id;
+                                let fh = dl.file_hash.clone();
+                                let rid = dl.request_id.clone();
+                                drop(downloads);
+                                // Wait before retry
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                let request = ChunkRequest::Chunk { request_id: rid.clone(), file_hash: fh, chunk_index };
+                                let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                outbound_request_map.insert(req_id, rid);
+                                return;
+                            } else {
+                                // Max retries exceeded
+                                let dl = downloads.remove(&request_id).unwrap();
+                                let _ = std::fs::remove_file(&dl.output_path);
+                                let mut tiers = download_tiers.lock().await;
+                                tiers.remove(&request_id);
+                            }
+                        }
+                        drop(downloads);
+                    }
+
                     let user_error = match &error {
                         request_response::OutboundFailure::DialFailure => {
                             format!("Seeder ({}...) is offline or unreachable. They may have disconnected from the network.", peer_short)
@@ -1341,45 +2117,109 @@ mod tests {
     }
 
     #[test]
-    fn test_file_request_message_serialization() {
-        let msg = FileRequestMessage {
+    fn test_chunk_request_file_info_serialization() {
+        let req = ChunkRequest::FileInfo {
             request_id: "req-001".to_string(),
             file_hash: "abc123def456".to_string(),
         };
-        let json = serde_json::to_string(&msg).unwrap();
-        let deserialized: FileRequestMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(msg.request_id, deserialized.request_id);
-        assert_eq!(msg.file_hash, deserialized.file_hash);
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
+        if let ChunkRequest::FileInfo { request_id, file_hash } = deserialized {
+            assert_eq!(request_id, "req-001");
+            assert_eq!(file_hash, "abc123def456");
+        } else {
+            panic!("Expected FileInfo variant");
+        }
     }
 
     #[test]
-    fn test_file_request_response_with_data() {
-        let resp = FileRequestResponse {
+    fn test_chunk_request_chunk_serialization() {
+        let req = ChunkRequest::Chunk {
+            request_id: "req-001".to_string(),
+            file_hash: "abc123".to_string(),
+            chunk_index: 42,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
+        if let ChunkRequest::Chunk { request_id, file_hash, chunk_index } = deserialized {
+            assert_eq!(request_id, "req-001");
+            assert_eq!(file_hash, "abc123");
+            assert_eq!(chunk_index, 42);
+        } else {
+            panic!("Expected Chunk variant");
+        }
+    }
+
+    #[test]
+    fn test_chunk_response_file_info_serialization() {
+        let resp = ChunkResponse::FileInfo {
             request_id: "req-001".to_string(),
             file_hash: "abc123".to_string(),
             file_name: "document.pdf".to_string(),
-            file_data: Some(vec![10, 20, 30]),
+            file_size: 1048576,
+            chunk_size: 262144,
+            total_chunks: 4,
+            chunk_hashes: vec!["hash0".to_string(), "hash1".to_string(), "hash2".to_string(), "hash3".to_string()],
+            price_wei: "1000000000000000".to_string(),
+            wallet_address: "0x1234567890abcdef".to_string(),
             error: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: FileRequestResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.file_data.unwrap(), vec![10, 20, 30]);
-        assert!(deserialized.error.is_none());
+        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
+        if let ChunkResponse::FileInfo { total_chunks, chunk_hashes, price_wei, wallet_address, error, .. } = deserialized {
+            assert_eq!(total_chunks, 4);
+            assert_eq!(chunk_hashes.len(), 4);
+            assert_eq!(price_wei, "1000000000000000");
+            assert_eq!(wallet_address, "0x1234567890abcdef");
+            assert!(error.is_none());
+        } else {
+            panic!("Expected FileInfo variant");
+        }
     }
 
     #[test]
-    fn test_file_request_response_not_found() {
-        let resp = FileRequestResponse {
+    fn test_chunk_response_chunk_serialization() {
+        let resp = ChunkResponse::Chunk {
+            request_id: "req-001".to_string(),
+            file_hash: "abc123".to_string(),
+            chunk_index: 0,
+            chunk_data: Some(vec![10, 20, 30]),
+            chunk_hash: "deadbeef".to_string(),
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
+        if let ChunkResponse::Chunk { chunk_index, chunk_data, chunk_hash, error, .. } = deserialized {
+            assert_eq!(chunk_index, 0);
+            assert_eq!(chunk_data.unwrap(), vec![10, 20, 30]);
+            assert_eq!(chunk_hash, "deadbeef");
+            assert!(error.is_none());
+        } else {
+            panic!("Expected Chunk variant");
+        }
+    }
+
+    #[test]
+    fn test_chunk_response_error() {
+        let resp = ChunkResponse::FileInfo {
             request_id: "req-002".to_string(),
             file_hash: "nonexistent".to_string(),
             file_name: String::new(),
-            file_data: None,
+            file_size: 0,
+            chunk_size: 262144,
+            total_chunks: 0,
+            chunk_hashes: vec![],
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
             error: Some("File not found".to_string()),
         };
         let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: FileRequestResponse = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.file_data.is_none());
-        assert_eq!(deserialized.error.unwrap(), "File not found");
+        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
+        if let ChunkResponse::FileInfo { error, .. } = deserialized {
+            assert_eq!(error.unwrap(), "File not found");
+        } else {
+            panic!("Expected FileInfo variant");
+        }
     }
 
     #[test]
@@ -1416,8 +2256,101 @@ mod tests {
             file_path: "/path/to/file.txt".to_string(),
             file_name: "file.txt".to_string(),
             file_size: 1024,
+            chunk_hashes: None,
+            price_wei: 0,
+            wallet_address: String::new(),
         };
         assert_eq!(info.file_name, "file.txt");
         assert_eq!(info.file_size, 1024);
+        assert!(info.chunk_hashes.is_none());
+        assert_eq!(info.price_wei, 0);
+    }
+
+    #[test]
+    fn test_shared_file_info_with_price() {
+        let info = SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+            chunk_hashes: None,
+            price_wei: 5_000_000_000_000_000,
+            wallet_address: "0xabc123".to_string(),
+        };
+        assert_eq!(info.price_wei, 5_000_000_000_000_000);
+        assert_eq!(info.wallet_address, "0xabc123");
+    }
+
+    #[test]
+    fn test_chunk_request_payment_proof_serialization() {
+        let req = ChunkRequest::PaymentProof {
+            request_id: "req-001".to_string(),
+            file_hash: "abc123".to_string(),
+            payment_tx: "0xdeadbeef".to_string(),
+            payer_address: "0x1234".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
+        if let ChunkRequest::PaymentProof { request_id, file_hash, payment_tx, payer_address } = deserialized {
+            assert_eq!(request_id, "req-001");
+            assert_eq!(file_hash, "abc123");
+            assert_eq!(payment_tx, "0xdeadbeef");
+            assert_eq!(payer_address, "0x1234");
+        } else {
+            panic!("Expected PaymentProof variant");
+        }
+    }
+
+    #[test]
+    fn test_chunk_response_payment_ack_serialization() {
+        let resp = ChunkResponse::PaymentAck {
+            request_id: "req-001".to_string(),
+            file_hash: "abc123".to_string(),
+            accepted: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
+        if let ChunkResponse::PaymentAck { accepted, error, .. } = deserialized {
+            assert!(accepted);
+            assert!(error.is_none());
+        } else {
+            panic!("Expected PaymentAck variant");
+        }
+    }
+
+    #[test]
+    fn test_chunk_response_payment_ack_rejected() {
+        let resp = ChunkResponse::PaymentAck {
+            request_id: "req-001".to_string(),
+            file_hash: "abc123".to_string(),
+            accepted: false,
+            error: Some("Insufficient payment".to_string()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
+        if let ChunkResponse::PaymentAck { accepted, error, .. } = deserialized {
+            assert!(!accepted);
+            assert_eq!(error.unwrap(), "Insufficient payment");
+        } else {
+            panic!("Expected PaymentAck variant");
+        }
+    }
+
+    #[test]
+    fn test_compute_chunk_hashes() {
+        // Create a temp file with known content
+        let dir = std::env::temp_dir();
+        let path = dir.join("chiral_test_chunk_hashes.bin");
+        let data = vec![0xABu8; CHUNK_SIZE * 2 + 100]; // 2.x chunks
+        std::fs::write(&path, &data).unwrap();
+
+        let hashes = compute_chunk_hashes(path.to_str().unwrap()).unwrap();
+        assert_eq!(hashes.len(), 3); // ceil((2*CHUNK_SIZE + 100) / CHUNK_SIZE) = 3
+        // Each hash should be a 64-char hex string (SHA-256)
+        for h in &hashes {
+            assert_eq!(h.len(), 64);
+        }
+
+        std::fs::remove_file(&path).unwrap();
     }
 }

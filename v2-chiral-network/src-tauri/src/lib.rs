@@ -29,6 +29,7 @@ pub struct AppState {
     pub download_tiers: Arc<Mutex<HashMap<String, SpeedTier>>>, // request_id -> speed tier
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
     pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
+    pub download_credentials: dht::DownloadCredentialsMap, // request_id -> wallet credentials for file payment
 }
 
 #[tauri::command]
@@ -42,7 +43,7 @@ async fn start_dht(
         return Err("DHT already running".to_string());
     }
 
-    let dht = Arc::new(DhtService::new(state.file_transfer.clone(), state.download_tiers.clone(), state.download_directory.clone()));
+    let dht = Arc::new(DhtService::new(state.file_transfer.clone(), state.download_tiers.clone(), state.download_directory.clone(), state.download_credentials.clone()));
     let result = dht.start(app.clone()).await?;
     *dht_guard = Some(dht);
 
@@ -339,6 +340,10 @@ struct FileMetadata {
     protocol: String,
     created_at: u64,
     peer_id: String,
+    #[serde(default)]
+    price_wei: String,
+    #[serde(default)]
+    wallet_address: String,
 }
 
 #[tauri::command]
@@ -347,6 +352,8 @@ async fn publish_file(
     file_path: String,
     file_name: String,
     protocol: Option<String>,
+    price_chr: Option<String>,
+    wallet_address: Option<String>,
 ) -> Result<PublishResult, String> {
     // Read file and compute hash
     let file_data = std::fs::read(&file_path).map_err(|e| e.to_string())?;
@@ -372,12 +379,32 @@ async fn publish_file(
     if let Some(dht) = dht_guard.as_ref() {
         let peer_id = dht.get_peer_id().await.unwrap_or_default();
 
+        // Parse price from CHR to wei
+        let price_wei_val = if let Some(ref price) = price_chr {
+            if price.is_empty() || price == "0" {
+                0u128
+            } else {
+                parse_chr_to_wei(price)?
+            }
+        } else {
+            0u128
+        };
+
+        let wallet_addr = wallet_address.unwrap_or_default();
+
+        // Validate: if price > 0, wallet must be non-empty
+        if price_wei_val > 0 && wallet_addr.is_empty() {
+            return Err("Wallet address is required when setting a file price".to_string());
+        }
+
         // Register the file for sharing (so we can serve it to requesters)
         dht.register_shared_file(
             merkle_root.clone(),
             file_path.clone(),
             file_name.clone(),
             file_size,
+            price_wei_val,
+            wallet_addr.clone(),
         ).await;
 
         // Create file metadata
@@ -391,6 +418,8 @@ async fn publish_file(
                 .unwrap()
                 .as_secs(),
             peer_id: peer_id.clone(),
+            price_wei: price_wei_val.to_string(),
+            wallet_address: wallet_addr,
         };
 
         // Serialize metadata to JSON
@@ -417,6 +446,8 @@ struct SearchResult {
     file_size: u64,
     seeders: Vec<String>,
     created_at: u64,
+    price_wei: String,
+    wallet_address: String,
 }
 
 #[tauri::command]
@@ -453,6 +484,8 @@ async fn search_file(
                     file_size: metadata.file_size,
                     seeders,
                     created_at: metadata.created_at,
+                    price_wei: metadata.price_wei,
+                    wallet_address: metadata.wallet_address,
                 }))
             }
             Ok(None) => {
@@ -490,6 +523,8 @@ async fn start_download(
     file_size: u64,
     wallet_address: Option<String>,
     private_key: Option<String>,
+    seeder_price_wei: Option<String>,
+    seeder_wallet_address: Option<String>,
 ) -> Result<DownloadStartResult, String> {
     // Parse speed tier
     let tier = SpeedTier::from_str(&speed_tier)?;
@@ -612,6 +647,18 @@ async fn start_download(
         {
             let mut tiers = state.download_tiers.lock().await;
             tiers.insert(request_id.clone(), tier);
+        }
+
+        // Store download credentials if wallet is available (needed for file payment in event loop)
+        let seeder_price: u128 = seeder_price_wei.as_deref().unwrap_or("0").parse().unwrap_or(0);
+        if seeder_price > 0 || wallet_address.is_some() {
+            if let (Some(ref addr), Some(ref key)) = (&wallet_address, &private_key) {
+                let mut creds = state.download_credentials.lock().await;
+                creds.insert(request_id.clone(), dht::DownloadCredentials {
+                    wallet_address: addr.clone(),
+                    private_key: key.clone(),
+                });
+            }
         }
 
         // Emit download started event
@@ -739,6 +786,8 @@ async fn register_shared_file(
     file_path: String,
     file_name: String,
     file_size: u64,
+    price_chr: Option<String>,
+    wallet_address: Option<String>,
 ) -> Result<(), String> {
     println!("Re-registering shared file: {} (hash: {})", file_name, file_hash);
 
@@ -747,10 +796,22 @@ async fn register_shared_file(
         return Err(format!("File no longer exists: {}", file_path));
     }
 
+    // Parse price from CHR to wei
+    let price_wei = if let Some(ref price) = price_chr {
+        if price.is_empty() || price == "0" {
+            0u128
+        } else {
+            parse_chr_to_wei(price)?
+        }
+    } else {
+        0u128
+    };
+    let wallet_addr = wallet_address.unwrap_or_default();
+
     // Get DHT service
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
-        dht.register_shared_file(file_hash, file_path, file_name, file_size).await;
+        dht.register_shared_file(file_hash, file_path, file_name, file_size, price_wei, wallet_addr).await;
         Ok(())
     } else {
         // DHT not running yet - this is okay, will be registered when DHT starts
@@ -1423,6 +1484,23 @@ async fn send_transaction(
     })
 }
 
+/// Public wrapper for sending payment transactions from dht.rs event loop.
+/// Takes CHR amount string, returns tx hash on success.
+pub async fn send_payment_transaction(
+    from_address: &str,
+    to_address: &str,
+    amount_chr: &str,
+    private_key: &str,
+) -> Result<String, String> {
+    let result = send_transaction(
+        from_address.to_string(),
+        to_address.to_string(),
+        amount_chr.to_string(),
+        private_key.to_string(),
+    ).await?;
+    Ok(result.hash)
+}
+
 /// Get a transaction receipt to check if it has been mined
 #[tauri::command]
 async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
@@ -1585,10 +1663,12 @@ fn classify_transaction(
         );
     }
 
-    if from_lower == address_lower {
+    if from_lower == address_lower && to_lower != burn_lower {
+        // Could be a file payment (sent to a seeder) or regular send
+        // If metadata tagged it as file_payment, that was already handled above
         return (
             "send".to_string(),
-            format!("💸 Sent to {}", &to[..10]),
+            format!("💸 Sent to {}", &to[..std::cmp::min(10, to.len())]),
             None, None, None, None,
         );
     }
@@ -1838,6 +1918,75 @@ async fn export_torrent_file(
     })
 }
 
+/// Open a file with the system default application
+#[tauri::command]
+async fn open_file(path: String) -> Result<(), String> {
+    let file_path = std::path::Path::new(&path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Show a file in the system file manager
+#[tauri::command]
+async fn show_in_folder(path: String) -> Result<(), String> {
+    let file_path = std::path::Path::new(&path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try xdg-open on the parent directory; dbus method would be better but this is simpler
+        if let Some(parent) = file_path.parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder: {}", e))?;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in Finder: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to reveal in Explorer: {}", e))?;
+    }
+
+    Ok(())
+}
+
 // ============================================================================
 // Geth Commands
 // ============================================================================
@@ -2062,6 +2211,7 @@ pub fn run() {
             download_tiers: Arc::new(Mutex::new(HashMap::new())),
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
             download_directory: Arc::new(Mutex::new(None)),
+            download_credentials: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -2091,6 +2241,8 @@ pub fn run() {
             register_shared_file,
             parse_torrent_file,
             export_torrent_file,
+            open_file,
+            show_in_folder,
             // Wallet commands
             get_wallet_balance,
             send_transaction,
