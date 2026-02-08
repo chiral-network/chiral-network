@@ -406,40 +406,49 @@ impl GethProcess {
             return Err("Geth is not installed. Please download it first.".to_string());
         }
 
-        // Kill any orphaned Geth process from a previous run that holds the datadir lock.
-        // This can happen if the app crashes or is force-closed.
-        // Use the datadir path to find the exact orphaned process.
-        if let Ok(output) = Command::new("fuser")
-            .arg(self.data_dir.join("geth").join("LOCK").to_string_lossy().as_ref())
-            .output()
-        {
-            let pids = String::from_utf8_lossy(&output.stdout);
-            for pid in pids.split_whitespace() {
-                let pid = pid.trim();
-                if !pid.is_empty() {
-                    println!("⚠️  Killing orphaned Geth holding datadir lock (PID {})", pid);
-                    let _ = Command::new("kill").args(["-9", pid]).output();
-                }
-            }
-        }
-        // Also try pkill as a fallback to catch any geth process using our datadir
-        let datadir_str = self.data_dir.to_string_lossy().to_string();
-        if let Ok(output) = Command::new("pgrep").args(["-f", &format!("geth.*--datadir.*{}", datadir_str)]).output() {
+        // Kill any orphaned Geth process from a previous app session.
+        // This happens when the app is closed without properly stopping Geth.
+        // We find processes by our geth binary path (unique to our app).
+        let geth_binary = self.geth_path();
+        let geth_binary_str = geth_binary.to_string_lossy().to_string();
+        let mut killed_orphan = false;
+
+        // Method 1: pgrep by exact binary path
+        if let Ok(output) = Command::new("pgrep").args(["-f", &geth_binary_str]).output() {
             let pids = String::from_utf8_lossy(&output.stdout);
             for pid in pids.trim().lines() {
                 let pid = pid.trim();
                 if !pid.is_empty() {
-                    println!("⚠️  Killing orphaned Geth process (PID {})", pid);
+                    println!("⚠️  Killing orphaned Geth process (PID {}, binary: {})", pid, geth_binary_str);
                     let _ = Command::new("kill").args(["-9", pid]).output();
+                    killed_orphan = true;
                 }
             }
         }
 
+        // Method 2: find any process holding our datadir open via lsof
+        if !killed_orphan {
+            let datadir_str = self.data_dir.to_string_lossy().to_string();
+            if let Ok(output) = Command::new("lsof").args(["+D", &datadir_str, "-t"]).output() {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for pid in pids.trim().lines() {
+                    let pid = pid.trim();
+                    if !pid.is_empty() {
+                        println!("⚠️  Killing process holding datadir (PID {})", pid);
+                        let _ = Command::new("kill").args(["-9", pid]).output();
+                        killed_orphan = true;
+                    }
+                }
+            }
+        }
+
+        if killed_orphan {
+            // Wait for process to fully exit and release all file locks
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+
         // Remove ALL stale LOCK files from the data directory tree
-        // Geth creates LOCK files at: datadir/LOCK, datadir/geth/LOCK, datadir/geth/chaindata/LOCK, etc.
         Self::remove_lock_files_recursive(&self.data_dir);
-        // Brief wait for process cleanup
-        std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Check if blockchain needs initialization or re-initialization
         // Use a version marker to detect genesis config changes
