@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Send, X, Check, History, User, FileIcon, Upload } from 'lucide-svelte';
+  import { Send, X, Check, History, User, FileIcon, Upload, Coins } from 'lucide-svelte';
   import {
     userAlias,
     nearbyPeers,
@@ -19,11 +19,12 @@
     updateTransferStatus,
     generateTransferId,
     formatFileSize,
+    formatPriceWei,
     type NearbyPeer,
     type FileTransfer
   } from '$lib/chiralDropStore';
   import { aliasFromPeerId } from '$lib/aliasService';
-  import { peers } from '$lib/stores';
+  import { peers, walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
   import { logger } from '$lib/logger';
@@ -41,10 +42,13 @@
   let fileInput = $state<HTMLInputElement>();
   let animationFrame: number;
   let time = $state(0);
+  let sendPrice = $state('');
   let unlistenPeerDiscovered: (() => void) | null = null;
   let unlistenFileReceived: (() => void) | null = null;
   let unlistenFileComplete: (() => void) | null = null;
   let unlistenFileReceivedComplete: (() => void) | null = null;
+  let unlistenPaidRequest: (() => void) | null = null;
+  let unlistenConnectionEstablished: (() => void) | null = null;
 
   // Wave animation
   function animate() {
@@ -127,6 +131,38 @@
           toasts.show(`File "${fileName}" saved to ${filePath}`, 'success', 8000);
           updateTransferStatus(transferId, 'completed');
         });
+
+        // Listen for connection-established events (catches non-mDNS peers too)
+        unlistenConnectionEstablished = await listen<string>('connection-established', (event) => {
+          const peerId = event.payload;
+          addNearbyPeer(peerId);
+        });
+
+        // Listen for paid file transfer requests (sent via chiraldrop with price > 0)
+        unlistenPaidRequest = await listen<any>('chiraldrop-paid-request', (event) => {
+          const { transferId, fromPeerId, fileName, fileHash, fileSize, priceWei, senderWallet } = event.payload;
+          const fromAlias = aliasFromPeerId(fromPeerId);
+          const toAlias = $userAlias;
+
+          addPendingTransfer({
+            id: transferId,
+            fileName,
+            fileSize: fileSize || 0,
+            fromPeerId,
+            fromAlias,
+            toPeerId: $localPeerId || '',
+            toAlias,
+            status: 'pending',
+            direction: 'incoming',
+            timestamp: Date.now(),
+            priceWei,
+            senderWallet,
+            fileHash
+          });
+
+          const priceDisplay = formatPriceWei(priceWei);
+          toasts.show(`${fromAlias.displayName} wants to send you "${fileName}" for ${priceDisplay}`, 'info');
+        });
       } catch (error) {
         log.warn('Failed to set up Tauri event listeners:', error);
       }
@@ -155,12 +191,29 @@
     if (unlistenFileReceivedComplete) {
       unlistenFileReceivedComplete();
     }
+    if (unlistenPaidRequest) {
+      unlistenPaidRequest();
+    }
+    if (unlistenConnectionEstablished) {
+      unlistenConnectionEstablished();
+    }
   });
 
-  // Subscribe to peers store updates
+  // Subscribe to peers store updates — sync adds AND removals
   $effect(() => {
+    const currentPeerIds = new Set($peers.map((p) => p.id));
+
+    // Add any new peers
     $peers.forEach((peer) => {
       addNearbyPeer(peer.id);
+    });
+
+    // Remove peers no longer in the peers store
+    const nearby = $nearbyPeers;
+    nearby.forEach((np) => {
+      if (!currentPeerIds.has(np.peerId)) {
+        removeNearbyPeer(np.peerId);
+      }
     });
   });
 
@@ -181,6 +234,14 @@
     const transferId = generateTransferId();
     const fromAlias = $userAlias;
     const toAlias = peer.alias;
+    const price = sendPrice.trim();
+    const isPaid = price !== '' && parseFloat(price) > 0;
+
+    // Validate wallet for paid transfers
+    if (isPaid && !$walletAccount) {
+      toasts.show('Connect your wallet to set a price on files', 'error');
+      return;
+    }
 
     // Add to pending transfers
     addPendingTransfer({
@@ -207,26 +268,64 @@
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
-      // Read file as array buffer
-      const buffer = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buffer));
+      if (isPaid) {
+        // Paid transfer flow:
+        // 1. Publish file (hashes + registers for chunked serving with price)
+        // 2. Send metadata-only request via file_transfer protocol with pricing info
+        //    (receiver will download via chunked protocol with payment handshake)
 
-      // Send via backend
-      await invoke('send_file', {
-        peerId: peer.peerId,
-        fileName: file.name,
-        fileData: bytes,
-        transferId
-      });
+        // Convert CHR to wei
+        const priceParts = price.split('.');
+        const whole = BigInt(priceParts[0] || '0');
+        const fracStr = (priceParts[1] || '').padEnd(18, '0').slice(0, 18);
+        const frac = BigInt(fracStr);
+        const priceWei = (whole * BigInt(1e18) + frac).toString();
 
-      updateTransferStatus(transferId, 'completed');
-      toasts.show(`File sent to ${toAlias.displayName}`, 'success');
+        // Publish file to get hash and register for chunked serving
+        const publishResult = await invoke<{ merkleRoot: string }>('publish_file', {
+          filePath: file.name,
+          fileName: file.name,
+          priceChr: price,
+          walletAddress: $walletAccount!.address
+        });
+
+        const fileHash = publishResult.merkleRoot;
+
+        // Send metadata-only transfer request (empty file data) with pricing
+        await invoke('send_file', {
+          peerId: peer.peerId,
+          fileName: file.name,
+          fileData: [],
+          transferId,
+          priceWei,
+          senderWallet: $walletAccount!.address,
+          fileHash
+        });
+
+        updateTransferStatus(transferId, 'completed');
+        toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHR)`, 'success');
+      } else {
+        // Free transfer: send file data directly (existing behavior)
+        const buffer = await file.arrayBuffer();
+        const bytes = Array.from(new Uint8Array(buffer));
+
+        await invoke('send_file', {
+          peerId: peer.peerId,
+          fileName: file.name,
+          fileData: bytes,
+          transferId
+        });
+
+        updateTransferStatus(transferId, 'completed');
+        toasts.show(`File sent to ${toAlias.displayName}`, 'success');
+      }
     } catch (error) {
       log.error('Failed to send file:', error);
       updateTransferStatus(transferId, 'failed');
       toasts.show(`Failed to send file: ${error}`, 'error');
     }
 
+    sendPrice = '';
     selectPeer(null);
   }
 
@@ -239,10 +338,36 @@
 
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const filePath = await invoke<string>('accept_file_transfer', { transferId: transfer.id });
-      acceptTransfer(transfer.id);
-      toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`, 'info');
-      // The actual file-received event will show the final path
+
+      const isPaid = transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0;
+
+      if (isPaid) {
+        // Paid transfer: download via chunked protocol with payment handshake
+        if (!$walletAccount) {
+          toasts.show('Connect your wallet to accept paid file transfers', 'error');
+          return;
+        }
+
+        acceptTransfer(transfer.id);
+        toasts.show(`Starting paid download of "${transfer.fileName}" (${formatPriceWei(transfer.priceWei!)})...`, 'info');
+
+        await invoke('start_download', {
+          fileHash: transfer.fileHash,
+          fileName: transfer.fileName,
+          seeders: [transfer.fromPeerId],
+          speedTier: 'free',
+          fileSize: transfer.fileSize,
+          walletAddress: $walletAccount.address,
+          privateKey: $walletAccount.privateKey,
+          seederPriceWei: transfer.priceWei,
+          seederWalletAddress: transfer.senderWallet
+        });
+      } else {
+        // Free transfer: accept via direct file transfer (existing behavior)
+        await invoke<string>('accept_file_transfer', { transferId: transfer.id });
+        acceptTransfer(transfer.id);
+        toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`, 'info');
+      }
     } catch (error) {
       log.error('Failed to accept transfer:', error);
       toasts.show(`Failed to accept transfer: ${error}`, 'error');
@@ -397,6 +522,12 @@
                     <p class="text-xs text-gray-500 dark:text-gray-400">
                       From {transfer.fromAlias.displayName} - {formatFileSize(transfer.fileSize)}
                     </p>
+                    {#if transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0}
+                      <span class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-xs rounded-full">
+                        <Coins class="w-3 h-3" />
+                        {formatPriceWei(transfer.priceWei)}
+                      </span>
+                    {/if}
                   </div>
                 </div>
                 <div class="flex gap-2 mt-3">
@@ -405,7 +536,9 @@
                     class="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 transition text-sm"
                   >
                     <Check class="w-4 h-4" />
-                    Accept
+                    {transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0
+                      ? `Pay & Accept`
+                      : 'Accept'}
                   </button>
                   <button
                     onclick={() => handleDecline(transfer)}
@@ -445,12 +578,33 @@
               <p class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[180px]">{$selectedPeer.peerId}</p>
             </div>
           </div>
+          <!-- Price Input -->
+          <div class="mb-3">
+            <label for="chiraldrop-price" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+              Price (CHR) — leave empty for free
+            </label>
+            <div class="flex items-center gap-2">
+              <Coins class="w-4 h-4 text-amber-500 flex-shrink-0" />
+              <input
+                id="chiraldrop-price"
+                type="number"
+                step="0.001"
+                min="0"
+                placeholder="0 (free)"
+                bind:value={sendPrice}
+                class="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
+              />
+            </div>
+            {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
+              <p class="text-xs text-amber-500 mt-1">Connect wallet to set a price</p>
+            {/if}
+          </div>
           <button
             onclick={() => fileInput?.click()}
             class="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
           >
             <Send class="w-4 h-4" />
-            Select File to Send
+            {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHR` : 'Select File to Send'}
           </button>
           <input
             bind:this={fileInput}
