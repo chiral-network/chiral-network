@@ -348,7 +348,7 @@
             };
             toasts.show(`Magnet link parsed but file not found in DHT. The seeder may be offline.`, 'warning');
           } else {
-            searchError = 'File not found on the network';
+            searchError = 'File not found in DHT. The seeder may be offline or the hash may be incorrect.';
           }
         }
       } else {
@@ -823,13 +823,18 @@
               {#if searchResult.fileSize > 0}
                 <span>{formatFileSize(searchResult.fileSize)}</span>
               {/if}
-              <span class="text-green-600 dark:text-green-400">
-                {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''}` : 'Unknown seeders'}
+              <span class="{searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
+                {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
               </span>
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
               {searchResult.hash}
             </p>
+            {#if searchResult.seeders.length > 0}
+              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                Seeder availability is verified when download starts
+              </p>
+            {/if}
           </div>
         </div>
 
