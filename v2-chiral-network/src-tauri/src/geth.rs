@@ -408,28 +408,53 @@ impl GethProcess {
 
         // Kill any orphaned Geth process from a previous app session.
         // This happens when the app is killed (e.g. Ctrl+C) without stopping Geth.
-        // We scan /proc/*/cmdline for processes with our exact --datadir argument,
-        // which uniquely identifies our geth instance without false-matching our own app.
+        // We try multiple methods to ensure the orphan is found and killed.
         let datadir_str = self.data_dir.to_string_lossy().to_string();
-        let our_pid = std::process::id();
         let mut killed_orphan = false;
 
+        // Method 1: Scan /proc/*/cmdline for geth processes using our datadir
+        // Use read() not read_to_string() since cmdline contains null bytes
+        println!("🔍 Scanning for orphaned Geth (datadir: {})", datadir_str);
         if let Ok(entries) = fs::read_dir("/proc") {
+            let our_pid = std::process::id();
             for entry in entries.flatten() {
                 let pid_str = entry.file_name().to_string_lossy().to_string();
                 if let Ok(pid) = pid_str.parse::<u32>() {
                     if pid == our_pid { continue; }
                     let cmdline_path = format!("/proc/{}/cmdline", pid);
-                    if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
-                        // /proc/*/cmdline uses null bytes as separators
-                        let args: Vec<&str> = cmdline.split('\0').collect();
-                        // Check if this is a geth process using our datadir
-                        let is_geth = args.first().map(|a| a.ends_with("geth")).unwrap_or(false);
-                        let has_our_datadir = args.windows(2).any(|w| w[0] == "--datadir" && w[1] == datadir_str);
-                        if is_geth && has_our_datadir {
-                            println!("⚠️  Killing orphaned Geth process (PID {}, cmdline: {})",
-                                pid, args.join(" "));
-                            let _ = Command::new("kill").args(["-9", &pid_str]).output();
+                    if let Ok(cmdline_bytes) = fs::read(&cmdline_path) {
+                        let cmdline = String::from_utf8_lossy(&cmdline_bytes);
+                        // Check if this process has both "geth" and our datadir in its cmdline
+                        if cmdline.contains("geth") {
+                            println!("🔍 Found geth-related process PID {}: {}", pid,
+                                cmdline.replace('\0', " "));
+                        }
+                        if cmdline.contains("geth") && cmdline.contains(&datadir_str) {
+                            println!("⚠️  Killing orphaned Geth process (PID {})", pid);
+                            let kill_result = Command::new("kill").args(["-9", &pid_str]).output();
+                            println!("⚠️  kill result: {:?}", kill_result);
+                            killed_orphan = true;
+                        }
+                    }
+                }
+            }
+        }
+        println!("🔍 Orphan scan complete. Found: {}", killed_orphan);
+
+        // Method 2: Use lsof to find any process holding the IPC socket
+        if !killed_orphan {
+            let ipc_path = self.data_dir.join("geth.ipc");
+            if ipc_path.exists() {
+                if let Ok(output) = Command::new("lsof")
+                    .args(["-t", &ipc_path.to_string_lossy()])
+                    .output()
+                {
+                    let pids = String::from_utf8_lossy(&output.stdout);
+                    for pid in pids.trim().lines() {
+                        let pid = pid.trim();
+                        if !pid.is_empty() {
+                            println!("⚠️  Killing process holding geth.ipc (PID {})", pid);
+                            let _ = Command::new("kill").args(["-9", pid]).output();
                             killed_orphan = true;
                         }
                     }
@@ -437,9 +462,25 @@ impl GethProcess {
             }
         }
 
+        // Method 3: Use fuser on the RPC port as last resort
+        if !killed_orphan {
+            if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).output() {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for pid in pids.split_whitespace() {
+                    let pid = pid.trim();
+                    if !pid.is_empty() {
+                        println!("⚠️  Killing process on port 8545 (PID {})", pid);
+                        let _ = Command::new("kill").args(["-9", pid]).output();
+                        killed_orphan = true;
+                    }
+                }
+            }
+        }
+
         if killed_orphan {
             // Wait for process to fully exit and release all file locks
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            println!("⏳ Waiting for orphaned process to exit...");
+            std::thread::sleep(std::time::Duration::from_secs(3));
         }
 
         // Remove ALL stale LOCK files from the data directory tree
