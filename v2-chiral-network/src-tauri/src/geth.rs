@@ -50,6 +50,7 @@ pub struct DownloadProgress {
 pub struct GethStatus {
     pub installed: bool,
     pub running: bool,
+    pub local_running: bool,
     pub syncing: bool,
     pub current_block: u64,
     pub highest_block: u64,
@@ -456,7 +457,7 @@ impl GethProcess {
 
         println!("✅ Geth started");
         println!("   Logs: {}", log_path.display());
-        println!("   RPC: {}", rpc_endpoint());
+        println!("   RPC: http://127.0.0.1:8545");
 
         // Wait for Geth to start up
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -551,6 +552,7 @@ impl GethProcess {
         Ok(GethStatus {
             installed: self.is_installed(),
             running: self.child.is_some() || chain_id > 0, // If we can query chain ID, it's running
+            local_running: self.child.is_some(),
             syncing,
             current_block: if syncing { current_block } else { block_number },
             highest_block: if syncing { highest_block } else { block_number },
@@ -559,8 +561,11 @@ impl GethProcess {
         })
     }
 
-    /// Start mining
+    /// Start mining (requires local Geth process)
     pub async fn start_mining(&self, threads: u32) -> Result<(), String> {
+        if self.child.is_none() {
+            return Err("Cannot mine: local Geth node is not running. Start the node from the Network page first.".to_string());
+        }
         let client = reqwest::Client::new();
         self.rpc_call(&client, "miner_start", serde_json::json!([threads]))
             .await
@@ -613,6 +618,15 @@ impl GethProcess {
             .map(|_| ())
     }
 
+    /// Get the effective RPC endpoint: local Geth if running, otherwise shared remote
+    fn effective_rpc_endpoint(&self) -> String {
+        if self.child.is_some() {
+            "http://127.0.0.1:8545".to_string()
+        } else {
+            rpc_endpoint()
+        }
+    }
+
     /// Make an RPC call to Geth
     async fn rpc_call(
         &self,
@@ -627,7 +641,7 @@ impl GethProcess {
             "id": 1
         });
 
-        let endpoint = rpc_endpoint();
+        let endpoint = self.effective_rpc_endpoint();
         let response = client
             .post(&endpoint)
             .json(&payload)
@@ -737,6 +751,7 @@ mod tests {
         let status = GethStatus {
             installed: true,
             running: true,
+            local_running: true,
             syncing: false,
             current_block: 100,
             highest_block: 100,
@@ -747,8 +762,10 @@ mod tests {
         assert!(json.contains("currentBlock"));
         assert!(json.contains("peerCount"));
         assert!(json.contains("chainId"));
+        assert!(json.contains("localRunning"));
         let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.chain_id, CHAIN_ID);
+        assert!(deserialized.local_running);
     }
 
     #[test]
