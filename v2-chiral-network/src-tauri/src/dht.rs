@@ -171,6 +171,9 @@ pub struct SharedFileInfo {
 /// Map of request_id -> SpeedTier for rate-limited downloads
 pub type DownloadTiersMap = Arc<Mutex<HashMap<String, SpeedTier>>>;
 
+/// Shared reference to the custom download directory setting
+pub type DownloadDirectoryRef = Arc<Mutex<Option<String>>>;
+
 pub struct DhtService {
     peers: Arc<Mutex<Vec<PeerInfo>>>,
     is_running: Arc<Mutex<bool>>,
@@ -179,12 +182,14 @@ pub struct DhtService {
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
     download_tiers: DownloadTiersMap,
+    download_directory: DownloadDirectoryRef,
 }
 
 impl DhtService {
     pub fn new(
         file_transfer_service: Arc<Mutex<crate::file_transfer::FileTransferService>>,
         download_tiers: DownloadTiersMap,
+        download_directory: DownloadDirectoryRef,
     ) -> Self {
         Self {
             peers: Arc::new(Mutex::new(Vec::new())),
@@ -194,6 +199,7 @@ impl DhtService {
             file_transfer_service: Some(file_transfer_service),
             shared_files: Arc::new(Mutex::new(std::collections::HashMap::new())),
             download_tiers,
+            download_directory,
         }
     }
 
@@ -255,9 +261,10 @@ impl DhtService {
         let file_transfer_clone = self.file_transfer_service.clone();
         let shared_files_clone = self.shared_files.clone();
         let download_tiers_clone = self.download_tiers.clone();
+        let download_dir_clone = self.download_directory.clone();
 
         tokio::spawn(async move {
-            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone, download_tiers_clone).await;
+            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone, download_tiers_clone, download_dir_clone).await;
         });
         
         Ok(format!("DHT started with peer ID: {}", peer_id))
@@ -535,6 +542,7 @@ async fn event_loop(
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
     download_tiers: DownloadTiersMap,
+    download_directory: DownloadDirectoryRef,
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
@@ -549,7 +557,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         println!("Listening on {:?}", address);
@@ -720,6 +728,7 @@ async fn handle_behaviour_event(
     pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
     shared_files: &SharedFilesMap,
     download_tiers: &DownloadTiersMap,
+    download_directory: &DownloadDirectoryRef,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -983,8 +992,15 @@ async fn handle_behaviour_event(
                                     tiers.remove(&response.request_id).unwrap_or(SpeedTier::Free)
                                 };
 
-                                // Save the file to Downloads folder with rate limiting
-                                if let Some(downloads_dir) = dirs::download_dir() {
+                                // Save the file to download directory with rate limiting
+                                let custom_dir = download_directory.lock().await.clone();
+                                let downloads_dir_result = if let Some(ref dir) = custom_dir {
+                                    let p = std::path::PathBuf::from(dir);
+                                    if p.exists() && p.is_dir() { Some(p) } else { dirs::download_dir() }
+                                } else {
+                                    dirs::download_dir()
+                                };
+                                if let Some(downloads_dir) = downloads_dir_result {
                                     let file_name = if response.file_name.is_empty() {
                                         format!("{}.download", &response.file_hash[..8])
                                     } else {
