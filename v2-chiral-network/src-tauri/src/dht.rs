@@ -847,7 +847,10 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     }
 
     let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
-    let ping = ping::Behaviour::new(ping::Config::new());
+    let ping = ping::Behaviour::new(
+        ping::Config::new()
+            .with_interval(std::time::Duration::from_secs(15))
+    );
 
     let identify_config = identify::Config::new(
         "/chiral/id/1.0.0".to_string(),
@@ -888,7 +891,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             yamux::Config::default,
         )?
         .with_behaviour(|_| behaviour)?
-        .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(60)))
+        .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
         .build();
 
     // Listen on all interfaces
