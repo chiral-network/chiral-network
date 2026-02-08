@@ -407,24 +407,28 @@ impl GethProcess {
         }
 
         // Kill any orphaned Geth process from a previous app session.
-        // This happens when the app is closed without properly stopping Geth.
-        // We match by the exact geth binary path in /proc/*/exe to avoid
-        // matching our own Tauri process (which pgrep -f would do).
-        let geth_binary = self.geth_path();
-        let geth_binary_str = geth_binary.to_string_lossy().to_string();
+        // This happens when the app is killed (e.g. Ctrl+C) without stopping Geth.
+        // We scan /proc/*/cmdline for processes with our exact --datadir argument,
+        // which uniquely identifies our geth instance without false-matching our own app.
+        let datadir_str = self.data_dir.to_string_lossy().to_string();
         let our_pid = std::process::id();
         let mut killed_orphan = false;
 
-        // Scan /proc for processes whose exe symlink matches our geth binary
         if let Ok(entries) = fs::read_dir("/proc") {
             for entry in entries.flatten() {
                 let pid_str = entry.file_name().to_string_lossy().to_string();
                 if let Ok(pid) = pid_str.parse::<u32>() {
                     if pid == our_pid { continue; }
-                    let exe_link = format!("/proc/{}/exe", pid);
-                    if let Ok(exe_path) = fs::read_link(&exe_link) {
-                        if exe_path.to_string_lossy() == geth_binary_str {
-                            println!("⚠️  Killing orphaned Geth process (PID {})", pid);
+                    let cmdline_path = format!("/proc/{}/cmdline", pid);
+                    if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
+                        // /proc/*/cmdline uses null bytes as separators
+                        let args: Vec<&str> = cmdline.split('\0').collect();
+                        // Check if this is a geth process using our datadir
+                        let is_geth = args.first().map(|a| a.ends_with("geth")).unwrap_or(false);
+                        let has_our_datadir = args.windows(2).any(|w| w[0] == "--datadir" && w[1] == datadir_str);
+                        if is_geth && has_our_datadir {
+                            println!("⚠️  Killing orphaned Geth process (PID {}, cmdline: {})",
+                                pid, args.join(" "));
                             let _ = Command::new("kill").args(["-9", &pid_str]).output();
                             killed_orphan = true;
                         }
