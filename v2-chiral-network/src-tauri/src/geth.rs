@@ -321,13 +321,11 @@ impl GethProcess {
                 "byzantiumBlock": 0,
                 "constantinopleBlock": 0,
                 "petersburgBlock": 0,
-                "istanbulBlock": 0,
-                "berlinBlock": 0,
-                "londonBlock": 0,
                 "ethash": {}
             },
-            "difficulty": "0x100",  // Lower difficulty for faster initial mining
+            "difficulty": "0x20000",
             "gasLimit": "0x1C9C380",
+            "nonce": "0x0000000000098765",
             "alloc": {
                 // Dev faucet address - 10000 CHR for testing
                 "0x0000000000000000000000000000000000001337": {
@@ -381,11 +379,32 @@ impl GethProcess {
             return Err("Geth is not installed. Please download it first.".to_string());
         }
 
-        // Check if blockchain needs initialization
+        // Check if blockchain needs initialization or re-initialization
+        // Use a version marker to detect genesis config changes
+        let genesis_version = "2"; // Bump this when genesis config changes
+        let version_file = self.data_dir.join(".genesis_version");
         let chaindata_path = self.data_dir.join("geth").join("chaindata");
-        if !chaindata_path.exists() {
-            println!("Initializing blockchain...");
+        let needs_init = if !chaindata_path.exists() {
+            true
+        } else {
+            // Check if genesis version matches
+            match fs::read_to_string(&version_file) {
+                Ok(v) => v.trim() != genesis_version,
+                Err(_) => true, // No version file = old genesis
+            }
+        };
+
+        if needs_init {
+            println!("Initializing blockchain (genesis v{})...", genesis_version);
+            // Remove old chain data if it exists
+            if chaindata_path.exists() {
+                println!("Removing old chain data for genesis update...");
+                let geth_dir = self.data_dir.join("geth");
+                let _ = fs::remove_dir_all(&geth_dir);
+            }
             self.init_genesis()?;
+            fs::write(&version_file, genesis_version)
+                .map_err(|e| format!("Failed to write genesis version: {}", e))?;
         }
 
         let geth_path = self.geth_path();
@@ -783,7 +802,7 @@ mod tests {
         assert_eq!(config["homesteadBlock"].as_u64().unwrap(), 0);
         assert_eq!(config["eip155Block"].as_u64().unwrap(), 0);
         assert_eq!(config["byzantiumBlock"].as_u64().unwrap(), 0);
-        assert_eq!(config["londonBlock"].as_u64().unwrap(), 0);
+        assert_eq!(config["petersburgBlock"].as_u64().unwrap(), 0);
 
         assert!(config.get("ethash").is_some());
         assert!(parsed.get("gasLimit").is_some());
