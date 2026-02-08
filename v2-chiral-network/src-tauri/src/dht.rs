@@ -1564,6 +1564,14 @@ async fn handle_behaviour_event(
                                             match verify_payment_on_chain(&payment_tx, &expected_wallet, expected_price).await {
                                                 Ok(true) => {
                                                     println!("✅ Payment verified for {} from {}", file_hash, payer_address);
+                                                    let price_wei_str = expected_price.to_string();
+                                                    let _ = app.emit("chiraldrop-payment-received", serde_json::json!({
+                                                        "fileHash": file_hash,
+                                                        "txHash": payment_tx,
+                                                        "priceWei": price_wei_str,
+                                                        "fromWallet": payer_address,
+                                                        "toWallet": expected_wallet,
+                                                    }));
                                                     ChunkResponse::PaymentAck {
                                                         request_id,
                                                         file_hash,
@@ -1719,6 +1727,16 @@ async fn handle_behaviour_event(
                                             ).await {
                                                 Ok(tx_hash) => {
                                                     println!("💰 Payment sent: tx={}", tx_hash);
+                                                    // Emit event so frontend can track in transaction history
+                                                    let _ = app.emit("chiraldrop-payment-sent", serde_json::json!({
+                                                        "requestId": request_id,
+                                                        "fileHash": file_hash,
+                                                        "fileName": file_name,
+                                                        "txHash": tx_hash,
+                                                        "priceWei": price_wei,
+                                                        "toWallet": wallet_address,
+                                                        "fromWallet": creds.wallet_address,
+                                                    }));
                                                     // Send payment proof to seeder
                                                     let request = ChunkRequest::PaymentProof {
                                                         request_id: request_id.clone(),
