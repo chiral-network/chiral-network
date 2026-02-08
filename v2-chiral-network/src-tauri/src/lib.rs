@@ -2267,7 +2267,7 @@ async fn stop_geth(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_geth_status(state: tauri::State<'_, AppState>) -> Result<GethStatus, String> {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     geth.get_status().await
 }
 
