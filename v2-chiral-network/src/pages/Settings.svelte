@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { settings, isDarkMode, type ThemeMode } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import {
@@ -9,8 +10,61 @@
     Zap,
     LayoutGrid,
     RotateCcw,
-    Check
+    Check,
+    FolderOpen,
+    HardDrive,
+    X
   } from 'lucide-svelte';
+
+  let isTauri = $state(false);
+  let displayDownloadDir = $state('');
+
+  function checkTauriAvailability(): boolean {
+    return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+  }
+
+  onMount(async () => {
+    isTauri = checkTauriAvailability();
+    if (isTauri) {
+      await loadDownloadDirectory();
+    }
+  });
+
+  async function loadDownloadDirectory() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      displayDownloadDir = await invoke<string>('get_download_directory');
+    } catch (e) {
+      console.error('Failed to load download directory:', e);
+    }
+  }
+
+  async function browseDownloadDirectory() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const picked = await invoke<string | null>('pick_download_directory');
+      if (picked) {
+        await invoke('set_download_directory', { path: picked });
+        settings.update((s) => ({ ...s, downloadDirectory: picked }));
+        displayDownloadDir = picked;
+        toasts.show('Download directory updated', 'success');
+      }
+    } catch (e) {
+      toasts.show(`Failed to set directory: ${e}`, 'error');
+    }
+  }
+
+  async function resetDownloadDirectory() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_download_directory', { path: null });
+      settings.update((s) => ({ ...s, downloadDirectory: '' }));
+      displayDownloadDir = await invoke<string>('get_download_directory');
+      toasts.show('Download directory reset to system default', 'info');
+    } catch (e) {
+      toasts.show(`Failed to reset directory: ${e}`, 'error');
+    }
+  }
 
   // Theme options
   const themeOptions: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
@@ -34,6 +88,9 @@
 
   function resetSettings() {
     settings.reset();
+    if (isTauri) {
+      resetDownloadDirectory();
+    }
     toasts.show('Settings reset to defaults', 'info');
   }
 </script>
@@ -138,6 +195,56 @@
       </button>
     </div>
   </div>
+
+  <!-- Storage Section -->
+  {#if isTauri}
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+      <div class="flex items-center gap-3 mb-6">
+        <div class="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
+          <HardDrive class="w-5 h-5 text-blue-600 dark:text-blue-400" />
+        </div>
+        <div>
+          <h2 class="font-semibold text-lg dark:text-white">Storage</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Configure where downloaded files are saved</p>
+        </div>
+      </div>
+
+      <!-- Download Directory -->
+      <div>
+        <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Download Directory</span>
+        <div class="flex items-center gap-3">
+          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+            <FolderOpen class="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <span class="text-sm text-gray-700 dark:text-gray-300 truncate font-mono">
+              {displayDownloadDir || 'Loading...'}
+            </span>
+          </div>
+          <button
+            onclick={browseDownloadDirectory}
+            class="px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors flex-shrink-0"
+          >
+            Browse
+          </button>
+          {#if $settings.downloadDirectory}
+            <button
+              onclick={resetDownloadDirectory}
+              class="p-2.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
+              title="Reset to system default"
+            >
+              <X class="w-4 h-4" />
+            </button>
+          {/if}
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+          {#if $settings.downloadDirectory}
+            Using custom directory
+          {:else}
+            Using system default Downloads folder
+          {/if}
+        </p>
+      </div>
+    </div>
+  {/if}
 
   <!-- Preview Section -->
   <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
