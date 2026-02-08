@@ -392,53 +392,11 @@ async fn search_file(
             }
             Ok(None) => {
                 println!("File not found in DHT: {}", file_hash);
-
-                // Fallback: If we have connected peers, return them as potential seeders
-                // They might have the file even if it's not in DHT yet
-                let peers = dht.get_peers().await;
-                if !peers.is_empty() {
-                    println!("DHT lookup failed, but {} peers are connected. Returning peers as potential seeders.", peers.len());
-                    let seeders: Vec<String> = peers.iter().map(|p| p.id.clone()).collect();
-
-                    // Return a partial result with connected peers as potential seeders
-                    // The download will attempt to request from these peers
-                    Ok(Some(SearchResult {
-                        hash: file_hash,
-                        file_name: String::new(), // Unknown, will be filled from magnet/torrent
-                        file_size: 0,
-                        seeders,
-                        created_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    }))
-                } else {
-                    println!("No peers connected, cannot search for file");
-                    Ok(None)
-                }
+                Ok(None)
             }
             Err(e) => {
                 println!("DHT lookup error: {}", e);
-
-                // On error, also try fallback to connected peers
-                let peers = dht.get_peers().await;
-                if !peers.is_empty() {
-                    println!("DHT lookup errored, but {} peers are connected. Returning peers as potential seeders.", peers.len());
-                    let seeders: Vec<String> = peers.iter().map(|p| p.id.clone()).collect();
-
-                    Ok(Some(SearchResult {
-                        hash: file_hash,
-                        file_name: String::new(),
-                        file_size: 0,
-                        seeders,
-                        created_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                    }))
-                } else {
-                    Err(e)
-                }
+                Err(e)
             }
         }
     } else {
@@ -600,12 +558,40 @@ async fn start_download(
             "speedTier": speed_tier
         }));
 
+        // Check which seeders are actually reachable before attempting download
+        let mut reachable_seeders = Vec::new();
+        let mut offline_count = 0;
+
+        for seeder in &seeders {
+            match dht.is_peer_connected(seeder).await {
+                Ok(true) => {
+                    println!("✅ Seeder {} is connected", seeder);
+                    reachable_seeders.push(seeder.clone());
+                }
+                Ok(false) => {
+                    println!("⚠️ Seeder {} is not currently connected", seeder);
+                    // Still include them — the swarm RequestFile handler will attempt to dial
+                    reachable_seeders.push(seeder.clone());
+                    offline_count += 1;
+                }
+                Err(e) => {
+                    println!("❌ Failed to check seeder {} connectivity: {}", seeder, e);
+                    offline_count += 1;
+                    reachable_seeders.push(seeder.clone());
+                }
+            }
+        }
+
+        if offline_count == seeders.len() {
+            println!("⚠️ All {} seeders appear to be offline, will attempt dial anyway", seeders.len());
+        }
+
         // Try each seeder until one succeeds
         let mut last_error = String::new();
         let mut request_sent = false;
 
-        for (i, seeder) in seeders.iter().enumerate() {
-            println!("Trying seeder {}/{}: {} for file {}", i + 1, seeders.len(), seeder, file_hash);
+        for (i, seeder) in reachable_seeders.iter().enumerate() {
+            println!("Trying seeder {}/{}: {} for file {}", i + 1, reachable_seeders.len(), seeder, file_hash);
 
             match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone()).await {
                 Ok(_) => {
@@ -631,12 +617,17 @@ async fn start_download(
                 let mut tiers = state.download_tiers.lock().await;
                 tiers.remove(&request_id);
             }
+            let error_msg = if offline_count > 0 {
+                format!("All {} seeder(s) are offline or unreachable. The file owner may have disconnected.", seeders.len())
+            } else {
+                format!("No seeder could provide the file: {}", last_error)
+            };
             let _ = app.emit("file-download-failed", serde_json::json!({
                 "requestId": request_id,
                 "fileHash": file_hash,
-                "error": format!("No seeder could provide the file: {}", last_error)
+                "error": error_msg
             }));
-            Err(format!("Failed to request file from any seeder: {}", last_error))
+            Err(error_msg)
         }
     } else {
         Err("DHT not running".to_string())
