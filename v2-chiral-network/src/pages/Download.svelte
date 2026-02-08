@@ -21,7 +21,9 @@
     Link,
     FileUp,
     Plus,
-    Trash2
+    Trash2,
+    FolderOpen,
+    ExternalLink
   } from 'lucide-svelte';
   import { Zap, Gauge, Rocket } from 'lucide-svelte';
   import { networkConnected, walletAccount } from '$lib/stores';
@@ -43,6 +45,7 @@
   let unlistenDownloadComplete: (() => void) | null = null;
   let unlistenDownloadFailed: (() => void) | null = null;
   let unlistenDownloadProgress: (() => void) | null = null;
+  let unlistenPaymentProcessing: (() => void) | null = null;
 
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
@@ -54,6 +57,8 @@
     fileSize: number;
     seeders: string[];
     createdAt: number;
+    priceWei: string;
+    walletAddress: string;
   }
 
   interface DownloadItem {
@@ -69,6 +74,7 @@
     startedAt: Date;
     completedAt?: Date;
     speedTier?: SpeedTier;
+    filePath?: string;
   }
 
   interface HistoryEntry {
@@ -81,6 +87,7 @@
     status: 'completed' | 'cancelled' | 'failed';
     speedTier?: SpeedTier;
     seeders?: number;
+    filePath?: string;
   }
 
   // File type detection
@@ -129,6 +136,23 @@
       hour: '2-digit',
       minute: '2-digit'
     }).format(date);
+  }
+
+  // Format wei price as CHR string
+  function formatPriceWei(weiStr: string): string {
+    if (!weiStr || weiStr === '0') return 'Free';
+    try {
+      const wei = BigInt(weiStr);
+      if (wei === 0n) return 'Free';
+      const whole = wei / 1_000_000_000_000_000_000n;
+      const frac = wei % 1_000_000_000_000_000_000n;
+      if (frac === 0n) return `${whole} CHR`;
+      const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
+      const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) : fracStr;
+      return `${whole}.${decimals} CHR`;
+    } catch {
+      return 'Free';
+    }
   }
 
   // State
@@ -197,7 +221,8 @@
       startedAt: download.startedAt,
       status: download.status as 'completed' | 'cancelled' | 'failed',
       speedTier: download.speedTier,
-      seeders: download.seeders
+      seeders: download.seeders,
+      filePath: download.filePath
     };
     downloadHistory = [entry, ...downloadHistory].slice(0, 50);
     saveDownloadHistory();
@@ -268,7 +293,9 @@
             fileName: result.name,
             fileSize: result.size || dhtResult?.fileSize || 0,
             seeders: dhtResult?.seeders || [],
-            createdAt: dhtResult?.createdAt || Date.now()
+            createdAt: dhtResult?.createdAt || Date.now(),
+            priceWei: dhtResult?.priceWei || '0',
+            walletAddress: dhtResult?.walletAddress || '',
           };
 
           if (searchResult.seeders.length > 0) {
@@ -349,7 +376,9 @@
               fileName,
               fileSize: 0,
               seeders: [],
-              createdAt: Date.now()
+              createdAt: Date.now(),
+              priceWei: '0',
+              walletAddress: '',
             };
             toasts.show(`Magnet link parsed but file not found in DHT. The seeder may be offline.`, 'warning');
           } else {
@@ -406,20 +435,26 @@
       return;
     }
 
-    // Check wallet for paid tiers
-    const cost = calculateCost(selectedTier, result.fileSize);
-    if (cost > 0) {
+    // Calculate total cost: speed tier + seeder file price
+    const tierCost = calculateCost(selectedTier, result.fileSize);
+    const seederPriceWei = result.priceWei || '0';
+    const seederPriceChr = seederPriceWei !== '0'
+      ? Number(BigInt(seederPriceWei)) / 1e18
+      : 0;
+    const totalCost = tierCost + seederPriceChr;
+
+    if (totalCost > 0) {
       if (!$walletAccount) {
-        toasts.show('Please log in with your wallet to use paid speed tiers', 'error');
+        toasts.show('Please log in with your wallet to download paid files', 'error');
         return;
       }
-      if (parseFloat(walletBalance) < cost) {
-        toasts.show(`Insufficient balance. Need ${formatCost(cost)}, have ${walletBalance} CHR`, 'error');
+      if (parseFloat(walletBalance) < totalCost) {
+        toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHR, have ${walletBalance} CHR`, 'error');
         return;
       }
     }
 
-    isProcessingPayment = cost > 0;
+    isProcessingPayment = totalCost > 0;
 
     const newDownload: DownloadItem = {
       id: `download-${Date.now()}`,
@@ -428,7 +463,7 @@
       size: result.fileSize,
       status: 'downloading',
       progress: 0,
-      speed: cost > 0 ? 'Processing payment...' : 'Connecting...',
+      speed: totalCost > 0 ? 'Processing payment...' : 'Connecting...',
       eta: 'Requesting file...',
       seeders: result.seeders.length,
       startedAt: new Date(),
@@ -454,14 +489,20 @@
         params.walletAddress = $walletAccount.address;
         params.privateKey = $walletAccount.privateKey;
       }
+      // Pass seeder pricing info
+      if (seederPriceWei !== '0') {
+        params.seederPriceWei = seederPriceWei;
+        params.seederWalletAddress = result.walletAddress;
+      }
 
       const response = await invoke<{ requestId: string; status: string }>('start_download', params);
 
       log.info('Download request sent:', response);
-      if (cost > 0) {
-        toasts.show(`Payment processed! Requesting file from seeder...`, 'success');
-        // Refresh balance after payment
+      if (tierCost > 0) {
+        toasts.show(`Speed tier payment processed! Requesting file from seeder...`, 'success');
         refreshWalletBalance();
+      } else if (seederPriceChr > 0) {
+        toasts.show(`Requesting file from seeder (payment will be sent automatically)...`, 'info');
       } else {
         toasts.show(`Requesting file from seeder...`, 'info');
       }
@@ -565,7 +606,8 @@
               status: 'completed' as const,
               progress: 100,
               size: fileSize || d.size,
-              completedAt: new Date()
+              completedAt: new Date(),
+              filePath: filePath || undefined
             };
           }
           return d;
@@ -627,6 +669,24 @@
         });
       });
 
+      // Listen for file payment processing
+      unlistenPaymentProcessing = await listen<{
+        requestId: string;
+        fileHash: string;
+        priceWei: string;
+        walletAddress: string;
+      }>('file-payment-processing', (event) => {
+        const { fileHash, priceWei } = event.payload;
+        log.info('Processing seeder payment:', event.payload);
+
+        downloads = downloads.map(d => {
+          if (d.hash === fileHash) {
+            return { ...d, speed: `Paying seeder ${formatPriceWei(priceWei)}...` };
+          }
+          return d;
+        });
+      });
+
       log.info('Download event listeners registered');
     } catch (error) {
       log.error('Failed to setup event listeners:', error);
@@ -646,6 +706,10 @@
     if (unlistenDownloadProgress) {
       unlistenDownloadProgress();
       unlistenDownloadProgress = null;
+    }
+    if (unlistenPaymentProcessing) {
+      unlistenPaymentProcessing();
+      unlistenPaymentProcessing = null;
     }
   }
 
@@ -680,6 +744,28 @@
       case 'cancelled': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
       case 'queued': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
       default: return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
+    }
+  }
+
+  // Open a downloaded file with the system default application
+  async function handleOpenFile(filePath: string) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('open_file', { path: filePath });
+    } catch (error) {
+      log.error('Failed to open file:', error);
+      toasts.show(`Failed to open file: ${error}`, 'error');
+    }
+  }
+
+  // Show a downloaded file in the system file manager
+  async function handleShowInFolder(filePath: string) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('show_in_folder', { path: filePath });
+    } catch (error) {
+      log.error('Failed to show in folder:', error);
+      toasts.show(`Failed to show in folder: ${error}`, 'error');
     }
   }
 
@@ -836,6 +922,15 @@
               <span class="{searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
               </span>
+              {#if searchResult.priceWei && searchResult.priceWei !== '0'}
+                <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                  {formatPriceWei(searchResult.priceWei)}
+                </span>
+              {:else}
+                <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                  Free
+                </span>
+              {/if}
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
               {searchResult.hash}
@@ -896,20 +991,31 @@
           </div>
 
           <!-- Download button -->
-          <div class="mt-4 flex items-center justify-between">
-            <div class="text-sm text-gray-600 dark:text-gray-400">
-              {#if selectedTier === 'free'}
-                ✅ Free download — no payment required
-              {:else if searchResult.fileSize > 0 && calculateCost(selectedTier, searchResult.fileSize) > 0}
-                💰 Cost: <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(calculateCost(selectedTier, searchResult.fileSize))}</span>
-                {#if $walletAccount}
-                  <span class="text-gray-400 mx-1">•</span>
-                  Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHR</span>
+          {#if searchResult}
+            {@const seederPrice = searchResult.priceWei && searchResult.priceWei !== '0' ? formatPriceWei(searchResult.priceWei) : null}
+            {@const tierCostVal = searchResult.fileSize > 0 ? calculateCost(selectedTier, searchResult.fileSize) : 0}
+            {@const hasCost = seederPrice || tierCostVal > 0}
+            <div class="mt-4 flex items-center justify-between">
+              <div class="text-sm text-gray-600 dark:text-gray-400">
+                {#if !hasCost && selectedTier === 'free'}
+                  Free download — no payment required
+                {:else}
+                  Cost:
+                  {#if seederPrice}
+                    <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span> (file)
+                  {/if}
+                  {#if seederPrice && tierCostVal > 0}
+                    <span class="mx-1">+</span>
+                  {/if}
+                  {#if tierCostVal > 0}
+                    <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
+                  {/if}
+                  {#if $walletAccount}
+                    <span class="text-gray-400 mx-1">•</span>
+                    Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHR</span>
+                  {/if}
                 {/if}
-              {:else}
-                💰 Cost calculated after download based on file size
-              {/if}
-            </div>
+              </div>
             <button
               onclick={() => startDownload(searchResult!)}
               disabled={!isTauri || isProcessingPayment}
@@ -923,7 +1029,8 @@
                 Download
               {/if}
             </button>
-          </div>
+            </div>
+          {/if}
         </div>
       </div>
     {/if}
@@ -1074,6 +1181,22 @@
                       <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
                     </button>
                   {:else if isFinished}
+                    {#if download.status === 'completed' && download.filePath}
+                      <button
+                        onclick={() => handleOpenFile(download.filePath!)}
+                        class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                        title="Open file"
+                      >
+                        <ExternalLink class="w-4 h-4 text-blue-500" />
+                      </button>
+                      <button
+                        onclick={() => handleShowInFolder(download.filePath!)}
+                        class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                        title="Show in folder"
+                      >
+                        <FolderOpen class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                      </button>
+                    {/if}
                     <button
                       onclick={() => moveToHistory(download.id)}
                       class="px-2.5 py-1 text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
@@ -1172,15 +1295,33 @@
                   <p class="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1 truncate">{entry.hash}</p>
                 </div>
 
-                <!-- Re-download button for completed files -->
+                <!-- File actions for completed entries -->
                 {#if entry.status === 'completed'}
-                  <button
-                    onclick={() => { searchQuery = entry.hash; searchMode = 'hash'; searchFile(); }}
-                    class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors flex-shrink-0"
-                    title="Download again"
-                  >
-                    <Download class="w-4 h-4 text-gray-400" />
-                  </button>
+                  <div class="flex items-center gap-1 flex-shrink-0">
+                    {#if entry.filePath}
+                      <button
+                        onclick={() => handleOpenFile(entry.filePath!)}
+                        class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                        title="Open file"
+                      >
+                        <ExternalLink class="w-4 h-4 text-blue-500" />
+                      </button>
+                      <button
+                        onclick={() => handleShowInFolder(entry.filePath!)}
+                        class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                        title="Show in folder"
+                      >
+                        <FolderOpen class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                      </button>
+                    {/if}
+                    <button
+                      onclick={() => { searchQuery = entry.hash; searchMode = 'hash'; searchFile(); }}
+                      class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                      title="Download again"
+                    >
+                      <Download class="w-4 h-4 text-gray-400" />
+                    </button>
+                  </div>
                 {/if}
               </div>
             </div>

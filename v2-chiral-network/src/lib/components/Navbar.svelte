@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Download, Upload, Wallet, Globe, Settings, LogOut, Send, Pickaxe } from 'lucide-svelte';
+  import { Download, Upload, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { isAuthenticated, walletAccount, networkConnected } from '$lib/stores';
 
@@ -19,6 +19,7 @@
     { path: '/account', label: 'Account', icon: Wallet },
     { path: '/network', label: 'Network', icon: Globe },
     { path: '/mining', label: 'Mining', icon: Pickaxe },
+    { path: '/diagnostics', label: 'Diagnostics', icon: Bug },
     { path: '/settings', label: 'Settings', icon: Settings }
   ];
 </script>
@@ -28,7 +29,7 @@
     <div class="flex items-center justify-between h-16">
       <div class="flex items-center gap-8">
         <div class="flex items-center gap-2">
-          <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg"></div>
+          <img src="/logo.png" alt="Chiral Network" class="w-8 h-8 rounded-lg" />
           <span class="text-xl font-bold dark:text-white">Chiral Network</span>
         </div>
 

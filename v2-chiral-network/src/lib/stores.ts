@@ -31,18 +31,42 @@ export const networkStats = writable({
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
+export interface NotificationSettings {
+  downloadComplete: boolean;
+  downloadFailed: boolean;
+  peerConnected: boolean;
+  peerDisconnected: boolean;
+  miningBlock: boolean;
+  paymentReceived: boolean;
+  networkStatus: boolean;
+  fileShared: boolean;
+}
+
 export interface AppSettings {
   theme: ThemeMode;
   reducedMotion: boolean;
   compactMode: boolean;
   downloadDirectory: string; // empty string = system default Downloads folder
+  notifications: NotificationSettings;
 }
+
+const defaultNotifications: NotificationSettings = {
+  downloadComplete: true,
+  downloadFailed: true,
+  peerConnected: false,
+  peerDisconnected: false,
+  miningBlock: true,
+  paymentReceived: true,
+  networkStatus: true,
+  fileShared: true
+};
 
 const defaultSettings: AppSettings = {
   theme: 'system',
   reducedMotion: false,
   compactMode: false,
-  downloadDirectory: ''
+  downloadDirectory: '',
+  notifications: { ...defaultNotifications }
 };
 
 function createSettingsStore() {
