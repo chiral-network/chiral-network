@@ -1412,10 +1412,11 @@ async fn send_transaction(
     let amount_wei = parse_chr_to_wei(&amount)?;
 
     // Get the nonce for the sender address
+    // Use "pending" to account for transactions still in the mempool
     let nonce_payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_getTransactionCount",
-        "params": [&from_address, "latest"],
+        "params": [&from_address, "pending"],
         "id": 1
     });
 
@@ -1575,13 +1576,24 @@ async fn send_transaction(
     println!("📥 RPC Response: {}", send_json);
 
     if let Some(error) = send_json.get("error") {
-        return Err(format!("Transaction failed: {}", error));
+        let error_msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        // "already known" means the tx is already in the mempool — treat as success
+        if error_msg != "already known" {
+            return Err(format!("Transaction failed: {}", error));
+        }
+        println!("⚠️ Transaction already in mempool, proceeding");
     }
 
-    let tx_hash = send_json["result"]
-        .as_str()
-        .ok_or("No transaction hash in response")?
-        .to_string();
+    // Compute tx hash from the signed transaction bytes
+    // If RPC returned it, use that; otherwise compute from our signed tx
+    let tx_hash = if let Some(hash) = send_json["result"].as_str() {
+        hash.to_string()
+    } else {
+        // Compute hash from signed transaction for "already known" case
+        let tx_bytes = hex::decode(signed_tx_hex.trim_start_matches("0x"))
+            .map_err(|e| format!("Failed to decode signed tx: {}", e))?;
+        format!("0x{}", hex::encode(keccak256(&tx_bytes)))
+    };
 
     println!("✅ Transaction submitted: {}", tx_hash);
 
