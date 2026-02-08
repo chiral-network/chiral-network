@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { walletAccount, isAuthenticated, networkConnected } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
@@ -51,12 +51,16 @@
     balanceAfter?: string;
   }
 
+  // Geth connection state
+  let gethConnected = $state(false);
+  let gethCheckInterval: ReturnType<typeof setInterval> | null = null;
+
   // State
   let privateKeyVisible = $state(false);
   let copied = $state<'address' | 'privateKey' | null>(null);
   let showLogoutModal = $state(false);
   let showSendModal = $state(false);
-  let balance = $state<string>('0.00');
+  let balance = $state<string>('--');
   let isLoadingBalance = $state(false);
 
   // Send transaction state
@@ -102,17 +106,44 @@
     loadTransactionHistory();
   }
 
+  // Check Geth connection status
+  async function checkGethStatus() {
+    if (!isTauri()) return;
+    try {
+      const status = await invoke<{ localRunning: boolean }>('get_geth_status');
+      const wasConnected = gethConnected;
+      gethConnected = status.localRunning;
+      // When Geth comes online, load balance and history
+      if (gethConnected && !wasConnected && $walletAccount?.address) {
+        loadBalance();
+        loadTransactionHistory();
+      }
+      if (!gethConnected) {
+        balance = '--';
+      }
+    } catch {
+      gethConnected = false;
+      balance = '--';
+    }
+  }
+
   // Load balance on mount and when wallet changes
   onMount(() => {
+    checkGethStatus();
+    gethCheckInterval = setInterval(checkGethStatus, 5000);
     if ($walletAccount?.address) {
       loadBalance();
       loadTransactionHistory();
     }
   });
 
+  onDestroy(() => {
+    if (gethCheckInterval) clearInterval(gethCheckInterval);
+  });
+
   // Watch for wallet changes
   $effect(() => {
-    if ($walletAccount?.address) {
+    if ($walletAccount?.address && gethConnected) {
       loadBalance();
       loadTransactionHistory();
     }
@@ -125,6 +156,10 @@
   async function loadBalance() {
     log.info('[Account.loadBalance] Called, address:', $walletAccount?.address);
     if (!$walletAccount?.address) return;
+    if (!gethConnected) {
+      balance = '--';
+      return;
+    }
 
     isLoadingBalance = true;
     try {
@@ -137,7 +172,7 @@
       if (!gethWarningShown) {
         gethWarningShown = true;
       }
-      balance = '0.00';
+      balance = '--';
     } finally {
       isLoadingBalance = false;
     }
@@ -355,7 +390,10 @@
             <div>
               <p class="text-blue-100 text-sm mb-1">Balance</p>
               <div class="flex items-baseline gap-2">
-                {#if isLoadingBalance}
+                {#if !gethConnected}
+                  <span class="text-xl font-bold text-blue-200/60">--</span>
+                  <span class="text-blue-200/60 text-sm">Start node to view balance</span>
+                {:else if isLoadingBalance}
                   <RefreshCw class="w-6 h-6 animate-spin" />
                 {:else}
                   <span class="text-3xl font-bold">{formatBalance(balance)}</span>
@@ -363,14 +401,16 @@
                 {/if}
               </div>
             </div>
-            <button
-              onclick={loadBalance}
-              disabled={isLoadingBalance}
-              class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
-              title="Refresh balance"
-            >
-              <RefreshCw class="w-5 h-5 {isLoadingBalance ? 'animate-spin' : ''}" />
-            </button>
+            {#if gethConnected}
+              <button
+                onclick={loadBalance}
+                disabled={isLoadingBalance}
+                class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
+                title="Refresh balance"
+              >
+                <RefreshCw class="w-5 h-5 {isLoadingBalance ? 'animate-spin' : ''}" />
+              </button>
+            {/if}
           </div>
         </div>
 
@@ -474,7 +514,9 @@
         </div>
         <button
           onclick={() => showSendModal = true}
-          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+          disabled={!gethConnected}
+          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          title={gethConnected ? 'Send CHR' : 'Start node to send CHR'}
         >
           <Send class="w-4 h-4" />
           Send
