@@ -629,10 +629,22 @@ impl GethProcess {
     /// We estimate hashrate from block difficulty / block time instead.
     pub async fn get_mining_status(&mut self) -> Result<MiningStatus, String> {
         let client = reqwest::Client::new();
+        let rpc_url = self.effective_rpc_endpoint();
+
+        println!("⛏️  ---- Mining Status Debug ----");
+        println!("⛏️  RPC endpoint: {}", rpc_url);
+        println!("⛏️  Local Geth running: {}", self.child.is_some());
 
         let mining = match self.rpc_call(&client, "eth_mining", serde_json::json!([])).await {
-            Ok(result) => result.as_bool().unwrap_or(false),
-            Err(_) => false,
+            Ok(result) => {
+                let m = result.as_bool().unwrap_or(false);
+                println!("⛏️  eth_mining: {} (raw: {})", m, result);
+                m
+            }
+            Err(e) => {
+                println!("⛏️  eth_mining: ERROR: {}", e);
+                false
+            }
         };
 
         // Estimate hashrate from block production:
@@ -644,9 +656,14 @@ impl GethProcess {
             let current_block = match self.rpc_call(&client, "eth_blockNumber", serde_json::json!([])).await {
                 Ok(result) => {
                     let hex = result.as_str().unwrap_or("0x0");
-                    u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
+                    let block = u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                    println!("⛏️  eth_blockNumber: {} (hex: {})", block, hex);
+                    block
                 }
-                Err(_) => 0,
+                Err(e) => {
+                    println!("⛏️  eth_blockNumber: ERROR: {}", e);
+                    0
+                }
             };
 
             let now = std::time::SystemTime::now()
@@ -662,13 +679,23 @@ impl GethProcess {
                     serde_json::json!(["latest", false]),
                 ).await {
                     Ok(result) => {
-                        result.get("difficulty")
+                        let diff = result.get("difficulty")
                             .and_then(|d| d.as_str())
                             .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
-                            .unwrap_or(0)
+                            .unwrap_or(0);
+                        let miner = result.get("miner").and_then(|m| m.as_str()).unwrap_or("unknown");
+                        let block_num = result.get("number").and_then(|n| n.as_str()).unwrap_or("?");
+                        println!("⛏️  Latest block: number={}, difficulty={}, miner={}", block_num, diff, miner);
+                        diff
                     }
-                    Err(_) => 0,
+                    Err(e) => {
+                        println!("⛏️  eth_getBlockByNumber: ERROR: {}", e);
+                        0
+                    }
                 };
+
+                println!("⛏️  Tracking: last_block={}, last_block_time={}, current_block={}, now={}",
+                    self.last_block, self.last_block_time, current_block, now);
 
                 if self.last_block > 0 && current_block > self.last_block && self.last_block_time > 0 {
                     // We have a previous measurement — compute hashrate from blocks mined
@@ -678,27 +705,60 @@ impl GethProcess {
                         // hashrate = (blocks_mined * difficulty) / elapsed_seconds
                         hash_rate = (blocks_mined as u128 * difficulty as u128 / elapsed as u128) as u64;
                     }
+                    println!("⛏️  Blocks mined since last poll: {}, elapsed: {}s, hashrate: {}", blocks_mined, elapsed, hash_rate);
                 } else if difficulty > 0 {
                     // First poll or no block change yet — estimate from difficulty alone
                     // Assume a ~13 second target block time as baseline
                     hash_rate = difficulty / 13;
+                    println!("⛏️  First poll estimate: hashrate={} (difficulty/{} = {})", hash_rate, 13, difficulty);
                 }
 
                 // Update tracking
                 self.last_block = current_block;
                 self.last_block_time = now;
+            } else {
+                println!("⛏️  Block number is 0 — chain may still be initializing");
             }
         } else {
             // Not mining — reset tracking
             self.last_block = 0;
             self.last_block_time = 0;
+            println!("⛏️  Mining is OFF");
         }
 
         let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await
         {
-            Ok(result) => result.as_str().map(|s| s.to_string()),
-            Err(_) => None,
+            Ok(result) => {
+                let addr = result.as_str().map(|s| s.to_string());
+                println!("⛏️  eth_coinbase: {:?}", addr);
+                addr
+            }
+            Err(e) => {
+                println!("⛏️  eth_coinbase: ERROR: {}", e);
+                None
+            }
         };
+
+        // Tail the Geth log file for recent activity
+        let log_path = self.data_dir.join("geth.log");
+        if log_path.exists() {
+            match fs::read_to_string(&log_path) {
+                Ok(contents) => {
+                    let lines: Vec<&str> = contents.lines().collect();
+                    let start = if lines.len() > 20 { lines.len() - 20 } else { 0 };
+                    println!("⛏️  ---- Geth Log (last {} lines) ----", lines.len() - start);
+                    for line in &lines[start..] {
+                        println!("⛏️  LOG: {}", line);
+                    }
+                    println!("⛏️  ---- End Geth Log ----");
+                }
+                Err(e) => println!("⛏️  Could not read geth.log: {}", e),
+            }
+        } else {
+            println!("⛏️  No geth.log found at {}", log_path.display());
+        }
+
+        println!("⛏️  ---- End Mining Status Debug ----");
 
         Ok(MiningStatus {
             mining,
