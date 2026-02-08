@@ -17,6 +17,8 @@
     acceptTransfer,
     declineTransfer,
     updateTransferStatus,
+    updateTransferPayment,
+    updateTransferByFileHash,
     generateTransferId,
     formatFileSize,
     formatPriceWei,
@@ -49,6 +51,10 @@
   let unlistenFileReceivedComplete: (() => void) | null = null;
   let unlistenPaidRequest: (() => void) | null = null;
   let unlistenConnectionEstablished: (() => void) | null = null;
+  let unlistenPaymentSent: (() => void) | null = null;
+  let unlistenPaymentReceived: (() => void) | null = null;
+  let unlistenDownloadComplete: (() => void) | null = null;
+  let unlistenDownloadFailed: (() => void) | null = null;
 
   // Wave animation
   function animate() {
@@ -163,6 +169,61 @@
           const priceDisplay = formatPriceWei(priceWei);
           toasts.show(`${fromAlias.displayName} wants to send you "${fileName}" for ${priceDisplay}`, 'info');
         });
+
+        // Listen for payment sent (buyer side) — record in both histories
+        unlistenPaymentSent = await listen<any>('chiraldrop-payment-sent', async (event) => {
+          const { requestId, fileHash, fileName, txHash, priceWei, toWallet } = event.payload;
+          log.info('Payment sent for ChiralDrop file:', fileName, 'tx:', txHash);
+
+          // Update ChiralDrop transfer history with payment tx hash
+          updateTransferByFileHash(fileHash, 'accepted', txHash);
+
+          // Record in Account transaction history
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('record_transaction_meta', {
+              txHash,
+              txType: 'file_payment',
+              description: `📁 Paid for "${fileName}" (${formatPriceWei(priceWei)})`,
+              recipientLabel: `Seeder (${toWallet.slice(0, 10)}...)`,
+            });
+          } catch (e) {
+            log.warn('Failed to record payment metadata:', e);
+          }
+        });
+
+        // Listen for payment received (seller side) — record in Account history
+        unlistenPaymentReceived = await listen<any>('chiraldrop-payment-received', async (event) => {
+          const { fileHash, txHash, priceWei, fromWallet } = event.payload;
+          log.info('Payment received for file:', fileHash, 'tx:', txHash);
+
+          // Record in Account transaction history
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('record_transaction_meta', {
+              txHash,
+              txType: 'file_sale',
+              description: `💰 Received payment (${formatPriceWei(priceWei)}) for shared file`,
+              recipientLabel: `Buyer (${fromWallet.slice(0, 10)}...)`,
+            });
+          } catch (e) {
+            log.warn('Failed to record payment received metadata:', e);
+          }
+        });
+
+        // Listen for download complete — update ChiralDrop transfer for paid downloads
+        unlistenDownloadComplete = await listen<any>('file-download-complete', (event) => {
+          const { fileHash, fileName } = event.payload;
+          updateTransferByFileHash(fileHash, 'completed');
+          log.info('Paid download complete:', fileName);
+        });
+
+        // Listen for download failed — update ChiralDrop transfer for paid downloads
+        unlistenDownloadFailed = await listen<any>('file-download-failed', (event) => {
+          const { fileHash, error } = event.payload;
+          updateTransferByFileHash(fileHash, 'failed');
+          log.warn('Paid download failed:', fileHash, error);
+        });
       } catch (error) {
         log.warn('Failed to set up Tauri event listeners:', error);
       }
@@ -196,6 +257,18 @@
     }
     if (unlistenConnectionEstablished) {
       unlistenConnectionEstablished();
+    }
+    if (unlistenPaymentSent) {
+      unlistenPaymentSent();
+    }
+    if (unlistenPaymentReceived) {
+      unlistenPaymentReceived();
+    }
+    if (unlistenDownloadComplete) {
+      unlistenDownloadComplete();
+    }
+    if (unlistenDownloadFailed) {
+      unlistenDownloadFailed();
     }
   });
 
@@ -642,7 +715,13 @@
                       <div class="flex items-center gap-2 mt-1">
                         <span class="text-xs {getStatusColor(transfer.status)} capitalize">{transfer.status}</span>
                         <span class="text-xs text-gray-400">{formatFileSize(transfer.fileSize)}</span>
+                        {#if transfer.priceWei && transfer.priceWei !== '0'}
+                          <span class="text-xs text-amber-600 dark:text-amber-400">{formatPriceWei(transfer.priceWei)}</span>
+                        {/if}
                       </div>
+                      {#if transfer.paymentTxHash}
+                        <p class="text-xs text-gray-400 mt-1 font-mono truncate" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
+                      {/if}
                       <p class="text-xs text-gray-400 mt-1">{formatTimestamp(transfer.timestamp)}</p>
                     </div>
                   </div>
