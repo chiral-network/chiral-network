@@ -40,7 +40,6 @@
   }
 
   let showHistory = $state(false);
-  let fileInput = $state<HTMLInputElement>();
   let animationFrame: number;
   let time = $state(0);
   let sendPrice = $state('');
@@ -224,16 +223,33 @@
     selectPeer(peer);
   }
 
-  function handleFileSelect(event: Event) {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file || !$selectedPeer) return;
+  async function handleSendClick() {
+    if (!$selectedPeer) return;
 
-    sendFile(file, $selectedPeer);
-    input.value = '';
+    const tauriAvailable = checkTauriAvailability();
+    if (!tauriAvailable) {
+      toasts.show('File transfer requires the desktop app', 'error');
+      return;
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+
+      // Use Tauri file dialog (browser file input doesn't work in Tauri 2)
+      const selectedPaths = await invoke<string[]>('open_file_dialog', { multiple: false });
+      if (!selectedPaths || selectedPaths.length === 0) return;
+
+      const filePath = selectedPaths[0];
+      const fileName = filePath.split(/[\\/]/).pop() || filePath;
+
+      await sendFile(filePath, fileName, $selectedPeer);
+    } catch (error) {
+      log.error('Failed to open file dialog:', error);
+      toasts.show(`Failed to open file dialog: ${error}`, 'error');
+    }
   }
 
-  async function sendFile(file: File, peer: NearbyPeer) {
+  async function sendFile(filePath: string, fileName: string, peer: NearbyPeer) {
     const transferId = generateTransferId();
     const fromAlias = $userAlias;
     const toAlias = peer.alias;
@@ -249,8 +265,8 @@
     // Add to pending transfers
     addPendingTransfer({
       id: transferId,
-      fileName: file.name,
-      fileSize: file.size,
+      fileName,
+      fileSize: 0,
       fromPeerId: $localPeerId || '',
       fromAlias,
       toPeerId: peer.peerId,
@@ -260,25 +276,13 @@
       timestamp: Date.now()
     });
 
-    const tauriAvailable = checkTauriAvailability();
-    if (!tauriAvailable) {
-      toasts.show('File transfer requires the desktop app', 'error');
-      updateTransferStatus(transferId, 'failed');
-      selectPeer(null);
-      return;
-    }
-
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
       if (isPaid) {
         // Paid transfer flow:
-        // 1. Read file bytes and publish via publish_file_data (hashes, stores in memory, registers for chunked serving)
+        // 1. Publish file from path (hashes, stores in memory, registers for chunked serving)
         // 2. Send metadata-only request via file_transfer protocol with pricing info
-        //    (receiver will download via chunked protocol with payment handshake)
-
-        const buffer = await file.arrayBuffer();
-        const bytes = Array.from(new Uint8Array(buffer));
 
         // Convert CHR to wei
         const priceParts = price.split('.');
@@ -287,10 +291,10 @@
         const frac = BigInt(fracStr);
         const priceWei = (whole * BigInt(1e18) + frac).toString();
 
-        // Publish file data to get hash and register for chunked serving
-        const publishResult = await invoke<{ merkleRoot: string }>('publish_file_data', {
-          fileName: file.name,
-          fileData: bytes,
+        // Publish file to get hash and register for chunked serving
+        const publishResult = await invoke<{ merkleRoot: string }>('publish_file', {
+          filePath,
+          fileName,
           priceChr: price,
           walletAddress: $walletAccount!.address
         });
@@ -300,26 +304,21 @@
         // Send metadata-only transfer request (empty file data) with pricing
         await invoke('send_file', {
           peerId: peer.peerId,
-          fileName: file.name,
+          fileName,
           fileData: [],
           transferId,
           priceWei,
           senderWallet: $walletAccount!.address,
-          fileHash,
-          fileSize: file.size
+          fileHash
         });
 
         updateTransferStatus(transferId, 'completed');
         toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHR)`, 'success');
       } else {
-        // Free transfer: send file data directly (existing behavior)
-        const buffer = await file.arrayBuffer();
-        const bytes = Array.from(new Uint8Array(buffer));
-
-        await invoke('send_file', {
+        // Free transfer: read file from disk and send directly
+        await invoke('send_file_by_path', {
           peerId: peer.peerId,
-          fileName: file.name,
-          fileData: bytes,
+          filePath,
           transferId
         });
 
@@ -607,18 +606,12 @@
             {/if}
           </div>
           <button
-            onclick={() => fileInput?.click()}
+            onclick={handleSendClick}
             class="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
           >
             <Send class="w-4 h-4" />
             {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHR` : 'Select File to Send'}
           </button>
-          <input
-            bind:this={fileInput}
-            type="file"
-            class="hidden"
-            onchange={handleFileSelect}
-          />
         </div>
       {:else}
         <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 text-center">
