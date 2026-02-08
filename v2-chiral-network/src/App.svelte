@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
-  import { isAuthenticated, isDarkMode, networkConnected } from '$lib/stores';
+  import { isAuthenticated, isDarkMode, networkConnected, settings } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
   import Navbar from '$lib/components/Navbar.svelte';
@@ -88,6 +88,20 @@
       const path = window.location.pathname;
       if (path === '/wallet' || path === '/') {
         goto('/network');
+      }
+    }
+  });
+
+  // Sync download directory setting to backend on startup
+  let downloadDirSynced = false;
+  $effect(() => {
+    if (!downloadDirSynced && typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)) {
+      downloadDirSynced = true;
+      const dir = $settings.downloadDirectory;
+      if (dir) {
+        import('@tauri-apps/api/core').then(({ invoke }) => {
+          invoke('set_download_directory', { path: dir }).catch(() => {});
+        });
       }
     }
   });
