@@ -391,6 +391,37 @@ impl GethProcess {
             return Err("Geth is not installed. Please download it first.".to_string());
         }
 
+        // Kill any orphaned Geth process from a previous run holding our ports
+        // This can happen if the app crashes or is force-closed
+        for port in &["8545", "30303"] {
+            if let Ok(output) = Command::new("lsof")
+                .args(["-ti", &format!("tcp:{}", port)])
+                .output()
+            {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for pid in pids.trim().lines() {
+                    let pid = pid.trim();
+                    if !pid.is_empty() {
+                        println!("⚠️  Killing orphaned process on port {} (PID {})", port, pid);
+                        let _ = Command::new("kill").arg(pid).output();
+                    }
+                }
+            }
+        }
+        // Brief wait for ports to be released
+        if Command::new("lsof").args(["-ti", "tcp:8545"]).output()
+            .map(|o| !o.stdout.is_empty()).unwrap_or(false)
+        {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+
+        // Remove stale LOCK file from a previous crashed Geth
+        let lock_file = self.data_dir.join("geth").join("LOCK");
+        if lock_file.exists() {
+            println!("⚠️  Removing stale LOCK file: {}", lock_file.display());
+            let _ = fs::remove_file(&lock_file);
+        }
+
         // Check if blockchain needs initialization or re-initialization
         // Use a version marker to detect genesis config changes
         let genesis_version = "3"; // Bump this when genesis config changes
@@ -474,11 +505,12 @@ impl GethProcess {
                .arg("--miner.threads").arg("1");
         }
 
-        // Create log file
+        // Create log file (truncate on each start for clean logs)
         let log_path = self.data_dir.join("geth.log");
         let log_file = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(&log_path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
 
@@ -502,6 +534,30 @@ impl GethProcess {
 
         // Wait for Geth to start up
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        // Check if Geth crashed during startup
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.child = None;
+                    LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+                    // Read the log file for crash details
+                    let log_contents = fs::read_to_string(&log_path).unwrap_or_default();
+                    let last_lines: Vec<&str> = log_contents.lines().rev().take(30).collect();
+                    let crash_log = last_lines.into_iter().rev().collect::<Vec<_>>().join("\n");
+                    println!("❌ Geth crashed on startup (exit: {}):\n{}", status, crash_log);
+                    return Err(format!("Geth crashed on startup (exit: {}). Check logs:\n{}", status, crash_log));
+                }
+                Ok(None) => {
+                    println!("✅ Geth process still running after 3s startup wait");
+                }
+                Err(e) => {
+                    self.child = None;
+                    LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+                    return Err(format!("Failed to check Geth process status: {}", e));
+                }
+            }
+        }
 
         // Auto-start mining if miner address is set
         if miner_address.is_some() {
