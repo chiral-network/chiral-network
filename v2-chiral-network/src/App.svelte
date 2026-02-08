@@ -12,6 +12,7 @@
   import AccountPage from './pages/Account.svelte';
   import NetworkPage from './pages/Network.svelte';
   import MiningPage from './pages/Mining.svelte';
+  import DiagnosticsPage from './pages/Diagnostics.svelte';
   import SettingsPage from './pages/Settings.svelte';
 
   let currentPath = $state('/wallet');
@@ -51,6 +52,10 @@
     {
       path: '/mining',
       component: MiningPage
+    },
+    {
+      path: '/diagnostics',
+      component: DiagnosticsPage
     },
     {
       path: '/settings',
