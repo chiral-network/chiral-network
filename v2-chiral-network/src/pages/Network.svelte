@@ -11,6 +11,7 @@
     Radio,
     Server,
     Download,
+    Upload,
     RefreshCw,
     AlertTriangle,
     Check,
@@ -19,7 +20,9 @@
     Activity,
     HeartPulse,
     ChevronDown,
-    ChevronUp
+    ChevronUp,
+    ArrowDownToLine,
+    ArrowUpFromLine
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Network');
@@ -89,6 +92,43 @@
   let isCheckingDhtHealth = $state(false);
   let showDhtHealthDetails = $state(false);
 
+  // Traffic Statistics State
+  let trafficStats = $state({
+    totalDownloaded: 0,
+    totalUploaded: 0,
+    downloadSpeed: 0,
+    uploadSpeed: 0,
+    sessionStart: Date.now()
+  });
+  let trafficInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Load traffic stats from localStorage
+  function loadTrafficStats() {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('chiral-traffic-stats');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        trafficStats = { ...trafficStats, ...parsed, sessionStart: Date.now() };
+      } catch {}
+    }
+  }
+
+  function saveTrafficStats() {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('chiral-traffic-stats', JSON.stringify({
+      totalDownloaded: trafficStats.totalDownloaded,
+      totalUploaded: trafficStats.totalUploaded
+    }));
+  }
+
+  function formatSpeed(bytesPerSec: number): string {
+    if (bytesPerSec >= 1e9) return `${(bytesPerSec / 1e9).toFixed(2)} GB/s`;
+    if (bytesPerSec >= 1e6) return `${(bytesPerSec / 1e6).toFixed(2)} MB/s`;
+    if (bytesPerSec >= 1e3) return `${(bytesPerSec / 1e3).toFixed(2)} KB/s`;
+    return `${bytesPerSec.toFixed(0)} B/s`;
+  }
+
   // Show "connecting" message only when Geth is running with 0 peers, auto-dismiss after 30s
   $effect(() => {
     if (gethStatus?.running && gethStatus?.peerCount === 0) {
@@ -112,6 +152,8 @@
   }
 
   onMount(async () => {
+    loadTrafficStats();
+
     if (isTauri()) {
       await loadGethStatus();
       await loadBootstrapHealth();
@@ -141,6 +183,10 @@
     if (gethConnectingTimeout) {
       clearTimeout(gethConnectingTimeout);
     }
+    if (trafficInterval) {
+      clearInterval(trafficInterval);
+    }
+    saveTrafficStats();
   });
 
   // Load Geth status
@@ -776,6 +822,44 @@
           Click "Run Check" to view DHT health diagnostics
         </p>
       {/if}
+    </div>
+
+    <!-- Traffic Statistics -->
+    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+      <div class="flex items-center gap-2 mb-3">
+        <Activity class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Traffic Statistics</span>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <ArrowDownToLine class="w-3.5 h-3.5 text-green-500" />
+            <p class="text-xs text-gray-500 dark:text-gray-400">Download Speed</p>
+          </div>
+          <p class="text-lg font-bold dark:text-white">{formatSpeed(trafficStats.downloadSpeed)}</p>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <ArrowUpFromLine class="w-3.5 h-3.5 text-blue-500" />
+            <p class="text-xs text-gray-500 dark:text-gray-400">Upload Speed</p>
+          </div>
+          <p class="text-lg font-bold dark:text-white">{formatSpeed(trafficStats.uploadSpeed)}</p>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <Download class="w-3.5 h-3.5 text-green-500" />
+            <p class="text-xs text-gray-500 dark:text-gray-400">Total Downloaded</p>
+          </div>
+          <p class="text-lg font-bold dark:text-white">{formatBytes(trafficStats.totalDownloaded)}</p>
+        </div>
+        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-1">
+            <Upload class="w-3.5 h-3.5 text-blue-500" />
+            <p class="text-xs text-gray-500 dark:text-gray-400">Total Uploaded</p>
+          </div>
+          <p class="text-lg font-bold dark:text-white">{formatBytes(trafficStats.totalUploaded)}</p>
+        </div>
+      </div>
     </div>
 
     <!-- Connected Peers -->
