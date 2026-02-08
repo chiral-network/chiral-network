@@ -478,6 +478,8 @@ impl GethProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
             child.kill().map_err(|e| format!("Failed to stop geth: {}", e))?;
+            // Wait for the process to fully exit so port 8545 is released
+            let _ = child.wait();
             println!("✅ Geth stopped");
         }
         Ok(())
@@ -565,7 +567,7 @@ impl GethProcess {
 
         Ok(GethStatus {
             installed: self.is_installed(),
-            running: self.child.is_some() || chain_id > 0, // If we can query chain ID, it's running
+            running: self.child.is_some(),
             local_running: self.child.is_some(),
             syncing,
             current_block: if syncing { current_block } else { block_number },
