@@ -95,7 +95,7 @@
   }
 </script>
 
-<div class="p-6 max-w-4xl mx-auto">
+<div class="p-6">
   <div class="mb-8">
     <h1 class="text-3xl font-bold dark:text-white">Settings</h1>
     <p class="text-gray-600 dark:text-gray-400 mt-1">Customize your Chiral Network experience</p>
