@@ -253,7 +253,7 @@
     const transferId = generateTransferId();
     const fromAlias = $userAlias;
     const toAlias = peer.alias;
-    const price = sendPrice.trim();
+    const price = String(sendPrice ?? '').trim();
     const isPaid = price !== '' && parseFloat(price) > 0;
 
     // Validate wallet for paid transfers
