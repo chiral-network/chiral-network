@@ -14,6 +14,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ============================================================================
 // Configuration
@@ -25,11 +26,20 @@ pub const CHAIN_ID: u64 = 98765;
 /// Network ID (same as chain ID for our network)
 pub const NETWORK_ID: u64 = 98765;
 
+/// Tracks whether a local Geth process is running (set by GethProcess start/stop)
+static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
+
 /// Shared RPC endpoint for the Chiral Network
-/// Override with CHIRAL_RPC_ENDPOINT environment variable
+/// Returns local endpoint (127.0.0.1:8545) when local Geth is running,
+/// otherwise falls back to the shared remote node.
+/// Override with CHIRAL_RPC_ENDPOINT environment variable.
 pub fn rpc_endpoint() -> String {
-    std::env::var("CHIRAL_RPC_ENDPOINT")
-        .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
+    if LOCAL_GETH_RUNNING.load(Ordering::Relaxed) {
+        "http://127.0.0.1:8545".to_string()
+    } else {
+        std::env::var("CHIRAL_RPC_ENDPOINT")
+            .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
+    }
 }
 
 // ============================================================================
@@ -482,6 +492,7 @@ impl GethProcess {
             .map_err(|e| format!("Failed to start geth: {}", e))?;
 
         self.child = Some(child);
+        LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
 
         println!("✅ Geth started");
         println!("   Logs: {}", log_path.display());
@@ -505,6 +516,7 @@ impl GethProcess {
     /// Stop Geth process
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
+            LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
             child.kill().map_err(|e| format!("Failed to stop geth: {}", e))?;
             // Wait for the process to fully exit so port 8545 is released
             let _ = child.wait();
@@ -521,10 +533,12 @@ impl GethProcess {
                 Ok(Some(_status)) => {
                     // Process has exited, clean up
                     self.child = None;
+                    LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
                 }
                 Ok(None) => {} // Still running
                 Err(_) => {
                     self.child = None;
+                    LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
                 }
             }
         }
@@ -776,7 +790,7 @@ impl GethProcess {
     }
 
     /// Get the effective RPC endpoint: local Geth if running, otherwise shared remote
-    fn effective_rpc_endpoint(&self) -> String {
+    pub fn effective_rpc_endpoint(&self) -> String {
         if self.child.is_some() {
             "http://127.0.0.1:8545".to_string()
         } else {
