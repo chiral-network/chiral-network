@@ -39,6 +39,8 @@
     mining: boolean;
     hashRate: number;
     minerAddress: string | null;
+    totalMinedWei: string;
+    totalMinedChr: number;
   }
 
   // State
@@ -61,7 +63,6 @@
   // Estimated stats (simulated from hash rate)
   let estimatedTemp = $state(0);
   let estimatedWattage = $state(0);
-  let totalMined = $state(0);
 
   // Save thread count whenever it changes
   $effect(() => {
@@ -123,10 +124,6 @@
 
   // Load status on mount
   onMount(async () => {
-    // Load saved total mined
-    const savedMined = typeof window !== 'undefined' ? localStorage.getItem('chiral-total-mined') : null;
-    if (savedMined) totalMined = parseFloat(savedMined) || 0;
-
     if (isTauri()) {
       await loadStatus();
       refreshInterval = setInterval(loadStatus, 5000);
@@ -347,7 +344,7 @@
             <span class="text-sm text-gray-600 dark:text-gray-400">Total Mined</span>
           </div>
           <p class="text-2xl font-bold dark:text-white">
-            {totalMined.toFixed(4)} CHR
+            {(miningStatus?.totalMinedChr ?? 0).toFixed(4)} CHR
           </p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">

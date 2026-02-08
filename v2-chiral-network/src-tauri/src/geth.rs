@@ -74,6 +74,8 @@ pub struct MiningStatus {
     pub mining: bool,
     pub hash_rate: u64,
     pub miner_address: Option<String>,
+    pub total_mined_wei: String,
+    pub total_mined_chr: f64,
 }
 
 // ============================================================================
@@ -772,12 +774,33 @@ impl GethProcess {
             println!("⛏️  No geth.log found at {}", log_path.display());
         }
 
+        // Query the miner's balance to get total mined CHR
+        let (total_mined_wei, total_mined_chr) = if let Some(ref addr) = miner_address {
+            match self.rpc_call(&client, "eth_getBalance", serde_json::json!([addr, "latest"])).await {
+                Ok(result) => {
+                    let hex = result.as_str().unwrap_or("0x0");
+                    let wei = u128::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                    let chr = wei as f64 / 1e18;
+                    println!("⛏️  Miner balance: {} CHR ({} wei)", chr, wei);
+                    (wei.to_string(), chr)
+                }
+                Err(e) => {
+                    println!("⛏️  eth_getBalance: ERROR: {}", e);
+                    ("0".to_string(), 0.0)
+                }
+            }
+        } else {
+            ("0".to_string(), 0.0)
+        };
+
         println!("⛏️  ---- End Mining Status Debug ----");
 
         Ok(MiningStatus {
             mining,
             hash_rate,
             miner_address,
+            total_mined_wei,
+            total_mined_chr,
         })
     }
 
