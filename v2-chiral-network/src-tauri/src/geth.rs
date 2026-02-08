@@ -484,7 +484,21 @@ impl GethProcess {
     }
 
     /// Get current Geth status via RPC
-    pub async fn get_status(&self) -> Result<GethStatus, String> {
+    pub async fn get_status(&mut self) -> Result<GethStatus, String> {
+        // Check if the local Geth process has exited unexpectedly
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(_status)) => {
+                    // Process has exited, clean up
+                    self.child = None;
+                }
+                Ok(None) => {} // Still running
+                Err(_) => {
+                    self.child = None;
+                }
+            }
+        }
+
         let client = reqwest::Client::new();
 
         // Check if syncing
@@ -630,7 +644,7 @@ impl GethProcess {
     /// Make an RPC call to Geth
     async fn rpc_call(
         &self,
-        client: &reqwest::Client,
+        _client: &reqwest::Client,
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
@@ -642,6 +656,10 @@ impl GethProcess {
         });
 
         let endpoint = self.effective_rpc_endpoint();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         let response = client
             .post(&endpoint)
             .json(&payload)

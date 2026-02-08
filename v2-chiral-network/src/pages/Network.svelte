@@ -197,6 +197,7 @@
       gethStatus = {
         installed: false,
         running: false,
+        localRunning: false,
         syncing: false,
         currentBlock: 0,
         highestBlock: 0,
@@ -214,6 +215,7 @@
       gethStatus = {
         installed: false,
         running: false,
+        localRunning: false,
         syncing: false,
         currentBlock: 0,
         highestBlock: 0,
