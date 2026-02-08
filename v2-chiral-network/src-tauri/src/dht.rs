@@ -939,12 +939,49 @@ async fn event_loop(
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
-                        let _ = app.emit("connection-established", peer_id.to_string());
-                        
+
+                        // Add to peers list so ChiralDrop and Network page can see them
+                        let peer_id_str = peer_id.to_string();
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs() as i64;
+                        let addr_str = endpoint.get_remote_address().to_string();
+
+                        {
+                            let mut peers_guard = peers.lock().await;
+                            if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
+                                existing.last_seen = now;
+                                if !existing.multiaddrs.contains(&addr_str) {
+                                    existing.multiaddrs.push(addr_str);
+                                }
+                            } else {
+                                peers_guard.push(PeerInfo {
+                                    id: peer_id_str.clone(),
+                                    address: peer_id_str.clone(),
+                                    multiaddrs: vec![addr_str],
+                                    last_seen: now,
+                                });
+                            }
+                            let _ = app.emit("peer-discovered", peers_guard.clone());
+                        }
+
+                        let _ = app.emit("connection-established", peer_id_str);
+
                         // If this is an incoming connection, notify that we're being pinged
                         if endpoint.is_listener() {
                             println!("Incoming connection from {}", peer_id);
                             let _ = app.emit("ping-received", peer_id.to_string());
+                        }
+                    }
+                    SwarmEvent::ConnectionClosed { peer_id, num_established, .. } => {
+                        // Only remove when all connections to this peer are gone
+                        if num_established == 0 {
+                            let peer_id_str = peer_id.to_string();
+                            println!("All connections closed with {}", peer_id_str);
+                            let mut peers_guard = peers.lock().await;
+                            peers_guard.retain(|p| p.id != peer_id_str);
+                            let _ = app.emit("peer-discovered", peers_guard.clone());
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
