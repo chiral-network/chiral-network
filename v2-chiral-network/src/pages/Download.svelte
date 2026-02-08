@@ -14,7 +14,6 @@
     Pause,
     Play,
     X,
-    Clock,
     CheckCircle,
     AlertCircle,
     History,
@@ -78,7 +77,10 @@
     fileName: string;
     fileSize: number;
     completedAt: Date;
+    startedAt?: Date;
     status: 'completed' | 'cancelled' | 'failed';
+    speedTier?: SpeedTier;
+    seeders?: number;
   }
 
   // File type detection
@@ -138,7 +140,7 @@
   let downloads = $state<DownloadItem[]>([]);
   let downloadHistory = $state<HistoryEntry[]>([]);
   let showSearchHistory = $state(false);
-  let showDownloadHistory = $state(true);
+  let downloadsTab = $state<'active' | 'history'>('active');
 
   // Speed tier state
   let selectedTier = $state<SpeedTier>('free');
@@ -192,7 +194,10 @@
       fileName: download.name,
       fileSize: download.size,
       completedAt: new Date(),
-      status: download.status as 'completed' | 'cancelled' | 'failed'
+      startedAt: download.startedAt,
+      status: download.status as 'completed' | 'cancelled' | 'failed',
+      speedTier: download.speedTier,
+      seeders: download.seeders
     };
     downloadHistory = [entry, ...downloadHistory].slice(0, 50);
     saveDownloadHistory();
@@ -431,6 +436,7 @@
     };
 
     downloads = [...downloads, newDownload];
+    downloadsTab = 'active';
     saveDownloadHistory();
 
     try {
@@ -664,40 +670,44 @@
     cleanupEventListeners();
   });
 
-  // Get status color
-  function getStatusColor(status: DownloadStatus): string {
-    switch (status) {
-      case 'downloading': return 'text-blue-500';
-      case 'paused': return 'text-yellow-500';
-      case 'completed': return 'text-green-500';
-      case 'failed': return 'text-red-500';
-      case 'cancelled': return 'text-gray-500';
-      case 'queued': return 'text-gray-500';
-      default: return 'text-gray-500';
-    }
-  }
-
-  // Get status icon
-  function getStatusIcon(status: DownloadStatus) {
-    switch (status) {
-      case 'downloading': return Loader2;
-      case 'paused': return Pause;
-      case 'completed': return CheckCircle;
-      case 'failed': return AlertCircle;
-      case 'cancelled': return X;
-      case 'queued': return Clock;
-      default: return Clock;
-    }
-  }
-
   // Get status badge color
   function getStatusBadgeColor(status: string): string {
     switch (status) {
-      case 'completed': return 'bg-green-100 text-green-800';
-      case 'failed': return 'bg-red-100 text-red-800';
-      case 'cancelled': return 'bg-gray-100 text-gray-800';
-      default: return 'bg-gray-100 text-gray-800';
+      case 'completed': return 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-400';
+      case 'downloading': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-400';
+      case 'paused': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-400';
+      case 'failed': return 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-400';
+      case 'cancelled': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
+      case 'queued': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
+      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
     }
+  }
+
+  function getTierLabel(tier?: SpeedTier): string {
+    switch (tier) {
+      case 'free': return 'Free';
+      case 'standard': return 'Standard';
+      case 'premium': return 'Premium';
+      default: return 'Free';
+    }
+  }
+
+  function getTierBadgeColor(tier?: SpeedTier): string {
+    switch (tier) {
+      case 'premium': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400';
+      case 'standard': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400';
+      default: return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400';
+    }
+  }
+
+  function formatDuration(start: Date, end: Date): string {
+    const seconds = Math.round((end.getTime() - start.getTime()) / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSecs = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${remainingSecs}s`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
   }
 </script>
 
@@ -929,171 +939,249 @@
     {/if}
   </div>
 
-  <!-- Download Tracker -->
-  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-2">
-        <Download class="w-5 h-5 text-gray-600 dark:text-gray-400" />
-        <h2 class="text-lg font-semibold dark:text-white">Download Tracker</h2>
-        <span class="text-sm text-gray-500 dark:text-gray-400">({getActiveDownloads().length} active)</span>
-      </div>
-    </div>
-
-    {#if downloads.length === 0}
-      <div class="text-center py-12">
-        <Download class="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
-        <p class="text-gray-600 dark:text-gray-400">No downloads</p>
-        <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">Search for a file or add a magnet link to start downloading</p>
-      </div>
-    {:else}
-      <div class="space-y-4">
-        {#each downloads as download (download.id)}
-          {@const DownloadIcon = getFileIcon(download.name)}
-          <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-            <div class="flex items-center gap-4">
-              <!-- File Icon -->
-              <div class="flex items-center justify-center w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
-                <DownloadIcon class="w-6 h-6 {getFileColor(download.name)}" />
-              </div>
-
-              <!-- File Info -->
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <p class="text-sm font-semibold truncate dark:text-white">{download.name}</p>
-                  <span class="px-2 py-0.5 text-xs font-medium rounded capitalize {getStatusBadgeColor(download.status)}">
-                    {download.status}
-                  </span>
-                </div>
-
-                <div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  {#if download.size > 0}
-                    <span>{formatFileSize(download.size)}</span>
-                  {/if}
-                  {#if download.status === 'downloading'}
-                    <span>{download.speed}</span>
-                    <span>ETA: {download.eta}</span>
-                  {/if}
-                  <span>{download.seeders} seeder{download.seeders !== 1 ? 's' : ''}</span>
-                </div>
-
-                <!-- Progress Bar -->
-                {#if download.status === 'downloading' || download.status === 'paused'}
-                  <div class="mt-2">
-                    <div class="flex items-center justify-between text-xs mb-1">
-                      <span class="text-gray-600 dark:text-gray-400">{download.progress.toFixed(1)}%</span>
-                    </div>
-                    <div class="h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
-                      <div
-                        class="h-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}"
-                        style="width: {download.progress}%"
-                      ></div>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-
-              <!-- Actions -->
-              <div class="flex items-center gap-2 flex-shrink-0">
-                {#if download.status === 'downloading' || download.status === 'paused'}
-                  <button
-                    onclick={() => togglePause(download.id)}
-                    class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                    title={download.status === 'downloading' ? 'Pause' : 'Resume'}
-                  >
-                    {#if download.status === 'downloading'}
-                      <Pause class="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                    {:else}
-                      <Play class="w-4 h-4 text-gray-600 dark:text-gray-400" />
-                    {/if}
-                  </button>
-                  <button
-                    onclick={() => cancelDownload(download.id)}
-                    class="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
-                    title="Cancel"
-                  >
-                    <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
-                  </button>
-                {:else if download.status === 'queued'}
-                  <button
-                    onclick={() => cancelDownload(download.id)}
-                    class="p-2 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
-                    title="Cancel"
-                  >
-                    <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
-                  </button>
-                {:else}
-                  <button
-                    onclick={() => moveToHistory(download.id)}
-                    class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                    title="Move to history"
-                  >
-                    <History class="w-4 h-4 text-gray-400" />
-                  </button>
-                {/if}
-              </div>
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </div>
-
-  <!-- Download History -->
+  <!-- Downloads -->
   <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-    <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-      <button
-        onclick={() => showDownloadHistory = !showDownloadHistory}
-        class="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-white"
-      >
-        <History class="w-5 h-5" />
-        Download History
-        <span class="text-sm font-normal text-gray-500 dark:text-gray-400">({downloadHistory.length})</span>
-      </button>
+    <!-- Tabs -->
+    <div class="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 px-4">
+      <div class="flex">
+        <button
+          onclick={() => downloadsTab = 'active'}
+          class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
+            {downloadsTab === 'active'
+              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+        >
+          <Download class="w-4 h-4" />
+          Active
+          {#if getActiveDownloads().length > 0}
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 rounded-full">
+              {getActiveDownloads().length}
+            </span>
+          {/if}
+        </button>
+        <button
+          onclick={() => downloadsTab = 'history'}
+          class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
+            {downloadsTab === 'history'
+              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+              : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
+        >
+          <History class="w-4 h-4" />
+          History
+          {#if downloadHistory.length > 0}
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 rounded-full">
+              {downloadHistory.length}
+            </span>
+          {/if}
+        </button>
+      </div>
 
-      {#if downloadHistory.length > 0}
+      {#if downloadsTab === 'history' && downloadHistory.length > 0}
         <button
           onclick={clearDownloadHistory}
           class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
         >
-          <Trash2 class="w-4 h-4" />
-          Clear All
+          <Trash2 class="w-3.5 h-3.5" />
+          Clear
         </button>
       {/if}
     </div>
 
-    {#if showDownloadHistory}
+    <!-- Active Downloads Tab -->
+    {#if downloadsTab === 'active'}
+      {#if downloads.length === 0}
+        <div class="text-center py-16 px-6">
+          <Download class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+          <p class="text-gray-500 dark:text-gray-400">No active downloads</p>
+          <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">Search for a file above to start downloading</p>
+        </div>
+      {:else}
+        <div class="divide-y divide-gray-100 dark:divide-gray-700">
+          {#each downloads as download (download.id)}
+            {@const DownloadIcon = getFileIcon(download.name)}
+            {@const TierIcon = getTierIcon(download.speedTier || 'free')}
+            {@const isActive = download.status === 'downloading' || download.status === 'paused'}
+            {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
+            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+              <!-- Top row: icon, name, badges, actions -->
+              <div class="flex items-start gap-3">
+                <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
+                  {download.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-gray-100 dark:bg-gray-700'}">
+                  <DownloadIcon class="w-5 h-5 {download.status === 'completed' ? 'text-green-500' : getFileColor(download.name)}" />
+                </div>
+
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <p class="text-sm font-semibold truncate dark:text-white">{download.name}</p>
+                    <span class="px-2 py-0.5 text-xs font-medium rounded-full capitalize {getStatusBadgeColor(download.status)}">
+                      {download.status}
+                    </span>
+                    <span class="px-2 py-0.5 text-xs font-medium rounded-full {getTierBadgeColor(download.speedTier)}">
+                      <TierIcon class="w-3 h-3 inline -mt-0.5" />
+                      {getTierLabel(download.speedTier)}
+                    </span>
+                  </div>
+
+                  <!-- Stats row -->
+                  <div class="flex items-center gap-3 mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                    {#if download.size > 0}
+                      <span class="flex items-center gap-1">
+                        {formatFileSize(download.size)}
+                      </span>
+                    {/if}
+                    {#if isActive}
+                      <span class="text-blue-600 dark:text-blue-400 font-medium">{download.speed}</span>
+                      <span>{download.eta}</span>
+                    {/if}
+                    {#if download.status === 'completed' && download.startedAt && download.completedAt}
+                      <span>Took {formatDuration(download.startedAt, download.completedAt)}</span>
+                    {/if}
+                    <span>{download.seeders} seeder{download.seeders !== 1 ? 's' : ''}</span>
+                    <span class="text-gray-400 dark:text-gray-500">Started {formatDate(download.startedAt)}</span>
+                  </div>
+
+                  <!-- Hash (truncated) -->
+                  <p class="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1 truncate">{download.hash}</p>
+                </div>
+
+                <!-- Actions -->
+                <div class="flex items-center gap-1 flex-shrink-0">
+                  {#if download.status === 'downloading' || download.status === 'paused'}
+                    <button
+                      onclick={() => togglePause(download.id)}
+                      class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                      title={download.status === 'downloading' ? 'Pause' : 'Resume'}
+                    >
+                      {#if download.status === 'downloading'}
+                        <Pause class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                      {:else}
+                        <Play class="w-4 h-4 text-green-500" />
+                      {/if}
+                    </button>
+                    <button
+                      onclick={() => cancelDownload(download.id)}
+                      class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                      title="Cancel"
+                    >
+                      <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                    </button>
+                  {:else if download.status === 'queued'}
+                    <button
+                      onclick={() => cancelDownload(download.id)}
+                      class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                      title="Cancel"
+                    >
+                      <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                    </button>
+                  {:else if isFinished}
+                    <button
+                      onclick={() => moveToHistory(download.id)}
+                      class="px-2.5 py-1 text-xs text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                      title="Dismiss"
+                    >
+                      Dismiss
+                    </button>
+                  {/if}
+                </div>
+              </div>
+
+              <!-- Progress Bar (for active downloads) -->
+              {#if isActive}
+                <div class="mt-3 ml-13">
+                  <div class="flex items-center gap-3">
+                    <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                      <div
+                        class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}"
+                        style="width: {download.progress}%"
+                      ></div>
+                    </div>
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right">{download.progress.toFixed(1)}%</span>
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Completed progress bar (full green) -->
+              {#if download.status === 'completed'}
+                <div class="mt-3 ml-13">
+                  <div class="flex items-center gap-3">
+                    <div class="flex-1 h-1.5 bg-green-200 dark:bg-green-900/30 rounded-full overflow-hidden">
+                      <div class="h-full rounded-full bg-green-500 w-full"></div>
+                    </div>
+                    <CheckCircle class="w-4 h-4 text-green-500 flex-shrink-0" />
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+    <!-- History Tab -->
+    {:else}
       {#if downloadHistory.length === 0}
-        <div class="p-8 text-center">
+        <div class="text-center py-16 px-6">
           <History class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-          <p class="text-gray-600 dark:text-gray-400">No download history</p>
-          <p class="text-sm text-gray-500 dark:text-gray-500 mt-1">Completed and finished downloads will appear here</p>
+          <p class="text-gray-500 dark:text-gray-400">No download history</p>
+          <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">Completed and finished downloads will appear here</p>
         </div>
       {:else}
         <div class="divide-y divide-gray-100 dark:divide-gray-700">
           {#each downloadHistory as entry (entry.id)}
             {@const EntryIcon = getFileIcon(entry.fileName)}
-            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-              <div class="flex items-center gap-4">
-                <!-- File Icon -->
-                <div class="flex items-center justify-center w-10 h-10 bg-gray-100 dark:bg-gray-700 rounded-lg flex-shrink-0">
-                  <EntryIcon class="w-5 h-5 {getFileColor(entry.fileName)}" />
+            {@const EntryTierIcon = getTierIcon(entry.speedTier || 'free')}
+            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+              <div class="flex items-start gap-3">
+                <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
+                  {entry.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' :
+                   entry.status === 'failed' ? 'bg-red-50 dark:bg-red-900/20' :
+                   'bg-gray-100 dark:bg-gray-700'}">
+                  <EntryIcon class="w-5 h-5 {
+                    entry.status === 'completed' ? 'text-green-500' :
+                    entry.status === 'failed' ? 'text-red-400' :
+                    getFileColor(entry.fileName)
+                  }" />
                 </div>
 
-                <!-- File Info -->
                 <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2">
-                    <p class="text-sm font-medium truncate text-gray-900 dark:text-white">{entry.fileName}</p>
-                    <span class="px-2 py-0.5 text-xs font-medium rounded capitalize {getStatusBadgeColor(entry.status)}">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <p class="text-sm font-semibold truncate dark:text-white">{entry.fileName}</p>
+                    <span class="px-2 py-0.5 text-xs font-medium rounded-full capitalize {getStatusBadgeColor(entry.status)}">
                       {entry.status}
                     </span>
+                    {#if entry.speedTier}
+                      <span class="px-2 py-0.5 text-xs font-medium rounded-full {getTierBadgeColor(entry.speedTier)}">
+                        <EntryTierIcon class="w-3 h-3 inline -mt-0.5" />
+                        {getTierLabel(entry.speedTier)}
+                      </span>
+                    {/if}
                   </div>
-                  <div class="flex items-center gap-4 text-xs text-gray-500 dark:text-gray-400 mt-1">
+
+                  <div class="flex items-center gap-3 mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                     {#if entry.fileSize > 0}
                       <span>{formatFileSize(entry.fileSize)}</span>
                     {/if}
+                    {#if entry.status === 'completed' && entry.startedAt && entry.completedAt}
+                      <span>Took {formatDuration(new Date(entry.startedAt), new Date(entry.completedAt))}</span>
+                    {/if}
+                    {#if entry.seeders}
+                      <span>{entry.seeders} seeder{entry.seeders !== 1 ? 's' : ''}</span>
+                    {/if}
                     <span>{formatDate(entry.completedAt)}</span>
                   </div>
+
+                  <p class="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1 truncate">{entry.hash}</p>
                 </div>
+
+                <!-- Re-download button for completed files -->
+                {#if entry.status === 'completed'}
+                  <button
+                    onclick={() => { searchQuery = entry.hash; searchMode = 'hash'; searchFile(); }}
+                    class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors flex-shrink-0"
+                    title="Download again"
+                  >
+                    <Download class="w-4 h-4 text-gray-400" />
+                  </button>
+                {/if}
               </div>
             </div>
           {/each}
