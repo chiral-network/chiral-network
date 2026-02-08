@@ -139,11 +139,22 @@ async fn send_file(
     file_name: String,
     file_data: Vec<u8>,
     transfer_id: String,
+    price_wei: Option<String>,
+    sender_wallet: Option<String>,
+    file_hash: Option<String>,
 ) -> Result<(), String> {
     let dht_guard = state.dht.lock().await;
 
     if let Some(dht) = dht_guard.as_ref() {
-        dht.send_file(peer_id, transfer_id, file_name, file_data).await
+        dht.send_file(
+            peer_id,
+            transfer_id,
+            file_name,
+            file_data,
+            price_wei.unwrap_or_default(),
+            sender_wallet.unwrap_or_default(),
+            file_hash.unwrap_or_default(),
+        ).await
     } else {
         Err("DHT not running".to_string())
     }
@@ -2155,7 +2166,7 @@ async fn send_encrypted_file(
     if let Some(dht) = dht_guard.as_ref() {
         // Prefix file name with .encrypted to indicate it's encrypted
         let encrypted_file_name = format!("{}.encrypted", file_name);
-        dht.send_file(peer_id, transfer_id, encrypted_file_name, encrypted_json).await
+        dht.send_file(peer_id, transfer_id, encrypted_file_name, encrypted_json, String::new(), String::new(), String::new()).await
     } else {
         Err("DHT not running".to_string())
     }
