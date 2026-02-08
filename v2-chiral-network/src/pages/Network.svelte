@@ -500,7 +500,7 @@
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Sync Status</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : 'Offline'}</p>
+          <p class="text-lg font-bold dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
         </div>
       </div>
 
