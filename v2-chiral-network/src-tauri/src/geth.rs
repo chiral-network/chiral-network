@@ -304,6 +304,21 @@ impl GethProcess {
         }
     }
 
+    /// Recursively remove all files named "LOCK" under the given directory
+    fn remove_lock_files_recursive(dir: &Path) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    Self::remove_lock_files_recursive(&path);
+                } else if path.file_name().map(|n| n == "LOCK").unwrap_or(false) {
+                    println!("⚠️  Removing stale LOCK file: {}", path.display());
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
     pub fn is_installed(&self) -> bool {
         self.downloader.is_geth_installed()
     }
@@ -391,36 +406,40 @@ impl GethProcess {
             return Err("Geth is not installed. Please download it first.".to_string());
         }
 
-        // Kill any orphaned Geth process from a previous run holding our ports
-        // This can happen if the app crashes or is force-closed
-        for port in &["8545", "30303"] {
-            if let Ok(output) = Command::new("lsof")
-                .args(["-ti", &format!("tcp:{}", port)])
-                .output()
-            {
-                let pids = String::from_utf8_lossy(&output.stdout);
-                for pid in pids.trim().lines() {
-                    let pid = pid.trim();
-                    if !pid.is_empty() {
-                        println!("⚠️  Killing orphaned process on port {} (PID {})", port, pid);
-                        let _ = Command::new("kill").arg(pid).output();
-                    }
+        // Kill any orphaned Geth process from a previous run that holds the datadir lock.
+        // This can happen if the app crashes or is force-closed.
+        // Use the datadir path to find the exact orphaned process.
+        if let Ok(output) = Command::new("fuser")
+            .arg(self.data_dir.join("geth").join("LOCK").to_string_lossy().as_ref())
+            .output()
+        {
+            let pids = String::from_utf8_lossy(&output.stdout);
+            for pid in pids.split_whitespace() {
+                let pid = pid.trim();
+                if !pid.is_empty() {
+                    println!("⚠️  Killing orphaned Geth holding datadir lock (PID {})", pid);
+                    let _ = Command::new("kill").args(["-9", pid]).output();
                 }
             }
         }
-        // Brief wait for ports to be released
-        if Command::new("lsof").args(["-ti", "tcp:8545"]).output()
-            .map(|o| !o.stdout.is_empty()).unwrap_or(false)
-        {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+        // Also try pkill as a fallback to catch any geth process using our datadir
+        let datadir_str = self.data_dir.to_string_lossy().to_string();
+        if let Ok(output) = Command::new("pgrep").args(["-f", &format!("geth.*--datadir.*{}", datadir_str)]).output() {
+            let pids = String::from_utf8_lossy(&output.stdout);
+            for pid in pids.trim().lines() {
+                let pid = pid.trim();
+                if !pid.is_empty() {
+                    println!("⚠️  Killing orphaned Geth process (PID {})", pid);
+                    let _ = Command::new("kill").args(["-9", pid]).output();
+                }
+            }
         }
 
-        // Remove stale LOCK file from a previous crashed Geth
-        let lock_file = self.data_dir.join("geth").join("LOCK");
-        if lock_file.exists() {
-            println!("⚠️  Removing stale LOCK file: {}", lock_file.display());
-            let _ = fs::remove_file(&lock_file);
-        }
+        // Remove ALL stale LOCK files from the data directory tree
+        // Geth creates LOCK files at: datadir/LOCK, datadir/geth/LOCK, datadir/geth/chaindata/LOCK, etc.
+        Self::remove_lock_files_recursive(&self.data_dir);
+        // Brief wait for process cleanup
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Check if blockchain needs initialization or re-initialization
         // Use a version marker to detect genesis config changes
