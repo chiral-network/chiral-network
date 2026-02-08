@@ -2288,7 +2288,7 @@ async fn stop_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningStatus, String> {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     geth.get_mining_status().await
 }
 
