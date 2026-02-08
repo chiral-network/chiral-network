@@ -27,6 +27,7 @@
   interface GethStatus {
     installed: boolean;
     running: boolean;
+    localRunning: boolean;
     syncing: boolean;
     currentBlock: number;
     highestBlock: number;
@@ -243,20 +244,20 @@
     <div class="flex items-center justify-center py-12">
       <Loader2 class="w-8 h-8 animate-spin text-gray-400" />
     </div>
-  {:else if !gethStatus?.installed || !gethStatus?.running}
-    <!-- Geth Not Running - Direct to Network Page -->
+  {:else if !gethStatus?.installed || !gethStatus?.localRunning}
+    <!-- Geth Not Running Locally - Direct to Network Page -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
           <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">Blockchain Node Required</h2>
+          <h2 class="font-semibold dark:text-white">Local Blockchain Node Required</h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
             {#if !gethStatus?.installed}
               Geth is not installed
             {:else}
-              Geth is not running
+              Local Geth node is not running
             {/if}
           </p>
         </div>
@@ -264,13 +265,13 @@
       <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
         <p class="text-sm text-yellow-800 dark:text-yellow-300">
           {#if !gethStatus?.installed}
-            You need to download and start Geth before you can mine CHR tokens.
+            You need to download and start a local Geth node before you can mine CHR tokens.
           {:else}
-            You need to start Geth before you can mine CHR tokens.
+            Mining requires a local Geth node. Start the node from the Network page to begin mining.
           {/if}
         </p>
         <p class="text-sm text-yellow-700 dark:text-yellow-400 mt-2">
-          Go to the <strong>Network</strong> page to manage your blockchain node connection.
+          Go to the <strong>Network</strong> page to start your local blockchain node.
         </p>
       </div>
       <button

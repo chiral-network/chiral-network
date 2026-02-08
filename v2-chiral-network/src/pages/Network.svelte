@@ -31,6 +31,7 @@
   interface GethStatus {
     installed: boolean;
     running: boolean;
+    localRunning: boolean;
     syncing: boolean;
     currentBlock: number;
     highestBlock: number;
