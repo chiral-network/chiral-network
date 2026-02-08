@@ -323,7 +323,7 @@ impl GethProcess {
                 "petersburgBlock": 0,
                 "ethash": {}
             },
-            "difficulty": "0x20000",
+            "difficulty": "0x400",
             "gasLimit": "0x1C9C380",
             "nonce": "0x0000000000098765",
             "alloc": {
@@ -381,7 +381,7 @@ impl GethProcess {
 
         // Check if blockchain needs initialization or re-initialization
         // Use a version marker to detect genesis config changes
-        let genesis_version = "2"; // Bump this when genesis config changes
+        let genesis_version = "3"; // Bump this when genesis config changes
         let version_file = self.data_dir.join(".genesis_version");
         let chaindata_path = self.data_dir.join("geth").join("chaindata");
         let needs_init = if !chaindata_path.exists() {
