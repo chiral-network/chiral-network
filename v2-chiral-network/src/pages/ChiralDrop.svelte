@@ -25,6 +25,7 @@
   } from '$lib/chiralDropStore';
   import { aliasFromPeerId } from '$lib/aliasService';
   import { peers, walletAccount } from '$lib/stores';
+  import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
   import { logger } from '$lib/logger';
@@ -200,6 +201,8 @@
   });
 
   // Subscribe to peers store updates — sync adds AND removals
+  // Use get() for nearbyPeers to avoid creating a reactive dependency
+  // (writing to nearbyPeers inside an effect that reads it would cause an infinite loop)
   $effect(() => {
     const currentPeerIds = new Set($peers.map((p) => p.id));
 
@@ -209,7 +212,7 @@
     });
 
     // Remove peers no longer in the peers store
-    const nearby = $nearbyPeers;
+    const nearby = get(nearbyPeers);
     nearby.forEach((np) => {
       if (!currentPeerIds.has(np.peerId)) {
         removeNearbyPeer(np.peerId);
@@ -270,9 +273,12 @@
 
       if (isPaid) {
         // Paid transfer flow:
-        // 1. Publish file (hashes + registers for chunked serving with price)
+        // 1. Read file bytes and publish via publish_file_data (hashes, stores in memory, registers for chunked serving)
         // 2. Send metadata-only request via file_transfer protocol with pricing info
         //    (receiver will download via chunked protocol with payment handshake)
+
+        const buffer = await file.arrayBuffer();
+        const bytes = Array.from(new Uint8Array(buffer));
 
         // Convert CHR to wei
         const priceParts = price.split('.');
@@ -281,10 +287,10 @@
         const frac = BigInt(fracStr);
         const priceWei = (whole * BigInt(1e18) + frac).toString();
 
-        // Publish file to get hash and register for chunked serving
-        const publishResult = await invoke<{ merkleRoot: string }>('publish_file', {
-          filePath: file.name,
+        // Publish file data to get hash and register for chunked serving
+        const publishResult = await invoke<{ merkleRoot: string }>('publish_file_data', {
           fileName: file.name,
+          fileData: bytes,
           priceChr: price,
           walletAddress: $walletAccount!.address
         });
@@ -299,7 +305,8 @@
           transferId,
           priceWei,
           senderWallet: $walletAccount!.address,
-          fileHash
+          fileHash,
+          fileSize: file.size
         });
 
         updateTransferStatus(transferId, 'completed');
