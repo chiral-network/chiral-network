@@ -408,35 +408,26 @@ impl GethProcess {
 
         // Kill any orphaned Geth process from a previous app session.
         // This happens when the app is closed without properly stopping Geth.
-        // We find processes by our geth binary path (unique to our app).
+        // We match by the exact geth binary path in /proc/*/exe to avoid
+        // matching our own Tauri process (which pgrep -f would do).
         let geth_binary = self.geth_path();
         let geth_binary_str = geth_binary.to_string_lossy().to_string();
+        let our_pid = std::process::id();
         let mut killed_orphan = false;
 
-        // Method 1: pgrep by exact binary path
-        if let Ok(output) = Command::new("pgrep").args(["-f", &geth_binary_str]).output() {
-            let pids = String::from_utf8_lossy(&output.stdout);
-            for pid in pids.trim().lines() {
-                let pid = pid.trim();
-                if !pid.is_empty() {
-                    println!("⚠️  Killing orphaned Geth process (PID {}, binary: {})", pid, geth_binary_str);
-                    let _ = Command::new("kill").args(["-9", pid]).output();
-                    killed_orphan = true;
-                }
-            }
-        }
-
-        // Method 2: find any process holding our datadir open via lsof
-        if !killed_orphan {
-            let datadir_str = self.data_dir.to_string_lossy().to_string();
-            if let Ok(output) = Command::new("lsof").args(["+D", &datadir_str, "-t"]).output() {
-                let pids = String::from_utf8_lossy(&output.stdout);
-                for pid in pids.trim().lines() {
-                    let pid = pid.trim();
-                    if !pid.is_empty() {
-                        println!("⚠️  Killing process holding datadir (PID {})", pid);
-                        let _ = Command::new("kill").args(["-9", pid]).output();
-                        killed_orphan = true;
+        // Scan /proc for processes whose exe symlink matches our geth binary
+        if let Ok(entries) = fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+                let pid_str = entry.file_name().to_string_lossy().to_string();
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    if pid == our_pid { continue; }
+                    let exe_link = format!("/proc/{}/exe", pid);
+                    if let Ok(exe_path) = fs::read_link(&exe_link) {
+                        if exe_path.to_string_lossy() == geth_binary_str {
+                            println!("⚠️  Killing orphaned Geth process (PID {})", pid);
+                            let _ = Command::new("kill").args(["-9", &pid_str]).output();
+                            killed_orphan = true;
+                        }
                     }
                 }
             }
