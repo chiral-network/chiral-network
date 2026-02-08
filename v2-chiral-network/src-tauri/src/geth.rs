@@ -608,29 +608,50 @@ impl GethProcess {
         let client = reqwest::Client::new();
 
         let mining = match self.rpc_call(&client, "eth_mining", serde_json::json!([])).await {
-            Ok(result) => result.as_bool().unwrap_or(false),
-            Err(_) => false,
+            Ok(result) => {
+                let val = result.as_bool().unwrap_or(false);
+                println!("⛏️  eth_mining: {} (raw: {})", val, result);
+                val
+            }
+            Err(e) => {
+                println!("⛏️  eth_mining error: {}", e);
+                false
+            }
         };
 
-        // Use ethash_getHashrate (Core-Geth specific, more reliable than eth_hashrate)
-        // Falls back to eth_hashrate if ethash method is unavailable
-        let hash_rate = match self.rpc_call(&client, "ethash_getHashrate", serde_json::json!([])).await {
-            Ok(result) => {
-                // ethash_getHashrate returns a hex-encoded uint64
-                let hex = result.as_str().unwrap_or("0x0");
-                u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-            }
-            Err(_) => {
-                // Fallback to eth_hashrate
-                match self.rpc_call(&client, "eth_hashrate", serde_json::json!([])).await {
-                    Ok(result) => {
-                        let hex = result.as_str().unwrap_or("0x0");
-                        u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-                    }
-                    Err(_) => 0,
+        // Try multiple methods to get hash rate
+        // 1. ethash_getHashrate (Core-Geth specific)
+        let ethash_hr = self.rpc_call(&client, "ethash_getHashrate", serde_json::json!([])).await;
+        println!("⛏️  ethash_getHashrate: {:?}", ethash_hr);
+
+        // 2. eth_hashrate (standard)
+        let eth_hr = self.rpc_call(&client, "eth_hashrate", serde_json::json!([])).await;
+        println!("⛏️  eth_hashrate: {:?}", eth_hr);
+
+        // 3. miner_getHashrate (alternative Core-Geth method)
+        let miner_hr = self.rpc_call(&client, "miner_getHashrate", serde_json::json!([])).await;
+        println!("⛏️  miner_getHashrate: {:?}", miner_hr);
+
+        // Pick the first non-zero result
+        let hash_rate = [&ethash_hr, &eth_hr, &miner_hr]
+            .iter()
+            .filter_map(|r| r.as_ref().ok())
+            .filter_map(|result| {
+                // Try parsing as hex string first
+                if let Some(hex) = result.as_str() {
+                    let parsed = u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                    if parsed > 0 { return Some(parsed); }
                 }
-            }
-        };
+                // Try parsing as number directly
+                if let Some(n) = result.as_u64() {
+                    if n > 0 { return Some(n); }
+                }
+                None
+            })
+            .next()
+            .unwrap_or(0);
+
+        println!("⛏️  Final hash_rate: {}", hash_rate);
 
         let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await
         {
