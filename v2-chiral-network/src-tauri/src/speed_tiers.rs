@@ -68,7 +68,16 @@ pub fn format_wei_as_chr(wei: u128) -> String {
     }
 }
 
-const CHUNK_SIZE: usize = 8192; // 8KB chunks
+/// Calculate the delay between chunk requests for rate limiting.
+/// Returns None for unlimited (Premium) tier.
+pub fn chunk_request_delay(chunk_size: u32, tier: &SpeedTier) -> Option<std::time::Duration> {
+    tier.bytes_per_second().map(|bps| {
+        let delay_us = (chunk_size as u64 * 1_000_000) / bps as u64;
+        std::time::Duration::from_micros(delay_us)
+    })
+}
+
+const CHUNK_SIZE: usize = 8192; // 8KB chunks (for rate_limited_write)
 const PROGRESS_INTERVAL: usize = 65536; // Emit progress every 64KB
 
 /// Write file data with rate limiting based on speed tier.
