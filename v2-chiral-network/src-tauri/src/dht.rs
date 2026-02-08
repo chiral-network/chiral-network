@@ -105,6 +105,10 @@ enum SwarmCommand {
     HealthCheck {
         response_tx: tokio::sync::oneshot::Sender<DhtHealthInfo>,
     },
+    CheckPeerConnected {
+        peer_id: PeerId,
+        response_tx: tokio::sync::oneshot::Sender<bool>,
+    },
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -399,6 +403,22 @@ impl DhtService {
         }
     }
 
+    /// Check if a specific peer is currently connected to the swarm
+    pub async fn is_peer_connected(&self, peer_id: &str) -> Result<bool, String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let peer_id_parsed = PeerId::from_str(peer_id).map_err(|e| e.to_string())?;
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            tx.send(SwarmCommand::CheckPeerConnected {
+                peer_id: peer_id_parsed,
+                response_tx,
+            }).map_err(|e| e.to_string())?;
+            response_rx.await.map_err(|e| e.to_string())
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
     /// Request a file from a remote peer by hash
     pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
@@ -641,8 +661,36 @@ async fn event_loop(
                             protocols,
                         });
                     }
+                    SwarmCommand::CheckPeerConnected { peer_id, response_tx } => {
+                        let is_connected = swarm.is_connected(&peer_id);
+                        let _ = response_tx.send(is_connected);
+                    }
                     SwarmCommand::RequestFile { peer_id, request_id, file_hash } => {
                         println!("Requesting file {} from peer {}", file_hash, peer_id);
+
+                        // Check if peer is actually connected before sending request
+                        if !swarm.is_connected(&peer_id) {
+                            println!("⚠️ Peer {} is not connected, attempting to dial...", peer_id);
+                            // Try to dial the peer - libp2p may know their address from DHT/Kademlia
+                            match swarm.dial(peer_id) {
+                                Ok(_) => {
+                                    println!("📡 Dialing peer {}...", peer_id);
+                                    // Give a short window for connection to establish
+                                    // The request will be sent, but if the peer is truly offline,
+                                    // libp2p will emit OutboundFailure
+                                }
+                                Err(e) => {
+                                    println!("❌ Cannot reach peer {}: {:?}", peer_id, e);
+                                    let _ = app.emit("file-download-failed", serde_json::json!({
+                                        "requestId": request_id,
+                                        "fileHash": file_hash,
+                                        "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
+                                    }));
+                                    continue;
+                                }
+                            }
+                        }
+
                         let request = FileRequestMessage {
                             request_id: request_id.clone(),
                             file_hash: file_hash.clone(),
@@ -844,10 +892,21 @@ async fn handle_behaviour_event(
                     }
                 }
                 Event::OutboundFailure { peer, error, .. } => {
-                    println!("File transfer failed to {:?}: {:?}", peer, error);
+                    let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
+                    let user_error = match &error {
+                        request_response::OutboundFailure::DialFailure |
+                        request_response::OutboundFailure::UnsupportedProtocols => {
+                            format!("Seeder ({}...) is offline or unreachable", peer_short)
+                        }
+                        request_response::OutboundFailure::Timeout => {
+                            format!("Seeder ({}...) did not respond in time", peer_short)
+                        }
+                        _ => format!("Transfer failed to ({}...): {:?}", peer_short, error)
+                    };
+                    println!("❌ File transfer failed to {:?}: {:?}", peer, error);
                     let _ = app.emit("file-transfer-failed", serde_json::json!({
                         "peerId": peer.to_string(),
-                        "error": format!("{:?}", error)
+                        "error": user_error
                     }));
                 }
                 Event::InboundFailure { peer, error, .. } => {
@@ -983,10 +1042,25 @@ async fn handle_behaviour_event(
                     }
                 }
                 Event::OutboundFailure { peer, error, .. } => {
-                    println!("File request failed to {:?}: {:?}", peer, error);
+                    let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
+                    let user_error = match &error {
+                        request_response::OutboundFailure::DialFailure => {
+                            format!("Seeder ({}...) is offline or unreachable. They may have disconnected from the network.", peer_short)
+                        }
+                        request_response::OutboundFailure::UnsupportedProtocols => {
+                            format!("Seeder ({}...) is offline or running an incompatible version. The file cannot be downloaded from this peer.", peer_short)
+                        }
+                        request_response::OutboundFailure::Timeout => {
+                            format!("Seeder ({}...) did not respond in time. They may be offline or experiencing network issues.", peer_short)
+                        }
+                        _ => {
+                            format!("Failed to reach seeder ({}...): {:?}", peer_short, error)
+                        }
+                    };
+                    println!("❌ File request failed to {:?}: {:?}", peer, error);
                     let _ = app.emit("file-download-failed", serde_json::json!({
                         "peerId": peer.to_string(),
-                        "error": format!("{:?}", error)
+                        "error": user_error
                     }));
                 }
                 Event::InboundFailure { peer, error, .. } => {
