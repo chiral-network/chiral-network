@@ -133,15 +133,21 @@ impl FileTransferService {
         Ok(())
     }
 
-    pub async fn accept_transfer(&self, app: tauri::AppHandle, transfer_id: String) -> Result<String, String> {
+    pub async fn accept_transfer(&self, app: tauri::AppHandle, transfer_id: String, custom_download_dir: Option<String>) -> Result<String, String> {
         let mut incoming = self.pending_incoming.lock().await;
 
         if let Some(transfer) = incoming.get_mut(&transfer_id) {
             transfer.status = TransferStatus::Accepted;
 
             // Get Downloads folder path
-            let downloads_dir = dirs::download_dir()
-                .ok_or_else(|| "Could not find Downloads folder".to_string())?;
+            let downloads_dir = if let Some(ref dir) = custom_download_dir {
+                let p = std::path::PathBuf::from(dir);
+                if p.exists() && p.is_dir() { p } else {
+                    dirs::download_dir().ok_or_else(|| "Could not find Downloads folder".to_string())?
+                }
+            } else {
+                dirs::download_dir().ok_or_else(|| "Could not find Downloads folder".to_string())?
+            };
 
             // Create file path
             let file_path = downloads_dir.join(&transfer.file_name);
