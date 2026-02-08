@@ -422,16 +422,19 @@ impl GethProcess {
             .arg("--miner.gasprice")
             .arg("0")
             .arg("--txpool.pricelimit")
-            .arg("0");
+            .arg("0")
+            .arg("--metrics");
 
         // Add bootstrap nodes if available
         if !bootstrap_nodes.is_empty() {
             cmd.arg("--bootnodes").arg(&bootstrap_nodes);
         }
 
-        // Set miner address if provided
+        // Set miner address and enable mining if provided
         if let Some(addr) = miner_address {
-            cmd.arg("--miner.etherbase").arg(addr);
+            cmd.arg("--miner.etherbase").arg(addr)
+               .arg("--mine")
+               .arg("--miner.threads").arg("1");
         }
 
         // Create log file
@@ -583,9 +586,13 @@ impl GethProcess {
             return Err("Cannot mine: local Geth node is not running. Start the node from the Network page first.".to_string());
         }
         let client = reqwest::Client::new();
-        self.rpc_call(&client, "miner_start", serde_json::json!([threads]))
-            .await
-            .map(|_| ())
+        println!("⛏️  Starting miner with {} thread(s) via RPC to {}", threads, self.effective_rpc_endpoint());
+        let result = self.rpc_call(&client, "miner_start", serde_json::json!([threads])).await;
+        match &result {
+            Ok(val) => println!("⛏️  miner_start response: {}", val),
+            Err(e) => println!("⛏️  miner_start error: {}", e),
+        }
+        result.map(|_| ())
     }
 
     /// Stop mining
@@ -605,12 +612,24 @@ impl GethProcess {
             Err(_) => false,
         };
 
-        let hash_rate = match self.rpc_call(&client, "eth_hashrate", serde_json::json!([])).await {
+        // Use ethash_getHashrate (Core-Geth specific, more reliable than eth_hashrate)
+        // Falls back to eth_hashrate if ethash method is unavailable
+        let hash_rate = match self.rpc_call(&client, "ethash_getHashrate", serde_json::json!([])).await {
             Ok(result) => {
+                // ethash_getHashrate returns a hex-encoded uint64
                 let hex = result.as_str().unwrap_or("0x0");
                 u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
             }
-            Err(_) => 0,
+            Err(_) => {
+                // Fallback to eth_hashrate
+                match self.rpc_call(&client, "eth_hashrate", serde_json::json!([])).await {
+                    Ok(result) => {
+                        let hex = result.as_str().unwrap_or("0x0");
+                        u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
+                    }
+                    Err(_) => 0,
+                }
+            }
         };
 
         let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await
