@@ -1725,23 +1725,25 @@ async fn handle_behaviour_event(
                                                 &cost_chr,
                                                 &creds.private_key,
                                             ).await {
-                                                Ok(tx_hash) => {
-                                                    println!("💰 Payment sent: tx={}", tx_hash);
+                                                Ok(payment) => {
+                                                    println!("💰 Payment sent: tx={}", payment.tx_hash);
                                                     // Emit event so frontend can track in transaction history
                                                     let _ = app.emit("chiraldrop-payment-sent", serde_json::json!({
                                                         "requestId": request_id,
                                                         "fileHash": file_hash,
                                                         "fileName": file_name,
-                                                        "txHash": tx_hash,
+                                                        "txHash": payment.tx_hash,
                                                         "priceWei": price_wei,
                                                         "toWallet": wallet_address,
                                                         "fromWallet": creds.wallet_address,
+                                                        "balanceBefore": payment.balance_before,
+                                                        "balanceAfter": payment.balance_after,
                                                     }));
                                                     // Send payment proof to seeder
                                                     let request = ChunkRequest::PaymentProof {
                                                         request_id: request_id.clone(),
                                                         file_hash: file_hash.clone(),
-                                                        payment_tx: tx_hash,
+                                                        payment_tx: payment.tx_hash,
                                                         payer_address: creds.wallet_address.clone(),
                                                     };
                                                     let req_id = swarm.behaviour_mut().file_request.send_request(&peer, request);
