@@ -163,6 +163,41 @@ async fn send_file(
     }
 }
 
+/// Send a file to a peer by reading from a file path on disk (used by ChiralDrop)
+#[tauri::command]
+async fn send_file_by_path(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    file_path: String,
+    transfer_id: String,
+    price_wei: Option<String>,
+    sender_wallet: Option<String>,
+    file_hash: Option<String>,
+) -> Result<(), String> {
+    let path = std::path::Path::new(&file_path);
+    let file_name = path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.clone());
+    let file_data = std::fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let file_size = file_data.len() as u64;
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        dht.send_file(
+            peer_id,
+            transfer_id,
+            file_name,
+            file_data,
+            price_wei.unwrap_or_default(),
+            sender_wallet.unwrap_or_default(),
+            file_hash.unwrap_or_default(),
+            file_size,
+        ).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
 #[tauri::command]
 async fn accept_file_transfer(
     app: tauri::AppHandle,
@@ -2325,6 +2360,7 @@ pub fn run() {
             get_dht_health,
             ping_peer,
             send_file,
+            send_file_by_path,
             accept_file_transfer,
             decline_file_transfer,
             store_dht_value,
