@@ -2443,13 +2443,45 @@ async fn lookup_encryption_key(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let geth = Arc::new(Mutex::new(GethProcess::new()));
+    let geth_for_signal = geth.clone();
+
+    // Spawn a background task to stop Geth on SIGINT (Ctrl+C) or SIGTERM
+    // This prevents orphaned Geth processes when the app is killed
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigint = signal(SignalKind::interrupt()).unwrap();
+                let mut sigterm = signal(SignalKind::terminate()).unwrap();
+                tokio::select! {
+                    _ = sigint.recv() => {
+                        println!("🛑 SIGINT received — stopping Geth before exit");
+                    }
+                    _ = sigterm.recv() => {
+                        println!("🛑 SIGTERM received — stopping Geth before exit");
+                    }
+                }
+                let mut geth = geth_for_signal.lock().await;
+                let _ = geth.stop();
+                // Exit the process now that cleanup is done
+                std::process::exit(0);
+            }
+        });
+    });
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             dht: Arc::new(Mutex::new(None)),
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
             file_storage: Arc::new(Mutex::new(HashMap::new())),
-            geth: Arc::new(Mutex::new(GethProcess::new())),
+            geth,
             encryption_keypair: Arc::new(Mutex::new(None)),
             download_tiers: Arc::new(Mutex::new(HashMap::new())),
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
