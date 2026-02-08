@@ -41,12 +41,14 @@
     status: string;
     gasUsed: number;
     // Enriched metadata
-    txType: string;          // "send", "receive", "speed_tier_payment", "unknown"
+    txType: string;          // "send", "receive", "speed_tier_payment", "file_payment", "file_sale", "unknown"
     description: string;
     fileName?: string;
     fileHash?: string;
     speedTier?: string;
     recipientLabel?: string;
+    balanceBefore?: string;
+    balanceAfter?: string;
   }
 
   // State
@@ -188,7 +190,7 @@
 
     isSending = true;
     try {
-      const result = await invoke<{ hash: string; status: string }>('send_transaction', {
+      const result = await invoke<{ hash: string; status: string; balanceBefore: string; balanceAfter: string }>('send_transaction', {
         fromAddress: $walletAccount.address,
         toAddress: recipientAddress,
         amount: String(sendAmount),
@@ -204,6 +206,8 @@
           txType: 'send',
           description: `💸 Sent ${sendAmount} CHR to ${recipientAddress.slice(0, 10)}...`,
           recipientLabel: null,
+          balanceBefore: result.balanceBefore,
+          balanceAfter: result.balanceAfter,
         });
       } catch (e) {
         log.warn('Failed to record tx metadata:', e);
@@ -600,6 +604,16 @@
                       <span class="text-gray-400">Gas Used</span>
                       <p class="text-gray-700 dark:text-gray-300">{tx.gasUsed.toLocaleString()}</p>
                     </div>
+                    {#if tx.balanceBefore && tx.balanceAfter}
+                      <div>
+                        <span class="text-gray-400">Balance Before</span>
+                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceBefore} CHR</p>
+                      </div>
+                      <div>
+                        <span class="text-gray-400">Balance After</span>
+                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceAfter} CHR</p>
+                      </div>
+                    {/if}
                     {#if tx.fileHash}
                       <div class="col-span-2">
                         <span class="text-gray-400">File Hash</span>

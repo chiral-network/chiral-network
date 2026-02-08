@@ -46,6 +46,7 @@
   let unlistenDownloadFailed: (() => void) | null = null;
   let unlistenDownloadProgress: (() => void) | null = null;
   let unlistenPaymentProcessing: (() => void) | null = null;
+  let unlistenSpeedTierPayment: (() => void) | null = null;
 
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
@@ -75,6 +76,8 @@
     completedAt?: Date;
     speedTier?: SpeedTier;
     filePath?: string;
+    balanceBefore?: string;
+    balanceAfter?: string;
   }
 
   interface HistoryEntry {
@@ -88,6 +91,8 @@
     speedTier?: SpeedTier;
     seeders?: number;
     filePath?: string;
+    balanceBefore?: string;
+    balanceAfter?: string;
   }
 
   // File type detection
@@ -222,7 +227,9 @@
       status: download.status as 'completed' | 'cancelled' | 'failed',
       speedTier: download.speedTier,
       seeders: download.seeders,
-      filePath: download.filePath
+      filePath: download.filePath,
+      balanceBefore: download.balanceBefore,
+      balanceAfter: download.balanceAfter,
     };
     downloadHistory = [entry, ...downloadHistory].slice(0, 50);
     saveDownloadHistory();
@@ -687,6 +694,27 @@
         });
       });
 
+      // Listen for speed tier payment completion with balance data
+      unlistenSpeedTierPayment = await listen<{
+        txHash: string;
+        fileHash: string;
+        fileName: string;
+        speedTier: string;
+        balanceBefore: string;
+        balanceAfter: string;
+      }>('speed-tier-payment-complete', (event) => {
+        const { fileHash, balanceBefore, balanceAfter } = event.payload;
+        log.info('Speed tier payment complete:', event.payload);
+
+        // Store balance data on the active download so it transfers to history
+        downloads = downloads.map(d => {
+          if (d.hash === fileHash) {
+            return { ...d, balanceBefore, balanceAfter };
+          }
+          return d;
+        });
+      });
+
       log.info('Download event listeners registered');
     } catch (error) {
       log.error('Failed to setup event listeners:', error);
@@ -710,6 +738,10 @@
     if (unlistenPaymentProcessing) {
       unlistenPaymentProcessing();
       unlistenPaymentProcessing = null;
+    }
+    if (unlistenSpeedTierPayment) {
+      unlistenSpeedTierPayment();
+      unlistenSpeedTierPayment = null;
     }
   }
 
@@ -1292,6 +1324,11 @@
                     <span>{formatDate(entry.completedAt)}</span>
                   </div>
 
+                  {#if entry.balanceBefore && entry.balanceAfter}
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Balance: {entry.balanceBefore} → {entry.balanceAfter} CHR
+                    </p>
+                  {/if}
                   <p class="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1 truncate">{entry.hash}</p>
                 </div>
 

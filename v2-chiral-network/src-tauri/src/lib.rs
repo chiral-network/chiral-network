@@ -699,9 +699,21 @@ async fn start_download(
                     file_hash: Some(file_hash.clone()),
                     speed_tier: Some(speed_tier.clone()),
                     recipient_label: Some("Burn Address (Speed Tier)".to_string()),
+                    balance_before: Some(result.balance_before.clone()),
+                    balance_after: Some(result.balance_after.clone()),
                 };
                 let mut metadata = state.tx_metadata.lock().await;
                 metadata.insert(result.hash.clone(), meta);
+
+                // Emit event so Download page can show balance change
+                let _ = app.emit("speed-tier-payment-complete", serde_json::json!({
+                    "txHash": result.hash,
+                    "fileHash": file_hash,
+                    "fileName": file_name,
+                    "speedTier": speed_tier,
+                    "balanceBefore": result.balance_before,
+                    "balanceAfter": result.balance_after,
+                }));
             }
             Err(e) => {
                 println!("❌ Speed tier payment failed: {}", e);
@@ -1164,6 +1176,8 @@ pub struct TransactionMeta {
     file_hash: Option<String>,    // For download payments
     speed_tier: Option<String>,   // For speed tier payments
     recipient_label: Option<String>, // User-provided label for recipient
+    balance_before: Option<String>,  // Balance before tx (CHR)
+    balance_after: Option<String>,   // Balance after tx (CHR)
 }
 
 // Transaction types
@@ -1186,6 +1200,8 @@ struct Transaction {
     file_hash: Option<String>,
     speed_tier: Option<String>,
     recipient_label: Option<String>,
+    balance_before: Option<String>,
+    balance_after: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1193,6 +1209,8 @@ struct Transaction {
 struct SendTransactionResult {
     hash: String,
     status: String,
+    balance_before: String,
+    balance_after: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1489,6 +1507,12 @@ async fn send_transaction(
     // Check total cost (amount + gas)
     let gas_cost = gas_price_u128 * gas_limit as u128;
     let total_cost = amount_wei.checked_add(gas_cost).ok_or("Amount overflow".to_string())?;
+
+    // Capture balance before/after for transaction history
+    let balance_before_chr = format!("{:.6}", balance_wei as f64 / 1e18);
+    let balance_after_wei = balance_wei.saturating_sub(total_cost);
+    let balance_after_chr = format!("{:.6}", balance_after_wei as f64 / 1e18);
+
     if balance_wei < total_cost {
         return Err(format!(
             "Insufficient balance: have {:.6} CHR, need {:.6} CHR (amount) + {:.6} CHR (gas)",
@@ -1609,6 +1633,8 @@ async fn send_transaction(
                     return Ok(SendTransactionResult {
                         hash: tx_hash,
                         status: "pending".to_string(),
+                        balance_before: balance_before_chr.clone(),
+                        balance_after: balance_after_chr.clone(),
                     });
                 }
 
@@ -1675,24 +1701,37 @@ async fn send_transaction(
     Ok(SendTransactionResult {
         hash: tx_hash,
         status: "pending".to_string(),
+        balance_before: balance_before_chr,
+        balance_after: balance_after_chr,
     })
 }
 
+/// Result of a payment transaction, including balance snapshots.
+pub struct PaymentResult {
+    pub tx_hash: String,
+    pub balance_before: String,
+    pub balance_after: String,
+}
+
 /// Public wrapper for sending payment transactions from dht.rs event loop.
-/// Takes CHR amount string, returns tx hash on success.
+/// Takes CHR amount string, returns tx hash and balance info on success.
 pub async fn send_payment_transaction(
     from_address: &str,
     to_address: &str,
     amount_chr: &str,
     private_key: &str,
-) -> Result<String, String> {
+) -> Result<PaymentResult, String> {
     let result = send_transaction(
         from_address.to_string(),
         to_address.to_string(),
         amount_chr.to_string(),
         private_key.to_string(),
     ).await?;
-    Ok(result.hash)
+    Ok(PaymentResult {
+        tx_hash: result.hash,
+        balance_before: result.balance_before,
+        balance_after: result.balance_after,
+    })
 }
 
 /// Get a transaction receipt to check if it has been mined
@@ -1818,6 +1857,8 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
     Ok(SendTransactionResult {
         hash: tx_hash,
         status: "pending".to_string(),
+        balance_before: String::new(),
+        balance_after: String::new(),
     })
 }
 
@@ -1828,7 +1869,7 @@ fn classify_transaction(
     to: &str,
     address: &str,
     metadata: &HashMap<String, TransactionMeta>,
-) -> (String, String, Option<String>, Option<String>, Option<String>, Option<String>) {
+) -> (String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) {
     let address_lower = address.to_lowercase();
     let to_lower = to.to_lowercase();
     let from_lower = from.to_lowercase();
@@ -1843,6 +1884,8 @@ fn classify_transaction(
             meta.file_hash.clone(),
             meta.speed_tier.clone(),
             meta.recipient_label.clone(),
+            meta.balance_before.clone(),
+            meta.balance_after.clone(),
         );
     }
 
@@ -1854,16 +1897,15 @@ fn classify_transaction(
             "⚡ Speed tier download payment".to_string(),
             None, None, None,
             Some("Burn Address (Speed Tier)".to_string()),
+            None, None,
         );
     }
 
     if from_lower == address_lower && to_lower != burn_lower {
-        // Could be a file payment (sent to a seeder) or regular send
-        // If metadata tagged it as file_payment, that was already handled above
         return (
             "send".to_string(),
             format!("💸 Sent to {}", &to[..std::cmp::min(10, to.len())]),
-            None, None, None, None,
+            None, None, None, None, None, None,
         );
     }
 
@@ -1871,11 +1913,11 @@ fn classify_transaction(
         return (
             "receive".to_string(),
             format!("📥 Received from {}", &from[..10]),
-            None, None, None, None,
+            None, None, None, None, None, None,
         );
     }
 
-    ("unknown".to_string(), "Transaction".to_string(), None, None, None, None)
+    ("unknown".to_string(), "Transaction".to_string(), None, None, None, None, None, None)
 }
 
 /// Get transaction history for an address
@@ -1958,7 +2000,7 @@ async fn get_transaction_history(
                                 let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
                                 let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
 
-                                let (tx_type, description, file_name, file_hash, speed_tier, recipient_label) =
+                                let (tx_type, description, file_name, file_hash, speed_tier, recipient_label, balance_before, balance_after) =
                                     classify_transaction(tx_hash, tx_from, tx_to, &address, &metadata);
 
                                 transactions.push(Transaction {
@@ -1977,6 +2019,8 @@ async fn get_transaction_history(
                                     file_hash,
                                     speed_tier,
                                     recipient_label,
+                                    balance_before,
+                                    balance_after,
                                 });
                             }
                         }
@@ -2002,6 +2046,8 @@ async fn record_transaction_meta(
     tx_type: String,
     description: String,
     recipient_label: Option<String>,
+    balance_before: Option<String>,
+    balance_after: Option<String>,
 ) -> Result<(), String> {
     let meta = TransactionMeta {
         tx_hash: tx_hash.clone(),
@@ -2011,6 +2057,8 @@ async fn record_transaction_meta(
         file_hash: None,
         speed_tier: None,
         recipient_label,
+        balance_before,
+        balance_after,
     };
     let mut metadata = state.tx_metadata.lock().await;
     metadata.insert(tx_hash, meta);

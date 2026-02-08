@@ -172,11 +172,11 @@
 
         // Listen for payment sent (buyer side) — record in both histories
         unlistenPaymentSent = await listen<any>('chiraldrop-payment-sent', async (event) => {
-          const { requestId, fileHash, fileName, txHash, priceWei, toWallet } = event.payload;
+          const { requestId, fileHash, fileName, txHash, priceWei, toWallet, balanceBefore, balanceAfter } = event.payload;
           log.info('Payment sent for ChiralDrop file:', fileName, 'tx:', txHash);
 
-          // Update ChiralDrop transfer history with payment tx hash
-          updateTransferByFileHash(fileHash, 'accepted', txHash);
+          // Update ChiralDrop transfer history with payment tx hash and balance
+          updateTransferByFileHash(fileHash, 'accepted', txHash, balanceBefore, balanceAfter);
 
           // Record in Account transaction history
           try {
@@ -186,6 +186,8 @@
               txType: 'file_payment',
               description: `📁 Paid for "${fileName}" (${formatPriceWei(priceWei)})`,
               recipientLabel: `Seeder (${toWallet.slice(0, 10)}...)`,
+              balanceBefore,
+              balanceAfter,
             });
           } catch (e) {
             log.warn('Failed to record payment metadata:', e);
@@ -197,7 +199,7 @@
           const { fileHash, txHash, priceWei, fromWallet } = event.payload;
           log.info('Payment received for file:', fileHash, 'tx:', txHash);
 
-          // Record in Account transaction history
+          // Record in Account transaction history (seller doesn't have balance snapshot from buyer's tx)
           try {
             const { invoke } = await import('@tauri-apps/api/core');
             await invoke('record_transaction_meta', {
@@ -205,6 +207,8 @@
               txType: 'file_sale',
               description: `💰 Received payment (${formatPriceWei(priceWei)}) for shared file`,
               recipientLabel: `Buyer (${fromWallet.slice(0, 10)}...)`,
+              balanceBefore: null,
+              balanceAfter: null,
             });
           } catch (e) {
             log.warn('Failed to record payment received metadata:', e);
@@ -721,6 +725,11 @@
                       </div>
                       {#if transfer.paymentTxHash}
                         <p class="text-xs text-gray-400 mt-1 font-mono truncate" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
+                      {/if}
+                      {#if transfer.balanceBefore && transfer.balanceAfter}
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          {transfer.balanceBefore} → {transfer.balanceAfter} CHR
+                        </p>
                       {/if}
                       <p class="text-xs text-gray-400 mt-1">{formatTimestamp(transfer.timestamp)}</p>
                     </div>
