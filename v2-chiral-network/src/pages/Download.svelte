@@ -1141,7 +1141,7 @@
             {@const TierIcon = getTierIcon(download.speedTier || 'free')}
             {@const isActive = download.status === 'downloading' || download.status === 'paused'}
             {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
-            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
               <!-- Top row: icon, name, badges, actions -->
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
@@ -1284,7 +1284,7 @@
           {#each downloadHistory as entry (entry.id)}
             {@const EntryIcon = getFileIcon(entry.fileName)}
             {@const EntryTierIcon = getTierIcon(entry.speedTier || 'free')}
-            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
                   {entry.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' :
