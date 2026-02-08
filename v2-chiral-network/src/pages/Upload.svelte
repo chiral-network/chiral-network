@@ -221,7 +221,7 @@
         }
 
         // Publish to DHT with selected protocol and pricing
-        const priceChr = filePrice && parseFloat(filePrice) > 0 ? filePrice : undefined;
+        const priceChr = filePrice && parseFloat(String(filePrice)) > 0 ? String(filePrice) : undefined;
         const walletAddr = $walletAccount?.address;
 
         if (priceChr && !walletAddr) {
