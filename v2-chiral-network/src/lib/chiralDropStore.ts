@@ -23,6 +23,7 @@ export interface FileTransfer {
   priceWei?: string;
   senderWallet?: string;
   fileHash?: string;
+  paymentTxHash?: string;
 }
 
 export interface NearbyPeer {
@@ -143,6 +144,41 @@ export function updateTransferStatus(id: string, status: FileTransfer['status'],
       transferHistory.update((history) => [{ ...transfer, status }, ...history]);
       pendingTransfers.update((transfers) => transfers.filter((t) => t.id !== id));
     }
+  }
+}
+
+export function updateTransferPayment(id: string, txHash: string) {
+  // Update in pending transfers
+  pendingTransfers.update((transfers) =>
+    transfers.map((t) => t.id === id ? { ...t, paymentTxHash: txHash } : t)
+  );
+  // Also update in history (transfer may have already moved there)
+  transferHistory.update((history) =>
+    history.map((t) => t.id === id ? { ...t, paymentTxHash: txHash } : t)
+  );
+}
+
+export function updateTransferByFileHash(fileHash: string, status: FileTransfer['status'], txHash?: string) {
+  // Find in pending by fileHash
+  const pending = get(pendingTransfers);
+  const transfer = pending.find((t) => t.fileHash === fileHash);
+  if (transfer) {
+    const updates: Partial<FileTransfer> = { status };
+    if (txHash) updates.paymentTxHash = txHash;
+    pendingTransfers.update((transfers) =>
+      transfers.map((t) => t.fileHash === fileHash ? { ...t, ...updates } : t)
+    );
+    if (status === 'completed' || status === 'failed') {
+      transferHistory.update((history) => [{ ...transfer, ...updates }, ...history]);
+      pendingTransfers.update((transfers) => transfers.filter((t) => t.fileHash !== fileHash));
+    }
+    return;
+  }
+  // Also check history (may already be there from acceptTransfer)
+  if (txHash) {
+    transferHistory.update((history) =>
+      history.map((t) => t.fileHash === fileHash ? { ...t, paymentTxHash: txHash, status } : t)
+    );
   }
 }
 
