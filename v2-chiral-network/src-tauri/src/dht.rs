@@ -171,12 +171,21 @@ pub struct PingRequest(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PingResponse(pub String);
 
-// File transfer protocol messages (for direct file push)
+// File transfer protocol messages (for direct file push / ChiralDrop)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileTransferRequest {
     pub transfer_id: String,
     pub file_name: String,
     pub file_data: Vec<u8>,
+    /// Price in wei (as string for CBOR safety). "0" or empty = free.
+    #[serde(default)]
+    pub price_wei: String,
+    /// Sender's wallet address for receiving payment.
+    #[serde(default)]
+    pub sender_wallet: String,
+    /// SHA-256 hash of the file (needed for paid downloads via chunked protocol).
+    #[serde(default)]
+    pub file_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,6 +265,9 @@ enum SwarmCommand {
         transfer_id: String,
         file_name: String,
         file_data: Vec<u8>,
+        price_wei: String,
+        sender_wallet: String,
+        file_hash: String,
     },
     RequestFileInfo {
         peer_id: PeerId,
@@ -626,6 +638,9 @@ impl DhtService {
         transfer_id: String,
         file_name: String,
         file_data: Vec<u8>,
+        price_wei: String,
+        sender_wallet: String,
+        file_hash: String,
     ) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
@@ -635,6 +650,9 @@ impl DhtService {
                 transfer_id,
                 file_name,
                 file_data,
+                price_wei,
+                sender_wallet,
+                file_hash,
             }).map_err(|e| e.to_string())?;
             Ok(())
         } else {
@@ -939,12 +957,15 @@ async fn event_loop(
                         let request_id = swarm.behaviour_mut().ping_protocol.send_request(&peer_id, request);
                         println!("Ping request sent with ID: {:?}", request_id);
                     }
-                    SwarmCommand::SendFile { peer_id, transfer_id, file_name, file_data } => {
-                        println!("Sending file '{}' to peer {}", file_name, peer_id);
+                    SwarmCommand::SendFile { peer_id, transfer_id, file_name, file_data, price_wei, sender_wallet, file_hash } => {
+                        println!("Sending file '{}' to peer {} (price: {} wei)", file_name, peer_id, price_wei);
                         let request = FileTransferRequest {
                             transfer_id: transfer_id.clone(),
                             file_name: file_name.clone(),
                             file_data,
+                            price_wei,
+                            sender_wallet,
+                            file_hash,
                         };
                         let request_id = swarm.behaviour_mut().file_transfer.send_request(&peer_id, request);
                         println!("File transfer request sent with ID: {:?}", request_id);
@@ -1228,23 +1249,39 @@ async fn handle_behaviour_event(
                 Event::Message { peer, message } => {
                     match message {
                         request_response::Message::Request { request, channel, .. } => {
-                            println!("Received file transfer from {}: {}", peer, request.file_name);
-                            let _file_size = request.file_data.len();
+                            let is_paid = !request.price_wei.is_empty()
+                                && request.price_wei != "0"
+                                && request.price_wei.parse::<u128>().unwrap_or(0) > 0;
 
-                            // Store file data in FileTransferService for later acceptance
-                            if let Some(fts) = file_transfer_service {
-                                let fts_lock = fts.lock().await;
-                                let _ = fts_lock.receive_file_request(
-                                    app.clone(),
-                                    peer.to_string(),
-                                    request.file_name.clone(),
-                                    request.file_data.clone(),
-                                    request.transfer_id.clone()
-                                ).await;
+                            println!("Received file transfer from {}: {} (paid: {})", peer, request.file_name, is_paid);
+
+                            if is_paid {
+                                // Paid transfer: file_data is empty, emit event with pricing
+                                // so the frontend can prompt the user to accept and pay
+                                let _ = app.emit("chiraldrop-paid-request", serde_json::json!({
+                                    "transferId": request.transfer_id,
+                                    "fromPeerId": peer.to_string(),
+                                    "fileName": request.file_name,
+                                    "fileHash": request.file_hash,
+                                    "fileSize": request.file_data.len(),
+                                    "priceWei": request.price_wei,
+                                    "senderWallet": request.sender_wallet
+                                }));
+                            } else {
+                                // Free transfer: store file data for acceptance
+                                if let Some(fts) = file_transfer_service {
+                                    let fts_lock = fts.lock().await;
+                                    let _ = fts_lock.receive_file_request(
+                                        app.clone(),
+                                        peer.to_string(),
+                                        request.file_name.clone(),
+                                        request.file_data.clone(),
+                                        request.transfer_id.clone()
+                                    ).await;
+                                }
                             }
 
-                            // Auto-accept for now (response is required by protocol)
-                            // In a real implementation, we'd wait for user action and cache the channel
+                            // Protocol requires a response
                             let response = FileTransferResponse {
                                 transfer_id: request.transfer_id.clone(),
                                 accepted: true,
@@ -2081,12 +2118,33 @@ mod tests {
             transfer_id: "tx-001".to_string(),
             file_name: "test.txt".to_string(),
             file_data: vec![1, 2, 3, 4, 5],
+            price_wei: "0".to_string(),
+            sender_wallet: String::new(),
+            file_hash: String::new(),
         };
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(request.transfer_id, deserialized.transfer_id);
         assert_eq!(request.file_name, deserialized.file_name);
         assert_eq!(request.file_data, deserialized.file_data);
+    }
+
+    #[test]
+    fn test_file_transfer_request_paid_serialization() {
+        let request = FileTransferRequest {
+            transfer_id: "tx-paid-001".to_string(),
+            file_name: "paid_file.zip".to_string(),
+            file_data: vec![],
+            price_wei: "1000000000000000000".to_string(),
+            sender_wallet: "0xabc123".to_string(),
+            file_hash: "deadbeef".to_string(),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.price_wei, "1000000000000000000");
+        assert_eq!(deserialized.sender_wallet, "0xabc123");
+        assert_eq!(deserialized.file_hash, "deadbeef");
+        assert!(deserialized.file_data.is_empty());
     }
 
     #[test]
