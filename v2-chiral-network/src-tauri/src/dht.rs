@@ -186,6 +186,9 @@ pub struct FileTransferRequest {
     /// SHA-256 hash of the file (needed for paid downloads via chunked protocol).
     #[serde(default)]
     pub file_hash: String,
+    /// Actual file size in bytes (for paid transfers where file_data is empty).
+    #[serde(default)]
+    pub file_size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,6 +271,7 @@ enum SwarmCommand {
         price_wei: String,
         sender_wallet: String,
         file_hash: String,
+        file_size: u64,
     },
     RequestFileInfo {
         peer_id: PeerId,
@@ -641,6 +645,7 @@ impl DhtService {
         price_wei: String,
         sender_wallet: String,
         file_hash: String,
+        file_size: u64,
     ) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
@@ -653,6 +658,7 @@ impl DhtService {
                 price_wei,
                 sender_wallet,
                 file_hash,
+                file_size,
             }).map_err(|e| e.to_string())?;
             Ok(())
         } else {
@@ -957,11 +963,12 @@ async fn event_loop(
                         let request_id = swarm.behaviour_mut().ping_protocol.send_request(&peer_id, request);
                         println!("Ping request sent with ID: {:?}", request_id);
                     }
-                    SwarmCommand::SendFile { peer_id, transfer_id, file_name, file_data, price_wei, sender_wallet, file_hash } => {
-                        println!("Sending file '{}' to peer {} (price: {} wei)", file_name, peer_id, price_wei);
+                    SwarmCommand::SendFile { peer_id, transfer_id, file_name, file_data, price_wei, sender_wallet, file_hash, file_size } => {
+                        println!("Sending file '{}' to peer {} (price: {} wei, size: {} bytes)", file_name, peer_id, price_wei, file_size);
                         let request = FileTransferRequest {
                             transfer_id: transfer_id.clone(),
                             file_name: file_name.clone(),
+                            file_size,
                             file_data,
                             price_wei,
                             sender_wallet,
@@ -1258,12 +1265,17 @@ async fn handle_behaviour_event(
                             if is_paid {
                                 // Paid transfer: file_data is empty, emit event with pricing
                                 // so the frontend can prompt the user to accept and pay
+                                let actual_size = if request.file_size > 0 {
+                                    request.file_size
+                                } else {
+                                    request.file_data.len() as u64
+                                };
                                 let _ = app.emit("chiraldrop-paid-request", serde_json::json!({
                                     "transferId": request.transfer_id,
                                     "fromPeerId": peer.to_string(),
                                     "fileName": request.file_name,
                                     "fileHash": request.file_hash,
-                                    "fileSize": request.file_data.len(),
+                                    "fileSize": actual_size,
                                     "priceWei": request.price_wei,
                                     "senderWallet": request.sender_wallet
                                 }));
@@ -2121,6 +2133,7 @@ mod tests {
             price_wei: "0".to_string(),
             sender_wallet: String::new(),
             file_hash: String::new(),
+            file_size: 5,
         };
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
@@ -2138,12 +2151,14 @@ mod tests {
             price_wei: "1000000000000000000".to_string(),
             sender_wallet: "0xabc123".to_string(),
             file_hash: "deadbeef".to_string(),
+            file_size: 1048576,
         };
         let json = serde_json::to_string(&request).unwrap();
         let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.price_wei, "1000000000000000000");
         assert_eq!(deserialized.sender_wallet, "0xabc123");
         assert_eq!(deserialized.file_hash, "deadbeef");
+        assert_eq!(deserialized.file_size, 1048576);
         assert!(deserialized.file_data.is_empty());
     }
 
