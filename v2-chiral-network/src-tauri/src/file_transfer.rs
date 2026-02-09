@@ -6,15 +6,6 @@ use tauri::Emitter;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct FileTransferRequest {
-    pub transfer_id: String,
-    pub from_peer_id: String,
-    pub file_name: String,
-    pub file_size: usize,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
 pub struct PendingTransfer {
     pub transfer_id: String,
     pub peer_id: String,
@@ -254,22 +245,6 @@ mod tests {
         let deserialized: PendingTransfer = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.transfer_id, "tx-001");
         assert_eq!(deserialized.file_data, vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn test_file_transfer_request_serialization() {
-        let request = FileTransferRequest {
-            transfer_id: "tx-001".to_string(),
-            from_peer_id: "peer-abc".to_string(),
-            file_name: "document.pdf".to_string(),
-            file_size: 1024,
-        };
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("transferId"));
-        assert!(json.contains("fromPeerId"));
-        assert!(json.contains("fileSize"));
-        let deserialized: FileTransferRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.file_size, 1024);
     }
 
     #[tokio::test]

@@ -407,76 +407,36 @@ impl GethProcess {
         }
 
         // Kill any orphaned Geth process from a previous app session.
-        // This happens when the app is killed (e.g. Ctrl+C) without stopping Geth.
+        // This happens when the app is killed (e.g. Ctrl+C) without stopping Geth,
+        // since Geth's stdout/stderr are redirected to a file so it doesn't receive SIGINT.
         //
-        // The geth.ipc Unix socket file exists only while Geth is running.
-        // If it's present, there's definitely an orphaned Geth we need to kill.
+        // We use a PID file to reliably track the child process across app restarts.
+        let pid_path = self.data_dir.join("geth.pid");
+        if let Ok(pid_str) = fs::read_to_string(&pid_path) {
+            if let Ok(old_pid) = pid_str.trim().parse::<u32>() {
+                // Check if this PID is still alive (signal 0 = existence check)
+                let is_alive = Command::new("kill")
+                    .args(["-0", &old_pid.to_string()])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                if is_alive {
+                    println!("⚠️  Found orphaned Geth process (PID {}), killing it", old_pid);
+                    let _ = Command::new("kill").args(["-9", &old_pid.to_string()]).output();
+                    // Wait for process to exit and release resources
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                } else {
+                    println!("🔍 Stale PID file found (PID {} no longer running), cleaning up", old_pid);
+                }
+            }
+            let _ = fs::remove_file(&pid_path);
+        }
+
+        // Also clean up stale IPC socket if it exists
         let ipc_path = self.data_dir.join("geth.ipc");
         if ipc_path.exists() {
-            println!("⚠️  Found geth.ipc — orphaned Geth is running");
-
-            // Try multiple kill methods until one works
-            // Method 1: lsof on the IPC socket
-            let mut killed = false;
-            if let Ok(output) = Command::new("lsof")
-                .args(["-t", &ipc_path.to_string_lossy()])
-                .output()
-            {
-                let pids = String::from_utf8_lossy(&output.stdout);
-                for pid in pids.trim().lines() {
-                    let pid = pid.trim();
-                    if !pid.is_empty() {
-                        println!("⚠️  Killing orphaned Geth via lsof (PID {})", pid);
-                        let _ = Command::new("kill").args(["-9", pid]).output();
-                        killed = true;
-                    }
-                }
-            }
-
-            // Method 2: fuser on the IPC socket
-            if !killed {
-                if let Ok(output) = Command::new("fuser")
-                    .arg(&ipc_path.to_string_lossy().as_ref())
-                    .output()
-                {
-                    // fuser outputs PIDs to stdout (or stderr depending on version)
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let combined = format!("{} {}", stdout, stderr);
-                    for token in combined.split_whitespace() {
-                        // fuser may append letters like "f" to PIDs
-                        let pid = token.trim_end_matches(char::is_alphabetic);
-                        if !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()) {
-                            println!("⚠️  Killing orphaned Geth via fuser (PID {})", pid);
-                            let _ = Command::new("kill").args(["-9", pid]).output();
-                            killed = true;
-                        }
-                    }
-                }
-            }
-
-            // Method 3: fuser on port 8545
-            if !killed {
-                if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).output() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let combined = format!("{} {}", stdout, stderr);
-                    for token in combined.split_whitespace() {
-                        let pid = token.trim_end_matches(char::is_alphabetic);
-                        if !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()) {
-                            println!("⚠️  Killing orphaned Geth via port 8545 (PID {})", pid);
-                            let _ = Command::new("kill").args(["-9", pid]).output();
-                            killed = true;
-                        }
-                    }
-                }
-            }
-
-            // Wait for process to exit and clean up
-            println!("⏳ Waiting for orphaned Geth to exit...");
-            std::thread::sleep(std::time::Duration::from_secs(3));
-
-            // Remove the IPC socket if it's still there
+            println!("🧹 Removing stale geth.ipc socket");
             let _ = fs::remove_file(&ipc_path);
         }
 
@@ -586,6 +546,12 @@ impl GethProcess {
             .spawn()
             .map_err(|e| format!("Failed to start geth: {}", e))?;
 
+        // Save the PID so we can kill the orphan on next start if the app crashes
+        let pid = child.id();
+        let pid_path = self.data_dir.join("geth.pid");
+        let _ = fs::write(&pid_path, pid.to_string());
+        println!("📝 Saved Geth PID {} to {}", pid, pid_path.display());
+
         self.child = Some(child);
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
 
@@ -639,6 +605,9 @@ impl GethProcess {
             child.kill().map_err(|e| format!("Failed to stop geth: {}", e))?;
             // Wait for the process to fully exit so port 8545 is released
             let _ = child.wait();
+            // Remove PID file
+            let pid_path = self.data_dir.join("geth.pid");
+            let _ = fs::remove_file(&pid_path);
             println!("✅ Geth stopped");
         }
         Ok(())
