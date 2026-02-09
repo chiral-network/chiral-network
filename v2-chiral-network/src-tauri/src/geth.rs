@@ -1204,6 +1204,26 @@ mod tests {
     }
 
     #[test]
+    fn test_rpc_endpoint_local_when_flag_set() {
+        // Set flag to true, expect local endpoint
+        LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
+        let endpoint = rpc_endpoint();
+        assert_eq!(endpoint, "http://127.0.0.1:8545");
+        // Reset
+        LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_rpc_endpoint_remote_when_flag_unset() {
+        LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+        let endpoint = rpc_endpoint();
+        // Should be remote (not 127.0.0.1) unless CHIRAL_RPC_ENDPOINT is set
+        if std::env::var("CHIRAL_RPC_ENDPOINT").is_err() {
+            assert!(endpoint.contains("130.245.173.73") || endpoint.contains("127.0.0.1"));
+        }
+    }
+
+    #[test]
     fn test_genesis_json_is_valid() {
         let genesis = GethProcess::get_genesis_json();
         let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
@@ -1234,6 +1254,25 @@ mod tests {
     }
 
     #[test]
+    fn test_genesis_difficulty_and_gas_limit() {
+        let genesis = GethProcess::get_genesis_json();
+        let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
+
+        let difficulty = parsed.get("difficulty").unwrap().as_str().unwrap();
+        assert!(difficulty.starts_with("0x"), "difficulty should be hex");
+        let diff_val = u64::from_str_radix(difficulty.trim_start_matches("0x"), 16).unwrap();
+        assert!(diff_val > 0, "difficulty should be non-zero");
+
+        let gas_limit = parsed.get("gasLimit").unwrap().as_str().unwrap();
+        assert!(gas_limit.starts_with("0x"), "gasLimit should be hex");
+        let gas_val = u64::from_str_radix(gas_limit.trim_start_matches("0x"), 16).unwrap();
+        assert!(gas_val > 1_000_000, "gasLimit should be at least 1M");
+
+        let nonce = parsed.get("nonce").unwrap().as_str().unwrap();
+        assert!(nonce.starts_with("0x"), "nonce should be hex");
+    }
+
+    #[test]
     fn test_genesis_extra_data() {
         let genesis = GethProcess::get_genesis_json();
         let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
@@ -1261,6 +1300,22 @@ mod tests {
     }
 
     #[test]
+    fn test_download_progress_uses_camel_case() {
+        let progress = DownloadProgress {
+            downloaded: 0,
+            total: 100,
+            percentage: 0.0,
+            status: "test".to_string(),
+        };
+        let json = serde_json::to_string(&progress).unwrap();
+        // serde rename_all = "camelCase" should not rename these (already lowercase)
+        assert!(json.contains("\"downloaded\""));
+        assert!(json.contains("\"total\""));
+        assert!(json.contains("\"percentage\""));
+        assert!(json.contains("\"status\""));
+    }
+
+    #[test]
     fn test_geth_status_serialization() {
         let status = GethStatus {
             installed: true,
@@ -1283,6 +1338,25 @@ mod tests {
     }
 
     #[test]
+    fn test_geth_status_not_running() {
+        let status = GethStatus {
+            installed: false,
+            running: false,
+            local_running: false,
+            syncing: false,
+            current_block: 0,
+            highest_block: 0,
+            peer_count: 0,
+            chain_id: 0,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.installed);
+        assert!(!deserialized.running);
+        assert_eq!(deserialized.chain_id, 0);
+    }
+
+    #[test]
     fn test_mining_status_serialization() {
         let status = MiningStatus {
             mining: true,
@@ -1294,9 +1368,157 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("hashRate"));
         assert!(json.contains("minerAddress"));
+        assert!(json.contains("totalMinedWei"));
+        assert!(json.contains("totalMinedChr"));
         let deserialized: MiningStatus = serde_json::from_str(&json).unwrap();
         assert!(deserialized.mining);
         assert_eq!(deserialized.hash_rate, 1000);
+    }
+
+    #[test]
+    fn test_mining_status_no_miner_address() {
+        let status = MiningStatus {
+            mining: false,
+            hash_rate: 0,
+            miner_address: None,
+            total_mined_wei: "0".to_string(),
+            total_mined_chr: 0.0,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"minerAddress\":null"));
+        let deserialized: MiningStatus = serde_json::from_str(&json).unwrap();
+        assert!(!deserialized.mining);
+        assert!(deserialized.miner_address.is_none());
+        assert_eq!(deserialized.total_mined_chr, 0.0);
+    }
+
+    #[test]
+    fn test_mined_block_serialization() {
+        let block = MinedBlock {
+            block_number: 42,
+            timestamp: 1700000000,
+            reward_wei: "5000000000000000000".to_string(),
+            reward_chr: 5.0,
+            difficulty: 1024,
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains("\"blockNumber\":42"));
+        assert!(json.contains("\"timestamp\":1700000000"));
+        assert!(json.contains("\"rewardWei\":\"5000000000000000000\""));
+        assert!(json.contains("\"rewardChr\":5.0"));
+        assert!(json.contains("\"difficulty\":1024"));
+        let deserialized: MinedBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.block_number, 42);
+        assert_eq!(deserialized.reward_chr, 5.0);
+    }
+
+    #[test]
+    fn test_mined_block_uses_camel_case() {
+        let block = MinedBlock {
+            block_number: 1,
+            timestamp: 0,
+            reward_wei: "0".to_string(),
+            reward_chr: 0.0,
+            difficulty: 0,
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        // Verify camelCase (not snake_case)
+        assert!(json.contains("blockNumber"));
+        assert!(!json.contains("block_number"));
+        assert!(json.contains("rewardWei"));
+        assert!(!json.contains("reward_wei"));
+        assert!(json.contains("rewardChr"));
+        assert!(!json.contains("reward_chr"));
+    }
+
+    #[test]
+    fn test_mined_block_deserialization_from_frontend_format() {
+        // Frontend sends camelCase — verify we can deserialize it
+        let json = r#"{"blockNumber":100,"timestamp":1700000000,"rewardWei":"5000000000000000000","rewardChr":5.0,"difficulty":512}"#;
+        let block: MinedBlock = serde_json::from_str(json).unwrap();
+        assert_eq!(block.block_number, 100);
+        assert_eq!(block.timestamp, 1700000000);
+        assert_eq!(block.reward_wei, "5000000000000000000");
+        assert_eq!(block.reward_chr, 5.0);
+        assert_eq!(block.difficulty, 512);
+    }
+
+    #[test]
+    fn test_mined_block_vec_serialization() {
+        let blocks = vec![
+            MinedBlock {
+                block_number: 10,
+                timestamp: 1000,
+                reward_wei: "5000000000000000000".to_string(),
+                reward_chr: 5.0,
+                difficulty: 256,
+            },
+            MinedBlock {
+                block_number: 5,
+                timestamp: 500,
+                reward_wei: "5000000000000000000".to_string(),
+                reward_chr: 5.0,
+                difficulty: 128,
+            },
+        ];
+        let json = serde_json::to_string(&blocks).unwrap();
+        let deserialized: Vec<MinedBlock> = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.len(), 2);
+        assert_eq!(deserialized[0].block_number, 10);
+        assert_eq!(deserialized[1].block_number, 5);
+    }
+
+    #[test]
+    fn test_mined_block_empty_vec_serialization() {
+        let blocks: Vec<MinedBlock> = vec![];
+        let json = serde_json::to_string(&blocks).unwrap();
+        assert_eq!(json, "[]");
+        let deserialized: Vec<MinedBlock> = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.is_empty());
+    }
+
+    #[test]
+    fn test_remove_lock_files_in_temp_dir() {
+        // Create a temp directory structure with LOCK files
+        let tmp = std::env::temp_dir().join("chiral-test-lock-removal");
+        let sub = tmp.join("chaindata");
+        let _ = fs::create_dir_all(&sub);
+
+        // Create LOCK files and a non-LOCK file
+        let lock1 = tmp.join("LOCK");
+        let lock2 = sub.join("LOCK");
+        let keep = tmp.join("keep.txt");
+        let _ = fs::write(&lock1, "");
+        let _ = fs::write(&lock2, "");
+        let _ = fs::write(&keep, "data");
+
+        GethProcess::remove_lock_files_recursive(&tmp);
+
+        assert!(!lock1.exists(), "LOCK in root should be removed");
+        assert!(!lock2.exists(), "LOCK in subdir should be removed");
+        assert!(keep.exists(), "Non-LOCK file should be kept");
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_remove_lock_files_nonexistent_dir() {
+        // Should not panic on nonexistent directory
+        let path = PathBuf::from("/nonexistent/path/for/testing");
+        GethProcess::remove_lock_files_recursive(&path);
+    }
+
+    #[test]
+    fn test_geth_process_data_dir_path() {
+        // GethProcess::new() sets data_dir under the system data directory
+        // We can't call new() (it runs kill_orphaned_geth) but we can verify the path pattern
+        let data_dir = dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("chiral-network")
+            .join("geth");
+        assert!(data_dir.to_string_lossy().contains("chiral-network"));
+        assert!(data_dir.to_string_lossy().ends_with("geth"));
     }
 
     #[test]
