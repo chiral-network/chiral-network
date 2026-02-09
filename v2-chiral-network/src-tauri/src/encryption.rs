@@ -12,7 +12,6 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
 };
 use hkdf::Hkdf;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
@@ -183,39 +182,6 @@ pub fn encrypt_for_recipient_hex(
     encrypt_for_recipient(plaintext, &pk_bytes)
 }
 
-/// Generate a random symmetric key for file encryption
-pub fn generate_file_key() -> [u8; 32] {
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
-    key
-}
-
-/// Encrypt file data with a symmetric key (for large files)
-pub fn encrypt_with_key(plaintext: &[u8], key: &[u8; 32]) -> Result<(Vec<u8>, [u8; 12]), String> {
-    let aes_key = Key::<Aes256Gcm>::from_slice(key);
-    let cipher = Aes256Gcm::new(aes_key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-
-    let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
-        .map_err(|e| format!("Encryption failed: {}", e))?;
-
-    let nonce_array: [u8; 12] = nonce.as_slice().try_into()
-        .map_err(|_| "Nonce conversion failed")?;
-
-    Ok((ciphertext, nonce_array))
-}
-
-/// Decrypt file data with a symmetric key
-pub fn decrypt_with_key(ciphertext: &[u8], key: &[u8; 32], nonce: &[u8; 12]) -> Result<Vec<u8>, String> {
-    let aes_key = Key::<Aes256Gcm>::from_slice(key);
-    let cipher = Aes256Gcm::new(aes_key);
-    let nonce = Nonce::from_slice(nonce);
-
-    cipher
-        .decrypt(nonce, ciphertext)
-        .map_err(|e| format!("Decryption failed: {}", e))
-}
 
 #[cfg(test)]
 mod tests {
@@ -259,17 +225,6 @@ mod tests {
         let result = decrypt_with_keypair(&bundle, &wrong_recipient);
 
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_symmetric_encryption() {
-        let key = generate_file_key();
-        let plaintext = b"Test symmetric encryption";
-
-        let (ciphertext, nonce) = encrypt_with_key(plaintext, &key).unwrap();
-        let decrypted = decrypt_with_key(&ciphertext, &key, &nonce).unwrap();
-
-        assert_eq!(decrypted, plaintext);
     }
 
     #[test]
@@ -337,33 +292,6 @@ mod tests {
     }
 
     #[test]
-    fn test_symmetric_wrong_key_fails() {
-        let key1 = generate_file_key();
-        let key2 = generate_file_key();
-        let plaintext = b"Symmetric test";
-
-        let (ciphertext, nonce) = encrypt_with_key(plaintext, &key1).unwrap();
-        let result = decrypt_with_key(&ciphertext, &key2, &nonce);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_symmetric_tampered_ciphertext_fails() {
-        let key = generate_file_key();
-        let plaintext = b"Integrity test";
-
-        let (mut ciphertext, nonce) = encrypt_with_key(plaintext, &key).unwrap();
-        // Tamper with ciphertext
-        if !ciphertext.is_empty() {
-            ciphertext[0] ^= 0xFF;
-        }
-        let result = decrypt_with_key(&ciphertext, &key, &nonce);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_encrypt_empty_data() {
         let recipient = EncryptionKeypair::generate();
         let plaintext = b"";
@@ -410,13 +338,6 @@ mod tests {
         let d1 = decrypt_with_keypair(&bundle1, &recipient).unwrap();
         let d2 = decrypt_with_keypair(&bundle2, &recipient).unwrap();
         assert_eq!(d1, d2);
-    }
-
-    #[test]
-    fn test_file_key_randomness() {
-        let key1 = generate_file_key();
-        let key2 = generate_file_key();
-        assert_ne!(key1, key2);
     }
 
     #[test]
