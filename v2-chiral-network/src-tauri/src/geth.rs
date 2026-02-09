@@ -315,6 +315,7 @@ impl GethProcess {
     /// Sends SIGTERM first for clean shutdown, escalates to SIGKILL if needed.
     /// Waits for confirmed process exit and resource cleanup before returning.
     fn kill_orphaned_geth(&self) {
+        println!("🔍 kill_orphaned_geth() — checking for orphans...");
         let pid_path = self.data_dir.join("geth.pid");
         let ipc_path = self.data_dir.join("geth.ipc");
 
@@ -513,18 +514,48 @@ impl GethProcess {
             return Err("Geth is not installed. Please download it first.".to_string());
         }
 
+        println!("🚀 start() called — datadir: {}", self.data_dir.display());
+
         // Kill any orphaned Geth process from a previous app session.
-        // This happens when the app is killed (e.g. Ctrl+C) without stopping Geth,
-        // since Geth's stdout/stderr are redirected to a file so it doesn't receive SIGINT.
-        //
-        // Strategy: Use PID file first, then fall back to fuser on port 8545.
-        // This covers both cases: PID file exists, and PID file was cleaned up but
-        // Geth is still running (e.g. signal handler killed Geth via SIGKILL but
-        // it hadn't fully exited before PID file was removed).
         self.kill_orphaned_geth();
 
         // Remove ALL stale LOCK files from the data directory tree
         Self::remove_lock_files_recursive(&self.data_dir);
+
+        // Debug: check what's on port 8545 right before spawning
+        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
+                println!("⚠️  Port 8545 still in use! stdout='{}' stderr='{}'", stdout.trim(), stderr.trim());
+            } else {
+                println!("✅ Port 8545 is free");
+            }
+        }
+
+        // Debug: check for LOCK files after cleanup
+        if let Ok(entries) = fs::read_dir(self.data_dir.join("geth")) {
+            for entry in entries.flatten() {
+                if entry.file_name() == "LOCK" {
+                    println!("⚠️  LOCK file still exists after cleanup: {}", entry.path().display());
+                }
+            }
+        }
+        // Also check chaindata LOCK
+        let chaindata_lock = self.data_dir.join("geth").join("chaindata").join("LOCK");
+        if chaindata_lock.exists() {
+            println!("⚠️  chaindata/LOCK still exists after cleanup!");
+        }
+        // Check IPC
+        let ipc_check = self.data_dir.join("geth.ipc");
+        if ipc_check.exists() {
+            println!("⚠️  geth.ipc still exists after cleanup!");
+        }
+        // Check PID file
+        let pid_check = self.data_dir.join("geth.pid");
+        if pid_check.exists() {
+            println!("⚠️  geth.pid still exists after cleanup!");
+        }
 
         // Check if blockchain needs initialization or re-initialization
         // Use a version marker to detect genesis config changes
@@ -625,6 +656,11 @@ impl GethProcess {
         cmd.stdout(Stdio::from(log_file_clone))
             .stderr(Stdio::from(log_file));
 
+        // Final cleanup right before spawn — remove LOCK files one more time
+        // in case geth init or bootstrap check left any behind
+        Self::remove_lock_files_recursive(&self.data_dir);
+
+        println!("🚀 Spawning Geth...");
         let child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start geth: {}", e))?;
