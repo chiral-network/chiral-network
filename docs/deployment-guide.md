@@ -6,28 +6,6 @@ This guide provides comprehensive instructions for deploying the Chiral Network 
 
 ## Prerequisites
 
-### System Requirements
-
-#### Minimum Requirements
-
-| Component | Specification                              |
-| --------- | ------------------------------------------ |
-| CPU       | 2 cores @ 2.0 GHz                          |
-| RAM       | 4 GB                                       |
-| Storage   | 100 GB SSD                                 |
-| Network   | 10 Mbps symmetric                          |
-| OS        | Ubuntu 20.04+ / Windows 10+ / macOS 10.15+ |
-
-#### Recommended Production
-
-| Component | Specification     |
-| --------- | ----------------- |
-| CPU       | 8 cores @ 3.0 GHz |
-| RAM       | 16 GB             |
-| Storage   | 1 TB NVMe SSD     |
-| Network   | 1 Gbps symmetric  |
-| OS        | Ubuntu 22.04 LTS  |
-
 ### Software Dependencies
 
 ```bash
