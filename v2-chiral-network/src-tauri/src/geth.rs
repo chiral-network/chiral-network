@@ -295,13 +295,20 @@ impl GethProcess {
             .join("chiral-network")
             .join("geth");
 
-        GethProcess {
+        let process = GethProcess {
             child: None,
             data_dir,
             downloader: GethDownloader::new(),
             last_block: 0,
             last_block_time: 0,
-        }
+        };
+
+        // Kill any orphaned Geth from a previous session immediately on construction.
+        // This runs at app startup before the user ever clicks "Start Node".
+        process.kill_orphaned_geth();
+        Self::remove_lock_files_recursive(&process.data_dir);
+
+        process
     }
 
     /// Kill an orphaned Geth process using PID file + port-based fallback.
