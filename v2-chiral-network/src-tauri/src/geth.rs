@@ -304,6 +304,106 @@ impl GethProcess {
         }
     }
 
+    /// Kill an orphaned Geth process using PID file + port-based fallback.
+    /// Sends SIGTERM first for clean shutdown, escalates to SIGKILL if needed.
+    /// Waits for confirmed process exit and resource cleanup before returning.
+    fn kill_orphaned_geth(&self) {
+        let pid_path = self.data_dir.join("geth.pid");
+        let ipc_path = self.data_dir.join("geth.ipc");
+
+        // Collect PIDs to kill from multiple sources
+        let mut pids_to_kill: Vec<u32> = Vec::new();
+
+        // Source 1: PID file from previous session
+        if let Ok(pid_str) = fs::read_to_string(&pid_path) {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                println!("🔍 Found PID file with PID {}", pid);
+                pids_to_kill.push(pid);
+            }
+            let _ = fs::remove_file(&pid_path);
+        }
+
+        // Source 2: fuser on port 8545 (catches cases where PID file was deleted
+        // but Geth is still running, or a different Geth instance is on our port)
+        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
+            // fuser outputs PIDs to stderr on some systems, stdout on others
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for text in [stdout, stderr] {
+                for token in text.split_whitespace() {
+                    let cleaned = token.trim_end_matches(char::is_alphabetic);
+                    if let Ok(pid) = cleaned.parse::<u32>() {
+                        if !pids_to_kill.contains(&pid) {
+                            println!("🔍 Found process on port 8545: PID {}", pid);
+                            pids_to_kill.push(pid);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Source 3: geth.ipc socket existence (another indicator)
+        if ipc_path.exists() && pids_to_kill.is_empty() {
+            println!("🔍 Found stale geth.ipc but no PID — will clean up after LOCK removal");
+        }
+
+        if pids_to_kill.is_empty() {
+            // No orphans found, just clean up stale files
+            if ipc_path.exists() {
+                let _ = fs::remove_file(&ipc_path);
+            }
+            return;
+        }
+
+        // Kill each PID: SIGTERM first, then SIGKILL if needed
+        for pid in &pids_to_kill {
+            let pid_s = pid.to_string();
+            let is_alive = || -> bool {
+                Command::new("kill").args(["-0", &pid_s])
+                    .output().map(|o| o.status.success()).unwrap_or(false)
+            };
+
+            if !is_alive() {
+                continue;
+            }
+
+            println!("⚠️  Killing orphaned Geth (PID {}), sending SIGTERM", pid);
+            let _ = Command::new("kill").arg(&pid_s).output();
+
+            // Wait up to 5s for graceful exit
+            let mut exited = false;
+            for i in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                if !is_alive() {
+                    println!("✅ Orphaned Geth (PID {}) exited after {}ms", pid, (i + 1) * 500);
+                    exited = true;
+                    break;
+                }
+            }
+
+            if !exited {
+                println!("⚠️  SIGTERM failed, sending SIGKILL to PID {}", pid);
+                let _ = Command::new("kill").args(["-9", &pid_s]).output();
+                for _ in 0..10 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if !is_alive() { break; }
+                }
+            }
+        }
+
+        // Wait for geth.ipc to disappear (confirms full resource release)
+        if ipc_path.exists() {
+            println!("⏳ Waiting for geth.ipc cleanup...");
+            for _ in 0..10 {
+                if !ipc_path.exists() { break; }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            if ipc_path.exists() {
+                let _ = fs::remove_file(&ipc_path);
+            }
+        }
+    }
+
     /// Recursively remove all files named "LOCK" under the given directory
     fn remove_lock_files_recursive(dir: &Path) {
         if let Ok(entries) = fs::read_dir(dir) {
@@ -410,70 +510,11 @@ impl GethProcess {
         // This happens when the app is killed (e.g. Ctrl+C) without stopping Geth,
         // since Geth's stdout/stderr are redirected to a file so it doesn't receive SIGINT.
         //
-        // We use a PID file to reliably track the child process across app restarts.
-        let pid_path = self.data_dir.join("geth.pid");
-        if let Ok(pid_str) = fs::read_to_string(&pid_path) {
-            if let Ok(old_pid) = pid_str.trim().parse::<u32>() {
-                let pid_s = old_pid.to_string();
-                let is_alive = || -> bool {
-                    Command::new("kill")
-                        .args(["-0", &pid_s])
-                        .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false)
-                };
-
-                if is_alive() {
-                    // First try graceful shutdown (SIGTERM) to let Geth release locks cleanly
-                    println!("⚠️  Found orphaned Geth process (PID {}), sending SIGTERM", old_pid);
-                    let _ = Command::new("kill").args([&pid_s]).output();
-
-                    // Wait up to 5 seconds for graceful exit
-                    let mut exited = false;
-                    for i in 0..10 {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        if !is_alive() {
-                            println!("✅ Orphaned Geth exited gracefully after {}ms", (i + 1) * 500);
-                            exited = true;
-                            break;
-                        }
-                    }
-
-                    // If still alive, force kill
-                    if !exited {
-                        println!("⚠️  Geth didn't exit gracefully, sending SIGKILL");
-                        let _ = Command::new("kill").args(["-9", &pid_s]).output();
-                        // Wait until confirmed dead
-                        for _ in 0..10 {
-                            std::thread::sleep(std::time::Duration::from_millis(500));
-                            if !is_alive() {
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    println!("🔍 Stale PID file (PID {} no longer running), cleaning up", old_pid);
-                }
-            }
-            let _ = fs::remove_file(&pid_path);
-        }
-
-        // Wait for geth.ipc to disappear — confirms Geth fully released all resources
-        let ipc_path = self.data_dir.join("geth.ipc");
-        if ipc_path.exists() {
-            println!("⏳ Waiting for geth.ipc to be released...");
-            for _ in 0..10 {
-                if !ipc_path.exists() {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-            // Force remove if still there
-            if ipc_path.exists() {
-                println!("🧹 Force-removing stale geth.ipc socket");
-                let _ = fs::remove_file(&ipc_path);
-            }
-        }
+        // Strategy: Use PID file first, then fall back to fuser on port 8545.
+        // This covers both cases: PID file exists, and PID file was cleaned up but
+        // Geth is still running (e.g. signal handler killed Geth via SIGKILL but
+        // it hadn't fully exited before PID file was removed).
+        self.kill_orphaned_geth();
 
         // Remove ALL stale LOCK files from the data directory tree
         Self::remove_lock_files_recursive(&self.data_dir);
@@ -637,9 +678,29 @@ impl GethProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
             LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
-            child.kill().map_err(|e| format!("Failed to stop geth: {}", e))?;
-            // Wait for the process to fully exit so port 8545 is released
-            let _ = child.wait();
+
+            let pid = child.id();
+
+            // Send SIGTERM first for graceful shutdown (releases LOCK files properly)
+            let _ = Command::new("kill").arg(pid.to_string()).output();
+
+            // Wait up to 5 seconds for graceful exit
+            let mut exited = false;
+            for _ in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                match child.try_wait() {
+                    Ok(Some(_)) => { exited = true; break; }
+                    Ok(None) => {} // still running
+                    Err(_) => { exited = true; break; }
+                }
+            }
+
+            // If still alive, force kill
+            if !exited {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+
             // Remove PID file
             let pid_path = self.data_dir.join("geth.pid");
             let _ = fs::remove_file(&pid_path);
