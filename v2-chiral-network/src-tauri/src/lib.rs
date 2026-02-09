@@ -8,7 +8,7 @@ mod speed_tiers;
 use dht::DhtService;
 use encryption::EncryptionKeypair;
 use file_transfer::FileTransferService;
-use geth::{GethDownloader, GethProcess, GethStatus, MiningStatus};
+use geth::{GethDownloader, GethProcess, GethStatus, MinedBlock, MiningStatus};
 use geth_bootstrap::BootstrapHealthReport;
 use speed_tiers::SpeedTier;
 use std::sync::Arc;
@@ -2227,6 +2227,15 @@ async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningSt
 }
 
 #[tauri::command]
+async fn get_mined_blocks(
+    state: tauri::State<'_, AppState>,
+    max_blocks: Option<u64>,
+) -> Result<Vec<MinedBlock>, String> {
+    let geth = state.geth.lock().await;
+    geth.get_mined_blocks(max_blocks.unwrap_or(500)).await
+}
+
+#[tauri::command]
 async fn set_miner_address(
     state: tauri::State<'_, AppState>,
     address: String,
@@ -2238,6 +2247,29 @@ async fn set_miner_address(
 #[tauri::command]
 fn get_chain_id() -> u64 {
     geth::CHAIN_ID
+}
+
+// ============================================================================
+// Diagnostics Commands
+// ============================================================================
+
+/// Read the last N lines of the Geth log file
+#[tauri::command]
+fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
+    let data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("chiral-network")
+        .join("geth");
+    let log_path = data_dir.join("geth.log");
+    if !log_path.exists() {
+        return Ok("No geth.log found".to_string());
+    }
+    let contents = std::fs::read_to_string(&log_path)
+        .map_err(|e| format!("Failed to read geth.log: {}", e))?;
+    let max_lines = lines.unwrap_or(100);
+    let all_lines: Vec<&str> = contents.lines().collect();
+    let start = if all_lines.len() > max_lines { all_lines.len() - max_lines } else { 0 };
+    Ok(all_lines[start..].join("\n"))
 }
 
 // ============================================================================
@@ -2402,9 +2434,25 @@ pub fn run() {
                         println!("🛑 SIGTERM received — stopping Geth before exit");
                     }
                 }
-                let mut geth = geth_for_signal.lock().await;
-                let _ = geth.stop();
-                // Exit the process now that cleanup is done
+                // Use try_lock to avoid deadlock with the main thread
+                match geth_for_signal.try_lock() {
+                    Ok(mut geth) => {
+                        let _ = geth.stop();
+                    }
+                    Err(_) => {
+                        // Fallback: kill via PID file
+                        let data_dir = dirs::data_dir()
+                            .unwrap_or_else(|| std::path::PathBuf::from("."))
+                            .join("chiral-network")
+                            .join("geth");
+                        let pid_path = data_dir.join("geth.pid");
+                        if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                                let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+                            }
+                        }
+                    }
+                }
                 std::process::exit(0);
             }
         });
@@ -2472,7 +2520,10 @@ pub fn run() {
             start_mining,
             stop_mining,
             get_mining_status,
+            get_mined_blocks,
             set_miner_address,
+            // Diagnostics commands
+            read_geth_log,
             // Bootstrap health commands
             check_bootstrap_health,
             get_bootstrap_health,
@@ -2490,15 +2541,32 @@ pub fn run() {
         .run(move |_app, event| {
             if let tauri::RunEvent::Exit = event {
                 // Stop Geth cleanly when the app exits (window close, quit, etc.)
-                println!("🛑 App exiting — stopping Geth");
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                rt.block_on(async {
-                    let mut geth = geth_for_exit.lock().await;
-                    let _ = geth.stop();
-                });
+                // Use try_lock to avoid deadlock — if the mutex is held by another
+                // task (e.g. mining status poll), force-kill via PID file instead.
+                println!("🛑 App exiting — stopping Geth and mining");
+                match geth_for_exit.try_lock() {
+                    Ok(mut geth) => {
+                        let _ = geth.stop();
+                    }
+                    Err(_) => {
+                        // Mutex is held — use synchronous force-kill as fallback
+                        println!("⚠️  Could not acquire Geth lock on exit, force-killing via PID");
+                        let data_dir = dirs::data_dir()
+                            .unwrap_or_else(|| std::path::PathBuf::from("."))
+                            .join("chiral-network")
+                            .join("geth");
+                        let pid_path = data_dir.join("geth.pid");
+                        if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                                println!("🛑 Force-killing Geth PID {} on exit", pid);
+                                let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+                            }
+                        }
+                        let _ = std::fs::remove_file(&pid_path);
+                    }
+                }
             }
         });
 }

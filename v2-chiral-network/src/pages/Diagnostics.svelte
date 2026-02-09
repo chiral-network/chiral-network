@@ -21,7 +21,9 @@
     AlertTriangle,
     Check,
     Info,
-    Terminal
+    Terminal,
+    Pickaxe,
+    FileText
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Diagnostics');
@@ -39,7 +41,7 @@
   let logEntries = $state<LogEntry[]>([]);
   let nextLogId = 0;
   let logFilter = $state<'all' | 'info' | 'warn' | 'error' | 'debug'>('all');
-  let sourceFilter = $state<'all' | 'dht' | 'bootstrap' | 'geth' | 'system'>('all');
+  let sourceFilter = $state<'all' | 'dht' | 'bootstrap' | 'geth' | 'mining' | 'system'>('all');
   let maxLogEntries = 500;
 
   // DHT diagnostics
@@ -80,6 +82,30 @@
 
   let gethStatus = $state<GethStatus | null>(null);
   let isLoadingGeth = $state(false);
+
+  // Mining diagnostics
+  interface MiningStatus {
+    mining: boolean;
+    hashRate: number;
+    minerAddress: string | null;
+    totalMinedWei: string;
+    totalMinedChr: number;
+  }
+
+  let miningStatus = $state<MiningStatus | null>(null);
+  let isLoadingMining = $state(false);
+  let showMiningSection = $state(true);
+
+  // Geth log viewer
+  let gethLogContent = $state('');
+  let isLoadingGethLog = $state(false);
+  let showGethLogSection = $state(true);
+  let gethLogLines = $state(100);
+
+  // Auto-refresh
+  let autoRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  let autoRefreshEnabled = $state(true);
+  let autoRefreshSeconds = $state(5);
 
   // Events
   let eventListeners: (() => void)[] = [];
@@ -148,7 +174,10 @@
       }
 
       // Initial data load
-      await Promise.all([loadDhtHealth(), loadBootstrapHealth(), loadGethStatus()]);
+      await Promise.all([loadDhtHealth(), loadBootstrapHealth(), loadGethStatus(), loadMiningStatus(), loadGethLog()]);
+
+      // Start auto-refresh
+      startAutoRefresh();
     }
   });
 
@@ -156,13 +185,42 @@
     for (const unlisten of eventListeners) {
       unlisten();
     }
+    stopAutoRefresh();
   });
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    if (autoRefreshEnabled) {
+      autoRefreshInterval = setInterval(async () => {
+        if (!isTauri()) return;
+        await Promise.all([loadGethStatus(), loadMiningStatus(), loadGethLog(), loadDhtHealth()]);
+      }, autoRefreshSeconds * 1000);
+    }
+  }
+
+  function stopAutoRefresh() {
+    if (autoRefreshInterval) {
+      clearInterval(autoRefreshInterval);
+      autoRefreshInterval = null;
+    }
+  }
+
+  function toggleAutoRefresh() {
+    autoRefreshEnabled = !autoRefreshEnabled;
+    if (autoRefreshEnabled) {
+      startAutoRefresh();
+      addLog('info', 'system', `Auto-refresh enabled (${autoRefreshSeconds}s)`);
+    } else {
+      stopAutoRefresh();
+      addLog('info', 'system', 'Auto-refresh disabled');
+    }
+  }
 
   async function loadDhtHealth() {
     isLoadingDht = true;
     try {
       dhtHealth = await dhtService.getHealth();
-      addLog('info', 'dht', `DHT health: ${dhtHealth.running ? 'Running' : 'Stopped'}, ${dhtHealth.connectedPeerCount} peers, ${dhtHealth.kademliaPeers} kademlia peers`);
+      addLog('debug', 'dht', `DHT health: ${dhtHealth.running ? 'Running' : 'Stopped'}, ${dhtHealth.connectedPeerCount} peers`);
     } catch (err) {
       addLog('error', 'dht', `Failed to get DHT health: ${err}`);
     } finally {
@@ -176,7 +234,7 @@
       const cached = await invoke<BootstrapHealthReport | null>('get_bootstrap_health');
       if (cached) {
         bootstrapHealth = cached;
-        addLog('info', 'bootstrap', `Bootstrap: ${cached.healthyNodes}/${cached.totalNodes} healthy nodes`);
+        addLog('debug', 'bootstrap', `Bootstrap: ${cached.healthyNodes}/${cached.totalNodes} healthy nodes`);
       }
     } catch (err) {
       addLog('warn', 'bootstrap', `No cached bootstrap health: ${err}`);
@@ -202,13 +260,44 @@
     isLoadingGeth = true;
     try {
       gethStatus = await invoke<GethStatus>('get_geth_status');
-      addLog('info', 'geth', `Geth: ${gethStatus.running ? 'Running' : 'Stopped'}, block ${gethStatus.currentBlock}, ${gethStatus.peerCount} peers`);
+      addLog('debug', 'geth', `Geth: ${gethStatus.running ? 'Running' : 'Stopped'}, block ${gethStatus.currentBlock}, ${gethStatus.peerCount} peers`);
     } catch (err) {
       addLog('error', 'geth', `Failed to get Geth status: ${err}`);
       gethStatus = { installed: false, running: false, syncing: false, currentBlock: 0, highestBlock: 0, peerCount: 0, chainId: 0 };
     } finally {
       isLoadingGeth = false;
     }
+  }
+
+  async function loadMiningStatus() {
+    isLoadingMining = true;
+    try {
+      miningStatus = await invoke<MiningStatus>('get_mining_status');
+      addLog('debug', 'mining', `Mining: ${miningStatus.mining ? 'Active' : 'Inactive'}, hashrate: ${miningStatus.hashRate} H/s, mined: ${miningStatus.totalMinedChr.toFixed(4)} CHR`);
+    } catch (err) {
+      addLog('error', 'mining', `Failed to get mining status: ${err}`);
+      miningStatus = null;
+    } finally {
+      isLoadingMining = false;
+    }
+  }
+
+  async function loadGethLog() {
+    isLoadingGethLog = true;
+    try {
+      gethLogContent = await invoke<string>('read_geth_log', { lines: gethLogLines });
+    } catch (err) {
+      gethLogContent = `Error reading log: ${err}`;
+    } finally {
+      isLoadingGethLog = false;
+    }
+  }
+
+  function formatHashRate(hr: number): string {
+    if (hr >= 1_000_000_000) return `${(hr / 1_000_000_000).toFixed(2)} GH/s`;
+    if (hr >= 1_000_000) return `${(hr / 1_000_000).toFixed(2)} MH/s`;
+    if (hr >= 1_000) return `${(hr / 1_000).toFixed(2)} KH/s`;
+    return `${hr} H/s`;
   }
 
   function clearLogs() {
@@ -243,7 +332,7 @@
 
   async function refreshAll() {
     addLog('info', 'system', 'Refreshing all diagnostics...');
-    await Promise.all([loadDhtHealth(), loadBootstrapHealth(), loadGethStatus()]);
+    await Promise.all([loadDhtHealth(), loadBootstrapHealth(), loadGethStatus(), loadMiningStatus(), loadGethLog()]);
     addLog('info', 'system', 'All diagnostics refreshed');
   }
 
@@ -274,13 +363,19 @@
       <h1 class="text-3xl font-bold dark:text-white">Diagnostics</h1>
       <p class="text-gray-600 dark:text-gray-400 mt-1">Developer tools for debugging and monitoring</p>
     </div>
-    <button
-      onclick={refreshAll}
-      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors dark:text-gray-300"
-      title="Refresh all"
-    >
-      <RefreshCw class="w-5 h-5" />
-    </button>
+    <div class="flex items-center gap-3">
+      <label class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+        <input type="checkbox" checked={autoRefreshEnabled} onchange={toggleAutoRefresh} class="rounded" />
+        Auto-refresh ({autoRefreshSeconds}s)
+      </label>
+      <button
+        onclick={refreshAll}
+        class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors dark:text-gray-300"
+        title="Refresh all"
+      >
+        <RefreshCw class="w-5 h-5" />
+      </button>
+    </div>
   </div>
 
   <!-- DHT Diagnostics -->
@@ -585,6 +680,168 @@
     {/if}
   </div>
 
+  <!-- Mining Diagnostics -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+    <button
+      onclick={() => showMiningSection = !showMiningSection}
+      class="w-full flex items-center justify-between p-6 text-left"
+    >
+      <div class="flex items-center gap-3">
+        <div class="p-2 {miningStatus?.mining ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+          <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}" />
+        </div>
+        <div>
+          <h2 class="font-semibold dark:text-white">Mining Diagnostics</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Mining status, hashrate, and rewards</p>
+        </div>
+      </div>
+      {#if showMiningSection}
+        <ChevronUp class="w-5 h-5 text-gray-400" />
+      {:else}
+        <ChevronDown class="w-5 h-5 text-gray-400" />
+      {/if}
+    </button>
+
+    {#if showMiningSection}
+      <div class="px-6 pb-6 space-y-4">
+        <div class="flex justify-end">
+          <button
+            onclick={loadMiningStatus}
+            disabled={isLoadingMining}
+            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+          >
+            {#if isLoadingMining}
+              <Loader2 class="w-3 h-3 animate-spin" />
+            {:else}
+              <RefreshCw class="w-3 h-3" />
+            {/if}
+            Refresh
+          </button>
+        </div>
+
+        {#if miningStatus}
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
+              <p class="text-sm font-bold {miningStatus.mining ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}">
+                {miningStatus.mining ? 'Mining' : 'Inactive'}
+              </p>
+            </div>
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Hash Rate</p>
+              <p class="text-sm font-bold dark:text-white">{formatHashRate(miningStatus.hashRate)}</p>
+            </div>
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined</p>
+              <p class="text-sm font-bold text-amber-600 dark:text-amber-400">{miningStatus.totalMinedChr.toFixed(4)} CHR</p>
+            </div>
+            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+              <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined (Wei)</p>
+              <p class="text-sm font-bold dark:text-white font-mono">{miningStatus.totalMinedWei}</p>
+            </div>
+          </div>
+
+          {#if miningStatus.minerAddress}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Miner Address (Coinbase)</p>
+              <p class="font-mono text-xs break-all dark:text-gray-300">{miningStatus.minerAddress}</p>
+            </div>
+          {:else}
+            <div class="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+              <p class="text-xs text-yellow-700 dark:text-yellow-400">No miner address set. Set your wallet address to receive mining rewards.</p>
+            </div>
+          {/if}
+        {:else}
+          <p class="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+            Click "Refresh" to load mining diagnostics
+          </p>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <!-- Geth Log Viewer -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+    <button
+      onclick={() => showGethLogSection = !showGethLogSection}
+      class="w-full flex items-center justify-between p-6 text-left"
+    >
+      <div class="flex items-center gap-3">
+        <div class="p-2 bg-cyan-100 dark:bg-cyan-900/30 rounded-lg">
+          <FileText class="w-6 h-6 text-cyan-600 dark:text-cyan-400" />
+        </div>
+        <div>
+          <h2 class="font-semibold dark:text-white">Geth Log</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Live Geth process output (geth.log)</p>
+        </div>
+      </div>
+      {#if showGethLogSection}
+        <ChevronUp class="w-5 h-5 text-gray-400" />
+      {:else}
+        <ChevronDown class="w-5 h-5 text-gray-400" />
+      {/if}
+    </button>
+
+    {#if showGethLogSection}
+      <div class="px-6 pb-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-gray-500 dark:text-gray-400">Lines:</label>
+            <select
+              bind:value={gethLogLines}
+              onchange={() => loadGethLog()}
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
+            >
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+              <option value={500}>500</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              onclick={() => {
+                if (gethLogContent) {
+                  navigator.clipboard.writeText(gethLogContent).then(() => {
+                    toasts.show('Geth log copied', 'success');
+                  });
+                }
+              }}
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
+            >
+              <Copy class="w-3 h-3" />
+              Copy
+            </button>
+            <button
+              onclick={loadGethLog}
+              disabled={isLoadingGethLog}
+              class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            >
+              {#if isLoadingGethLog}
+                <Loader2 class="w-3 h-3 animate-spin" />
+              {:else}
+                <RefreshCw class="w-3 h-3" />
+              {/if}
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-gray-900 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
+          {#if gethLogContent}
+            {#each gethLogContent.split('\n') as line}
+              <div class="py-0.5 hover:bg-gray-800 px-1 rounded {line.includes('Fatal') || line.includes('ERROR') || line.includes('error') ? 'text-red-400' : line.includes('WARN') || line.includes('warn') ? 'text-yellow-400' : line.includes('INFO') ? 'text-gray-300' : 'text-gray-400'}">
+                {line}
+              </div>
+            {/each}
+          {:else}
+            <p class="text-gray-500 text-center py-8">No Geth log available. Start the Geth node to generate logs.</p>
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
+
   <!-- Event Logs -->
   <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
     <button
@@ -631,6 +888,7 @@
               <option value="dht">DHT</option>
               <option value="bootstrap">Bootstrap</option>
               <option value="geth">Geth</option>
+              <option value="mining">Mining</option>
               <option value="system">System</option>
             </select>
           </div>
