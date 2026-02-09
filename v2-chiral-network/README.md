@@ -25,7 +25,3 @@ Build for production:
 npm run tauri:build
 ```
 
-## Current Status
-
-This is a minimal starting point that displays "Welcome to Chiral Network" when launched. 
-Functionality will be rebuilt incrementally with a focus on maintainability and performance.
