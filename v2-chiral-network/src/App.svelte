@@ -1,8 +1,9 @@
 <script lang="ts">
   import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
-  import { isAuthenticated, isDarkMode, networkConnected, settings } from '$lib/stores';
+  import { isAuthenticated, isDarkMode, networkConnected, settings, walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
+  import { gethService } from '$lib/services/gethService';
   import Navbar from '$lib/components/Navbar.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import WalletPage from './pages/Wallet.svelte';
@@ -125,6 +126,35 @@
     }
     if (!$isAuthenticated) {
       dhtAutoConnected = false;
+    }
+  });
+
+  // Auto-start Geth node once when user logs in
+  let gethAutoStarted = false;
+  $effect(() => {
+    if ($isAuthenticated && !gethAutoStarted) {
+      gethAutoStarted = true;
+      (async () => {
+        try {
+          const installed = await gethService.isInstalled();
+          if (!installed) return;
+          const status = await gethService.getStatus();
+          if (status.running) {
+            // Already running — just start polling
+            gethService.startStatusPolling();
+            return;
+          }
+          // Start Geth with wallet address as miner
+          const addr = $walletAccount?.address;
+          await gethService.start(addr || undefined);
+        } catch (err) {
+          // Silently handle — user can start manually from Network page
+          console.warn('Geth auto-start failed:', err);
+        }
+      })();
+    }
+    if (!$isAuthenticated) {
+      gethAutoStarted = false;
     }
   });
 </script>
