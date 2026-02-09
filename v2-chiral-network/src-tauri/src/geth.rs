@@ -414,30 +414,65 @@ impl GethProcess {
         let pid_path = self.data_dir.join("geth.pid");
         if let Ok(pid_str) = fs::read_to_string(&pid_path) {
             if let Ok(old_pid) = pid_str.trim().parse::<u32>() {
-                // Check if this PID is still alive (signal 0 = existence check)
-                let is_alive = Command::new("kill")
-                    .args(["-0", &old_pid.to_string()])
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false);
+                let pid_s = old_pid.to_string();
+                let is_alive = || -> bool {
+                    Command::new("kill")
+                        .args(["-0", &pid_s])
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false)
+                };
 
-                if is_alive {
-                    println!("⚠️  Found orphaned Geth process (PID {}), killing it", old_pid);
-                    let _ = Command::new("kill").args(["-9", &old_pid.to_string()]).output();
-                    // Wait for process to exit and release resources
-                    std::thread::sleep(std::time::Duration::from_secs(2));
+                if is_alive() {
+                    // First try graceful shutdown (SIGTERM) to let Geth release locks cleanly
+                    println!("⚠️  Found orphaned Geth process (PID {}), sending SIGTERM", old_pid);
+                    let _ = Command::new("kill").args([&pid_s]).output();
+
+                    // Wait up to 5 seconds for graceful exit
+                    let mut exited = false;
+                    for i in 0..10 {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        if !is_alive() {
+                            println!("✅ Orphaned Geth exited gracefully after {}ms", (i + 1) * 500);
+                            exited = true;
+                            break;
+                        }
+                    }
+
+                    // If still alive, force kill
+                    if !exited {
+                        println!("⚠️  Geth didn't exit gracefully, sending SIGKILL");
+                        let _ = Command::new("kill").args(["-9", &pid_s]).output();
+                        // Wait until confirmed dead
+                        for _ in 0..10 {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            if !is_alive() {
+                                break;
+                            }
+                        }
+                    }
                 } else {
-                    println!("🔍 Stale PID file found (PID {} no longer running), cleaning up", old_pid);
+                    println!("🔍 Stale PID file (PID {} no longer running), cleaning up", old_pid);
                 }
             }
             let _ = fs::remove_file(&pid_path);
         }
 
-        // Also clean up stale IPC socket if it exists
+        // Wait for geth.ipc to disappear — confirms Geth fully released all resources
         let ipc_path = self.data_dir.join("geth.ipc");
         if ipc_path.exists() {
-            println!("🧹 Removing stale geth.ipc socket");
-            let _ = fs::remove_file(&ipc_path);
+            println!("⏳ Waiting for geth.ipc to be released...");
+            for _ in 0..10 {
+                if !ipc_path.exists() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            // Force remove if still there
+            if ipc_path.exists() {
+                println!("🧹 Force-removing stale geth.ipc socket");
+                let _ = fs::remove_file(&ipc_path);
+            }
         }
 
         // Remove ALL stale LOCK files from the data directory tree
