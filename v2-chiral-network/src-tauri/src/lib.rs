@@ -2379,6 +2379,7 @@ async fn lookup_encryption_key(
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
     let geth_for_signal = geth.clone();
+    let geth_for_exit = geth.clone();
 
     // Spawn a background task to stop Geth on SIGINT (Ctrl+C) or SIGTERM
     // This prevents orphaned Geth processes when the app is killed
@@ -2484,6 +2485,20 @@ pub fn run() {
             publish_encryption_key,
             lookup_encryption_key
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Stop Geth cleanly when the app exits (window close, quit, etc.)
+                println!("🛑 App exiting — stopping Geth");
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async {
+                    let mut geth = geth_for_exit.lock().await;
+                    let _ = geth.stop();
+                });
+            }
+        });
 }
