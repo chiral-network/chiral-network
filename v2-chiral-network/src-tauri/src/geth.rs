@@ -78,6 +78,16 @@ pub struct MiningStatus {
     pub total_mined_chr: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MinedBlock {
+    pub block_number: u64,
+    pub timestamp: u64,
+    pub reward_wei: String,
+    pub reward_chr: f64,
+    pub difficulty: u64,
+}
+
 // ============================================================================
 // Geth Downloader
 // ============================================================================
@@ -1027,6 +1037,87 @@ impl GethProcess {
             total_mined_wei,
             total_mined_chr,
         })
+    }
+
+    /// Get blocks mined by the current miner address.
+    /// Scans the last `max_blocks` blocks and returns those where the miner matches.
+    pub async fn get_mined_blocks(&self, max_blocks: u64) -> Result<Vec<MinedBlock>, String> {
+        let client = reqwest::Client::new();
+
+        // Get current block number
+        let current_block = match self.rpc_call(&client, "eth_blockNumber", serde_json::json!([])).await {
+            Ok(result) => {
+                let hex = result.as_str().unwrap_or("0x0");
+                u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
+            }
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        if current_block == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Get miner address
+        let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await {
+            Ok(result) => result.as_str().unwrap_or("").to_lowercase(),
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        if miner_address.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let start_block = current_block.saturating_sub(max_blocks);
+        let mut mined_blocks = Vec::new();
+
+        // Scan blocks from newest to oldest
+        for block_num in (start_block..=current_block).rev() {
+            let hex_num = format!("0x{:x}", block_num);
+            let block = match self.rpc_call(
+                &client,
+                "eth_getBlockByNumber",
+                serde_json::json!([hex_num, false]),
+            ).await {
+                Ok(result) => result,
+                Err(_) => continue,
+            };
+
+            let block_miner = block.get("miner")
+                .and_then(|m| m.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            if block_miner == miner_address {
+                let timestamp = block.get("timestamp")
+                    .and_then(|t| t.as_str())
+                    .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
+                    .unwrap_or(0);
+
+                let difficulty = block.get("difficulty")
+                    .and_then(|d| d.as_str())
+                    .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
+                    .unwrap_or(0);
+
+                // Block reward is 5 ETH (5e18 wei) for ethash genesis configs
+                let reward_wei: u128 = 5_000_000_000_000_000_000;
+                let reward_chr = reward_wei as f64 / 1e18;
+
+                mined_blocks.push(MinedBlock {
+                    block_number: block_num,
+                    timestamp,
+                    reward_wei: reward_wei.to_string(),
+                    reward_chr,
+                    difficulty,
+                });
+            }
+
+            // Cap results to avoid too much data
+            if mined_blocks.len() >= 50 {
+                break;
+            }
+        }
+
+        Ok(mined_blocks)
     }
 
     /// Set miner address (coinbase)

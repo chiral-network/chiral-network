@@ -17,7 +17,10 @@
     Blocks,
     Coins,
     Clock,
-    Cpu
+    Cpu,
+    History,
+    ChevronDown,
+    ChevronUp
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Mining');
@@ -42,9 +45,20 @@
     totalMinedChr: number;
   }
 
+  interface MinedBlock {
+    blockNumber: number;
+    timestamp: number;
+    rewardWei: string;
+    rewardChr: number;
+    difficulty: number;
+  }
+
   // State
   let gethStatus = $state<GethStatus | null>(null);
   let miningStatus = $state<MiningStatus | null>(null);
+  let minedBlocks = $state<MinedBlock[]>([]);
+  let isLoadingHistory = $state(false);
+  let showHistory = $state(true);
   let isLoading = $state(true);
   let isStartingMining = $state(false);
   let maxThreads = $state(navigator.hardwareConcurrency || 4);
@@ -109,6 +123,7 @@
   onMount(async () => {
     if (isTauri()) {
       await loadStatus();
+      loadMinedBlocks();
       refreshInterval = setInterval(loadStatus, 5000);
     }
     isLoading = false;
@@ -195,6 +210,31 @@
       log.error('Failed to stop mining:', error);
       toasts.show(`Failed to stop mining: ${error}`, 'error');
     }
+  }
+
+  // Load mined blocks history
+  async function loadMinedBlocks() {
+    if (!isTauri()) return;
+    isLoadingHistory = true;
+    try {
+      minedBlocks = await invoke<MinedBlock[]>('get_mined_blocks', { maxBlocks: 500 });
+    } catch (error) {
+      log.error('Failed to load mined blocks:', error);
+      minedBlocks = [];
+    } finally {
+      isLoadingHistory = false;
+    }
+  }
+
+  // Derived: total rewards from history
+  let totalHistoryReward = $derived(
+    minedBlocks.reduce((sum, b) => sum + b.rewardChr, 0)
+  );
+
+  // Format timestamp to readable date/time
+  function formatTimestamp(ts: number): string {
+    if (ts === 0) return 'Unknown';
+    return new Date(ts * 1000).toLocaleString();
   }
 
   // Format hash rate
@@ -398,6 +438,113 @@
           </button>
         {/if}
       </div>
+    </div>
+
+    <!-- Mining History -->
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+      <button
+        onclick={() => showHistory = !showHistory}
+        class="w-full flex items-center justify-between p-6 text-left"
+      >
+        <div class="flex items-center gap-3">
+          <div class="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
+            <History class="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
+          </div>
+          <div>
+            <h2 class="font-semibold dark:text-white">Mining History</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+              {minedBlocks.length} block{minedBlocks.length !== 1 ? 's' : ''} mined
+              {#if totalHistoryReward > 0}
+                — {totalHistoryReward.toFixed(2)} CHR earned
+              {/if}
+            </p>
+          </div>
+        </div>
+        {#if showHistory}
+          <ChevronUp class="w-5 h-5 text-gray-400" />
+        {:else}
+          <ChevronDown class="w-5 h-5 text-gray-400" />
+        {/if}
+      </button>
+
+      {#if showHistory}
+        <div class="px-6 pb-6">
+          <div class="flex justify-end mb-4">
+            <button
+              onclick={loadMinedBlocks}
+              disabled={isLoadingHistory}
+              class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            >
+              {#if isLoadingHistory}
+                <Loader2 class="w-3 h-3 animate-spin" />
+              {:else}
+                <RefreshCw class="w-3 h-3" />
+              {/if}
+              Refresh
+            </button>
+          </div>
+          {#if isLoadingHistory && minedBlocks.length === 0}
+            <div class="flex items-center justify-center py-8">
+              <Loader2 class="w-6 h-6 animate-spin text-gray-400" />
+              <span class="ml-2 text-sm text-gray-500 dark:text-gray-400">Scanning blockchain...</span>
+            </div>
+          {:else if minedBlocks.length === 0}
+            <div class="text-center py-8">
+              <Pickaxe class="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+              <p class="text-sm text-gray-500 dark:text-gray-400">No blocks mined yet.</p>
+              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Start mining to earn CHR block rewards.</p>
+            </div>
+          {:else}
+            <!-- Summary Stats -->
+            <div class="grid grid-cols-3 gap-3 mb-4">
+              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">Blocks Mined</p>
+                <p class="text-lg font-bold dark:text-white">{minedBlocks.length}</p>
+              </div>
+              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">Total Earned</p>
+                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{totalHistoryReward.toFixed(2)} CHR</p>
+              </div>
+              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+                <p class="text-xs text-gray-500 dark:text-gray-400">Reward per Block</p>
+                <p class="text-lg font-bold dark:text-white">{minedBlocks[0]?.rewardChr ?? 0} CHR</p>
+              </div>
+            </div>
+
+            <!-- Block Table -->
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-gray-200 dark:border-gray-700">
+                    <th class="text-left py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Block #</th>
+                    <th class="text-left py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Time</th>
+                    <th class="text-right py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Reward</th>
+                    <th class="text-right py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Difficulty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each minedBlocks as block (block.blockNumber)}
+                    <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                      <td class="py-2 px-3 font-mono text-xs dark:text-gray-300">
+                        #{block.blockNumber.toLocaleString()}
+                      </td>
+                      <td class="py-2 px-3 text-xs text-gray-600 dark:text-gray-400">
+                        {formatTimestamp(block.timestamp)}
+                      </td>
+                      <td class="py-2 px-3 text-right text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                        +{block.rewardChr} CHR
+                      </td>
+                      <td class="py-2 px-3 text-right text-xs text-gray-500 dark:text-gray-400 font-mono">
+                        {block.difficulty.toLocaleString()}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
