@@ -332,22 +332,6 @@ pub async fn get_cached_report() -> Option<BootstrapHealthReport> {
     cache.report.clone()
 }
 
-/// Clear the cache (useful for forcing fresh health check)
-pub async fn clear_cache() {
-    let mut cache = CACHE.write().await;
-    cache.report = None;
-    cache.last_updated = None;
-}
-
-/// Get all bootstrap enodes without health checking (synchronous fallback)
-pub fn get_all_enodes() -> String {
-    get_nodes()
-        .iter()
-        .map(|n| n.enode.clone())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -389,13 +373,6 @@ mod tests {
         for node in &nodes {
             assert!(node.enode.starts_with("enode://"));
         }
-    }
-
-    #[test]
-    fn test_get_all_enodes() {
-        let enodes = get_all_enodes();
-        assert!(!enodes.is_empty());
-        assert!(enodes.contains("enode://"));
     }
 
     #[test]
@@ -481,13 +458,4 @@ mod tests {
         assert!(json.contains("healthyEnodeString"));
     }
 
-    #[test]
-    fn test_get_all_enodes_comma_separated() {
-        let enodes = get_all_enodes();
-        let parts: Vec<&str> = enodes.split(',').collect();
-        assert_eq!(parts.len(), get_default_nodes().len());
-        for part in parts {
-            assert!(part.starts_with("enode://"));
-        }
-    }
 }

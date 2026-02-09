@@ -278,12 +278,6 @@ enum SwarmCommand {
         request_id: String,
         file_hash: String,
     },
-    RequestChunk {
-        peer_id: PeerId,
-        request_id: String,
-        file_hash: String,
-        chunk_index: u32,
-    },
     PutDhtValue {
         key: String,
         value: String,
@@ -299,13 +293,6 @@ enum SwarmCommand {
     CheckPeerConnected {
         peer_id: PeerId,
         response_tx: tokio::sync::oneshot::Sender<bool>,
-    },
-    SendPaymentProof {
-        peer_id: PeerId,
-        request_id: String,
-        file_hash: String,
-        payment_tx: String,
-        payer_address: String,
     },
 }
 
@@ -404,10 +391,6 @@ struct ActiveChunkedDownload {
     retry_counts: Vec<u8>,
     current_chunk_index: u32,
     start_time: std::time::Instant,
-    /// Seeder's price in wei (0 = free)
-    price_wei: u128,
-    /// Seeder's wallet address
-    seeder_wallet: String,
     /// Whether payment has been confirmed by seeder
     payment_confirmed: bool,
 }
@@ -1135,26 +1118,6 @@ async fn event_loop(
                             "peerId": peer_id.to_string()
                         }));
                     }
-                    SwarmCommand::RequestChunk { peer_id, request_id, file_hash, chunk_index } => {
-                        let request = ChunkRequest::Chunk {
-                            request_id: request_id.clone(),
-                            file_hash: file_hash.clone(),
-                            chunk_index,
-                        };
-                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                        outbound_request_map.insert(req_id, request_id.clone());
-                    }
-                    SwarmCommand::SendPaymentProof { peer_id, request_id, file_hash, payment_tx, payer_address } => {
-                        println!("💰 Sending payment proof to peer {}: tx={}", peer_id, payment_tx);
-                        let request = ChunkRequest::PaymentProof {
-                            request_id: request_id.clone(),
-                            file_hash: file_hash.clone(),
-                            payment_tx,
-                            payer_address,
-                        };
-                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                        outbound_request_map.insert(req_id, request_id);
-                    }
                 }
             }
         }
@@ -1688,8 +1651,6 @@ async fn handle_behaviour_event(
                                         retry_counts: vec![0u8; total_chunks as usize],
                                         current_chunk_index: 0,
                                         start_time: std::time::Instant::now(),
-                                        price_wei: price,
-                                        seeder_wallet: wallet_address.clone(),
                                         payment_confirmed: price == 0,
                                     };
 
