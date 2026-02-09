@@ -660,7 +660,7 @@ async fn start_download(
     wallet_address: Option<String>,
     private_key: Option<String>,
     seeder_price_wei: Option<String>,
-    seeder_wallet_address: Option<String>,
+    _seeder_wallet_address: Option<String>,
 ) -> Result<DownloadStartResult, String> {
     // Parse speed tier
     let tier = SpeedTier::from_str(&speed_tier)?;
@@ -1090,66 +1090,6 @@ fn extract_bencode_bytes(data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-// Find the start of the info dictionary
-fn find_info_dict(data: &[u8]) -> Option<usize> {
-    // Look for "4:infod" pattern (info key followed by dictionary start)
-    let pattern = b"4:infod";
-    data.windows(pattern.len())
-        .position(|w| w == pattern)
-        .map(|p| p + 6) // Skip "4:info" to get to the 'd'
-}
-
-// Find the end of a dictionary starting at position 0
-fn find_dict_end(data: &[u8]) -> Option<usize> {
-    if data.first() != Some(&b'd') {
-        return None;
-    }
-
-    let mut depth = 0;
-    let mut i = 0;
-
-    while i < data.len() {
-        match data[i] {
-            b'd' | b'l' => {
-                depth += 1;
-                i += 1;
-            }
-            b'e' => {
-                depth -= 1;
-                i += 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            b'i' => {
-                // Integer: skip to 'e'
-                while i < data.len() && data[i] != b'e' {
-                    i += 1;
-                }
-                i += 1; // Skip 'e'
-            }
-            b'0'..=b'9' => {
-                // String: find length, skip string
-                let start = i;
-                while i < data.len() && data[i] != b':' {
-                    i += 1;
-                }
-                if let Ok(len_str) = std::str::from_utf8(&data[start..i]) {
-                    if let Ok(len) = len_str.parse::<usize>() {
-                        i += 1 + len; // Skip ':' and string content
-                    } else {
-                        i += 1;
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-            _ => i += 1,
-        }
-    }
-
-    None
-}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1300,12 +1240,6 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
 fn parse_hex_u64(hex: &str) -> u64 {
     let hex = hex.trim_start_matches("0x");
     u64::from_str_radix(hex, 16).unwrap_or(0)
-}
-
-/// Parse hex string to u128
-fn parse_hex_u128(hex: &str) -> u128 {
-    let hex = hex.trim_start_matches("0x");
-    u128::from_str_radix(hex, 16).unwrap_or(0)
 }
 
 /// Convert CHR amount string to wei using string math (avoids f64 precision loss)
