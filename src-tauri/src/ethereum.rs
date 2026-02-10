@@ -12,7 +12,6 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 use tauri::Emitter;
 
@@ -50,31 +49,6 @@ pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
         network_id: *NETWORK_ID,
     }
 });
-
-/// Tracks whether a local Geth process is running (set by GethProcess start/stop).
-/// When true, rpc_endpoint() returns the local URL; when false, falls back to remote.
-static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
-
-/// Returns the appropriate RPC endpoint based on whether local Geth is running.
-/// When local Geth is running, returns localhost; otherwise falls back to the
-/// configured remote endpoint.
-pub fn rpc_endpoint() -> String {
-    if LOCAL_GETH_RUNNING.load(Ordering::Relaxed) {
-        "http://127.0.0.1:8545".to_string()
-    } else {
-        NETWORK_CONFIG.rpc_endpoint.clone()
-    }
-}
-
-/// Sets the local Geth running flag.
-pub fn set_local_geth_running(running: bool) {
-    LOCAL_GETH_RUNNING.store(running, Ordering::Relaxed);
-}
-
-/// Returns whether local Geth is flagged as running (non-blocking, no RPC call).
-pub fn is_local_geth_running() -> bool {
-    LOCAL_GETH_RUNNING.load(Ordering::Relaxed)
-}
 
 // Shared HTTP client for all RPC calls
 pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
@@ -480,7 +454,6 @@ impl GethProcess {
             .map_err(|e| format!("Failed to start geth: {}", e))?;
 
         self.child = Some(child);
-        set_local_geth_running(true);
 
         eprintln!("✅ Geth process started successfully");
         eprintln!("    Logs: {}", log_path.display());
@@ -496,7 +469,6 @@ impl GethProcess {
                 Ok(Some(status)) => {
                     // Process has already exited - something went wrong
                     self.child = None;
-                    set_local_geth_running(false);
                     return Err(format!(
                         "Geth process exited immediately with status: {}. Check logs at: {}",
                         status, log_path.display()
@@ -516,7 +488,6 @@ impl GethProcess {
     }
 
     pub fn stop(&mut self) -> Result<(), String> {
-        set_local_geth_running(false);
         // First try to kill the tracked child process
         if let Some(mut child) = self.child.take() {
             // Try to kill the process
@@ -614,7 +585,7 @@ pub async fn add_peer(enode: &str) -> Result<bool, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -642,7 +613,7 @@ pub async fn get_peers() -> Result<Vec<serde_json::Value>, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -728,7 +699,7 @@ pub async fn get_node_info() -> Result<serde_json::Value, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -800,8 +771,8 @@ pub fn get_account_from_private_key(private_key_hex: &str) -> Result<EthAccount,
 }
 
 pub async fn get_balance(address: &str) -> Result<String, String> {
-    let rpc_ep = rpc_endpoint();
-    tracing::info!("[get_balance] Requesting balance for {} from RPC: {}", address, rpc_ep);
+    let rpc_endpoint = &NETWORK_CONFIG.rpc_endpoint;
+    tracing::info!("[get_balance] Requesting balance for {} from RPC: {}", address, rpc_endpoint);
 
     let payload = json!({
         "jsonrpc": "2.0",
@@ -811,12 +782,12 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_ep)
+        .post(rpc_endpoint)
         .json(&payload)
         .send()
         .await
         .map_err(|e| {
-            tracing::error!("[get_balance] Failed to send request to {}: {}", rpc_ep, e);
+            tracing::error!("[get_balance] Failed to send request to {}: {}", rpc_endpoint, e);
             format!("Failed to send request: {}", e)
         })?;
 
@@ -863,7 +834,7 @@ pub async fn get_peer_count() -> Result<u32, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -899,7 +870,7 @@ pub async fn get_chain_id() -> Result<u64, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -932,7 +903,7 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
     loop {
         // Check if geth is responding to RPC calls
         if let Ok(response) = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "net_version",
@@ -980,7 +951,7 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&set_etherbase)
         .send()
         .await
@@ -1007,7 +978,7 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&start_mining)
         .send()
         .await
@@ -1046,7 +1017,7 @@ pub async fn stop_mining() -> Result<(), String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1073,7 +1044,7 @@ pub async fn get_mining_status() -> Result<bool, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1115,7 +1086,7 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1202,7 +1173,7 @@ pub async fn get_hashrate() -> Result<String, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1223,7 +1194,7 @@ pub async fn get_hashrate() -> Result<String, String> {
         });
 
         if let Ok(miner_response) = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&miner_payload)
             .send()
             .await
@@ -1274,7 +1245,7 @@ pub async fn get_hashrate() -> Result<String, String> {
         });
 
         if let Ok(gethashrate_response) = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&gethashrate_payload)
             .send()
             .await
@@ -1360,7 +1331,7 @@ pub async fn get_block_number() -> Result<u64, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1396,7 +1367,7 @@ pub async fn get_network_difficulty() -> Result<String, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1447,7 +1418,7 @@ pub async fn get_network_difficulty_as_u64() -> Result<u64, String> {
     });
 
     let response = client
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1806,7 +1777,7 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&block_number_payload)
         .send()
         .await
@@ -1901,7 +1872,7 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
         let mut block_result = 0u64;
         for attempt in 0..3 {
             if let Ok(response) = HTTP_CLIENT
-                .post(&rpc_endpoint())
+                .post(&NETWORK_CONFIG.rpc_endpoint)
                 .json(&block_payload)
                 .send()
                 .await
@@ -1979,7 +1950,7 @@ pub async fn get_recent_mined_blocks(
 ) -> Result<Vec<MinedBlock>, String> {
     // Fetch latest block number
     let latest_v = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
@@ -2010,7 +1981,7 @@ pub async fn get_recent_mined_blocks(
         }
 
         let block_v = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",
@@ -2145,7 +2116,7 @@ pub async fn get_mined_blocks_range(
 
     for n in (from_block..=to_block).rev() {
         let block_v = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",
@@ -2227,7 +2198,7 @@ pub async fn get_total_mining_rewards(miner_address: &str) -> Result<f64, String
     // This could be slow for many blocks, but it's a one-time calculation
     for n in 0..=current_block {
         let block_v = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",
@@ -2321,7 +2292,7 @@ pub async fn calculate_accurate_totals(
 
         // Get block with full transaction data
         let block_v = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "eth_getBlockByNumber",
@@ -2417,7 +2388,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     });
 
     if let Ok(response) = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&hashrate_payload)
         .send()
         .await
@@ -2464,7 +2435,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&latest_block)
         .send()
         .await
@@ -2514,7 +2485,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         });
 
         if let Ok(prev_response) = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&previous_block)
             .send()
             .await
@@ -2586,9 +2557,8 @@ pub async fn send_transaction(
         Err(e) => tracing::error!("   Failed to get peer count: {}", e),
     }
 
-    let rpc_ep = rpc_endpoint();
-    let provider = Provider::<Http>::try_from(rpc_ep.as_str())
-        .map_err(|e| format!("Failed to connect to RPC ({}): {}", rpc_ep, e))?;
+    let provider = Provider::<Http>::try_from(NETWORK_CONFIG.rpc_endpoint.as_str())
+        .map_err(|e| format!("Failed to connect to RPC ({}): {}", NETWORK_CONFIG.rpc_endpoint, e))?;
 
     let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
@@ -2832,7 +2802,7 @@ pub async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_jso
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -2866,7 +2836,7 @@ pub async fn get_transaction_by_hash(tx_hash: String) -> Result<Option<serde_jso
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -2900,7 +2870,7 @@ pub async fn get_txpool_status() -> Result<serde_json::Value, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -2929,7 +2899,7 @@ pub async fn get_txpool_content() -> Result<serde_json::Value, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -2961,7 +2931,7 @@ pub async fn get_block_details_by_number(
     });
 
     let response = client
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -2990,7 +2960,7 @@ pub async fn get_peer_info() -> Result<serde_json::Value, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -3082,7 +3052,7 @@ pub async fn get_coinbase() -> Result<String, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -3145,7 +3115,7 @@ pub async fn get_transaction_history(
         });
 
         let response = client
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&payload)
             .send()
             .await
@@ -3219,7 +3189,7 @@ pub async fn get_transaction_history(
                 });
 
                 let receipt_response = client
-                    .post(&rpc_endpoint())
+                    .post(&NETWORK_CONFIG.rpc_endpoint)
                     .json(&receipt_payload)
                     .send()
                     .await
