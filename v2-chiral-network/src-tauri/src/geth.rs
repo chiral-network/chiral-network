@@ -341,19 +341,36 @@ impl GethProcess {
             let _ = fs::remove_file(&pid_path);
         }
 
-        // Source 2: fuser on port 8545 (catches cases where PID file was deleted
-        // but Geth is still running, or a different Geth instance is on our port)
-        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
-            // fuser outputs PIDs to stderr on some systems, stdout on others
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            for text in [stdout, stderr] {
-                for token in text.split_whitespace() {
-                    let cleaned = token.trim_end_matches(char::is_alphabetic);
-                    if let Ok(pid) = cleaned.parse::<u32>() {
+        // Source 2: Check ports 8545 (RPC) and 30303 (P2P) for orphaned Geth.
+        // Uses lsof (works on macOS and Linux) with fuser as fallback (Linux only).
+        for port in &["8545", "30303"] {
+            // Try lsof first (works on macOS and Linux)
+            let lsof_result = Command::new("lsof")
+                .args(["-ti", &format!(":{}", port)])
+                .output();
+            if let Ok(output) = lsof_result {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for token in stdout.split_whitespace() {
+                    if let Ok(pid) = token.trim().parse::<u32>() {
                         if !pids_to_kill.contains(&pid) {
-                            println!("🔍 Found process on port 8545: PID {}", pid);
+                            println!("🔍 Found process on port {}: PID {}", port, pid);
                             pids_to_kill.push(pid);
+                        }
+                    }
+                }
+            }
+            // Fallback: try fuser (Linux only, not available on macOS)
+            if let Ok(output) = Command::new("fuser").args([&format!("{}/tcp", port)]).stderr(Stdio::piped()).output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                for text in [stdout, stderr] {
+                    for token in text.split_whitespace() {
+                        let cleaned = token.trim_end_matches(char::is_alphabetic);
+                        if let Ok(pid) = cleaned.parse::<u32>() {
+                            if !pids_to_kill.contains(&pid) {
+                                println!("🔍 Found process on port {}: PID {}", port, pid);
+                                pids_to_kill.push(pid);
+                            }
                         }
                     }
                 }
@@ -527,14 +544,17 @@ impl GethProcess {
         // Remove ALL stale LOCK files from the data directory tree
         Self::remove_lock_files_recursive(&self.data_dir);
 
-        // Debug: check what's on port 8545 right before spawning
-        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
-                println!("⚠️  Port 8545 still in use! stdout='{}' stderr='{}'", stdout.trim(), stderr.trim());
+        // Debug: check what's on ports 8545 and 30303 right before spawning
+        for port in &["8545", "30303"] {
+            let in_use = Command::new("lsof")
+                .args(["-ti", &format!(":{}", port)])
+                .output()
+                .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                .unwrap_or(false);
+            if in_use {
+                println!("⚠️  Port {} still in use!", port);
             } else {
-                println!("✅ Port 8545 is free");
+                println!("✅ Port {} is free", port);
             }
         }
 
