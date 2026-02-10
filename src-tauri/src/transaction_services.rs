@@ -1,7 +1,7 @@
 // transactions.rs - Transaction handling with enriched error responses
 // This module provides Geth RPC interaction with developer-friendly error enrichment
 
-use crate::ethereum::{NETWORK_CONFIG, HTTP_CLIENT, get_balance, get_block_number, rpc_endpoint};
+use crate::ethereum::{NETWORK_CONFIG, HTTP_CLIENT, get_balance, get_block_number};
 use rlp::{Rlp, RlpStream};
 use secp256k1::{ecdsa::RecoverableSignature, ecdsa::RecoveryId, Message, Secp256k1};
 use serde::{Deserialize, Serialize};
@@ -522,7 +522,7 @@ pub async fn broadcast_raw_transaction(signed_tx: &str) -> Result<BroadcastRespo
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -531,7 +531,7 @@ pub async fn broadcast_raw_transaction(signed_tx: &str) -> Result<BroadcastRespo
             message: "Cannot connect to Chiral node".to_string(),
             details: json!({
                 "connection_error": e.to_string(),
-                "endpoint": rpc_endpoint()
+                "endpoint": NETWORK_CONFIG.rpc_endpoint
             }),
             suggestion: "Ensure the Chiral node is running and accessible".to_string(),
             documentation_url: "https://docs.chiral-network.com/errors#node_unavailable".to_string(),
@@ -586,7 +586,7 @@ pub async fn get_transaction_receipt(tx_hash: &str) -> Result<TransactionReceipt
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&receipt_payload)
         .send()
         .await
@@ -610,7 +610,7 @@ pub async fn get_transaction_receipt(tx_hash: &str) -> Result<TransactionReceipt
         });
 
         let tx_response = HTTP_CLIENT
-            .post(&rpc_endpoint())
+            .post(&NETWORK_CONFIG.rpc_endpoint)
             .json(&tx_payload)
             .send()
             .await
@@ -699,7 +699,7 @@ pub async fn get_transaction_receipt(tx_hash: &str) -> Result<TransactionReceipt
     });
 
     let tx_response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&tx_payload)
         .send()
         .await
@@ -747,7 +747,7 @@ pub async fn get_transaction_count(address: &str) -> Result<u64, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -784,7 +784,7 @@ pub async fn get_address_nonce(address: &str) -> Result<NonceInfo, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -829,7 +829,7 @@ pub async fn estimate_gas(from: &str, to: &str, value: &str, data: Option<&str>)
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -864,7 +864,7 @@ pub async fn get_gas_price() -> Result<String, String> {
     });
 
     let response = HTTP_CLIENT
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
