@@ -37,6 +37,10 @@
     highestBlock: number;
     peerCount: number;
     chainId: number;
+    remoteBlock: number | null;
+    syncVerified: boolean;
+    possibleFork: boolean;
+    secondsSinceStart: number | null;
   }
 
   interface DownloadProgress {
@@ -500,7 +504,21 @@
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Sync Status</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
+          <p class="text-lg font-bold dark:text-white">
+            {#if gethStatus?.possibleFork}
+              <span class="text-red-600 dark:text-red-400">Fork!</span>
+            {:else if gethStatus?.syncing}
+              Syncing
+            {:else if gethStatus?.syncVerified}
+              <span class="text-green-600 dark:text-green-400">Verified</span>
+            {:else if gethStatus?.running}
+              {gethStatus?.peerCount > 0 ? 'Synced' : 'Isolated'}
+            {:else if gethStatus?.chainId}
+              Remote
+            {:else}
+              Offline
+            {/if}
+          </p>
         </div>
       </div>
 
@@ -531,14 +549,47 @@
         {/if}
       </div>
 
-      <!-- Connecting Info -->
-      {#if showGethConnectingMsg}
-        <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <p class="text-sm text-blue-800 dark:text-blue-300">
-            <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
-            This may take a moment. Peer count will update automatically.
-          </p>
-        </div>
+      <!-- Sync Status Warnings -->
+      {#if gethStatus?.running}
+        {#if gethStatus.possibleFork}
+          <div class="mt-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+            <div class="flex items-start gap-2">
+              <AlertTriangle class="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <p class="text-sm font-medium text-red-800 dark:text-red-300">Chain fork detected</p>
+                <p class="text-xs text-red-700 dark:text-red-400 mt-1">
+                  Your local chain (block {gethStatus.currentBlock.toLocaleString()}) has diverged from the network{#if gethStatus.remoteBlock !== null} (block {gethStatus.remoteBlock.toLocaleString()}){/if} with 0 peers. Your balance may be from an isolated chain.
+                </p>
+              </div>
+            </div>
+          </div>
+        {:else if gethStatus.peerCount === 0 && gethStatus.secondsSinceStart !== null && gethStatus.secondsSinceStart > 30}
+          <div class="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+            <div class="flex items-start gap-2">
+              <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <p class="text-sm font-medium text-yellow-800 dark:text-yellow-300">No peers connected</p>
+                <p class="text-xs text-yellow-700 dark:text-yellow-400 mt-1">
+                  The node has been running for {Math.floor((gethStatus.secondsSinceStart || 0) / 60)}m {(gethStatus.secondsSinceStart || 0) % 60}s without discovering peers. Wallet balance may be inaccurate. Check bootstrap node health below.
+                </p>
+              </div>
+            </div>
+          </div>
+        {:else if showGethConnectingMsg}
+          <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p class="text-sm text-blue-800 dark:text-blue-300">
+              <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
+              This may take a moment.
+            </p>
+          </div>
+        {/if}
+
+        {#if gethStatus.syncVerified}
+          <div class="mt-2 flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+            <Check class="w-3 h-3" />
+            Sync verified{#if gethStatus.remoteBlock !== null} (network block {gethStatus.remoteBlock.toLocaleString()}){/if}
+          </div>
+        {/if}
       {/if}
 
       <!-- Bootstrap Health Check -->
