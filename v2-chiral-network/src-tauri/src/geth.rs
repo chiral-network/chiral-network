@@ -895,13 +895,16 @@ impl GethProcess {
             _ => false,
         };
 
-        // Sync verified: has peers AND (no remote data OR blocks within tolerance)
-        let sync_verified = peer_count > 0 && match remote_block {
-            Some(remote) => {
-                let diff = if local_block > remote { local_block - remote } else { remote - local_block };
-                diff <= 5
-            }
-            None => true, // remote unavailable, trust peer count alone
+        // Sync verified when EITHER:
+        // 1. Has peers AND (no remote data OR local/remote blocks within tolerance), OR
+        // 2. Remote is reachable AND local/remote blocks within tolerance (even with 0 peers —
+        //    the remote RPC IS the network truth, peers may never connect if bootstrap
+        //    doesn't run a Geth peer on the same chain)
+        let sync_verified = if let Some(remote) = remote_block {
+            let diff = if local_block > remote { local_block - remote } else { remote - local_block };
+            diff <= 5 // blocks match the network — verified regardless of peer count
+        } else {
+            peer_count > 0 // remote unavailable, fall back to peer count alone
         };
 
         if possible_fork {
