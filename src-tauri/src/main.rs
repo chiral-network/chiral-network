@@ -1661,7 +1661,6 @@ async fn start_dht_node(
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
     let proxy_latency_arc = state.proxy_latency.clone();
-    let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
     let analytics_arc = state.analytics.clone();
 
@@ -10192,15 +10191,12 @@ fn main() {
                     if let Some(state) = app_handle.try_state::<AppState>() {
                         let proxies_arc_for_pump = state.proxies.clone();
                         let proxy_lat_for_pump = state.proxy_latency.clone();
-                        let relay_reputation_arc_for_pump = state.relay_reputation.clone();
-
                         tauri::async_runtime::spawn(async move {
                             pump_dht_events(
                                 app_handle,
                                 dht_service,
                                 proxies_arc_for_pump,
                                 proxy_lat_for_pump,
-                                relay_reputation_arc_for_pump,
                             )
                             .await;
                         });
@@ -10828,7 +10824,6 @@ async fn pump_dht_events(
     dht_service: Arc<DhtService>,
     proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
     proxy_latency_arc: Arc<Mutex<ProxyLatencyService>>,
-    relay_reputation_arc: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
 ) {
     loop {
         let events = dht_service.drain_events(64).await;
