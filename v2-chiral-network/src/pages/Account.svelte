@@ -108,6 +108,9 @@
     loadTransactionHistory();
   }
 
+  // Track whether we've loaded balance after sync verification
+  let balanceLoadedAfterSync = $state(false);
+
   // Check Geth connection status
   async function checkGethStatus() {
     if (!isTauri()) return;
@@ -122,10 +125,13 @@
       gethConnected = status.localRunning;
       syncVerified = status.syncVerified;
       possibleFork = status.possibleFork;
-      // Only auto-load balance when sync is verified (or after 60s timeout as fallback)
+
       const timedOut = (status.secondsSinceStart || 0) > 60;
       const canLoadBalance = status.syncVerified || timedOut;
-      if (gethConnected && canLoadBalance && !wasConnected && $walletAccount?.address) {
+
+      // Load balance when Geth first connects, or when sync becomes verified
+      if (gethConnected && canLoadBalance && !balanceLoadedAfterSync && $walletAccount?.address) {
+        balanceLoadedAfterSync = true;
         loadBalance();
         loadTransactionHistory();
       }
@@ -133,23 +139,21 @@
         balance = '--';
         syncVerified = false;
         possibleFork = false;
+        balanceLoadedAfterSync = false;
       }
     } catch {
       gethConnected = false;
       syncVerified = false;
       possibleFork = false;
+      balanceLoadedAfterSync = false;
       balance = '--';
     }
   }
 
-  // Load balance on mount and when wallet changes
+  // Load balance on mount — checkGethStatus handles sync-gated loading
   onMount(() => {
     checkGethStatus();
     gethCheckInterval = setInterval(checkGethStatus, 5000);
-    if ($walletAccount?.address) {
-      loadBalance();
-      loadTransactionHistory();
-    }
   });
 
   onDestroy(() => {
