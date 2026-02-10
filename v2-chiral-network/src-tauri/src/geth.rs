@@ -66,6 +66,14 @@ pub struct GethStatus {
     pub highest_block: u64,
     pub peer_count: u32,
     pub chain_id: u64,
+    /// Block height from the remote/bootstrap RPC (network truth)
+    pub remote_block: Option<u64>,
+    /// true when peer_count > 0 AND local/remote blocks are within tolerance
+    pub sync_verified: bool,
+    /// true when local chain is ahead of remote with 0 peers (isolated fork)
+    pub possible_fork: bool,
+    /// Seconds since Geth was started (for frontend timeout logic)
+    pub seconds_since_start: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +304,8 @@ pub struct GethProcess {
     last_block: u64,
     /// Timestamp (seconds since epoch) when last_block was observed
     last_block_time: u64,
+    /// Epoch seconds when start() succeeded (for sync verification timeout)
+    started_at: Option<u64>,
 }
 
 impl GethProcess {
@@ -311,6 +321,7 @@ impl GethProcess {
             downloader: GethDownloader::new(),
             last_block: 0,
             last_block_time: 0,
+            started_at: None,
         };
 
         // Kill any orphaned Geth from a previous session immediately on construction.
@@ -698,6 +709,12 @@ impl GethProcess {
 
         self.child = Some(child);
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
+        self.started_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        );
 
         println!("✅ Geth started");
         println!("   Logs: {}", log_path.display());
@@ -746,6 +763,7 @@ impl GethProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
             LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+            self.started_at = None;
 
             let pid = child.id();
 
@@ -859,15 +877,56 @@ impl GethProcess {
             Err(_) => 0,
         };
 
+        // Sync verification: query remote block height and compare
+        let remote_block = self.query_remote_block_height().await;
+        let local_block = if syncing { current_block } else { block_number };
+
+        let seconds_since_start = self.started_at.map(|t| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(t)
+        });
+
+        // Fork detection: local is significantly ahead of remote with 0 peers
+        let possible_fork = match (remote_block, peer_count) {
+            (Some(remote), 0) if local_block > remote.saturating_add(5) => true,
+            _ => false,
+        };
+
+        // Sync verified: has peers AND (no remote data OR blocks within tolerance)
+        let sync_verified = peer_count > 0 && match remote_block {
+            Some(remote) => {
+                let diff = if local_block > remote { local_block - remote } else { remote - local_block };
+                diff <= 5
+            }
+            None => true, // remote unavailable, trust peer count alone
+        };
+
+        if possible_fork {
+            println!("⚠️  FORK DETECTED: local block {} vs remote {:?}, peers: {}", local_block, remote_block, peer_count);
+        } else if peer_count == 0 {
+            if let Some(secs) = seconds_since_start {
+                if secs > 30 && self.child.is_some() {
+                    println!("⚠️  ISOLATED NODE: 0 peers after {}s", secs);
+                }
+            }
+        }
+
         Ok(GethStatus {
             installed: self.is_installed(),
             running: self.child.is_some(),
             local_running: self.child.is_some(),
             syncing,
-            current_block: if syncing { current_block } else { block_number },
-            highest_block: if syncing { highest_block } else { block_number },
+            current_block: local_block,
+            highest_block: if syncing { highest_block } else { local_block },
             peer_count,
             chain_id,
+            remote_block,
+            sync_verified,
+            possible_fork,
+            seconds_since_start,
         })
     }
 
@@ -1143,6 +1202,35 @@ impl GethProcess {
             .map(|_| ())
     }
 
+    /// Query block height from the remote/bootstrap RPC endpoint.
+    /// Returns None if the remote is unreachable, times out, or local Geth is not running.
+    async fn query_remote_block_height(&self) -> Option<u64> {
+        // Only compare against remote when we have a local node running
+        if self.child.is_none() {
+            return None;
+        }
+
+        let remote_url = std::env::var("CHIRAL_RPC_ENDPOINT")
+            .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string());
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .ok()?;
+
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_blockNumber",
+            "params": [],
+            "id": 1
+        });
+
+        let response = client.post(&remote_url).json(&payload).send().await.ok()?;
+        let json: serde_json::Value = response.json().await.ok()?;
+        let hex = json["result"].as_str()?;
+        u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
+    }
+
     /// Get the effective RPC endpoint: local Geth if running, otherwise shared remote
     pub fn effective_rpc_endpoint(&self) -> String {
         if self.child.is_some() {
@@ -1341,15 +1429,26 @@ mod tests {
             highest_block: 100,
             peer_count: 5,
             chain_id: CHAIN_ID,
+            remote_block: Some(100),
+            sync_verified: true,
+            possible_fork: false,
+            seconds_since_start: Some(120),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("currentBlock"));
         assert!(json.contains("peerCount"));
         assert!(json.contains("chainId"));
         assert!(json.contains("localRunning"));
+        assert!(json.contains("remoteBlock"));
+        assert!(json.contains("syncVerified"));
+        assert!(json.contains("possibleFork"));
+        assert!(json.contains("secondsSinceStart"));
         let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.chain_id, CHAIN_ID);
         assert!(deserialized.local_running);
+        assert!(deserialized.sync_verified);
+        assert!(!deserialized.possible_fork);
+        assert_eq!(deserialized.remote_block, Some(100));
     }
 
     #[test]
@@ -1363,12 +1462,18 @@ mod tests {
             highest_block: 0,
             peer_count: 0,
             chain_id: 0,
+            remote_block: None,
+            sync_verified: false,
+            possible_fork: false,
+            seconds_since_start: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
         assert!(!deserialized.installed);
         assert!(!deserialized.running);
         assert_eq!(deserialized.chain_id, 0);
+        assert!(!deserialized.sync_verified);
+        assert_eq!(deserialized.remote_block, None);
     }
 
     #[test]

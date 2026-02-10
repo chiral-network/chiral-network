@@ -20,7 +20,8 @@
     Loader2,
     CheckCircle,
     XCircle,
-    Pickaxe
+    Pickaxe,
+    AlertTriangle
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('GethStatus');
@@ -230,9 +231,15 @@
             <p class="text-xs text-gray-500">Block</p>
           </div>
           <div class="bg-gray-50 rounded-lg p-3 text-center">
-            {#if $gethStatus?.syncing}
+            {#if $gethStatus?.possibleFork}
+              <AlertTriangle class="w-5 h-5 mx-auto text-red-500 mb-1" />
+              <p class="text-lg font-semibold text-red-600">Fork!</p>
+            {:else if $gethStatus?.syncing}
               <Loader2 class="w-5 h-5 mx-auto text-yellow-500 mb-1 animate-spin" />
               <p class="text-lg font-semibold text-yellow-600">Syncing</p>
+            {:else if $gethStatus?.syncVerified}
+              <CheckCircle class="w-5 h-5 mx-auto text-green-500 mb-1" />
+              <p class="text-lg font-semibold text-green-600">Verified</p>
             {:else}
               <CheckCircle class="w-5 h-5 mx-auto text-green-500 mb-1" />
               <p class="text-lg font-semibold text-green-600">Synced</p>
