@@ -496,6 +496,9 @@ struct ProxyManager {
     targets: std::collections::HashSet<PeerId>,
     capable: std::collections::HashSet<PeerId>,
     online: std::collections::HashSet<PeerId>,
+    latency_ms: std::collections::HashMap<PeerId, u64>,
+    relay_pending: std::collections::HashSet<PeerId>,
+    relay_ready: std::collections::HashSet<PeerId>,
     // Privacy routing state
     privacy_routing_enabled: bool,
     trusted_proxy_nodes: std::collections::HashSet<PeerId>,
@@ -516,13 +519,20 @@ impl ProxyManager {
     fn set_online(&mut self, id: PeerId) {
         self.online.insert(id);
     }
+    fn set_latency(&mut self, id: PeerId, rtt_ms: u64) {
+        self.latency_ms.insert(id, rtt_ms);
+    }
     fn set_offline(&mut self, id: &PeerId) {
         self.online.remove(id);
+        self.latency_ms.remove(id);
     }
     fn remove_all(&mut self, id: &PeerId) {
         self.targets.remove(id);
         self.capable.remove(id);
         self.online.remove(id);
+        self.latency_ms.remove(id);
+        self.relay_pending.remove(id);
+        self.relay_ready.remove(id);
         self.trusted_proxy_nodes.remove(id);
         self.manual_trusted.remove(id);
     }
@@ -586,13 +596,21 @@ impl ProxyManager {
             return None;
         }
 
-        // Select a trusted proxy node that's online and not the target itself
+        // Select a trusted proxy that's online/capable and prefer the one with
+        // lowest observed latency. Unknown latency sorts last.
         self.trusted_proxy_nodes
             .iter()
-            .find(|&&proxy_id| {
+            .filter(|&&proxy_id| {
                 proxy_id != *target_peer
                     && self.online.contains(&proxy_id)
                     && self.capable.contains(&proxy_id)
+            })
+            .min_by(|a, b| {
+                let latency_a = self.latency_ms.get(*a).copied().unwrap_or(u64::MAX);
+                let latency_b = self.latency_ms.get(*b).copied().unwrap_or(u64::MAX);
+                latency_a
+                    .cmp(&latency_b)
+                    .then_with(|| a.to_string().cmp(&b.to_string()))
             })
             .cloned()
     }
@@ -604,6 +622,9 @@ impl Default for ProxyManager {
             targets: std::collections::HashSet::new(),
             capable: std::collections::HashSet::new(),
             online: std::collections::HashSet::new(),
+            latency_ms: std::collections::HashMap::new(),
+            relay_pending: std::collections::HashSet::new(),
+            relay_ready: std::collections::HashSet::new(),
             privacy_routing_enabled: false,
             trusted_proxy_nodes: std::collections::HashSet::new(),
             privacy_mode: PrivacyMode::Off,
@@ -2497,7 +2518,11 @@ async fn run_dht_node(
                                                     selection.update_peer_latency(&peer.to_string(), rtt_ms);
                                                 }
 
-                                                let show = proxy_mgr.lock().await.is_proxy(&peer);
+                                                let show = {
+                                                    let mut mgr = proxy_mgr.lock().await;
+                                                    mgr.set_latency(peer.clone(), rtt_ms);
+                                                    mgr.is_proxy(&peer)
+                                                };
 
                                                 if show {
                                                     let _ = event_tx

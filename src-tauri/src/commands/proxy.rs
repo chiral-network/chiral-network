@@ -124,20 +124,47 @@ fn parse_tcp_target(input: &str) -> Result<(String, u16), String> {
     Ok((host, port))
 }
 
-async fn tcp_probe(host: String, port: u16, timeout_ms: u64) -> Result<u64, String> {
-    let mut addrs = lookup_host((host.as_str(), port))
-        .await
-        .map_err(|e| format!("dns resolve failed for {host}:{port}: {e}"))?;
-    let target = addrs
-        .next()
-        .ok_or_else(|| format!("no target address resolved for {host}:{port}"))?;
+fn canonical_tcp_target(input: &str) -> Option<String> {
+    parse_tcp_target(input)
+        .ok()
+        .map(|(host, port)| format!("{}:{}", host.to_lowercase(), port))
+}
 
+fn is_configured_proxy_target(proxies: &[ProxyNode], target: &str) -> bool {
+    let Some(target_key) = canonical_tcp_target(target) else {
+        return false;
+    };
+
+    proxies.iter().any(|node| {
+        canonical_tcp_target(&node.address)
+            .or_else(|| canonical_tcp_target(&node.id))
+            .as_deref()
+            == Some(target_key.as_str())
+    })
+}
+
+async fn tcp_probe(host: String, port: u16, timeout_ms: u64) -> Result<u64, String> {
+    let bounded_timeout_ms = timeout_ms.max(100);
+    let timeout_duration = Duration::from_millis(bounded_timeout_ms);
     let start = Instant::now();
-    let dur = Duration::from_millis(timeout_ms.max(100));
-    let conn = timeout(dur, TcpStream::connect(target))
+
+    let probe = async {
+        let mut addrs = lookup_host((host.as_str(), port))
+            .await
+            .map_err(|e| format!("dns resolve failed for {host}:{port}: {e}"))?;
+        let target = addrs
+            .next()
+            .ok_or_else(|| format!("no target address resolved for {host}:{port}"))?;
+
+        TcpStream::connect(target)
+            .await
+            .map_err(|e| format!("proxy test connection failed: {e}"))?;
+        Ok::<(), String>(())
+    };
+
+    timeout(timeout_duration, probe)
         .await
-        .map_err(|_| format!("proxy test timeout after {}ms", timeout_ms.max(100)))?;
-    conn.map_err(|e| format!("proxy test connection failed: {e}"))?;
+        .map_err(|_| format!("proxy test timeout after {}ms", bounded_timeout_ms))??;
     Ok(start.elapsed().as_millis() as u64)
 }
 
@@ -373,6 +400,13 @@ pub(crate) async fn proxy_self_test(
     if t.is_empty() {
         return Err("target must not be empty".to_string());
     }
+    let is_allowed_target = {
+        let proxies = state.proxies.lock().await;
+        is_configured_proxy_target(&proxies, t)
+    };
+    if !is_allowed_target {
+        return Err("target must match an already configured proxy address or id".to_string());
+    }
 
     let timeout_ms = timeout_ms.unwrap_or(1500);
     let (host, port) = parse_tcp_target(t)?;
@@ -548,7 +582,9 @@ mod tests {
             let _ = listener.accept().await;
         });
 
-        let latency = tcp_probe("127.0.0.1".to_string(), port, 1000).await.unwrap();
+        let latency = tcp_probe("127.0.0.1".to_string(), port, 1000)
+            .await
+            .unwrap();
         assert!(latency <= 1000);
 
         let _ = task.await;
@@ -556,7 +592,9 @@ mod tests {
 
     #[tokio::test]
     async fn tcp_probe_fails_for_closed_port() {
-        let err = tcp_probe("127.0.0.1".to_string(), 9, 200).await.unwrap_err();
+        let err = tcp_probe("127.0.0.1".to_string(), 9, 200)
+            .await
+            .unwrap_err();
         assert!(err.contains("failed") || err.contains("timeout"));
     }
 
