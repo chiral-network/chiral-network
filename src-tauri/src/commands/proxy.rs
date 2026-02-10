@@ -33,6 +33,17 @@ pub struct ProxySelfTestResult {
     pub tested_at: u64,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySelfTestSummary {
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub best_id: Option<String>,
+    pub best_latency_ms: Option<u64>,
+    pub results: Vec<ProxySelfTestResult>,
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -128,6 +139,32 @@ async fn tcp_probe(host: String, port: u16, timeout_ms: u64) -> Result<u64, Stri
         .map_err(|_| format!("proxy test timeout after {}ms", timeout_ms.max(100)))?;
     conn.map_err(|e| format!("proxy test connection failed: {e}"))?;
     Ok(start.elapsed().as_millis() as u64)
+}
+
+fn summarize_self_tests(results: &[ProxySelfTestResult]) -> ProxySelfTestSummary {
+    let mut best: Option<(&ProxySelfTestResult, u64)> = None;
+    let mut passed = 0usize;
+
+    for result in results {
+        if result.ok {
+            passed += 1;
+        }
+        if let Some(lat) = result.latency_ms {
+            match best {
+                Some((_, cur)) if lat >= cur => {}
+                _ => best = Some((result, lat)),
+            }
+        }
+    }
+
+    ProxySelfTestSummary {
+        total: results.len(),
+        passed,
+        failed: results.len().saturating_sub(passed),
+        best_id: best.map(|(res, _)| res.id.clone()),
+        best_latency_ms: best.map(|(_, lat)| lat),
+        results: results.to_vec(),
+    }
 }
 
 async fn apply_test_result(
@@ -392,6 +429,16 @@ pub(crate) async fn proxy_self_test_all(
 }
 
 #[tauri::command]
+pub(crate) async fn proxy_self_test_report(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    timeout_ms: Option<u64>,
+) -> Result<ProxySelfTestSummary, String> {
+    let results = proxy_self_test_all(app, state, timeout_ms).await?;
+    Ok(summarize_self_tests(&results))
+}
+
+#[tauri::command]
 pub(crate) async fn enable_privacy_routing(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -511,5 +558,41 @@ mod tests {
     async fn tcp_probe_fails_for_closed_port() {
         let err = tcp_probe("127.0.0.1".to_string(), 9, 200).await.unwrap_err();
         assert!(err.contains("failed") || err.contains("timeout"));
+    }
+
+    #[test]
+    fn summarize_self_tests_picks_best() {
+        let rows = vec![
+            ProxySelfTestResult {
+                id: "p-a".to_string(),
+                address: "a".to_string(),
+                ok: true,
+                latency_ms: Some(50),
+                error: None,
+                tested_at: 1,
+            },
+            ProxySelfTestResult {
+                id: "p-b".to_string(),
+                address: "b".to_string(),
+                ok: false,
+                latency_ms: None,
+                error: Some("bad".to_string()),
+                tested_at: 2,
+            },
+            ProxySelfTestResult {
+                id: "p-c".to_string(),
+                address: "c".to_string(),
+                ok: true,
+                latency_ms: Some(10),
+                error: None,
+                tested_at: 3,
+            },
+        ];
+        let summary = summarize_self_tests(&rows);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.best_id.as_deref(), Some("p-c"));
+        assert_eq!(summary.best_latency_ms, Some(10));
     }
 }
