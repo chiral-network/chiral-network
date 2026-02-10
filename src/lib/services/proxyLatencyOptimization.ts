@@ -31,6 +31,15 @@ export interface ProxySelfTestResult {
   testedAt: number;
 }
 
+export interface ProxySelfTestSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  bestId?: string;
+  bestLatencyMs?: number;
+  results: ProxySelfTestResult[];
+}
+
 export class ProxyLatencyOptimizationService {
   /**
    * Check if Tauri is available by attempting to call invoke
@@ -100,6 +109,30 @@ export class ProxyLatencyOptimizationService {
     }
   }
 
+  static async getBestProxyCandidate(): Promise<ProxyLatencyInfo | null> {
+    try {
+      return await invoke<ProxyLatencyInfo | null>('get_best_proxy_candidate');
+    } catch (error) {
+      throw new Error(`Failed to get best proxy candidate: ${error}`);
+    }
+  }
+
+  static async removeLatencyEntry(proxyId: string): Promise<boolean> {
+    try {
+      return await invoke<boolean>('remove_proxy_latency_entry', { proxyId });
+    } catch (error) {
+      throw new Error(`Failed to remove proxy latency entry: ${error}`);
+    }
+  }
+
+  static async clearLatencyData(): Promise<number> {
+    try {
+      return await invoke<number>('clear_proxy_latency_data');
+    } catch (error) {
+      throw new Error(`Failed to clear proxy latency data: ${error}`);
+    }
+  }
+
   static async selfTestProxy(target: string, timeoutMs = 1500): Promise<ProxySelfTestResult> {
     try {
       return await invoke<ProxySelfTestResult>('proxy_self_test', { target, timeoutMs });
@@ -113,6 +146,14 @@ export class ProxyLatencyOptimizationService {
       return await invoke<ProxySelfTestResult[]>('proxy_self_test_all', { timeoutMs });
     } catch (error) {
       throw new Error(`Failed to self-test all proxies: ${error}`);
+    }
+  }
+
+  static async selfTestReport(timeoutMs = 1500): Promise<ProxySelfTestSummary> {
+    try {
+      return await invoke<ProxySelfTestSummary>('proxy_self_test_report', { timeoutMs });
+    } catch (error) {
+      throw new Error(`Failed to run proxy self-test report: ${error}`);
     }
   }
 
