@@ -93,7 +93,7 @@ describe('gethService', () => {
       const { gethService, gethStatus, miningStatus } = await import('$lib/services/gethService');
 
       // Set some values first
-      gethStatus.set({ installed: true, running: true, syncing: false, currentBlock: 100, highestBlock: 100, peerCount: 2, chainId: 13337, remoteBlock: 100, syncVerified: true, possibleFork: false, secondsSinceStart: 120 });
+      gethStatus.set({ installed: true, running: true, syncing: false, currentBlock: 100, highestBlock: 100, peerCount: 2, chainId: 13337 });
       miningStatus.set({ mining: true, hashRate: 1000, minerAddress: '0xABC' });
 
       await gethService.stop();
@@ -114,10 +114,6 @@ describe('gethService', () => {
         highestBlock: 42,
         peerCount: 3,
         chainId: 13337,
-        remoteBlock: 42,
-        syncVerified: true,
-        possibleFork: false,
-        secondsSinceStart: 120,
       };
       mockInvoke.mockResolvedValueOnce(mockStatus);
       const { gethService, gethStatus } = await import('$lib/services/gethService');
@@ -204,7 +200,7 @@ describe('gethService', () => {
 
   describe('statusPolling', () => {
     it('should poll at specified interval', async () => {
-      const mockStatus = { installed: true, running: true, syncing: false, currentBlock: 1, highestBlock: 1, peerCount: 0, chainId: 13337, remoteBlock: 1, syncVerified: false, possibleFork: false, secondsSinceStart: 5 };
+      const mockStatus = { installed: true, running: true, syncing: false, currentBlock: 1, highestBlock: 1, peerCount: 0, chainId: 13337 };
       const mockMining = { mining: false, hashRate: 0, minerAddress: null };
       mockInvoke.mockResolvedValue(mockStatus);
       // Override for mining status calls
@@ -250,7 +246,7 @@ describe('gethService', () => {
     it('should start polling when geth is installed and running', async () => {
       mockInvoke
         .mockResolvedValueOnce(true) // is_geth_installed
-        .mockResolvedValueOnce({ installed: true, running: true, syncing: false, currentBlock: 10, highestBlock: 10, peerCount: 1, chainId: 13337, remoteBlock: 10, syncVerified: true, possibleFork: false, secondsSinceStart: 60 }) // get_geth_status
+        .mockResolvedValueOnce({ installed: true, running: true, syncing: false, currentBlock: 10, highestBlock: 10, peerCount: 1, chainId: 13337 }) // get_geth_status
         .mockResolvedValue({}); // subsequent polling calls
 
       const { gethService } = await import('$lib/services/gethService');
@@ -275,7 +271,7 @@ describe('gethService', () => {
     it('should not poll when geth is installed but not running', async () => {
       mockInvoke
         .mockResolvedValueOnce(true) // is_geth_installed
-        .mockResolvedValueOnce({ installed: true, running: false, syncing: false, currentBlock: 0, highestBlock: 0, peerCount: 0, chainId: 13337, remoteBlock: null, syncVerified: false, possibleFork: false, secondsSinceStart: null }); // get_geth_status
+        .mockResolvedValueOnce({ installed: true, running: false, syncing: false, currentBlock: 0, highestBlock: 0, peerCount: 0, chainId: 13337 }); // get_geth_status
 
       const { gethService } = await import('$lib/services/gethService');
       await gethService.initialize();

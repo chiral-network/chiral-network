@@ -6651,7 +6651,7 @@ impl DhtService {
 
         // This is a simplified example. In a real app, you would get the provider,
         // contract address, and signer from the AppState or configuration.
-        let provider = Provider::<Http>::try_from(crate::ethereum::rpc_endpoint().as_str())
+        let provider = Provider::<Http>::try_from(crate::ethereum::NETWORK_CONFIG.rpc_endpoint.as_str())
             .map_err(|e| format!("Failed to create provider: {}", e))?;
         let client = Arc::new(provider);
 
