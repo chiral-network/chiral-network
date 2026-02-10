@@ -6562,6 +6562,30 @@ async fn clear_proxy_latency_data(state: State<'_, AppState>) -> Result<usize, S
 }
 
 #[tauri::command]
+async fn get_proxy_latency_entry(
+    state: State<'_, AppState>,
+    proxy_id: String,
+) -> Result<Option<ProxyLatencyInfo>, String> {
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_proxy(&proxy_id))
+}
+
+#[tauri::command]
+async fn get_proxy_latency_score(
+    state: State<'_, AppState>,
+    proxy_id: String,
+) -> Result<f64, String> {
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_proxy_score(&proxy_id))
+}
+
+#[tauri::command]
 async fn download_file_multi_source(
     state: State<'_, AppState>,
     file_hash: String,
@@ -9536,6 +9560,8 @@ fn main() {
             get_best_proxy_candidate,
             remove_proxy_latency_entry,
             clear_proxy_latency_data,
+            get_proxy_latency_entry,
+            get_proxy_latency_score,
             download_file_multi_source,
             get_file_transfer_events,
             write_file,
