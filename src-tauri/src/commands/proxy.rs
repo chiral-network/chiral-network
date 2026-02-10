@@ -1,11 +1,16 @@
 use crate::dht::{DhtService, PrivacyMode};
 use crate::AppState;
+use chiral_network::proxy_latency::ProxyStatus;
+use libp2p::multiaddr::Protocol;
+use libp2p::Multiaddr;
 use tauri::Emitter;
 use tauri::State;
 // use tracing::info;
 use libp2p::PeerId;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
+use tokio::net::{lookup_host, TcpStream};
+use tokio::time::{timeout, Duration, Instant};
 use tracing::{info, warn};
 
 #[derive(Clone, serde::Serialize)]
@@ -15,6 +20,24 @@ pub struct ProxyNode {
     pub status: String,
     pub latency: u32,
     pub error: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxySelfTestResult {
+    pub id: String,
+    pub address: String,
+    pub ok: bool,
+    pub latency_ms: Option<u64>,
+    pub error: Option<String>,
+    pub tested_at: u64,
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Normalize user input into a TCP libp2p multiaddr (no WebSocket).
@@ -65,6 +88,106 @@ pub fn normalize_to_multiaddr(input: &str) -> Result<String, String> {
     Ok(m)
 }
 
+fn parse_tcp_target(input: &str) -> Result<(String, u16), String> {
+    let normalized = normalize_to_multiaddr(input)?;
+    let addr: Multiaddr = normalized
+        .parse()
+        .map_err(|e| format!("invalid proxy address '{input}': {e}"))?;
+
+    let mut host: Option<String> = None;
+    let mut port: Option<u16> = None;
+    for p in addr.iter() {
+        match p {
+            Protocol::Ip4(ip) => host = Some(ip.to_string()),
+            Protocol::Ip6(ip) => host = Some(ip.to_string()),
+            Protocol::Dns(name) | Protocol::Dns4(name) | Protocol::Dns6(name) => {
+                host = Some(name.to_string())
+            }
+            Protocol::Tcp(p) => port = Some(p),
+            _ => {}
+        }
+    }
+
+    let host = host.ok_or_else(|| format!("missing host in '{input}'"))?;
+    let port = port.ok_or_else(|| format!("missing tcp port in '{input}'"))?;
+    Ok((host, port))
+}
+
+async fn tcp_probe(host: String, port: u16, timeout_ms: u64) -> Result<u64, String> {
+    let mut addrs = lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| format!("dns resolve failed for {host}:{port}: {e}"))?;
+    let target = addrs
+        .next()
+        .ok_or_else(|| format!("no target address resolved for {host}:{port}"))?;
+
+    let start = Instant::now();
+    let dur = Duration::from_millis(timeout_ms.max(100));
+    let conn = timeout(dur, TcpStream::connect(target))
+        .await
+        .map_err(|_| format!("proxy test timeout after {}ms", timeout_ms.max(100)))?;
+    conn.map_err(|e| format!("proxy test connection failed: {e}"))?;
+    Ok(start.elapsed().as_millis() as u64)
+}
+
+async fn apply_test_result(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    target: &str,
+    latency_ms: Option<u64>,
+    error: Option<String>,
+) -> ProxySelfTestResult {
+    let tested_at = now_secs();
+    let ok = error.is_none();
+    let status_label = if ok { "online" } else { "error" };
+    let status_kind = if ok {
+        ProxyStatus::Online
+    } else {
+        ProxyStatus::Error
+    };
+
+    let node = {
+        let mut proxies = state.proxies.lock().await;
+        if let Some(p) = proxies
+            .iter_mut()
+            .find(|p| p.id == target || p.address == target)
+        {
+            p.status = status_label.to_string();
+            if let Some(ms) = latency_ms {
+                p.latency = ms as u32;
+            }
+            p.error = error.clone();
+            p.clone()
+        } else {
+            let n = ProxyNode {
+                id: target.to_string(),
+                address: target.to_string(),
+                status: status_label.to_string(),
+                latency: latency_ms.unwrap_or_default() as u32,
+                error: error.clone(),
+            };
+            proxies.push(n.clone());
+            n
+        }
+    };
+
+    {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.update_proxy_latency(node.id.clone(), latency_ms, status_kind);
+    }
+
+    let _ = app.emit("proxy_status_update", node.clone());
+
+    ProxySelfTestResult {
+        id: node.id,
+        address: node.address,
+        ok,
+        latency_ms,
+        error,
+        tested_at,
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn proxy_connect(
     app: tauri::AppHandle,
@@ -97,10 +220,19 @@ pub(crate) async fn proxy_connect(
         }
     }
 
+    {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.update_proxy_latency(url.clone(), None, ProxyStatus::Connecting);
+    }
+
     // 2) dial via DHT
     if let Some(dht) = state.dht.lock().await.as_ref() {
         let multi = normalize_to_multiaddr(&url)?;
-        dht.connect_peer(multi).await?;
+        if let Err(err) = dht.connect_peer(multi).await {
+            let mut svc = state.proxy_latency.lock().await;
+            svc.update_proxy_latency(url.clone(), None, ProxyStatus::Error);
+            return Err(err);
+        }
         Ok(())
     } else {
         Err("DHT not initialized".into())
@@ -129,6 +261,10 @@ pub(crate) async fn proxy_disconnect(
     if let Some(peer_id_str) = maybe_peer_id {
         if let Ok(peer_id) = PeerId::from_str(&peer_id_str) {
             if let Some(dht) = state.dht.lock().await.as_ref() {
+                {
+                    let mut svc = state.proxy_latency.lock().await;
+                    svc.update_proxy_latency(peer_id_str.clone(), None, ProxyStatus::Offline);
+                }
                 return dht.disconnect_peer(peer_id).await;
             }
         }
@@ -162,6 +298,8 @@ pub(crate) async fn proxy_remove(
                 let _ = dht.disconnect_peer(peer_id).await;
             }
         }
+        let mut svc = state.proxy_latency.lock().await;
+        svc.remove_proxy(&peer_id_str);
     }
 
     let _ = app.emit("proxy_reset", ());
@@ -185,6 +323,72 @@ pub(crate) async fn proxy_echo(
         .as_ref()
         .ok_or_else(|| "DHT not running".to_string())?;
     dht.echo(peer_id, payload).await
+}
+
+#[tauri::command]
+pub(crate) async fn proxy_self_test(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    target: String,
+    timeout_ms: Option<u64>,
+) -> Result<ProxySelfTestResult, String> {
+    let t = target.trim();
+    if t.is_empty() {
+        return Err("target must not be empty".to_string());
+    }
+
+    let timeout_ms = timeout_ms.unwrap_or(1500);
+    let (host, port) = parse_tcp_target(t)?;
+
+    let res = match tcp_probe(host, port, timeout_ms).await {
+        Ok(lat_ms) => apply_test_result(&app, &state, t, Some(lat_ms), None).await,
+        Err(err) => apply_test_result(&app, &state, t, None, Some(err)).await,
+    };
+    Ok(res)
+}
+
+#[tauri::command]
+pub(crate) async fn proxy_self_test_all(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    timeout_ms: Option<u64>,
+) -> Result<Vec<ProxySelfTestResult>, String> {
+    let timeout_ms = timeout_ms.unwrap_or(1500);
+    let targets: Vec<String> = {
+        let proxies = state.proxies.lock().await;
+        proxies
+            .iter()
+            .map(|p| {
+                if p.address.trim().is_empty() {
+                    p.id.clone()
+                } else {
+                    p.address.clone()
+                }
+            })
+            .collect()
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for t in targets {
+        if seen.insert(t.clone()) {
+            deduped.push(t);
+        }
+    }
+
+    let mut out = Vec::with_capacity(deduped.len());
+    for t in deduped {
+        let parsed = parse_tcp_target(&t);
+        let res = match parsed {
+            Ok((host, port)) => match tcp_probe(host, port, timeout_ms).await {
+                Ok(lat_ms) => apply_test_result(&app, &state, &t, Some(lat_ms), None).await,
+                Err(err) => apply_test_result(&app, &state, &t, None, Some(err)).await,
+            },
+            Err(err) => apply_test_result(&app, &state, &t, None, Some(err)).await,
+        };
+        out.push(res);
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -268,4 +472,44 @@ pub(crate) async fn disable_privacy_routing(
 
     let _ = app.emit("privacy_routing_disabled", ());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[test]
+    fn parse_tcp_target_supports_host_port() {
+        let (host, port) = parse_tcp_target("127.0.0.1:8080").unwrap();
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn parse_tcp_target_supports_multiaddr() {
+        let (host, port) = parse_tcp_target("/ip4/127.0.0.1/tcp/9000").unwrap();
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 9000);
+    }
+
+    #[tokio::test]
+    async fn tcp_probe_succeeds_for_local_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        let latency = tcp_probe("127.0.0.1".to_string(), port, 1000).await.unwrap();
+        assert!(latency <= 1000);
+
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn tcp_probe_fails_for_closed_port() {
+        let err = tcp_probe("127.0.0.1".to_string(), 9, 200).await.unwrap_err();
+        assert!(err.contains("failed") || err.contains("timeout"));
+    }
 }
