@@ -450,12 +450,8 @@ impl GethProcess {
     }
 
     /// Get the genesis.json content for Chiral Network
-    /// Pre-allocates 1 CHR (1e18 wei) to common test addresses for development
+    /// Must match the genesis used to initialize the shared chain (v1 genesis.json)
     fn get_genesis_json() -> String {
-        // Pre-allocate balance to a dev faucet address for testing
-        // This faucet address can distribute CHR to new users
-        // Faucet address: 0x0000000000000000000000000000000000001337
-        // Each allocation is 1000 CHR (1000 * 10^18 wei = 0x3635c9adc5dea00000)
         serde_json::json!({
             "config": {
                 "chainId": CHAIN_ID,
@@ -466,18 +462,20 @@ impl GethProcess {
                 "byzantiumBlock": 0,
                 "constantinopleBlock": 0,
                 "petersburgBlock": 0,
+                "istanbulBlock": 0,
+                "berlinBlock": 0,
+                "londonBlock": 0,
                 "ethash": {}
             },
-            "difficulty": "0x400",
-            "gasLimit": "0x1C9C380",
-            "nonce": "0x0000000000098765",
-            "alloc": {
-                // Dev faucet address - 10000 CHR for testing
-                "0x0000000000000000000000000000000000001337": {
-                    "balance": "0x21e19e0c9bab2400000"  // 10000 CHR in wei
-                }
-            },
-            "extraData": "0x43686972616c204e6574776f726b2047656e65736973"  // "Chiral Network Genesis" in hex
+            "difficulty": "0x400000",
+            "gasLimit": "0x47b760",
+            "alloc": {},
+            "coinbase": "0x0000000000000000000000000000000000000000",
+            "extraData": "0x4b656570206f6e206b656570696e67206f6e21",
+            "nonce": "0x0000000000000042",
+            "mixhash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "timestamp": "0x68b3b2ca"
         }).to_string()
     }
 
@@ -1098,8 +1096,8 @@ impl GethProcess {
                     .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
                     .unwrap_or(0);
 
-                // Block reward is 5 ETH (5e18 wei) for ethash genesis configs
-                let reward_wei: u128 = 5_000_000_000_000_000_000;
+                // Block reward is 2 CHR (EIP-1234, constantinopleBlock: 0 in genesis)
+                let reward_wei: u128 = 2_000_000_000_000_000_000;
                 let reward_chr = reward_wei as f64 / 1e18;
 
                 mined_blocks.push(MinedBlock {
@@ -1243,14 +1241,12 @@ mod tests {
     }
 
     #[test]
-    fn test_genesis_has_faucet_allocation() {
+    fn test_genesis_has_empty_alloc() {
         let genesis = GethProcess::get_genesis_json();
         let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
 
         let alloc = parsed.get("alloc").expect("should have alloc");
-        let faucet = alloc.get("0x0000000000000000000000000000000000001337");
-        assert!(faucet.is_some(), "Faucet address should be allocated");
-        assert!(faucet.unwrap().get("balance").is_some());
+        assert!(alloc.as_object().unwrap().is_empty(), "alloc should be empty (no pre-allocations)");
     }
 
     #[test]
@@ -1282,7 +1278,7 @@ mod tests {
 
         let bytes = hex::decode(extra_data.trim_start_matches("0x")).unwrap();
         let text = String::from_utf8(bytes).unwrap();
-        assert_eq!(text, "Chiral Network Genesis");
+        assert_eq!(text, "Keep on keeping on!");
     }
 
     #[test]
@@ -1397,19 +1393,19 @@ mod tests {
         let block = MinedBlock {
             block_number: 42,
             timestamp: 1700000000,
-            reward_wei: "5000000000000000000".to_string(),
-            reward_chr: 5.0,
+            reward_wei: "2000000000000000000".to_string(),
+            reward_chr: 2.0,
             difficulty: 1024,
         };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"blockNumber\":42"));
         assert!(json.contains("\"timestamp\":1700000000"));
-        assert!(json.contains("\"rewardWei\":\"5000000000000000000\""));
-        assert!(json.contains("\"rewardChr\":5.0"));
+        assert!(json.contains("\"rewardWei\":\"2000000000000000000\""));
+        assert!(json.contains("\"rewardChr\":2.0"));
         assert!(json.contains("\"difficulty\":1024"));
         let deserialized: MinedBlock = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.block_number, 42);
-        assert_eq!(deserialized.reward_chr, 5.0);
+        assert_eq!(deserialized.reward_chr, 2.0);
     }
 
     #[test]
@@ -1434,12 +1430,12 @@ mod tests {
     #[test]
     fn test_mined_block_deserialization_from_frontend_format() {
         // Frontend sends camelCase — verify we can deserialize it
-        let json = r#"{"blockNumber":100,"timestamp":1700000000,"rewardWei":"5000000000000000000","rewardChr":5.0,"difficulty":512}"#;
+        let json = r#"{"blockNumber":100,"timestamp":1700000000,"rewardWei":"2000000000000000000","rewardChr":2.0,"difficulty":512}"#;
         let block: MinedBlock = serde_json::from_str(json).unwrap();
         assert_eq!(block.block_number, 100);
         assert_eq!(block.timestamp, 1700000000);
-        assert_eq!(block.reward_wei, "5000000000000000000");
-        assert_eq!(block.reward_chr, 5.0);
+        assert_eq!(block.reward_wei, "2000000000000000000");
+        assert_eq!(block.reward_chr, 2.0);
         assert_eq!(block.difficulty, 512);
     }
 

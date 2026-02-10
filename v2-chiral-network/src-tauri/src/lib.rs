@@ -1175,7 +1175,7 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
     let payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_getBalance",
-        "params": [address, "pending"],
+        "params": [address, "latest"],
         "id": 1
     });
 
