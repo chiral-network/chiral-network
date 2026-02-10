@@ -29,16 +29,17 @@ pub const NETWORK_ID: u64 = 98765;
 /// Tracks whether a local Geth process is running (set by GethProcess start/stop)
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// Shared RPC endpoint for the Chiral Network.
-/// Always returns the shared remote node so that all clients query the
-/// same canonical chain for balances, transactions, and block data.
+/// Shared RPC endpoint for the Chiral Network
+/// Returns local endpoint (127.0.0.1:8545) when local Geth is running,
+/// otherwise falls back to the shared remote node.
 /// Override with CHIRAL_RPC_ENDPOINT environment variable.
-///
-/// Local Geth (127.0.0.1:8545) is only used for mining operations via
-/// GethProcess::effective_rpc_endpoint().
 pub fn rpc_endpoint() -> String {
-    std::env::var("CHIRAL_RPC_ENDPOINT")
-        .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
+    if LOCAL_GETH_RUNNING.load(Ordering::Relaxed) {
+        "http://127.0.0.1:8545".to_string()
+    } else {
+        std::env::var("CHIRAL_RPC_ENDPOINT")
+            .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
+    }
 }
 
 // ============================================================================
@@ -1203,12 +1204,11 @@ mod tests {
     }
 
     #[test]
-    fn test_rpc_endpoint_always_returns_remote() {
-        // rpc_endpoint() always returns the shared remote — local Geth flag
-        // should NOT affect it (balance queries must use the shared chain)
+    fn test_rpc_endpoint_local_when_flag_set() {
+        // Set flag to true, expect local endpoint
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
         let endpoint = rpc_endpoint();
-        assert_eq!(endpoint, "http://130.245.173.73:8545");
+        assert_eq!(endpoint, "http://127.0.0.1:8545");
         // Reset
         LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
     }
