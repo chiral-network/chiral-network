@@ -967,7 +967,7 @@ impl ReputationContract {
     pub fn new(chain_id: u64) -> Self {
         Self {
             contract_address: None,
-            rpc_url: crate::ethereum::rpc_endpoint(),
+            rpc_url: crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone(),
             chain_id,
         }
     }
