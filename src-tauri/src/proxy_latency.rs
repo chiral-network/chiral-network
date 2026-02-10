@@ -79,6 +79,16 @@ impl ProxyLatencyService {
         self.proxy_latencies.remove(proxy_id).is_some()
     }
 
+    pub fn clear(&mut self) -> usize {
+        let count = self.proxy_latencies.len();
+        self.proxy_latencies.clear();
+        count
+    }
+
+    pub fn len(&self) -> usize {
+        self.proxy_latencies.len()
+    }
+
     /// Get the best proxy based on latency
     pub fn get_best_proxy(&self) -> Option<ProxyLatencyInfo> {
         self.proxy_latencies
@@ -256,5 +266,25 @@ mod tests {
         assert!(svc.remove_proxy("p-a"));
         assert!(!svc.remove_proxy("p-a"));
         assert!(svc.get_proxy("p-a").is_none());
+    }
+
+    #[test]
+    fn clear_and_len_work() {
+        let mut svc = ProxyLatencyService::new();
+        svc.update_proxy_latency("p-a".to_string(), Some(11), ProxyStatus::Online);
+        svc.update_proxy_latency("p-b".to_string(), None, ProxyStatus::Offline);
+        assert_eq!(svc.len(), 2);
+        assert_eq!(svc.clear(), 2);
+        assert_eq!(svc.len(), 0);
+    }
+
+    #[test]
+    fn update_status_preserves_latency() {
+        let mut svc = ProxyLatencyService::new();
+        svc.update_proxy_latency("p-a".to_string(), Some(33), ProxyStatus::Online);
+        svc.update_status("p-a".to_string(), ProxyStatus::Error);
+        let p = svc.get_proxy("p-a").unwrap();
+        assert_eq!(p.latency_ms, Some(33));
+        assert!(matches!(p.status, ProxyStatus::Error));
     }
 }
