@@ -29,17 +29,14 @@ pub const NETWORK_ID: u64 = 98765;
 /// Tracks whether a local Geth process is running (set by GethProcess start/stop)
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
 
-/// Shared RPC endpoint for the Chiral Network
-/// Returns local endpoint (127.0.0.1:8545) when local Geth is running,
-/// otherwise falls back to the shared remote node.
+/// Shared RPC endpoint for balance, transaction, and state queries.
+/// Always returns the remote bootstrap node so all clients see the same
+/// canonical chain state.  Mining operations use `effective_rpc_endpoint()`
+/// which routes to the local Geth when it is running.
 /// Override with CHIRAL_RPC_ENDPOINT environment variable.
 pub fn rpc_endpoint() -> String {
-    if LOCAL_GETH_RUNNING.load(Ordering::Relaxed) {
-        "http://127.0.0.1:8545".to_string()
-    } else {
-        std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
-    }
+    std::env::var("CHIRAL_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
 }
 
 // ============================================================================
@@ -1203,23 +1200,15 @@ mod tests {
     }
 
     #[test]
-    fn test_rpc_endpoint_local_when_flag_set() {
-        // Set flag to true, expect local endpoint
+    fn test_rpc_endpoint_always_remote() {
+        // rpc_endpoint() should always return remote, regardless of LOCAL_GETH_RUNNING
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
         let endpoint = rpc_endpoint();
-        assert_eq!(endpoint, "http://127.0.0.1:8545");
+        if std::env::var("CHIRAL_RPC_ENDPOINT").is_err() {
+            assert!(endpoint.contains("130.245.173.73"), "should be remote even when local flag is set");
+        }
         // Reset
         LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
-    }
-
-    #[test]
-    fn test_rpc_endpoint_remote_when_flag_unset() {
-        LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
-        let endpoint = rpc_endpoint();
-        // Should be remote (not 127.0.0.1) unless CHIRAL_RPC_ENDPOINT is set
-        if std::env::var("CHIRAL_RPC_ENDPOINT").is_err() {
-            assert!(endpoint.contains("130.245.173.73") || endpoint.contains("127.0.0.1"));
-        }
     }
 
     #[test]
