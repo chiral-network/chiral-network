@@ -66,14 +66,6 @@ pub struct GethStatus {
     pub highest_block: u64,
     pub peer_count: u32,
     pub chain_id: u64,
-    /// Block height from the remote/bootstrap RPC (network truth)
-    pub remote_block: Option<u64>,
-    /// true when peer_count > 0 AND local/remote blocks are within tolerance
-    pub sync_verified: bool,
-    /// true when local chain is ahead of remote with 0 peers (isolated fork)
-    pub possible_fork: bool,
-    /// Seconds since Geth was started (for frontend timeout logic)
-    pub seconds_since_start: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,8 +296,6 @@ pub struct GethProcess {
     last_block: u64,
     /// Timestamp (seconds since epoch) when last_block was observed
     last_block_time: u64,
-    /// Epoch seconds when start() succeeded (for sync verification timeout)
-    started_at: Option<u64>,
 }
 
 impl GethProcess {
@@ -321,7 +311,6 @@ impl GethProcess {
             downloader: GethDownloader::new(),
             last_block: 0,
             last_block_time: 0,
-            started_at: None,
         };
 
         // Kill any orphaned Geth from a previous session immediately on construction.
@@ -352,36 +341,19 @@ impl GethProcess {
             let _ = fs::remove_file(&pid_path);
         }
 
-        // Source 2: Check ports 8545 (RPC) and 30303 (P2P) for orphaned Geth.
-        // Uses lsof (works on macOS and Linux) with fuser as fallback (Linux only).
-        for port in &["8545", "30303"] {
-            // Try lsof first (works on macOS and Linux)
-            let lsof_result = Command::new("lsof")
-                .args(["-ti", &format!(":{}", port)])
-                .output();
-            if let Ok(output) = lsof_result {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for token in stdout.split_whitespace() {
-                    if let Ok(pid) = token.trim().parse::<u32>() {
+        // Source 2: fuser on port 8545 (catches cases where PID file was deleted
+        // but Geth is still running, or a different Geth instance is on our port)
+        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
+            // fuser outputs PIDs to stderr on some systems, stdout on others
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            for text in [stdout, stderr] {
+                for token in text.split_whitespace() {
+                    let cleaned = token.trim_end_matches(char::is_alphabetic);
+                    if let Ok(pid) = cleaned.parse::<u32>() {
                         if !pids_to_kill.contains(&pid) {
-                            println!("🔍 Found process on port {}: PID {}", port, pid);
+                            println!("🔍 Found process on port 8545: PID {}", pid);
                             pids_to_kill.push(pid);
-                        }
-                    }
-                }
-            }
-            // Fallback: try fuser (Linux only, not available on macOS)
-            if let Ok(output) = Command::new("fuser").args([&format!("{}/tcp", port)]).stderr(Stdio::piped()).output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                for text in [stdout, stderr] {
-                    for token in text.split_whitespace() {
-                        let cleaned = token.trim_end_matches(char::is_alphabetic);
-                        if let Ok(pid) = cleaned.parse::<u32>() {
-                            if !pids_to_kill.contains(&pid) {
-                                println!("🔍 Found process on port {}: PID {}", port, pid);
-                                pids_to_kill.push(pid);
-                            }
                         }
                     }
                 }
@@ -478,8 +450,12 @@ impl GethProcess {
     }
 
     /// Get the genesis.json content for Chiral Network
-    /// Uses Core-Geth compatible config format (not standard go-ethereum fork names)
+    /// Pre-allocates 1 CHR (1e18 wei) to common test addresses for development
     fn get_genesis_json() -> String {
+        // Pre-allocate balance to a dev faucet address for testing
+        // This faucet address can distribute CHR to new users
+        // Faucet address: 0x0000000000000000000000000000000000001337
+        // Each allocation is 1000 CHR (1000 * 10^18 wei = 0x3635c9adc5dea00000)
         serde_json::json!({
             "config": {
                 "chainId": CHAIN_ID,
@@ -496,11 +472,12 @@ impl GethProcess {
             "gasLimit": "0x1C9C380",
             "nonce": "0x0000000000098765",
             "alloc": {
+                // Dev faucet address - 10000 CHR for testing
                 "0x0000000000000000000000000000000000001337": {
-                    "balance": "0x21e19e0c9bab2400000"
+                    "balance": "0x21e19e0c9bab2400000"  // 10000 CHR in wei
                 }
             },
-            "extraData": "0x43686972616c204e6574776f726b2047656e65736973"
+            "extraData": "0x43686972616c204e6574776f726b2047656e65736973"  // "Chiral Network Genesis" in hex
         }).to_string()
     }
 
@@ -555,17 +532,14 @@ impl GethProcess {
         // Remove ALL stale LOCK files from the data directory tree
         Self::remove_lock_files_recursive(&self.data_dir);
 
-        // Debug: check what's on ports 8545 and 30303 right before spawning
-        for port in &["8545", "30303"] {
-            let in_use = Command::new("lsof")
-                .args(["-ti", &format!(":{}", port)])
-                .output()
-                .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-                .unwrap_or(false);
-            if in_use {
-                println!("⚠️  Port {} still in use!", port);
+        // Debug: check what's on port 8545 right before spawning
+        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
+                println!("⚠️  Port 8545 still in use! stdout='{}' stderr='{}'", stdout.trim(), stderr.trim());
             } else {
-                println!("✅ Port {} is free", port);
+                println!("✅ Port 8545 is free");
             }
         }
 
@@ -595,7 +569,7 @@ impl GethProcess {
 
         // Check if blockchain needs initialization or re-initialization
         // Use a version marker to detect genesis config changes
-        let genesis_version = "4"; // Bump this when genesis config changes
+        let genesis_version = "3"; // Bump this when genesis config changes
         let version_file = self.data_dir.join(".genesis_version");
         let chaindata_path = self.data_dir.join("geth").join("chaindata");
         let needs_init = if !chaindata_path.exists() {
@@ -669,11 +643,11 @@ impl GethProcess {
             cmd.arg("--bootnodes").arg(&bootstrap_nodes);
         }
 
-        // Set miner address (coinbase) but do NOT start mining yet —
-        // mining is deferred until the node has synced with peers to avoid
-        // creating a divergent chain from block 0
+        // Set miner address and enable mining if provided
         if let Some(addr) = miner_address {
-            cmd.arg("--miner.etherbase").arg(addr);
+            cmd.arg("--miner.etherbase").arg(addr)
+               .arg("--mine")
+               .arg("--miner.threads").arg("1");
         }
 
         // Create log file (truncate on each start for clean logs)
@@ -709,12 +683,6 @@ impl GethProcess {
 
         self.child = Some(child);
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
-        self.started_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-        );
 
         println!("✅ Geth started");
         println!("   Logs: {}", log_path.display());
@@ -747,24 +715,12 @@ impl GethProcess {
             }
         }
 
-        // Mining is deferred — wait for the node to sync with peers or
-        // the remote RPC before producing blocks.  This prevents each client
-        // from mining an independent chain starting from block 0.
+        // Auto-start mining if miner address is set
         if miner_address.is_some() {
-            println!("⏳ Mining deferred — waiting for peer sync before starting...");
-            let synced = self.wait_for_sync(30).await; // up to 30 seconds
-            if synced {
-                println!("⛏️  Node synced, starting mining...");
-                match self.start_mining(1).await {
-                    Ok(_) => println!("✅ Mining started after sync"),
-                    Err(e) => println!("⚠️  Failed to start mining after sync: {}", e),
-                }
-            } else {
-                println!("⚠️  No peers found after 30s — starting mining anyway (may create isolated chain)");
-                match self.start_mining(1).await {
-                    Ok(_) => println!("✅ Mining started (isolated mode)"),
-                    Err(e) => println!("⚠️  Failed to start mining: {}", e),
-                }
+            println!("⛏️  Auto-starting mining...");
+            match self.start_mining(1).await {
+                Ok(_) => println!("✅ Mining started automatically"),
+                Err(e) => println!("⚠️  Failed to auto-start mining: {}", e),
             }
         }
 
@@ -775,7 +731,6 @@ impl GethProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
             LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
-            self.started_at = None;
 
             let pid = child.id();
 
@@ -889,122 +844,16 @@ impl GethProcess {
             Err(_) => 0,
         };
 
-        // Sync verification: query remote block height and compare
-        let remote_block = self.query_remote_block_height().await;
-        let local_block = if syncing { current_block } else { block_number };
-
-        let seconds_since_start = self.started_at.map(|t| {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .saturating_sub(t)
-        });
-
-        // Fork detection: local is significantly ahead of remote with 0 peers
-        let possible_fork = match (remote_block, peer_count) {
-            (Some(remote), 0) if local_block > remote.saturating_add(5) => true,
-            _ => false,
-        };
-
-        // Sync verified when EITHER:
-        // 1. Has peers AND (no remote data OR local/remote blocks within tolerance), OR
-        // 2. Remote is reachable AND local/remote blocks within tolerance (even with 0 peers —
-        //    the remote RPC IS the network truth, peers may never connect if bootstrap
-        //    doesn't run a Geth peer on the same chain)
-        let sync_verified = if let Some(remote) = remote_block {
-            let diff = if local_block > remote { local_block - remote } else { remote - local_block };
-            diff <= 5 // blocks match the network — verified regardless of peer count
-        } else {
-            peer_count > 0 // remote unavailable, fall back to peer count alone
-        };
-
-        if possible_fork {
-            println!("⚠️  FORK DETECTED: local block {} vs remote {:?}, peers: {}", local_block, remote_block, peer_count);
-        } else if peer_count == 0 {
-            if let Some(secs) = seconds_since_start {
-                if secs > 30 && self.child.is_some() {
-                    println!("⚠️  ISOLATED NODE: 0 peers after {}s", secs);
-                }
-            }
-        }
-
         Ok(GethStatus {
             installed: self.is_installed(),
             running: self.child.is_some(),
             local_running: self.child.is_some(),
             syncing,
-            current_block: local_block,
-            highest_block: if syncing { highest_block } else { local_block },
+            current_block: if syncing { current_block } else { block_number },
+            highest_block: if syncing { highest_block } else { block_number },
             peer_count,
             chain_id,
-            remote_block,
-            sync_verified,
-            possible_fork,
-            seconds_since_start,
         })
-    }
-
-    /// Wait for the node to discover at least 1 peer or verify its chain
-    /// matches the remote RPC.  Returns true if synced, false on timeout.
-    async fn wait_for_sync(&self, timeout_secs: u64) -> bool {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
-
-        let polls = timeout_secs * 2; // poll every 500ms
-        for attempt in 1..=polls {
-            // Check peer count via local RPC
-            let peer_payload = serde_json::json!({
-                "jsonrpc": "2.0", "method": "net_peerCount", "params": [], "id": 1
-            });
-            if let Ok(resp) = client.post("http://127.0.0.1:8545")
-                .json(&peer_payload)
-                .send().await
-            {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(hex) = json["result"].as_str() {
-                        let peers = u32::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                        if peers > 0 {
-                            println!("✅ Found {} peer(s) after {}ms", peers, attempt * 500);
-                            return true;
-                        }
-                    }
-                }
-            }
-
-            // Also check if remote RPC has a chain we should sync to
-            if let Some(remote) = self.query_remote_block_height().await {
-                if remote > 0 {
-                    // Remote has blocks — check if local is syncing to it
-                    let block_payload = serde_json::json!({
-                        "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1
-                    });
-                    if let Ok(resp) = client.post("http://127.0.0.1:8545")
-                        .json(&block_payload)
-                        .send().await
-                    {
-                        if let Ok(json) = resp.json::<serde_json::Value>().await {
-                            if let Some(hex) = json["result"].as_str() {
-                                let local = u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                                // If local matches remote (within 5 blocks), we're synced
-                                let diff = if local > remote { local - remote } else { remote - local };
-                                if diff <= 5 && local > 0 {
-                                    println!("✅ Chain synced with remote (local={}, remote={}) after {}ms", local, remote, attempt * 500);
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        }
-
-        println!("⏱️  Sync timeout after {}s (0 peers, no remote match)", timeout_secs);
-        false
     }
 
     /// Start mining (requires local Geth process)
@@ -1249,8 +1098,8 @@ impl GethProcess {
                     .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
                     .unwrap_or(0);
 
-                // Block reward is 2 CHR (EIP-1234, constantinopleBlock: 0 in genesis)
-                let reward_wei: u128 = 2_000_000_000_000_000_000;
+                // Block reward is 5 ETH (5e18 wei) for ethash genesis configs
+                let reward_wei: u128 = 5_000_000_000_000_000_000;
                 let reward_chr = reward_wei as f64 / 1e18;
 
                 mined_blocks.push(MinedBlock {
@@ -1277,35 +1126,6 @@ impl GethProcess {
         self.rpc_call(&client, "miner_setEtherbase", serde_json::json!([address]))
             .await
             .map(|_| ())
-    }
-
-    /// Query block height from the remote/bootstrap RPC endpoint.
-    /// Returns None if the remote is unreachable, times out, or local Geth is not running.
-    async fn query_remote_block_height(&self) -> Option<u64> {
-        // Only compare against remote when we have a local node running
-        if self.child.is_none() {
-            return None;
-        }
-
-        let remote_url = std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string());
-
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(3))
-            .build()
-            .ok()?;
-
-        let payload = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "eth_blockNumber",
-            "params": [],
-            "id": 1
-        });
-
-        let response = client.post(&remote_url).json(&payload).send().await.ok()?;
-        let json: serde_json::Value = response.json().await.ok()?;
-        let hex = json["result"].as_str()?;
-        u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
     }
 
     /// Get the effective RPC endpoint: local Geth if running, otherwise shared remote
@@ -1506,26 +1326,15 @@ mod tests {
             highest_block: 100,
             peer_count: 5,
             chain_id: CHAIN_ID,
-            remote_block: Some(100),
-            sync_verified: true,
-            possible_fork: false,
-            seconds_since_start: Some(120),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("currentBlock"));
         assert!(json.contains("peerCount"));
         assert!(json.contains("chainId"));
         assert!(json.contains("localRunning"));
-        assert!(json.contains("remoteBlock"));
-        assert!(json.contains("syncVerified"));
-        assert!(json.contains("possibleFork"));
-        assert!(json.contains("secondsSinceStart"));
         let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.chain_id, CHAIN_ID);
         assert!(deserialized.local_running);
-        assert!(deserialized.sync_verified);
-        assert!(!deserialized.possible_fork);
-        assert_eq!(deserialized.remote_block, Some(100));
     }
 
     #[test]
@@ -1539,18 +1348,12 @@ mod tests {
             highest_block: 0,
             peer_count: 0,
             chain_id: 0,
-            remote_block: None,
-            sync_verified: false,
-            possible_fork: false,
-            seconds_since_start: None,
         };
         let json = serde_json::to_string(&status).unwrap();
         let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
         assert!(!deserialized.installed);
         assert!(!deserialized.running);
         assert_eq!(deserialized.chain_id, 0);
-        assert!(!deserialized.sync_verified);
-        assert_eq!(deserialized.remote_block, None);
     }
 
     #[test]
@@ -1594,19 +1397,19 @@ mod tests {
         let block = MinedBlock {
             block_number: 42,
             timestamp: 1700000000,
-            reward_wei: "2000000000000000000".to_string(),
-            reward_chr: 2.0,
+            reward_wei: "5000000000000000000".to_string(),
+            reward_chr: 5.0,
             difficulty: 1024,
         };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"blockNumber\":42"));
         assert!(json.contains("\"timestamp\":1700000000"));
-        assert!(json.contains("\"rewardWei\":\"2000000000000000000\""));
-        assert!(json.contains("\"rewardChr\":2.0"));
+        assert!(json.contains("\"rewardWei\":\"5000000000000000000\""));
+        assert!(json.contains("\"rewardChr\":5.0"));
         assert!(json.contains("\"difficulty\":1024"));
         let deserialized: MinedBlock = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.block_number, 42);
-        assert_eq!(deserialized.reward_chr, 2.0);
+        assert_eq!(deserialized.reward_chr, 5.0);
     }
 
     #[test]
@@ -1631,12 +1434,12 @@ mod tests {
     #[test]
     fn test_mined_block_deserialization_from_frontend_format() {
         // Frontend sends camelCase — verify we can deserialize it
-        let json = r#"{"blockNumber":100,"timestamp":1700000000,"rewardWei":"2000000000000000000","rewardChr":2.0,"difficulty":512}"#;
+        let json = r#"{"blockNumber":100,"timestamp":1700000000,"rewardWei":"5000000000000000000","rewardChr":5.0,"difficulty":512}"#;
         let block: MinedBlock = serde_json::from_str(json).unwrap();
         assert_eq!(block.block_number, 100);
         assert_eq!(block.timestamp, 1700000000);
-        assert_eq!(block.reward_wei, "2000000000000000000");
-        assert_eq!(block.reward_chr, 2.0);
+        assert_eq!(block.reward_wei, "5000000000000000000");
+        assert_eq!(block.reward_chr, 5.0);
         assert_eq!(block.difficulty, 512);
     }
 

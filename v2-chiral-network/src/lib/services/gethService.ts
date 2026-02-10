@@ -34,10 +34,6 @@ export interface GethStatus {
   highestBlock: number;
   peerCount: number;
   chainId: number;
-  remoteBlock: number | null;
-  syncVerified: boolean;
-  possibleFork: boolean;
-  secondsSinceStart: number | null;
 }
 
 export interface MiningStatus {

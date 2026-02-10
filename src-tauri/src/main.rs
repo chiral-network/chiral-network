@@ -459,41 +459,14 @@ async fn start_geth_node(
 ) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
+    let rpc_url = rpc_url.unwrap_or_else(|| crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone());
+    *state.rpc_url.lock().await = rpc_url.clone();
 
     geth.start(
         &data_dir,
         miner_address.as_deref(),
         pure_client_mode.unwrap_or(false),
     )?;
-    drop(miner_address);
-    drop(geth);
-
-    // Now that LOCAL_GETH_RUNNING is true, rpc_endpoint() returns local.
-    // Update state.rpc_url to reflect the correct (local) endpoint.
-    let effective_rpc = rpc_url.unwrap_or_else(|| crate::ethereum::rpc_endpoint());
-    *state.rpc_url.lock().await = effective_rpc;
-
-    // Wait for local Geth RPC to be ready before returning.
-    // Without this, callers that immediately query the balance get errors
-    // because Geth needs a few seconds to open its RPC listener.
-    let client = reqwest::Client::new();
-    let local_rpc = "http://127.0.0.1:8545";
-    let probe = serde_json::json!({
-        "jsonrpc": "2.0", "method": "net_version", "params": [], "id": 1
-    });
-    for attempt in 1..=20 {
-        if let Ok(resp) = client.post(local_rpc).json(&probe)
-            .timeout(std::time::Duration::from_secs(2))
-            .send().await
-        {
-            if resp.status().is_success() {
-                tracing::info!("[start_geth_node] Local Geth RPC ready after {} attempt(s)", attempt);
-                return Ok(());
-            }
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    }
-    tracing::warn!("[start_geth_node] Local Geth RPC not ready after 10s, proceeding anyway");
     Ok(())
 }
 
@@ -715,7 +688,7 @@ async fn get_disk_space(path: String) -> Result<u64, String> {
 #[tauri::command]
 async fn get_account_balance(address: String) -> Result<String, String> {
     tracing::info!("[get_account_balance] Querying balance for address: {}", address);
-    tracing::info!("[get_account_balance] Using RPC endpoint: {}", crate::ethereum::rpc_endpoint());
+    tracing::info!("[get_account_balance] Using RPC endpoint: {}", crate::ethereum::NETWORK_CONFIG.rpc_endpoint);
     match get_balance(&address).await {
         Ok(balance) => {
             tracing::info!("[get_account_balance] Balance result for {}: {}", address, balance);
@@ -963,22 +936,41 @@ async fn get_network_chain_id() -> Result<u64, String> {
 
 #[tauri::command]
 async fn is_geth_running(state: State<'_, AppState>) -> Result<bool, String> {
-    // Check the atomic flag first (fast, no I/O)
-    if crate::ethereum::is_local_geth_running() {
-        return Ok(true);
-    }
-
-    // Also check managed child process as a secondary signal
+    // Check local Geth process first
     let geth = state.geth.lock().await;
     if geth.is_running() {
+        tracing::info!("[is_geth_running] Local Geth process is running");
         return Ok(true);
     }
+    drop(geth);
 
-    // No local Geth running — return false immediately.
-    // Do NOT probe the remote RPC endpoint. The remote server is a shared
-    // fallback for RPC calls, not a local Geth instance. Probing it every
-    // 5 seconds creates unnecessary traffic and returns misleading results.
-    Ok(false)
+    // Fall back to checking if the shared RPC endpoint is reachable
+    let rpc_endpoint = &crate::ethereum::NETWORK_CONFIG.rpc_endpoint;
+    tracing::info!("[is_geth_running] No local Geth, checking shared RPC: {}", rpc_endpoint);
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+
+    match crate::ethereum::HTTP_CLIENT
+        .post(rpc_endpoint)
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let success = resp.status().is_success();
+            tracing::info!("[is_geth_running] Shared RPC response status: {}, is_success: {}", resp.status(), success);
+            Ok(success)
+        },
+        Err(e) => {
+            tracing::warn!("[is_geth_running] Shared RPC unreachable: {}", e);
+            Ok(false)
+        },
+    }
 }
 
 #[tauri::command]
@@ -1157,7 +1149,7 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
 
 #[tauri::command]
 async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    use crate::ethereum::rpc_endpoint;
+    use crate::ethereum::NETWORK_CONFIG;
     use reqwest::Client;
 
     let client = Client::new();
@@ -1180,7 +1172,7 @@ async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json:
     let mut recent_miners = serde_json::Map::new();
 
     if let Ok(response) = client
-        .post(&rpc_endpoint())
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&block_num_payload)
         .send()
         .await
@@ -1198,7 +1190,7 @@ async fn get_miner_diagnostics(state: State<'_, AppState>) -> Result<serde_json:
                         });
 
                         if let Ok(block_response) = client
-                            .post(&rpc_endpoint())
+                            .post(&NETWORK_CONFIG.rpc_endpoint)
                             .json(&block_payload)
                             .send()
                             .await
@@ -9282,7 +9274,7 @@ fn main() {
             miner_address: Mutex::new(None),
             active_account: Arc::new(Mutex::new(None)),
             active_account_private_key: Arc::new(Mutex::new(None)),
-            rpc_url: Mutex::new(crate::ethereum::rpc_endpoint()),
+            rpc_url: Mutex::new(crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone()),
             dht: Mutex::new(Some(dht_service_arc.clone())),
             file_transfer: Mutex::new(None),
             webrtc: Mutex::new(None),
