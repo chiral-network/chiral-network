@@ -7,6 +7,30 @@ export interface ProxyLatencyInfo {
   status: 'Online' | 'Offline' | 'Connecting' | 'Error';
 }
 
+export interface ProxyOptimizationSummary {
+  totalProxies: number;
+  onlineProxies: number;
+  testedProxies: number;
+  bestProxyId?: string;
+  bestLatencyMs?: number;
+  averageLatencyMs?: number;
+  shouldUseProxyRouting: boolean;
+}
+
+export interface ProxyOptimizationDetail {
+  summary: ProxyOptimizationSummary;
+  topProxies: ProxyLatencyInfo[];
+}
+
+export interface ProxySelfTestResult {
+  id: string;
+  address: string;
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
+  testedAt: number;
+}
+
 export class ProxyLatencyOptimizationService {
   /**
    * Check if Tauri is available by attempting to call invoke
@@ -38,9 +62,57 @@ export class ProxyLatencyOptimizationService {
    */
   static async getOptimizationStatus(): Promise<boolean> {
     try {
-      return await invoke('get_proxy_optimization_status');
+      const raw = await invoke<any>('get_proxy_optimization_status');
+      if (typeof raw === 'boolean') {
+        return raw;
+      }
+      if (raw && typeof raw === 'object') {
+        if (typeof raw.shouldUseProxyRouting === 'boolean') {
+          return raw.shouldUseProxyRouting;
+        }
+        if (raw.summary && typeof raw.summary.shouldUseProxyRouting === 'boolean') {
+          return raw.summary.shouldUseProxyRouting;
+        }
+      }
+      return false;
     } catch (error) {
       throw new Error(`Failed to get optimization status: ${error}`);
+    }
+  }
+
+  static async getOptimizationDetail(): Promise<ProxyOptimizationDetail | null> {
+    try {
+      const raw = await invoke<any>('get_proxy_optimization_status');
+      if (!raw || typeof raw !== 'object' || !raw.summary) {
+        return null;
+      }
+      return raw as ProxyOptimizationDetail;
+    } catch (error) {
+      throw new Error(`Failed to get optimization detail: ${error}`);
+    }
+  }
+
+  static async getLatencySnapshot(limit = 50): Promise<ProxyLatencyInfo[]> {
+    try {
+      return await invoke<ProxyLatencyInfo[]>('get_proxy_latency_snapshot', { limit });
+    } catch (error) {
+      throw new Error(`Failed to get proxy latency snapshot: ${error}`);
+    }
+  }
+
+  static async selfTestProxy(target: string, timeoutMs = 1500): Promise<ProxySelfTestResult> {
+    try {
+      return await invoke<ProxySelfTestResult>('proxy_self_test', { target, timeoutMs });
+    } catch (error) {
+      throw new Error(`Failed to self-test proxy: ${error}`);
+    }
+  }
+
+  static async selfTestAll(timeoutMs = 1500): Promise<ProxySelfTestResult[]> {
+    try {
+      return await invoke<ProxySelfTestResult[]>('proxy_self_test_all', { timeoutMs });
+    } catch (error) {
+      throw new Error(`Failed to self-test all proxies: ${error}`);
     }
   }
 
