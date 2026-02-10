@@ -196,7 +196,7 @@ export async function getProxyOptimizationStatus(): Promise<string> {
 
 export async function selfTestProxyNode(target: string, timeoutMs = 1500) {
   try {
-    return await invoke<any>("proxy_self_test", { target, timeoutMs });
+    return await invoke<any>("plugin:proxysec|proxy_self_test", { target, timeoutMs });
   } catch (e) {
     console.error("proxy_self_test failed:", e);
     throw e;
@@ -205,7 +205,7 @@ export async function selfTestProxyNode(target: string, timeoutMs = 1500) {
 
 export async function selfTestAllProxyNodes(timeoutMs = 1500) {
   try {
-    return await invoke<any[]>("proxy_self_test_all", { timeoutMs });
+    return await invoke<any[]>("plugin:proxysec|proxy_self_test_all", { timeoutMs });
   } catch (e) {
     console.error("proxy_self_test_all failed:", e);
     throw e;
@@ -214,7 +214,7 @@ export async function selfTestAllProxyNodes(timeoutMs = 1500) {
 
 export async function getProxyLatencySnapshot(limit = 50) {
   try {
-    return await invoke<any[]>("get_proxy_latency_snapshot", { limit });
+    return await invoke<any[]>("plugin:proxysec|get_proxy_latency_snapshot", { limit });
   } catch (e) {
     console.error("get_proxy_latency_snapshot failed:", e);
     return [];
