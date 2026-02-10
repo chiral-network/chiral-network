@@ -528,11 +528,13 @@ pub(crate) async fn proxy_self_test_all(
         out.push(res);
     }
 
-    let summary = summarize_self_test_all(run_id, targets.len(), &out, cancelled);
-    let _ = app.emit("proxy_self_test_all_complete", summary);
-    if cancelled {
+    // only the active epoch can publish completion
+    if cancelled || state.proxy_self_test_epoch.load(Ordering::SeqCst) != run_id {
         return Err("proxy self-test run cancelled by a newer request".to_string());
     }
+
+    let summary = summarize_self_test_all(run_id, targets.len(), &out, false);
+    let _ = app.emit("proxy_self_test_all_complete", summary);
     Ok(out)
 }
 
