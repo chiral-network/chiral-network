@@ -58,7 +58,8 @@ use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
-    proxy_echo, proxy_remove, proxy_self_test, proxy_self_test_all, ProxyNode,
+    proxy_echo, proxy_remove, proxy_self_test, proxy_self_test_all, proxy_self_test_report,
+    ProxyNode,
 };
 use bandwidth::BandwidthController;
 use chiral_network::download_paths;
@@ -6522,6 +6523,45 @@ async fn get_proxy_latency_snapshot(
 }
 
 #[tauri::command]
+async fn get_best_proxy_candidate(
+    state: State<'_, AppState>,
+) -> Result<Option<ProxyLatencyInfo>, String> {
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_best_proxy())
+}
+
+#[tauri::command]
+async fn remove_proxy_latency_entry(
+    state: State<'_, AppState>,
+    proxy_id: String,
+) -> Result<bool, String> {
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+
+    let removed = {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.remove_proxy(&proxy_id)
+    };
+
+    if removed {
+        let mut proxies = state.proxies.lock().await;
+        proxies.retain(|p| p.id != proxy_id);
+    }
+
+    Ok(removed)
+}
+
+#[tauri::command]
+async fn clear_proxy_latency_data(state: State<'_, AppState>) -> Result<usize, String> {
+    let removed = {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.clear()
+    };
+    Ok(removed)
+}
+
+#[tauri::command]
 async fn download_file_multi_source(
     state: State<'_, AppState>,
     file_hash: String,
@@ -9493,6 +9533,9 @@ fn main() {
             update_proxy_latency,
             get_proxy_optimization_status,
             get_proxy_latency_snapshot,
+            get_best_proxy_candidate,
+            remove_proxy_latency_entry,
+            clear_proxy_latency_data,
             download_file_multi_source,
             get_file_transfer_events,
             write_file,
@@ -9514,6 +9557,7 @@ fn main() {
             proxy_remove,
             proxy_self_test,
             proxy_self_test_all,
+            proxy_self_test_report,
             proxy_echo,
             list_proxies,
             enable_privacy_routing,
