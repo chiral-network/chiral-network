@@ -53,6 +53,8 @@
 
   // Geth connection state
   let gethConnected = $state(false);
+  let syncVerified = $state(false);
+  let possibleFork = $state(false);
   let gethCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   // State
@@ -110,19 +112,32 @@
   async function checkGethStatus() {
     if (!isTauri()) return;
     try {
-      const status = await invoke<{ localRunning: boolean }>('get_geth_status');
+      const status = await invoke<{
+        localRunning: boolean;
+        syncVerified: boolean;
+        possibleFork: boolean;
+        secondsSinceStart: number | null;
+      }>('get_geth_status');
       const wasConnected = gethConnected;
       gethConnected = status.localRunning;
-      // When Geth comes online, load balance and history
-      if (gethConnected && !wasConnected && $walletAccount?.address) {
+      syncVerified = status.syncVerified;
+      possibleFork = status.possibleFork;
+      // Only auto-load balance when sync is verified (or after 60s timeout as fallback)
+      const timedOut = (status.secondsSinceStart || 0) > 60;
+      const canLoadBalance = status.syncVerified || timedOut;
+      if (gethConnected && canLoadBalance && !wasConnected && $walletAccount?.address) {
         loadBalance();
         loadTransactionHistory();
       }
       if (!gethConnected) {
         balance = '--';
+        syncVerified = false;
+        possibleFork = false;
       }
     } catch {
       gethConnected = false;
+      syncVerified = false;
+      possibleFork = false;
       balance = '--';
     }
   }
@@ -412,6 +427,21 @@
               </button>
             {/if}
           </div>
+          {#if possibleFork}
+            <div class="mt-2 p-2 bg-red-500/20 border border-red-400/30 rounded-lg">
+              <div class="flex items-center gap-1.5">
+                <AlertTriangle class="w-4 h-4 text-red-300 flex-shrink-0" />
+                <p class="text-xs text-red-200">Chain fork detected — balance may be from an isolated chain.</p>
+              </div>
+            </div>
+          {:else if gethConnected && !syncVerified}
+            <div class="mt-2 p-2 bg-yellow-500/20 border border-yellow-400/30 rounded-lg">
+              <div class="flex items-center gap-1.5">
+                <Loader2 class="w-4 h-4 text-yellow-300 flex-shrink-0 animate-spin" />
+                <p class="text-xs text-yellow-200">Waiting for peer sync verification...</p>
+              </div>
+            </div>
+          {/if}
         </div>
 
         <div class="flex items-center gap-2 mt-4">
