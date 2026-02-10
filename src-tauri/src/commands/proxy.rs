@@ -9,6 +9,7 @@ use tauri::State;
 use libp2p::PeerId;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
+use std::sync::atomic::Ordering;
 use tokio::net::{lookup_host, TcpStream};
 use tokio::time::{timeout, Duration, Instant};
 use tracing::{info, warn};
@@ -28,7 +29,10 @@ pub struct ProxySelfTestResult {
     pub id: String,
     pub address: String,
     pub ok: bool,
+    pub tcp_connect_ms: Option<u64>,
+    // keep old field for compatibility while clients switch
     pub latency_ms: Option<u64>,
+    pub ping_rtt_ms: Option<u64>,
     pub error: Option<String>,
     pub tested_at: u64,
 }
@@ -40,8 +44,20 @@ pub struct ProxySelfTestSummary {
     pub passed: usize,
     pub failed: usize,
     pub best_id: Option<String>,
+    pub best_tcp_connect_ms: Option<u64>,
     pub best_latency_ms: Option<u64>,
     pub results: Vec<ProxySelfTestResult>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxySelfTestAllComplete {
+    pub run_id: u64,
+    pub total: usize,
+    pub completed: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub cancelled: bool,
 }
 
 fn now_secs() -> u64 {
@@ -124,10 +140,27 @@ fn parse_tcp_target(input: &str) -> Result<(String, u16), String> {
     Ok((host, port))
 }
 
+fn canonical_host(host: &str) -> String {
+    let lower = host.to_lowercase();
+    if lower == "localhost" {
+        "127.0.0.1".to_string()
+    } else {
+        lower
+    }
+}
+
+fn format_host_port(host: &str, port: u16) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]:{}", host, port)
+    } else {
+        format!("{}:{}", host, port)
+    }
+}
+
 fn canonical_tcp_target(input: &str) -> Option<String> {
     parse_tcp_target(input)
         .ok()
-        .map(|(host, port)| format!("{}:{}", host.to_lowercase(), port))
+        .map(|(host, port)| format_host_port(&canonical_host(&host), port))
 }
 
 fn is_configured_proxy_target(proxies: &[ProxyNode], target: &str) -> bool {
@@ -168,6 +201,29 @@ async fn tcp_probe(host: String, port: u16, timeout_ms: u64) -> Result<u64, Stri
     Ok(start.elapsed().as_millis() as u64)
 }
 
+fn dedupe_self_test_targets(proxies: &[ProxyNode]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for p in proxies {
+        let raw = if p.address.trim().is_empty() {
+            p.id.trim()
+        } else {
+            p.address.trim()
+        };
+        if raw.is_empty() {
+            continue;
+        }
+
+        let key = canonical_tcp_target(raw).unwrap_or_else(|| raw.to_lowercase());
+        if seen.insert(key) {
+            out.push(raw.to_string());
+        }
+    }
+
+    out
+}
+
 fn summarize_self_tests(results: &[ProxySelfTestResult]) -> ProxySelfTestSummary {
     let mut best: Option<(&ProxySelfTestResult, u64)> = None;
     let mut passed = 0usize;
@@ -176,7 +232,7 @@ fn summarize_self_tests(results: &[ProxySelfTestResult]) -> ProxySelfTestSummary
         if result.ok {
             passed += 1;
         }
-        if let Some(lat) = result.latency_ms {
+        if let Some(lat) = result.tcp_connect_ms {
             match best {
                 Some((_, cur)) if lat >= cur => {}
                 _ => best = Some((result, lat)),
@@ -189,8 +245,26 @@ fn summarize_self_tests(results: &[ProxySelfTestResult]) -> ProxySelfTestSummary
         passed,
         failed: results.len().saturating_sub(passed),
         best_id: best.map(|(res, _)| res.id.clone()),
+        best_tcp_connect_ms: best.map(|(_, lat)| lat),
         best_latency_ms: best.map(|(_, lat)| lat),
         results: results.to_vec(),
+    }
+}
+
+fn summarize_self_test_all(
+    run_id: u64,
+    total: usize,
+    results: &[ProxySelfTestResult],
+    cancelled: bool,
+) -> ProxySelfTestAllComplete {
+    let passed = results.iter().filter(|row| row.ok).count();
+    ProxySelfTestAllComplete {
+        run_id,
+        total,
+        completed: results.len(),
+        passed,
+        failed: results.len().saturating_sub(passed),
+        cancelled,
     }
 }
 
@@ -198,7 +272,7 @@ async fn apply_test_result(
     app: &tauri::AppHandle,
     state: &AppState,
     target: &str,
-    latency_ms: Option<u64>,
+    tcp_connect_ms: Option<u64>,
     error: Option<String>,
 ) -> ProxySelfTestResult {
     let tested_at = now_secs();
@@ -217,7 +291,7 @@ async fn apply_test_result(
             .find(|p| p.id == target || p.address == target)
         {
             p.status = status_label.to_string();
-            if let Some(ms) = latency_ms {
+            if let Some(ms) = tcp_connect_ms {
                 p.latency = ms as u32;
             }
             p.error = error.clone();
@@ -227,7 +301,7 @@ async fn apply_test_result(
                 id: target.to_string(),
                 address: target.to_string(),
                 status: status_label.to_string(),
-                latency: latency_ms.unwrap_or_default() as u32,
+                latency: tcp_connect_ms.unwrap_or_default() as u32,
                 error: error.clone(),
             };
             proxies.push(n.clone());
@@ -237,7 +311,7 @@ async fn apply_test_result(
 
     {
         let mut svc = state.proxy_latency.lock().await;
-        svc.update_proxy_latency(node.id.clone(), latency_ms, status_kind);
+        svc.update_proxy_latency(node.id.clone(), tcp_connect_ms, status_kind);
     }
 
     let _ = app.emit("proxy_status_update", node.clone());
@@ -246,7 +320,9 @@ async fn apply_test_result(
         id: node.id,
         address: node.address,
         ok,
-        latency_ms,
+        tcp_connect_ms,
+        latency_ms: tcp_connect_ms,
+        ping_rtt_ms: None,
         error,
         tested_at,
     }
@@ -425,39 +501,37 @@ pub(crate) async fn proxy_self_test_all(
     timeout_ms: Option<u64>,
 ) -> Result<Vec<ProxySelfTestResult>, String> {
     let timeout_ms = timeout_ms.unwrap_or(1500);
-    let targets: Vec<String> = {
+    let run_id = state
+        .proxy_self_test_epoch
+        .fetch_add(1, Ordering::SeqCst)
+        .saturating_add(1);
+    let targets = {
         let proxies = state.proxies.lock().await;
-        proxies
-            .iter()
-            .map(|p| {
-                if p.address.trim().is_empty() {
-                    p.id.clone()
-                } else {
-                    p.address.clone()
-                }
-            })
-            .collect()
+        dedupe_self_test_targets(&proxies)
     };
 
-    let mut seen = std::collections::HashSet::new();
-    let mut deduped = Vec::new();
-    for t in targets {
-        if seen.insert(t.clone()) {
-            deduped.push(t);
+    let mut cancelled = false;
+    let mut out = Vec::with_capacity(targets.len());
+    for t in targets.iter() {
+        if state.proxy_self_test_epoch.load(Ordering::SeqCst) != run_id {
+            cancelled = true;
+            break;
         }
-    }
-
-    let mut out = Vec::with_capacity(deduped.len());
-    for t in deduped {
         let parsed = parse_tcp_target(&t);
         let res = match parsed {
             Ok((host, port)) => match tcp_probe(host, port, timeout_ms).await {
-                Ok(lat_ms) => apply_test_result(&app, &state, &t, Some(lat_ms), None).await,
+                Ok(ms) => apply_test_result(&app, &state, &t, Some(ms), None).await,
                 Err(err) => apply_test_result(&app, &state, &t, None, Some(err)).await,
             },
             Err(err) => apply_test_result(&app, &state, &t, None, Some(err)).await,
         };
         out.push(res);
+    }
+
+    let summary = summarize_self_test_all(run_id, targets.len(), &out, cancelled);
+    let _ = app.emit("proxy_self_test_all_complete", summary);
+    if cancelled {
+        return Err("proxy self-test run cancelled by a newer request".to_string());
     }
     Ok(out)
 }
@@ -574,6 +648,42 @@ mod tests {
         assert_eq!(port, 9000);
     }
 
+    #[test]
+    fn canonical_tcp_target_normalizes_localhost() {
+        let localhost = canonical_tcp_target("localhost:9050").unwrap();
+        let loopback = canonical_tcp_target("127.0.0.1:9050").unwrap();
+        assert_eq!(localhost, loopback);
+    }
+
+    #[test]
+    fn dedupe_targets_merges_equivalent_ids() {
+        let proxies = vec![
+            ProxyNode {
+                id: "a".into(),
+                address: "localhost:9050".into(),
+                status: "offline".into(),
+                latency: 0,
+                error: None,
+            },
+            ProxyNode {
+                id: "b".into(),
+                address: "127.0.0.1:9050".into(),
+                status: "offline".into(),
+                latency: 0,
+                error: None,
+            },
+            ProxyNode {
+                id: "c".into(),
+                address: "/dns4/example.org/tcp/443".into(),
+                status: "offline".into(),
+                latency: 0,
+                error: None,
+            },
+        ];
+        let deduped = dedupe_self_test_targets(&proxies);
+        assert_eq!(deduped.len(), 2);
+    }
+
     #[tokio::test]
     async fn tcp_probe_succeeds_for_local_listener() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -605,7 +715,9 @@ mod tests {
                 id: "p-a".to_string(),
                 address: "a".to_string(),
                 ok: true,
+                tcp_connect_ms: Some(50),
                 latency_ms: Some(50),
+                ping_rtt_ms: None,
                 error: None,
                 tested_at: 1,
             },
@@ -613,7 +725,9 @@ mod tests {
                 id: "p-b".to_string(),
                 address: "b".to_string(),
                 ok: false,
+                tcp_connect_ms: None,
                 latency_ms: None,
+                ping_rtt_ms: None,
                 error: Some("bad".to_string()),
                 tested_at: 2,
             },
@@ -621,7 +735,9 @@ mod tests {
                 id: "p-c".to_string(),
                 address: "c".to_string(),
                 ok: true,
+                tcp_connect_ms: Some(10),
                 latency_ms: Some(10),
+                ping_rtt_ms: None,
                 error: None,
                 tested_at: 3,
             },
@@ -631,6 +747,7 @@ mod tests {
         assert_eq!(summary.passed, 2);
         assert_eq!(summary.failed, 1);
         assert_eq!(summary.best_id.as_deref(), Some("p-c"));
+        assert_eq!(summary.best_tcp_connect_ms, Some(10));
         assert_eq!(summary.best_latency_ms, Some(10));
     }
 }
