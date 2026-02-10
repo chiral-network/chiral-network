@@ -1854,13 +1854,18 @@ fn classify_transaction(
     ("unknown".to_string(), "Transaction".to_string(), None, None, None, None, None, None)
 }
 
-/// Get transaction history for an address
+/// Get transaction history for an address.
+/// Scans all blocks using JSON-RPC batch requests for efficiency.
 #[tauri::command]
 async fn get_transaction_history(
     state: tauri::State<'_, AppState>,
     address: String,
 ) -> Result<TransactionHistoryResult, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let rpc = default_rpc_endpoint();
 
     // Get the latest block number
     let block_payload = serde_json::json!({
@@ -1871,7 +1876,7 @@ async fn get_transaction_history(
     });
 
     let block_response = client
-        .post(&default_rpc_endpoint())
+        .post(&rpc)
         .json(&block_payload)
         .send()
         .await
@@ -1886,88 +1891,114 @@ async fn get_transaction_history(
     // Load local metadata for enrichment
     let metadata = state.tx_metadata.lock().await;
 
-    // For simplicity, we'll check the last 100 blocks for transactions
-    // In production, you'd use an indexer or logs
     let mut transactions = Vec::new();
-    let start_block = if latest_block > 100 { latest_block - 100 } else { 0 };
-
     let address_lower = address.to_lowercase();
 
-    for block_num in (start_block..=latest_block).rev() {
-        let block_hex = format!("0x{:x}", block_num);
+    // Scan all blocks from latest to genesis using batch RPC requests.
+    // Each batch fetches up to BATCH_SIZE blocks in a single HTTP request.
+    const BATCH_SIZE: u64 = 200;
+    let mut cursor = latest_block;
 
-        let get_block_payload = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "eth_getBlockByNumber",
-            "params": [block_hex, true],
-            "id": 1
-        });
+    'outer: loop {
+        let batch_start = cursor.saturating_sub(BATCH_SIZE - 1);
+        // Build a JSON-RPC batch request
+        let batch: Vec<serde_json::Value> = (batch_start..=cursor)
+            .rev()
+            .enumerate()
+            .map(|(i, block_num)| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "eth_getBlockByNumber",
+                    "params": [format!("0x{:x}", block_num), true],
+                    "id": i + 1
+                })
+            })
+            .collect();
 
-        let block_response = client
-            .post(&default_rpc_endpoint())
-            .json(&get_block_payload)
+        let batch_response = client
+            .post(&rpc)
+            .json(&batch)
             .send()
             .await;
 
-        if let Ok(response) = block_response {
-            if let Ok(json) = response.json::<serde_json::Value>().await {
-                if let Some(result) = json.get("result") {
-                    if let Some(txs) = result.get("transactions").and_then(|t| t.as_array()) {
-                        let block_timestamp = result.get("timestamp")
-                            .and_then(|t| t.as_str())
-                            .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0))
-                            .unwrap_or(0);
+        if let Ok(response) = batch_response {
+            if let Ok(results) = response.json::<Vec<serde_json::Value>>().await {
+                for item in &results {
+                    if let Some(result) = item.get("result") {
+                        if let Some(txs) = result.get("transactions").and_then(|t| t.as_array()) {
+                            if txs.is_empty() {
+                                continue;
+                            }
+                            let block_timestamp = result.get("timestamp")
+                                .and_then(|t| t.as_str())
+                                .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0))
+                                .unwrap_or(0);
+                            let block_number_hex = result.get("number")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("0x0");
+                            let block_num = u64::from_str_radix(block_number_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
-                        for tx in txs {
-                            let from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
-                            let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
+                            for tx in txs {
+                                let from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
+                                let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
 
-                            if from == address_lower || to == address_lower {
-                                let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
-                                let value_wei = u128::from_str_radix(value_hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                                let value_chr = value_wei as f64 / 1e18;
+                                if from == address_lower || to == address_lower {
+                                    let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
+                                    let value_wei = u128::from_str_radix(value_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                                    let value_chr = value_wei as f64 / 1e18;
 
-                                let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
-                                let gas_used = u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                                    let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
+                                    let gas_used = u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
-                                let tx_hash = tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
-                                let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
-                                let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
+                                    let tx_hash = tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
+                                    let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
+                                    let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
 
-                                let (tx_type, description, file_name, file_hash, speed_tier, recipient_label, balance_before, balance_after) =
-                                    classify_transaction(tx_hash, tx_from, tx_to, &address, &metadata);
+                                    let (tx_type, description, file_name, file_hash, speed_tier, recipient_label, balance_before, balance_after) =
+                                        classify_transaction(tx_hash, tx_from, tx_to, &address, &metadata);
 
-                                transactions.push(Transaction {
-                                    hash: tx_hash.to_string(),
-                                    from: tx_from.to_string(),
-                                    to: tx_to.to_string(),
-                                    value: format!("{:.6}", value_chr),
-                                    value_wei: value_wei.to_string(),
-                                    block_number: block_num,
-                                    timestamp: block_timestamp,
-                                    status: "confirmed".to_string(),
-                                    gas_used,
-                                    tx_type,
-                                    description,
-                                    file_name,
-                                    file_hash,
-                                    speed_tier,
-                                    recipient_label,
-                                    balance_before,
-                                    balance_after,
-                                });
+                                    transactions.push(Transaction {
+                                        hash: tx_hash.to_string(),
+                                        from: tx_from.to_string(),
+                                        to: tx_to.to_string(),
+                                        value: format!("{:.6}", value_chr),
+                                        value_wei: value_wei.to_string(),
+                                        block_number: block_num,
+                                        timestamp: block_timestamp,
+                                        status: "confirmed".to_string(),
+                                        gas_used,
+                                        tx_type,
+                                        description,
+                                        file_name,
+                                        file_hash,
+                                        speed_tier,
+                                        recipient_label,
+                                        balance_before,
+                                        balance_after,
+                                    });
+
+                                    if transactions.len() >= 50 {
+                                        break 'outer;
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-
-        // Limit to 50 transactions
-        if transactions.len() >= 50 {
+        } else {
+            // If batch request fails, stop scanning
             break;
         }
+
+        if batch_start == 0 {
+            break;
+        }
+        cursor = batch_start - 1;
     }
+
+    // Sort newest first
+    transactions.sort_by(|a, b| b.block_number.cmp(&a.block_number));
 
     Ok(TransactionHistoryResult { transactions })
 }
