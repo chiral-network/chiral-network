@@ -133,6 +133,22 @@ export class ProxyLatencyOptimizationService {
     }
   }
 
+  static async getLatencyEntry(proxyId: string): Promise<ProxyLatencyInfo | null> {
+    try {
+      return await invoke<ProxyLatencyInfo | null>('get_proxy_latency_entry', { proxyId });
+    } catch (error) {
+      throw new Error(`Failed to get proxy latency entry: ${error}`);
+    }
+  }
+
+  static async getLatencyScore(proxyId: string): Promise<number> {
+    try {
+      return await invoke<number>('get_proxy_latency_score', { proxyId });
+    } catch (error) {
+      throw new Error(`Failed to get proxy latency score: ${error}`);
+    }
+  }
+
   static async selfTestProxy(target: string, timeoutMs = 1500): Promise<ProxySelfTestResult> {
     try {
       return await invoke<ProxySelfTestResult>('proxy_self_test', { target, timeoutMs });
