@@ -459,14 +459,41 @@ async fn start_geth_node(
 ) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
     let miner_address = state.miner_address.lock().await;
-    let rpc_url = rpc_url.unwrap_or_else(|| crate::ethereum::rpc_endpoint());
-    *state.rpc_url.lock().await = rpc_url.clone();
 
     geth.start(
         &data_dir,
         miner_address.as_deref(),
         pure_client_mode.unwrap_or(false),
     )?;
+    drop(miner_address);
+    drop(geth);
+
+    // Now that LOCAL_GETH_RUNNING is true, rpc_endpoint() returns local.
+    // Update state.rpc_url to reflect the correct (local) endpoint.
+    let effective_rpc = rpc_url.unwrap_or_else(|| crate::ethereum::rpc_endpoint());
+    *state.rpc_url.lock().await = effective_rpc;
+
+    // Wait for local Geth RPC to be ready before returning.
+    // Without this, callers that immediately query the balance get errors
+    // because Geth needs a few seconds to open its RPC listener.
+    let client = reqwest::Client::new();
+    let local_rpc = "http://127.0.0.1:8545";
+    let probe = serde_json::json!({
+        "jsonrpc": "2.0", "method": "net_version", "params": [], "id": 1
+    });
+    for attempt in 1..=20 {
+        if let Ok(resp) = client.post(local_rpc).json(&probe)
+            .timeout(std::time::Duration::from_secs(2))
+            .send().await
+        {
+            if resp.status().is_success() {
+                tracing::info!("[start_geth_node] Local Geth RPC ready after {} attempt(s)", attempt);
+                return Ok(());
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+    tracing::warn!("[start_geth_node] Local Geth RPC not ready after 10s, proceeding anyway");
     Ok(())
 }
 
