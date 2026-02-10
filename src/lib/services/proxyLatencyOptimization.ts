@@ -2,6 +2,9 @@ import { invoke } from '@tauri-apps/api/core';
 
 export interface ProxyLatencyInfo {
   proxyId: string;
+  tcpConnectMs?: number;
+  pingRttMs?: number;
+  // legacy alias from older backend payloads
   latencyMs?: number;
   lastUpdated: number;
   status: 'Online' | 'Offline' | 'Connecting' | 'Error';
@@ -26,6 +29,9 @@ export interface ProxySelfTestResult {
   id: string;
   address: string;
   ok: boolean;
+  tcpConnectMs?: number;
+  pingRttMs?: number;
+  // legacy alias from older backend payloads
   latencyMs?: number;
   error?: string;
   testedAt: number;
@@ -103,7 +109,7 @@ export class ProxyLatencyOptimizationService {
 
   static async getLatencySnapshot(limit = 50): Promise<ProxyLatencyInfo[]> {
     try {
-      return await invoke<ProxyLatencyInfo[]>('get_proxy_latency_snapshot', { limit });
+      return await invoke<ProxyLatencyInfo[]>('plugin:proxysec|get_proxy_latency_snapshot', { limit });
     } catch (error) {
       throw new Error(`Failed to get proxy latency snapshot: ${error}`);
     }
@@ -111,7 +117,7 @@ export class ProxyLatencyOptimizationService {
 
   static async getBestProxyCandidate(): Promise<ProxyLatencyInfo | null> {
     try {
-      return await invoke<ProxyLatencyInfo | null>('get_best_proxy_candidate');
+      return await invoke<ProxyLatencyInfo | null>('plugin:proxysec|get_best_proxy_candidate');
     } catch (error) {
       throw new Error(`Failed to get best proxy candidate: ${error}`);
     }
@@ -119,7 +125,7 @@ export class ProxyLatencyOptimizationService {
 
   static async removeLatencyEntry(proxyId: string): Promise<boolean> {
     try {
-      return await invoke<boolean>('remove_proxy_latency_entry', { proxyId });
+      return await invoke<boolean>('plugin:proxysec|remove_proxy_latency_entry', { proxyId });
     } catch (error) {
       throw new Error(`Failed to remove proxy latency entry: ${error}`);
     }
@@ -127,7 +133,7 @@ export class ProxyLatencyOptimizationService {
 
   static async clearLatencyData(): Promise<number> {
     try {
-      return await invoke<number>('clear_proxy_latency_data');
+      return await invoke<number>('plugin:proxysec|clear_proxy_latency_data');
     } catch (error) {
       throw new Error(`Failed to clear proxy latency data: ${error}`);
     }
@@ -135,7 +141,7 @@ export class ProxyLatencyOptimizationService {
 
   static async getLatencyEntry(proxyId: string): Promise<ProxyLatencyInfo | null> {
     try {
-      return await invoke<ProxyLatencyInfo | null>('get_proxy_latency_entry', { proxyId });
+      return await invoke<ProxyLatencyInfo | null>('plugin:proxysec|get_proxy_latency_entry', { proxyId });
     } catch (error) {
       throw new Error(`Failed to get proxy latency entry: ${error}`);
     }
@@ -143,7 +149,7 @@ export class ProxyLatencyOptimizationService {
 
   static async getLatencyScore(proxyId: string): Promise<number> {
     try {
-      return await invoke<number>('get_proxy_latency_score', { proxyId });
+      return await invoke<number>('plugin:proxysec|get_proxy_latency_score', { proxyId });
     } catch (error) {
       throw new Error(`Failed to get proxy latency score: ${error}`);
     }
@@ -151,7 +157,7 @@ export class ProxyLatencyOptimizationService {
 
   static async selfTestProxy(target: string, timeoutMs = 1500): Promise<ProxySelfTestResult> {
     try {
-      return await invoke<ProxySelfTestResult>('proxy_self_test', { target, timeoutMs });
+      return await invoke<ProxySelfTestResult>('plugin:proxysec|proxy_self_test', { target, timeoutMs });
     } catch (error) {
       throw new Error(`Failed to self-test proxy: ${error}`);
     }
@@ -159,7 +165,7 @@ export class ProxyLatencyOptimizationService {
 
   static async selfTestAll(timeoutMs = 1500): Promise<ProxySelfTestResult[]> {
     try {
-      return await invoke<ProxySelfTestResult[]>('proxy_self_test_all', { timeoutMs });
+      return await invoke<ProxySelfTestResult[]>('plugin:proxysec|proxy_self_test_all', { timeoutMs });
     } catch (error) {
       throw new Error(`Failed to self-test all proxies: ${error}`);
     }
@@ -167,7 +173,7 @@ export class ProxyLatencyOptimizationService {
 
   static async selfTestReport(timeoutMs = 1500): Promise<ProxySelfTestSummary> {
     try {
-      return await invoke<ProxySelfTestSummary>('proxy_self_test_report', { timeoutMs });
+      return await invoke<ProxySelfTestSummary>('plugin:proxysec|proxy_self_test_report', { timeoutMs });
     } catch (error) {
       throw new Error(`Failed to run proxy self-test report: ${error}`);
     }
