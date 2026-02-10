@@ -356,6 +356,7 @@ struct AppState {
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     privacy_proxies: Arc<Mutex<Vec<String>>>,
     proxy_latency: Arc<Mutex<ProxyLatencyService>>,
+    proxy_self_test_epoch: Arc<std::sync::atomic::AtomicU64>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
@@ -1746,11 +1747,7 @@ async fn start_dht_node(
                                 "connecting" => ProxyStatus::Connecting,
                                 _ => ProxyStatus::Error,
                             };
-                            svc.update_proxy_latency(
-                                to_emit.id.clone(),
-                                latency_ms,
-                                status_kind,
-                            );
+                            svc.update_proxy_latency(to_emit.id.clone(), latency_ms, status_kind);
                         }
 
                         let _ = app_handle.emit("proxy_status_update", to_emit);
@@ -1785,7 +1782,7 @@ async fn start_dht_node(
                         }
                         drop(proxies);
                         let mut svc = proxy_latency_arc.lock().await;
-                        svc.update_proxy_latency(peer, Some(rtt_ms), ProxyStatus::Online);
+                        svc.update_ping_rtt(peer, Some(rtt_ms), ProxyStatus::Online);
                     }
                     DhtEvent::DownloadedFile(metadata) => {
                         info!(
@@ -3702,11 +3699,7 @@ async fn upload_file_to_network(
         .len();
 
     // Normalize protocol for robust matching (tests/users may send different casing like "Bitswap", "BitSwap", "BITSWAP").
-    let protocol_upper = protocol
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_uppercase();
+    let protocol_upper = protocol.as_deref().unwrap_or("").trim().to_uppercase();
     let dont_need_to_copy_protocols = vec!["BITSWAP", "WEBRTC"];
     let mut file_path = file_path.clone();
 
@@ -4664,8 +4657,8 @@ async fn test_ftp_connection(
 
     // Connect based on FTPS setting
     if use_ftps {
-        use suppaftp::{RustlsConnector, RustlsFtpStream};
         use std::sync::Arc;
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
 
         // Create TLS connector with rustls
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -4790,8 +4783,8 @@ async fn upload_to_external_ftp(
 
     // Upload based on FTPS setting
     if use_ftps {
-        use suppaftp::{RustlsConnector, RustlsFtpStream};
         use std::sync::Arc;
+        use suppaftp::{RustlsConnector, RustlsFtpStream};
 
         // Create TLS connector with rustls
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -5224,14 +5217,19 @@ async fn download_blocks_from_network(
             .unwrap_or(false);
         if !has_cids {
             for _ in 0..10 {
-                if let Ok(Some(refreshed)) =
-                    dht.synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500).await
+                if let Ok(Some(refreshed)) = dht
+                    .synchronous_search_metadata(file_metadata.merkle_root.clone(), 1_500)
+                    .await
                 {
-                    if refreshed.cids.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
+                    if refreshed
+                        .cids
+                        .as_ref()
+                        .map(|c| !c.is_empty())
+                        .unwrap_or(false)
+                    {
                         info!(
                             "🔽 Refreshed metadata now has cids for {}: {:?}",
-                            file_metadata.merkle_root,
-                            refreshed.cids
+                            file_metadata.merkle_root, refreshed.cids
                         );
                         file_metadata.cids = refreshed.cids;
                         break;
@@ -5333,7 +5331,9 @@ async fn download_file_from_network(
                     // doesn't include seeders yet, fall back to DHT provider discovery.
                     let mut metadata = metadata;
                     if metadata.seeders.is_empty() {
-                        let providers = dht_service.get_seeders_for_file(&metadata.merkle_root).await;
+                        let providers = dht_service
+                            .get_seeders_for_file(&metadata.merkle_root)
+                            .await;
                         if !providers.is_empty() {
                             info!(
                                 "Metadata had 0 seeders; using {} providers from DHT for {}",
@@ -9033,6 +9033,22 @@ async fn remove_payment_checkpoint_session(
     state.payment_checkpoint.remove_session(&session_id).await
 }
 
+fn proxysec_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("proxysec")
+        .invoke_handler(tauri::generate_handler![
+            proxy_self_test,
+            proxy_self_test_all,
+            proxy_self_test_report,
+            get_proxy_latency_snapshot,
+            get_best_proxy_candidate,
+            remove_proxy_latency_entry,
+            clear_proxy_latency_data,
+            get_proxy_latency_entry,
+            get_proxy_latency_score
+        ])
+        .build()
+}
+
 // #[cfg(not(test))]
 fn main() {
     // Don't initialize tracing subscriber here - we'll do it in setup() after loading settings
@@ -9351,6 +9367,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
+        .plugin(proxysec_plugin())
         .manage(AppState {
             geth: Mutex::new(GethProcess::new()),
             downloader: Arc::new(GethDownloader::new()),
@@ -9368,6 +9385,7 @@ fn main() {
             proxies: Arc::new(Mutex::new(Vec::new())),
             privacy_proxies: Arc::new(Mutex::new(Vec::new())),
             proxy_latency: Arc::new(Mutex::new(ProxyLatencyService::new())),
+            proxy_self_test_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
@@ -9556,12 +9574,6 @@ fn main() {
             get_multi_source_progress,
             update_proxy_latency,
             get_proxy_optimization_status,
-            get_proxy_latency_snapshot,
-            get_best_proxy_candidate,
-            remove_proxy_latency_entry,
-            clear_proxy_latency_data,
-            get_proxy_latency_entry,
-            get_proxy_latency_score,
             download_file_multi_source,
             get_file_transfer_events,
             write_file,
@@ -9581,9 +9593,6 @@ fn main() {
             proxy_connect,
             proxy_disconnect,
             proxy_remove,
-            proxy_self_test,
-            proxy_self_test_all,
-            proxy_self_test_report,
             proxy_echo,
             list_proxies,
             enable_privacy_routing,
