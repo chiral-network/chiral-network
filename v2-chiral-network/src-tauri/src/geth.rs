@@ -669,11 +669,11 @@ impl GethProcess {
             cmd.arg("--bootnodes").arg(&bootstrap_nodes);
         }
 
-        // Set miner address and enable mining if provided
+        // Set miner address (coinbase) but do NOT start mining yet —
+        // mining is deferred until the node has synced with peers to avoid
+        // creating a divergent chain from block 0
         if let Some(addr) = miner_address {
-            cmd.arg("--miner.etherbase").arg(addr)
-               .arg("--mine")
-               .arg("--miner.threads").arg("1");
+            cmd.arg("--miner.etherbase").arg(addr);
         }
 
         // Create log file (truncate on each start for clean logs)
@@ -747,12 +747,24 @@ impl GethProcess {
             }
         }
 
-        // Auto-start mining if miner address is set
+        // Mining is deferred — wait for the node to sync with peers or
+        // the remote RPC before producing blocks.  This prevents each client
+        // from mining an independent chain starting from block 0.
         if miner_address.is_some() {
-            println!("⛏️  Auto-starting mining...");
-            match self.start_mining(1).await {
-                Ok(_) => println!("✅ Mining started automatically"),
-                Err(e) => println!("⚠️  Failed to auto-start mining: {}", e),
+            println!("⏳ Mining deferred — waiting for peer sync before starting...");
+            let synced = self.wait_for_sync(30).await; // up to 30 seconds
+            if synced {
+                println!("⛏️  Node synced, starting mining...");
+                match self.start_mining(1).await {
+                    Ok(_) => println!("✅ Mining started after sync"),
+                    Err(e) => println!("⚠️  Failed to start mining after sync: {}", e),
+                }
+            } else {
+                println!("⚠️  No peers found after 30s — starting mining anyway (may create isolated chain)");
+                match self.start_mining(1).await {
+                    Ok(_) => println!("✅ Mining started (isolated mode)"),
+                    Err(e) => println!("⚠️  Failed to start mining: {}", e),
+                }
             }
         }
 
@@ -931,6 +943,68 @@ impl GethProcess {
             possible_fork,
             seconds_since_start,
         })
+    }
+
+    /// Wait for the node to discover at least 1 peer or verify its chain
+    /// matches the remote RPC.  Returns true if synced, false on timeout.
+    async fn wait_for_sync(&self, timeout_secs: u64) -> bool {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        let polls = timeout_secs * 2; // poll every 500ms
+        for attempt in 1..=polls {
+            // Check peer count via local RPC
+            let peer_payload = serde_json::json!({
+                "jsonrpc": "2.0", "method": "net_peerCount", "params": [], "id": 1
+            });
+            if let Ok(resp) = client.post("http://127.0.0.1:8545")
+                .json(&peer_payload)
+                .send().await
+            {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(hex) = json["result"].as_str() {
+                        let peers = u32::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                        if peers > 0 {
+                            println!("✅ Found {} peer(s) after {}ms", peers, attempt * 500);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Also check if remote RPC has a chain we should sync to
+            if let Some(remote) = self.query_remote_block_height().await {
+                if remote > 0 {
+                    // Remote has blocks — check if local is syncing to it
+                    let block_payload = serde_json::json!({
+                        "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1
+                    });
+                    if let Ok(resp) = client.post("http://127.0.0.1:8545")
+                        .json(&block_payload)
+                        .send().await
+                    {
+                        if let Ok(json) = resp.json::<serde_json::Value>().await {
+                            if let Some(hex) = json["result"].as_str() {
+                                let local = u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                                // If local matches remote (within 5 blocks), we're synced
+                                let diff = if local > remote { local - remote } else { remote - local };
+                                if diff <= 5 && local > 0 {
+                                    println!("✅ Chain synced with remote (local={}, remote={}) after {}ms", local, remote, attempt * 500);
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        println!("⏱️  Sync timeout after {}s (0 peers, no remote match)", timeout_secs);
+        false
     }
 
     /// Start mining (requires local Geth process)
