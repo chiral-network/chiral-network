@@ -106,24 +106,14 @@
     loadTransactionHistory();
   }
 
-  // Check Geth connection status
+  // Check Geth connection status (used to track local mining node state)
   async function checkGethStatus() {
     if (!isTauri()) return;
     try {
       const status = await invoke<{ localRunning: boolean }>('get_geth_status');
-      const wasConnected = gethConnected;
       gethConnected = status.localRunning;
-      // When Geth comes online, load balance and history
-      if (gethConnected && !wasConnected && $walletAccount?.address) {
-        loadBalance();
-        loadTransactionHistory();
-      }
-      if (!gethConnected) {
-        balance = '--';
-      }
     } catch {
       gethConnected = false;
-      balance = '--';
     }
   }
 
@@ -143,35 +133,24 @@
 
   // Watch for wallet changes
   $effect(() => {
-    if ($walletAccount?.address && gethConnected) {
+    if ($walletAccount?.address) {
       loadBalance();
       loadTransactionHistory();
     }
   });
 
-  // Track if we've shown the Geth warning
-  let gethWarningShown = $state(false);
-
-  // Load wallet balance
+  // Load wallet balance (always queries remote RPC — no local Geth needed)
   async function loadBalance() {
     log.info('[Account.loadBalance] Called, address:', $walletAccount?.address);
     if (!$walletAccount?.address) return;
-    if (!gethConnected) {
-      balance = '--';
-      return;
-    }
 
     isLoadingBalance = true;
     try {
       const result = await walletService.getBalance($walletAccount.address);
       balance = result;
       log.info('[Account.loadBalance] Balance loaded:', result);
-      gethWarningShown = false; // Reset if successful
     } catch (error) {
       log.warn('[Account.loadBalance] Failed:', error);
-      if (!gethWarningShown) {
-        gethWarningShown = true;
-      }
       balance = '--';
     } finally {
       isLoadingBalance = false;
@@ -390,27 +369,25 @@
             <div>
               <p class="text-blue-100 text-sm mb-1">Balance</p>
               <div class="flex items-baseline gap-2">
-                {#if !gethConnected}
-                  <span class="text-xl font-bold text-blue-200/60">--</span>
-                  <span class="text-blue-200/60 text-sm">Start node to view balance</span>
-                {:else if isLoadingBalance}
+                {#if isLoadingBalance}
                   <RefreshCw class="w-6 h-6 animate-spin" />
+                {:else if balance === '--'}
+                  <span class="text-xl font-bold text-blue-200/60">--</span>
+                  <span class="text-blue-200/60 text-sm">Connecting to network...</span>
                 {:else}
                   <span class="text-3xl font-bold">{formatBalance(balance)}</span>
                   <span class="text-blue-100">CHR</span>
                 {/if}
               </div>
             </div>
-            {#if gethConnected}
-              <button
-                onclick={loadBalance}
-                disabled={isLoadingBalance}
-                class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
-                title="Refresh balance"
-              >
-                <RefreshCw class="w-5 h-5 {isLoadingBalance ? 'animate-spin' : ''}" />
-              </button>
-            {/if}
+            <button
+              onclick={loadBalance}
+              disabled={isLoadingBalance}
+              class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
+              title="Refresh balance"
+            >
+              <RefreshCw class="w-5 h-5 {isLoadingBalance ? 'animate-spin' : ''}" />
+            </button>
           </div>
         </div>
 
@@ -514,9 +491,7 @@
         </div>
         <button
           onclick={() => showSendModal = true}
-          disabled={!gethConnected}
-          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          title={gethConnected ? 'Send CHR' : 'Start node to send CHR'}
+          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
         >
           <Send class="w-4 h-4" />
           Send
