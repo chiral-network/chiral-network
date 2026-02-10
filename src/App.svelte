@@ -710,6 +710,11 @@ $: canShowLockAction = !showFirstRunWizard;
               const { gethStatus } = await import('./lib/services/gethService');
               gethStatus.set('running');
               diagnosticLogger.info('GETH', 'Geth RPC is already reachable, skipping local Geth start');
+              // Re-query balance now that Geth is confirmed running (initial query may have hit remote)
+              try {
+                const { walletService } = await import('./lib/wallet');
+                await walletService.refreshBalance();
+              } catch (_) {}
             } else {
               // Check if Geth is installed
               const isGethInstalled = await invoke<boolean>('check_geth_binary').catch(() => false);
@@ -767,6 +772,12 @@ $: canShowLockAction = !showFirstRunWizard;
                 // Update geth status
                 const { gethStatus } = await import('./lib/services/gethService');
                 gethStatus.set('running');
+                // Re-query balance now that local Geth is running (initial query hit remote with 0 balance)
+                try {
+                  const { walletService } = await import('./lib/wallet');
+                  await walletService.refreshBalance();
+                  await walletService.refreshTransactions();
+                } catch (_) {}
               } catch (gethError) {
                 const gethErrorMsg = gethError instanceof Error ? gethError.message : String(gethError);
                 if (gethErrorMsg.includes("already running") || gethErrorMsg.includes("already started")) {
