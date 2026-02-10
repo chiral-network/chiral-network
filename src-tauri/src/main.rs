@@ -58,11 +58,12 @@ use crate::commands::bootstrap::get_bootstrap_nodes_command;
 use crate::commands::network::get_full_network_stats;
 use crate::commands::proxy::{
     disable_privacy_routing, enable_privacy_routing, list_proxies, proxy_connect, proxy_disconnect,
-    proxy_echo, proxy_remove, ProxyNode,
+    proxy_echo, proxy_remove, proxy_self_test, proxy_self_test_all, ProxyNode,
 };
 use bandwidth::BandwidthController;
 use chiral_network::download_paths;
 use chiral_network::payment_checkpoint::PaymentCheckpointService;
+use chiral_network::proxy_latency::{ProxyLatencyInfo, ProxyLatencyService, ProxyStatus};
 use chiral_network::transfer_events::{
     current_timestamp_ms, ErrorCategory, SourceInfo, SourceType, TransferCompletedEvent,
     TransferEventBus, TransferFailedEvent, TransferStartedEvent,
@@ -353,6 +354,7 @@ struct AppState {
     keystore: Arc<Mutex<Keystore>>,
     proxies: Arc<Mutex<Vec<ProxyNode>>>,
     privacy_proxies: Arc<Mutex<Vec<String>>>,
+    proxy_latency: Arc<Mutex<ProxyLatencyService>>,
     file_transfer_pump: Mutex<Option<JoinHandle<()>>>,
     multi_source_pump: Mutex<Option<JoinHandle<()>>>,
     socks5_proxy_cli: Mutex<Option<String>>,
@@ -1656,6 +1658,8 @@ async fn start_dht_node(
     // Spawn the event pump
     let app_handle = app.clone();
     let proxies_arc = state.proxies.clone();
+    let proxy_latency_arc = state.proxy_latency.clone();
+    let relay_reputation_arc = state.relay_reputation.clone();
     let dht_clone_for_pump = dht_arc.clone();
     let analytics_arc = state.analytics.clone();
 
@@ -1733,6 +1737,21 @@ async fn start_dht_node(
                             }
                         };
 
+                        {
+                            let mut svc = proxy_latency_arc.lock().await;
+                            let status_kind = match to_emit.status.as_str() {
+                                "online" => ProxyStatus::Online,
+                                "offline" => ProxyStatus::Offline,
+                                "connecting" => ProxyStatus::Connecting,
+                                _ => ProxyStatus::Error,
+                            };
+                            svc.update_proxy_latency(
+                                to_emit.id.clone(),
+                                latency_ms,
+                                status_kind,
+                            );
+                        }
+
                         let _ = app_handle.emit("proxy_status_update", to_emit);
                     }
                     DhtEvent::NatStatus {
@@ -1763,6 +1782,9 @@ async fn start_dht_node(
                             p.latency = rtt_ms as u32;
                             let _ = app_handle.emit("proxy_status_update", p.clone());
                         }
+                        drop(proxies);
+                        let mut svc = proxy_latency_arc.lock().await;
+                        svc.update_proxy_latency(peer, Some(rtt_ms), ProxyStatus::Online);
                     }
                     DhtEvent::DownloadedFile(metadata) => {
                         info!(
@@ -6427,35 +6449,76 @@ async fn update_proxy_latency(
     proxy_id: String,
     latency_ms: Option<u64>,
 ) -> Result<(), String> {
-    let ms = {
-        let ms_guard = state.multi_source_download.lock().await;
-        ms_guard.as_ref().cloned()
+    if proxy_id.trim().is_empty() {
+        return Err("proxy_id must not be empty".to_string());
+    }
+
+    let status = if latency_ms.is_some() {
+        ProxyStatus::Online
+    } else {
+        ProxyStatus::Offline
     };
 
-    if let Some(multi_source_service) = ms {
-        multi_source_service
-            .update_proxy_latency(proxy_id, latency_ms)
-            .await;
-        Ok(())
-    } else {
-        Err("Multi-source download service not available for proxy latency update".to_string())
+    {
+        let mut svc = state.proxy_latency.lock().await;
+        svc.update_proxy_latency(proxy_id.clone(), latency_ms, status.clone());
     }
+
+    {
+        let mut proxies = state.proxies.lock().await;
+        if let Some(node) = proxies
+            .iter_mut()
+            .find(|p| p.id == proxy_id || p.address == proxy_id)
+        {
+            node.status = match status {
+                ProxyStatus::Online => "online".to_string(),
+                ProxyStatus::Offline => "offline".to_string(),
+                ProxyStatus::Connecting => "connecting".to_string(),
+                ProxyStatus::Error => "error".to_string(),
+            };
+            if let Some(ms) = latency_ms {
+                node.latency = ms as u32;
+            }
+            node.error = None;
+        } else {
+            proxies.push(ProxyNode {
+                id: proxy_id.clone(),
+                address: proxy_id.clone(),
+                status: match status {
+                    ProxyStatus::Online => "online".to_string(),
+                    ProxyStatus::Offline => "offline".to_string(),
+                    ProxyStatus::Connecting => "connecting".to_string(),
+                    ProxyStatus::Error => "error".to_string(),
+                },
+                latency: latency_ms.unwrap_or_default() as u32,
+                error: None,
+            });
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
 async fn get_proxy_optimization_status(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let ms = {
-        let ms_guard = state.multi_source_download.lock().await;
-        ms_guard.as_ref().cloned()
-    };
+    let svc = state.proxy_latency.lock().await;
+    let summary = svc.get_status();
+    let top = svc.get_snapshot(Some(10));
+    Ok(serde_json::json!({
+        "summary": summary,
+        "topProxies": top
+    }))
+}
 
-    if let Some(multi_source_service) = ms {
-        Ok(multi_source_service.get_proxy_optimization_status().await)
-    } else {
-        Err("Multi-source download service not available for proxy optimization status".to_string())
-    }
+#[tauri::command]
+async fn get_proxy_latency_snapshot(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<ProxyLatencyInfo>, String> {
+    let svc = state.proxy_latency.lock().await;
+    Ok(svc.get_snapshot(limit))
 }
 
 #[tauri::command]
@@ -9240,6 +9303,7 @@ fn main() {
             )),
             proxies: Arc::new(Mutex::new(Vec::new())),
             privacy_proxies: Arc::new(Mutex::new(Vec::new())),
+            proxy_latency: Arc::new(Mutex::new(ProxyLatencyService::new())),
             file_transfer_pump: Mutex::new(None),
             multi_source_pump: Mutex::new(None),
             socks5_proxy_cli: Mutex::new(args.socks5_proxy),
@@ -9428,6 +9492,7 @@ fn main() {
             get_multi_source_progress,
             update_proxy_latency,
             get_proxy_optimization_status,
+            get_proxy_latency_snapshot,
             download_file_multi_source,
             get_file_transfer_events,
             write_file,
@@ -9447,6 +9512,8 @@ fn main() {
             proxy_connect,
             proxy_disconnect,
             proxy_remove,
+            proxy_self_test,
+            proxy_self_test_all,
             proxy_echo,
             list_proxies,
             enable_privacy_routing,
@@ -10043,16 +10110,22 @@ fn main() {
                 };
 
                 if let Some(dht_service) = dht_clone_for_pump {
-                    let proxies_arc_for_pump = Arc::new(Mutex::new(Vec::new()));
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        let proxies_arc_for_pump = state.proxies.clone();
+                        let proxy_lat_for_pump = state.proxy_latency.clone();
+                        let relay_reputation_arc_for_pump = state.relay_reputation.clone();
 
-                    tauri::async_runtime::spawn(async move {
-                        pump_dht_events(
-                            app_handle,
-                            dht_service,
-                            proxies_arc_for_pump,
-                        )
-                        .await;
-                    });
+                        tauri::async_runtime::spawn(async move {
+                            pump_dht_events(
+                                app_handle,
+                                dht_service,
+                                proxies_arc_for_pump,
+                                proxy_lat_for_pump,
+                                relay_reputation_arc_for_pump,
+                            )
+                            .await;
+                        });
+                    }
                 }
             }
 
@@ -10675,6 +10748,8 @@ async fn pump_dht_events(
     app_handle: tauri::AppHandle,
     dht_service: Arc<DhtService>,
     proxies_arc: Arc<Mutex<Vec<ProxyNode>>>,
+    proxy_latency_arc: Arc<Mutex<ProxyLatencyService>>,
+    relay_reputation_arc: Arc<Mutex<std::collections::HashMap<String, RelayNodeStats>>>,
 ) {
     loop {
         let events = dht_service.drain_events(64).await;
@@ -10733,6 +10808,16 @@ async fn pump_dht_events(
                             node
                         }
                     };
+                    {
+                        let mut svc = proxy_latency_arc.lock().await;
+                        let status_kind = match to_emit.status.as_str() {
+                            "online" => ProxyStatus::Online,
+                            "offline" => ProxyStatus::Offline,
+                            "connecting" => ProxyStatus::Connecting,
+                            _ => ProxyStatus::Error,
+                        };
+                        svc.update_proxy_latency(to_emit.id.clone(), latency_ms, status_kind);
+                    }
                     let _ = app_handle.emit("proxy_status_update", to_emit);
                 }
                 DhtEvent::NatStatus {
