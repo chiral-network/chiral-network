@@ -849,7 +849,7 @@ onDestroy(() => {
             <div class="text-center p-2 rounded bg-background border border-border/30">
               <p class="text-xs text-muted-foreground">{$t('proxy.latency')}</p>
               <p class="text-sm font-bold text-purple-600">{node.latency || 'N/A'}</p>
-              <p class="text-xs text-muted-foreground">ms</p>
+              <p class="text-xs text-muted-foreground">ms (tcp connect)</p>
             </div>
             {#if node.address}
               {@const stats = getPerformanceStats(node.address)}
@@ -921,6 +921,9 @@ onDestroy(() => {
         <div>
           <h4 class="text-sm font-medium text-gray-700 mb-2">{$t('proxy.optimization.currentStatus')}</h4>
           <p class="text-sm font-medium">{optimizationStatus}</p>
+          <p class="text-xs text-gray-600 mt-1">
+            self-test metric: tcp connect ms | routing metric: ping rtt ms
+          </p>
           <div class="flex gap-2 mt-1">
             <button
               class="text-xs text-purple-600 hover:text-purple-800"
