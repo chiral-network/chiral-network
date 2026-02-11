@@ -355,6 +355,51 @@
       default: return 'bg-gray-100 dark:bg-gray-700';
     }
   }
+
+  function sourceBg(source: string): string {
+    const normalized = source.toLowerCase();
+    switch (normalized) {
+      case 'geth': return 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300';
+      case 'mining': return 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300';
+      case 'dht': return 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300';
+      case 'bootstrap': return 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300';
+      case 'system': return 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300';
+      default: return 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300';
+    }
+  }
+
+  function gethLogLineColor(line: string, level: string | null): string {
+    if (level === 'ERROR' || line.includes('Fatal') || line.includes('ERROR') || line.includes('error')) {
+      return 'text-red-400';
+    }
+    if (level === 'WARN' || line.includes('WARN') || line.includes('warn')) {
+      return 'text-yellow-400';
+    }
+    if (level === 'DEBUG') {
+      return 'text-slate-400';
+    }
+    return 'text-gray-300';
+  }
+
+  function parseStructuredGethLine(line: string): {
+    timestamp: string | null;
+    level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | null;
+    source: string | null;
+    message: string;
+  } {
+    const match = line.match(/^\[(\d+)\]\s+\[(INFO|WARN|ERROR|DEBUG)\]\s+\[([A-Z_]+)\]\s+(.*)$/);
+    if (!match) {
+      return { timestamp: null, level: null, source: null, message: line };
+    }
+    const [, ts, level, source, message] = match;
+    const date = new Date(Number(ts) * 1000);
+    return {
+      timestamp: Number.isFinite(date.getTime()) ? date.toLocaleTimeString() : ts,
+      level: level as 'INFO' | 'WARN' | 'ERROR' | 'DEBUG',
+      source,
+      message
+    };
+  }
 </script>
 
 <div class="p-6 space-y-6">
@@ -786,8 +831,9 @@
       <div class="px-6 pb-6 space-y-4">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <label class="text-xs text-gray-500 dark:text-gray-400">Lines:</label>
+            <label for="geth-log-lines" class="text-xs text-gray-500 dark:text-gray-400">Lines:</label>
             <select
+              id="geth-log-lines"
               bind:value={gethLogLines}
               onchange={() => loadGethLog()}
               class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
@@ -830,8 +876,24 @@
         <div class="bg-gray-900 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
           {#if gethLogContent}
             {#each gethLogContent.split('\n') as line}
-              <div class="py-0.5 hover:bg-gray-800 px-1 rounded {line.includes('Fatal') || line.includes('ERROR') || line.includes('error') ? 'text-red-400' : line.includes('WARN') || line.includes('warn') ? 'text-yellow-400' : line.includes('INFO') ? 'text-gray-300' : 'text-gray-400'}">
-                {line}
+              {@const parsed = parseStructuredGethLine(line)}
+              <div class="flex gap-2 py-0.5 hover:bg-gray-800 px-1 rounded">
+                {#if parsed.timestamp}
+                  <span class="text-gray-500 shrink-0">{parsed.timestamp}</span>
+                {/if}
+                {#if parsed.level}
+                  <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {levelBg(parsed.level.toLowerCase())}">
+                    {parsed.level}
+                  </span>
+                {/if}
+                {#if parsed.source}
+                  <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {sourceBg(parsed.source)}">
+                    {parsed.source}
+                  </span>
+                {/if}
+                <span class="{gethLogLineColor(parsed.message, parsed.level)} break-all">
+                  {parsed.message}
+                </span>
               </div>
             {/each}
           {:else}
@@ -933,7 +995,7 @@
               <div class="flex gap-2 py-0.5 hover:bg-gray-800 px-1 rounded">
                 <span class="text-gray-500 shrink-0">{entry.timestamp.toLocaleTimeString()}</span>
                 <span class="shrink-0 px-1 rounded {levelBg(entry.level)} text-[10px] uppercase font-bold">{entry.level}</span>
-                <span class="text-purple-400 shrink-0">[{entry.source}]</span>
+                <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {sourceBg(entry.source)}">{entry.source}</span>
                 <span class="text-gray-300 break-all">{entry.message}</span>
               </div>
             {/each}
