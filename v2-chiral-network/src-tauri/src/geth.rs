@@ -465,7 +465,7 @@ impl GethProcess {
                 "londonBlock": 0,
                 "ethash": {}
             },
-            "difficulty": "0x400000",
+            "difficulty": "0x1000000",
             "gasLimit": "0x47b760",
             "alloc": {},
             "coinbase": "0x0000000000000000000000000000000000000000",
