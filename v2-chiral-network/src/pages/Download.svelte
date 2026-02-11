@@ -515,8 +515,13 @@
       }
 
       // Update download with request ID
+      let resolvedRequestId = response.requestId;
+      if (downloads.some(d => d.id === resolvedRequestId && d.id !== newDownload.id)) {
+        resolvedRequestId = `${response.requestId}-${Date.now()}`;
+      }
+
       downloads = downloads.map(d =>
-        d.id === newDownload.id ? { ...d, id: response.requestId, speed: 'Connecting...' } : d
+        d.id === newDownload.id ? { ...d, id: resolvedRequestId, speed: 'Connecting...' } : d
       );
       saveDownloadHistory();
     } catch (error) {
