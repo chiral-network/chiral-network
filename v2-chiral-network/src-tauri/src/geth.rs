@@ -11,10 +11,11 @@ use crate::geth_bootstrap;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // ============================================================================
 // Configuration
@@ -28,6 +29,63 @@ pub const NETWORK_ID: u64 = 98765;
 
 /// Tracks whether a local Geth process is running (set by GethProcess start/stop)
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
+
+fn diagnostics_geth_log_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("chiral-network")
+        .join("geth")
+        .join("geth.log")
+}
+
+fn detect_log_level(message: &str) -> &'static str {
+    let upper = message.to_ascii_uppercase();
+    if upper.contains("ERROR") || upper.contains("FAILED") || message.contains("❌") {
+        "ERROR"
+    } else if upper.contains("WARN") || message.contains("⚠️") {
+        "WARN"
+    } else if upper.contains("DEBUG") || message.contains("🔍") {
+        "DEBUG"
+    } else {
+        "INFO"
+    }
+}
+
+fn detect_log_source(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if message.contains("⛏️") || lower.contains("mining") || lower.contains("hashrate") {
+        "MINING"
+    } else {
+        "GETH"
+    }
+}
+
+fn append_structured_geth_log(message: &str) {
+    let log_path = diagnostics_geth_log_path();
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let level = detect_log_level(message);
+    let source = detect_log_source(message);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
+        for line in message.lines() {
+            let entry = format!("[{}] [{}] [{}] {}\n", timestamp, level, source, line);
+            let _ = file.write_all(entry.as_bytes());
+        }
+    }
+}
+
+macro_rules! println {
+    ($($arg:tt)*) => {{
+        append_structured_geth_log(&format!($($arg)*));
+    }};
+}
 
 /// Shared RPC endpoint for balance, transaction, and state queries.
 /// Always returns the remote bootstrap node so all clients see the same
