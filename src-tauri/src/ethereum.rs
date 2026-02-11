@@ -1069,12 +1069,26 @@ pub async fn reconnect_to_bootstrap_with_snapshot(
     let stagnant = is_stagnant(&state.sample_hist, now_ms, cfg.stagnation_window);
     let attempts_exhausted = state.attempt_idx >= cfg.max_attempts;
 
+    if state.in_flight {
+        return Ok(build_snapshot(
+            &state,
+            &cfg,
+            PeerRecoveryReason::Attempting,
+            peer_count,
+            now,
+            "none".to_string(),
+            false,
+            true,
+            stagnant,
+        ));
+    }
+
     let reason = eval_recovery_reason(RecoveryEval {
         rpc_ok,
         window_active,
         healthy,
         saturated,
-        in_flight: state.in_flight,
+        in_flight: false,
         cooling_down,
         stagnant,
         attempts_exhausted,
