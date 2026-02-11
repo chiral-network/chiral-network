@@ -43,6 +43,11 @@
 
   let showHistory = $state(false);
   let sendPrice = $state('');
+  let mapPaneRatio = $state(72);
+  let isWideLayout = $state(false);
+  let isResizingSplit = $state(false);
+  let splitLayoutEl: HTMLDivElement | null = null;
+  let cleanupSplitListeners: (() => void) | null = null;
   let unlistenPeerDiscovered: (() => void) | null = null;
   let unlistenFileReceived: (() => void) | null = null;
   let unlistenFileComplete: (() => void) | null = null;
@@ -54,7 +59,66 @@
   let unlistenDownloadComplete: (() => void) | null = null;
   let unlistenDownloadFailed: (() => void) | null = null;
 
+  const SPLIT_RATIO_STORAGE_KEY = 'chiraldrop_map_ratio';
+  const MIN_MAP_PANE_RATIO = 45;
+  const MAX_MAP_PANE_RATIO = 80;
+
+  function clampMapPaneRatio(ratio: number): number {
+    return Math.max(MIN_MAP_PANE_RATIO, Math.min(MAX_MAP_PANE_RATIO, ratio));
+  }
+
+  function updateWideLayoutState() {
+    if (typeof window === 'undefined') return;
+    isWideLayout = window.innerWidth >= 1280;
+    if (!isWideLayout) {
+      isResizingSplit = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  }
+
+  function handleSplitPointerMove(event: PointerEvent) {
+    if (!isResizingSplit || !isWideLayout || !splitLayoutEl) return;
+    const rect = splitLayoutEl.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = ((event.clientX - rect.left) / rect.width) * 100;
+    mapPaneRatio = clampMapPaneRatio(ratio);
+  }
+
+  function stopSplitResize() {
+    if (!isResizingSplit) return;
+    isResizingSplit = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
+
+  function startSplitResize(event: PointerEvent) {
+    if (!isWideLayout) return;
+    event.preventDefault();
+    isResizingSplit = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }
+
   onMount(async () => {
+    if (typeof window !== 'undefined') {
+      const storedRatio = Number(localStorage.getItem(SPLIT_RATIO_STORAGE_KEY));
+      if (Number.isFinite(storedRatio)) {
+        mapPaneRatio = clampMapPaneRatio(storedRatio);
+      }
+
+      updateWideLayoutState();
+      const handleResize = () => updateWideLayoutState();
+      window.addEventListener('resize', handleResize);
+      window.addEventListener('pointermove', handleSplitPointerMove);
+      window.addEventListener('pointerup', stopSplitResize);
+      cleanupSplitListeners = () => {
+        window.removeEventListener('resize', handleResize);
+        window.removeEventListener('pointermove', handleSplitPointerMove);
+        window.removeEventListener('pointerup', stopSplitResize);
+      };
+    }
+
     // Check Tauri availability
     isTauri = checkTauriAvailability();
 
@@ -226,6 +290,9 @@
   });
 
   onDestroy(() => {
+    cleanupSplitListeners?.();
+    stopSplitResize();
+
     if (unlistenPeerDiscovered) {
       unlistenPeerDiscovered();
     }
@@ -255,6 +322,13 @@
     }
     if (unlistenDownloadFailed) {
       unlistenDownloadFailed();
+    }
+  });
+
+  $effect(() => {
+    const ratio = mapPaneRatio;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(SPLIT_RATIO_STORAGE_KEY, String(ratio));
     }
   });
 
@@ -502,9 +576,15 @@
     </div>
   </div>
 
-  <div class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_22rem] gap-4 sm:gap-6">
+  <div
+    bind:this={splitLayoutEl}
+    class="flex-1 min-h-0 flex flex-col xl:flex-row gap-4 sm:gap-6 xl:gap-0"
+  >
     <!-- Peer Map -->
-    <div class="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div
+      class="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800 min-h-[22rem] xl:min-h-0"
+      style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` : ''}
+    >
       <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-blue-50/70 to-cyan-50/60 dark:from-slate-900 dark:via-gray-900 dark:to-blue-950/50"></div>
       <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-blue-300/25 blur-3xl dark:bg-blue-500/20"></div>
       <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20"></div>
@@ -518,7 +598,12 @@
       </div>
 
       <!-- User -->
-      <div class="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+      <div class="absolute left-1/2 bottom-6 z-30 -translate-x-1/2 flex flex-col items-center">
+        <div class="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+          <span class="user-wave user-wave-1"></span>
+          <span class="user-wave user-wave-2"></span>
+          <span class="user-wave user-wave-3"></span>
+        </div>
         <span class="absolute -inset-4 rounded-full bg-blue-400/25 blur-xl dark:bg-blue-500/20"></span>
         <div
           class="relative h-16 w-16 rounded-full border-4 border-white shadow-xl ring-4 ring-blue-200/60 dark:border-gray-700 dark:ring-blue-900/60 flex items-center justify-center"
@@ -567,8 +652,19 @@
       {/if}
     </div>
 
+    <button
+      type="button"
+      onpointerdown={startSplitResize}
+      class="hidden relative xl:flex xl:w-3 xl:flex-none xl:items-center xl:justify-center xl:cursor-col-resize group"
+      aria-label="Resize map and side panel"
+      title="Drag to resize panels"
+    >
+      <span class="h-full w-px bg-gray-300 dark:bg-gray-600"></span>
+      <span class="absolute h-20 w-1.5 rounded-full bg-gray-300/80 transition group-hover:bg-blue-400 dark:bg-gray-600 dark:group-hover:bg-blue-500"></span>
+    </button>
+
     <!-- Side Panel -->
-    <div class="flex min-h-0 flex-col gap-4">
+    <div class="flex min-h-0 flex-col gap-4 xl:flex-1">
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
         <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-800/85">
@@ -747,6 +843,27 @@
     animation: peerPulse 2.8s ease-in-out infinite;
   }
 
+  .user-wave {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 64px;
+    height: 64px;
+    border-radius: 9999px;
+    border: 2px solid rgba(59, 130, 246, 0.45);
+    transform: translate(-50%, -50%);
+    animation: userWavePulse 4s ease-out infinite;
+    pointer-events: none;
+  }
+
+  .user-wave-2 {
+    animation-delay: 1.25s;
+  }
+
+  .user-wave-3 {
+    animation-delay: 2.5s;
+  }
+
   @keyframes peerPulse {
     0%, 100% {
       opacity: 0.35;
@@ -755,6 +872,21 @@
     50% {
       opacity: 0.75;
       transform: scale(1.12);
+    }
+  }
+
+  @keyframes userWavePulse {
+    0% {
+      width: 64px;
+      height: 64px;
+      opacity: 0.55;
+      border-width: 3px;
+    }
+    100% {
+      width: 460px;
+      height: 460px;
+      opacity: 0;
+      border-width: 1px;
     }
   }
 </style>
