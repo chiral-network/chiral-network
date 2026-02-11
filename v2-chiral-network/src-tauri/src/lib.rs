@@ -1902,7 +1902,7 @@ async fn get_transaction_history(
     let address_lower = address.to_lowercase();
 
     // Scan only a recent block window from the chain tip.
-    const MAX_BLOCKS_TO_SCAN: u64 = 100;
+    const MAX_BLOCKS_TO_SCAN: u64 = 5000;
     const BATCH_SIZE: u64 = 100;
     let first_block_to_scan = latest_block.saturating_sub(MAX_BLOCKS_TO_SCAN.saturating_sub(1));
     let mut cursor = latest_block;
