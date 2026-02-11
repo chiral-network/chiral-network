@@ -14,7 +14,6 @@
     X,
     Plus,
     Copy,
-    RefreshCw,
     Globe,
     Share2,
     History,
@@ -123,10 +122,6 @@
   let showUploadHistory = $state(true);
   let filePrice = $state('');
 
-  // Storage info
-  let availableStorage = $state<number | null>(null);
-  let isRefreshingStorage = $state(false);
-
   // Persistence keys
   const UPLOAD_HISTORY_KEY = 'chiral_upload_history';
 
@@ -151,21 +146,6 @@
       localStorage.setItem(UPLOAD_HISTORY_KEY, JSON.stringify(sharedFiles));
     } catch (e) {
       log.error('Failed to save upload history:', e);
-    }
-  }
-
-  async function refreshStorage() {
-    if (!isTauri || isRefreshingStorage) return;
-
-    isRefreshingStorage = true;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const storage = await invoke<number>('get_available_storage');
-      availableStorage = storage;
-    } catch (error) {
-      log.error('Failed to get storage:', error);
-    } finally {
-      isRefreshingStorage = false;
     }
   }
 
@@ -426,9 +406,6 @@
   onMount(() => {
     isTauri = checkTauriAvailability();
     loadUploadHistory();
-    if (isTauri) {
-      refreshStorage();
-    }
   });
 
   // Set up Tauri drag-drop listener
@@ -489,30 +466,6 @@
           </p>
         </div>
       </div>
-    </div>
-  {/if}
-
-  <!-- Storage Info -->
-  {#if isTauri}
-    <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between">
-      <div>
-        <p class="text-sm font-semibold text-gray-900 dark:text-white">Storage</p>
-        <p class="text-sm text-gray-600 dark:text-gray-400">
-          {#if availableStorage !== null}
-            {formatFileSize(availableStorage * 1024 * 1024)} available
-          {:else}
-            Checking storage...
-          {/if}
-        </p>
-      </div>
-      <button
-        onclick={refreshStorage}
-        disabled={isRefreshingStorage}
-        class="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
-      >
-        <RefreshCw class="w-4 h-4 {isRefreshingStorage ? 'animate-spin' : ''}" />
-        Refresh
-      </button>
     </div>
   {/if}
 
