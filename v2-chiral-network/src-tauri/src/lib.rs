@@ -732,7 +732,13 @@ async fn start_download(
             let custom_dir = state.download_directory.lock().await.clone();
             let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
-            let request_id = format!("local-{}", &file_hash[..8]);
+            let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
+            let request_id = format!("local-{}-{}",
+                file_hash_prefix,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis());
 
             let file_data_clone = file_data.clone();
             let app_clone = app.clone();
@@ -785,7 +791,8 @@ async fn start_download(
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
         // Generate a unique request ID
-        let request_id = format!("download-{}-{}", &file_hash[..8],
+        let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
+        let request_id = format!("download-{}-{}", file_hash_prefix,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
