@@ -23,8 +23,7 @@
     Plus,
     Trash2,
     FolderOpen,
-    ExternalLink,
-    Eye
+    ExternalLink
   } from 'lucide-svelte';
   import { Zap, Gauge, Rocket } from 'lucide-svelte';
   import { networkConnected, walletAccount } from '$lib/stores';
@@ -52,7 +51,6 @@
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
   type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'cancelled' | 'failed';
-  type PreviewType = 'video' | 'audio' | 'image' | 'pdf' | 'unsupported';
 
   interface SearchResult {
     hash: string;
@@ -172,12 +170,6 @@
   let downloadHistory = $state<HistoryEntry[]>([]);
   let showSearchHistory = $state(false);
   let downloadsTab = $state<'active' | 'history'>('active');
-  let isViewerOpen = $state(false);
-  let viewerSource = $state('');
-  let viewerType = $state<PreviewType>('unsupported');
-  let viewerFileName = $state('');
-  let viewerFilePath = $state('');
-  let viewerError = $state<string | null>(null);
 
   // Speed tier state
   let selectedTier = $state<SpeedTier>('free');
@@ -798,50 +790,6 @@
     }
   }
 
-  function getPreviewType(fileName: string): PreviewType {
-    const ext = fileName.split('.').pop()?.toLowerCase() || '';
-
-    if (['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'ogg'].includes(ext)) return 'video';
-    if (['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'wma'].includes(ext)) return 'audio';
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
-    if (ext === 'pdf') return 'pdf';
-    return 'unsupported';
-  }
-
-  function canPreviewFile(fileName: string): boolean {
-    return getPreviewType(fileName) !== 'unsupported';
-  }
-
-  async function handlePreviewFile(filePath: string, fileName: string) {
-    const previewType = getPreviewType(fileName);
-    if (previewType === 'unsupported') {
-      toasts.show('This file type cannot be previewed in-app yet. Open it with the system app.', 'info');
-      return;
-    }
-
-    try {
-      const { convertFileSrc } = await import('@tauri-apps/api/core');
-      viewerSource = convertFileSrc(filePath);
-      viewerType = previewType;
-      viewerFileName = fileName;
-      viewerFilePath = filePath;
-      viewerError = null;
-      isViewerOpen = true;
-    } catch (error) {
-      log.error('Failed to open in-app viewer:', error);
-      toasts.show(`Failed to preview file: ${error}`, 'error');
-    }
-  }
-
-  function closeViewer() {
-    isViewerOpen = false;
-    viewerSource = '';
-    viewerType = 'unsupported';
-    viewerFileName = '';
-    viewerFilePath = '';
-    viewerError = null;
-  }
-
   // Show a downloaded file in the system file manager
   async function handleShowInFolder(filePath: string) {
     try {
@@ -1266,15 +1214,6 @@
                     </button>
                   {:else if isFinished}
                     {#if download.status === 'completed' && download.filePath}
-                      {#if canPreviewFile(download.name)}
-                        <button
-                          onclick={() => handlePreviewFile(download.filePath!, download.name)}
-                          class="p-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
-                          title="Preview in app"
-                        >
-                          <Eye class="w-4 h-4 text-indigo-500" />
-                        </button>
-                      {/if}
                       <button
                         onclick={() => handleOpenFile(download.filePath!)}
                         class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
@@ -1397,15 +1336,6 @@
                 {#if entry.status === 'completed'}
                   <div class="flex items-center gap-1 flex-shrink-0">
                     {#if entry.filePath}
-                      {#if canPreviewFile(entry.fileName)}
-                        <button
-                          onclick={() => handlePreviewFile(entry.filePath!, entry.fileName)}
-                          class="p-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
-                          title="Preview in app"
-                        >
-                          <Eye class="w-4 h-4 text-indigo-500" />
-                        </button>
-                      {/if}
                       <button
                         onclick={() => handleOpenFile(entry.filePath!)}
                         class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
@@ -1438,92 +1368,3 @@
     {/if}
   </div>
 </div>
-
-<!-- In-app file preview modal -->
-{#if isViewerOpen}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div
-    class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
-    role="dialog"
-    aria-modal="true"
-    tabindex="-1"
-    onclick={closeViewer}
-    onkeydown={(e) => e.key === 'Escape' && closeViewer()}
-  >
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="w-full max-w-5xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden"
-      role="document"
-      onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.stopPropagation()}
-    >
-      <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
-        <div class="min-w-0">
-          <p class="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{viewerFileName}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">In-app preview</p>
-        </div>
-        <div class="flex items-center gap-2">
-          <button
-            onclick={() => handleShowInFolder(viewerFilePath)}
-            class="px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300"
-          >
-            Show in folder
-          </button>
-          <button
-            onclick={() => handleOpenFile(viewerFilePath)}
-            class="px-3 py-1.5 text-xs rounded-lg bg-blue-600 hover:bg-blue-700 text-white"
-          >
-            Open externally
-          </button>
-          <button
-            onclick={closeViewer}
-            class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
-            title="Close preview"
-          >
-            <X class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-          </button>
-        </div>
-      </div>
-
-      <div class="p-4 bg-black/90 min-h-[320px] max-h-[calc(90vh-64px)] overflow-auto flex items-center justify-center">
-        {#if viewerError}
-          <p class="text-sm text-red-300">{viewerError}</p>
-        {:else if viewerType === 'video'}
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video
-            class="max-w-full max-h-[calc(90vh-120px)] rounded-lg"
-            controls
-            autoplay
-            src={viewerSource}
-            onerror={() => viewerError = 'Unable to load this video in the in-app player.'}
-          ></video>
-        {:else if viewerType === 'audio'}
-          <audio
-            class="w-full max-w-xl"
-            controls
-            autoplay
-            src={viewerSource}
-            onerror={() => viewerError = 'Unable to load this audio file in the in-app player.'}
-          ></audio>
-        {:else if viewerType === 'image'}
-          <img
-            class="max-w-full max-h-[calc(90vh-120px)] rounded-lg object-contain"
-            alt={viewerFileName}
-            src={viewerSource}
-            onerror={() => viewerError = 'Unable to load this image in the in-app viewer.'}
-          />
-        {:else if viewerType === 'pdf'}
-          <iframe
-            class="w-full h-[calc(90vh-140px)] rounded-lg bg-white"
-            title={viewerFileName}
-            src={viewerSource}
-          ></iframe>
-        {:else}
-          <div class="text-center text-gray-300">
-            <p>This file type is not supported for in-app preview.</p>
-          </div>
-        {/if}
-      </div>
-    </div>
-  </div>
-{/if}
