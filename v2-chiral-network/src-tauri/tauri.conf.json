@@ -20,24 +20,7 @@
       }
     ],
     "security": {
-      "csp": null,
-      "assetProtocol": {
-        "enable": true,
-        "scope": {
-          "allow": [
-            "$DOWNLOAD/**",
-            "$HOME/**",
-            "$DESKTOP/**",
-            "$DOCUMENT/**",
-            "$VIDEO/**",
-            "$PICTURE/**",
-            "$MUSIC/**",
-            "$TEMP/**",
-            "$APPDATA/**",
-            "$APPLOCALDATA/**"
-          ]
-        }
-      }
+      "csp": null
     }
   },
   "bundle": {
