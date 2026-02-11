@@ -7,15 +7,15 @@ use secp256k1::{PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha3::{Digest, Keccak256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::net::TcpStream;
-use std::time::Duration;
-use tokio::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
+use tokio::sync::Mutex;
 use url::Url;
 
 // ============================================================================
@@ -25,6 +25,17 @@ use url::Url;
 /// Block reward in Chiral - the amount awarded for mining a block.
 /// This is the single source of truth for block rewards throughout the codebase.
 pub const BLOCK_REWARD: f64 = 2.0;
+
+pub const DEFAULT_GETH_MAX_PEERS: u32 = 100;
+const DEFAULT_RECOVERY_WINDOW_SECS: u64 = 120;
+const DEFAULT_RECOVERY_STAGNATION_SECS: u64 = 20;
+const DEFAULT_RECOVERY_COOLDOWN_SECS: u64 = 30;
+const DEFAULT_RECOVERY_MAX_ATTEMPTS: u32 = 4;
+const DEFAULT_RECOVERY_HEADROOM: u32 = 5;
+const DEFAULT_RECOVERY_SEED_CAP: usize = 8;
+const DEFAULT_RECOVERY_RPC_TIMEOUT_MS: u64 = 2000;
+const DEFAULT_RECOVERY_POST_WAIT_MS: u64 = 2000;
+const SAMPLE_HISTORY_CAP: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
@@ -44,13 +55,11 @@ impl Default for NetworkConfig {
 }
 
 // Global configuration - reads from genesis.json or environment variables
-pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| {
-    NetworkConfig {
-        rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
-            .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
-        chain_id: *CHAIN_ID,
-        network_id: *NETWORK_ID,
-    }
+pub static NETWORK_CONFIG: Lazy<NetworkConfig> = Lazy::new(|| NetworkConfig {
+    rpc_endpoint: std::env::var("CHIRAL_RPC_ENDPOINT")
+        .unwrap_or_else(|_| "http://127.0.0.1:8545".to_string()),
+    chain_id: *CHAIN_ID,
+    network_id: *NETWORK_ID,
 });
 
 // Shared HTTP client for all RPC calls
@@ -60,6 +69,270 @@ pub static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
         .build()
         .expect("Failed to create HTTP client")
 });
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerRecoveryReason {
+    Healthy,
+    CoolingDown,
+    Saturated,
+    RpcDown,
+    WindowExpired,
+    WaitingStagnation,
+    Attempting,
+    AttemptsExhausted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerCountSample {
+    pub peer_count: u32,
+    pub timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerAttemptResult {
+    pub source: String,
+    pub accepted_targets: usize,
+    pub attempted_targets: usize,
+    pub error: Option<String>,
+    pub timestamp_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerRecoverySnapshot {
+    pub reason: PeerRecoveryReason,
+    pub peer_count: u32,
+    pub min_peers: u32,
+    pub max_peers: u32,
+    pub window_remaining_ms: u64,
+    pub cooldown_remaining_ms: u64,
+    pub attempt_idx: u32,
+    pub target_source: String,
+    pub rpc_ok: bool,
+    pub trigger_stagnant: bool,
+    pub trigger_saturated: bool,
+    pub trigger_healthy: bool,
+    pub attempted: bool,
+    pub last_samples: Vec<PeerCountSample>,
+    pub last_attempt: Option<PeerAttemptResult>,
+}
+
+#[derive(Debug, Clone)]
+struct PeerRecoveryCfg {
+    min_peers: u32,
+    max_peers: u32,
+    cold_window: Duration,
+    stagnation_window: Duration,
+    cooldown: Duration,
+    max_attempts: u32,
+    saturation_headroom: u32,
+    seed_cap: usize,
+    rpc_timeout: Duration,
+    post_wait: Duration,
+}
+
+impl PeerRecoveryCfg {
+    fn with_min_peers(min_peers: u32) -> Self {
+        Self {
+            min_peers,
+            max_peers: get_configured_max_peers(),
+            cold_window: Duration::from_secs(DEFAULT_RECOVERY_WINDOW_SECS),
+            stagnation_window: Duration::from_secs(DEFAULT_RECOVERY_STAGNATION_SECS),
+            cooldown: Duration::from_secs(DEFAULT_RECOVERY_COOLDOWN_SECS),
+            max_attempts: DEFAULT_RECOVERY_MAX_ATTEMPTS,
+            saturation_headroom: DEFAULT_RECOVERY_HEADROOM,
+            seed_cap: DEFAULT_RECOVERY_SEED_CAP,
+            rpc_timeout: Duration::from_millis(DEFAULT_RECOVERY_RPC_TIMEOUT_MS),
+            post_wait: Duration::from_millis(DEFAULT_RECOVERY_POST_WAIT_MS),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PeerRecoveryState {
+    rpc_ready_at: Option<Instant>,
+    cooldown_until: Option<Instant>,
+    in_flight: bool,
+    attempt_idx: u32,
+    seed_cursor: usize,
+    rpc_fail_cnt: u32,
+    sample_hist: VecDeque<PeerCountSample>,
+    last_attempt: Option<PeerAttemptResult>,
+}
+
+impl Default for PeerRecoveryState {
+    fn default() -> Self {
+        Self {
+            rpc_ready_at: None,
+            cooldown_until: None,
+            in_flight: false,
+            attempt_idx: 0,
+            seed_cursor: 0,
+            rpc_fail_cnt: 0,
+            sample_hist: VecDeque::with_capacity(SAMPLE_HISTORY_CAP),
+            last_attempt: None,
+        }
+    }
+}
+
+static PEER_RECOVERY_STATE: Lazy<Mutex<PeerRecoveryState>> =
+    Lazy::new(|| Mutex::new(PeerRecoveryState::default()));
+
+#[derive(Debug, Clone, Copy)]
+struct RecoveryEval {
+    rpc_ok: bool,
+    window_active: bool,
+    healthy: bool,
+    saturated: bool,
+    in_flight: bool,
+    cooling_down: bool,
+    stagnant: bool,
+    attempts_exhausted: bool,
+}
+
+fn eval_recovery_reason(inp: RecoveryEval) -> PeerRecoveryReason {
+    if !inp.rpc_ok {
+        return PeerRecoveryReason::RpcDown;
+    }
+    if !inp.window_active {
+        return PeerRecoveryReason::WindowExpired;
+    }
+    if inp.healthy {
+        return PeerRecoveryReason::Healthy;
+    }
+    if inp.saturated {
+        return PeerRecoveryReason::Saturated;
+    }
+    if inp.in_flight {
+        return PeerRecoveryReason::Attempting;
+    }
+    if inp.cooling_down {
+        return PeerRecoveryReason::CoolingDown;
+    }
+    if inp.attempts_exhausted {
+        return PeerRecoveryReason::AttemptsExhausted;
+    }
+    if !inp.stagnant {
+        return PeerRecoveryReason::WaitingStagnation;
+    }
+    PeerRecoveryReason::Attempting
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+pub fn get_configured_max_peers() -> u32 {
+    std::env::var("CHIRAL_GETH_MAX_PEERS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_GETH_MAX_PEERS)
+}
+
+fn parse_rpc_quantity_u32(raw: &str, field: &str) -> Result<u32, String> {
+    if !raw.starts_with("0x") {
+        return Err(format!(
+            "Invalid {} response: expected hex quantity with 0x prefix, got '{}'",
+            field, raw
+        ));
+    }
+    let hex = &raw[2..];
+    if hex.is_empty() {
+        return Err(format!(
+            "Invalid {} response: empty quantity '{}'",
+            field, raw
+        ));
+    }
+    if hex.len() > 1 && hex.starts_with('0') {
+        return Err(format!(
+            "Invalid {} response: quantity has leading zero '{}'",
+            field, raw
+        ));
+    }
+    u32::from_str_radix(hex, 16)
+        .map_err(|e| format!("Failed to parse {} quantity '{}': {}", field, raw, e))
+}
+
+fn parse_seed_enodes_list(raw: &str) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for (idx, entry) in raw.split(',').enumerate() {
+        let enode = entry.trim();
+        if enode.is_empty() {
+            continue;
+        }
+        if !enode.starts_with("enode://") {
+            return Err(format!(
+                "Invalid seed enode at index {}: '{}' must start with enode://",
+                idx, enode
+            ));
+        }
+        crate::geth_bootstrap::parse_enode_address(enode)
+            .map_err(|e| format!("Invalid seed enode at index {}: {}", idx, e))?;
+        if seen.insert(enode.to_string()) {
+            out.push(enode.to_string());
+        }
+    }
+    Ok(out)
+}
+
+fn get_seed_enodes_from_env() -> Result<Vec<String>, String> {
+    let raw = match std::env::var("CHIRAL_GETH_SEED_ENODES") {
+        Ok(v) => v,
+        Err(_) => return Ok(Vec::new()),
+    };
+    parse_seed_enodes_list(&raw)
+}
+
+fn push_peer_sample(samples: &mut VecDeque<PeerCountSample>, peer_count: u32, timestamp_ms: u64) {
+    if samples.len() == SAMPLE_HISTORY_CAP {
+        samples.pop_front();
+    }
+    samples.push_back(PeerCountSample {
+        peer_count,
+        timestamp_ms,
+    });
+}
+
+fn is_stagnant(samples: &VecDeque<PeerCountSample>, now_ms: u64, span: Duration) -> bool {
+    if samples.len() < 2 {
+        return false;
+    }
+    let cutoff = now_ms.saturating_sub(span.as_millis() as u64);
+    let newest = match samples.back() {
+        Some(v) => v,
+        None => return false,
+    };
+    let baseline = samples
+        .iter()
+        .rev()
+        .find(|sample| sample.timestamp_ms <= cutoff);
+    match baseline {
+        Some(base) => newest.peer_count <= base.peer_count,
+        None => false,
+    }
+}
+
+fn select_seed_batch(seeds: &[String], cursor: usize, cap: usize) -> (Vec<String>, usize) {
+    if seeds.is_empty() {
+        return (Vec::new(), cursor);
+    }
+    let mut idx = cursor % seeds.len();
+    let take = cap.min(seeds.len());
+    let mut out = Vec::with_capacity(take);
+    for _ in 0..take {
+        out.push(seeds[idx].clone());
+        idx = (idx + 1) % seeds.len();
+    }
+    (out, idx)
+}
 
 //Structs
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,7 +399,9 @@ impl GethProcess {
         let port = url.port_or_known_default().unwrap_or(8545);
         let addr = format!("{host}:{port}");
         match addr.parse() {
-            Ok(sock_addr) => TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)).is_ok(),
+            Ok(sock_addr) => {
+                TcpStream::connect_timeout(&sock_addr, Duration::from_millis(500)).is_ok()
+            }
             Err(_) => false,
         }
     }
@@ -167,8 +442,12 @@ impl GethProcess {
         Err(format!("Could not verify chain ID of existing blockchain data. Will reinitialize to ensure correctness."))
     }
 
-
-    pub fn start(&mut self, data_dir: &str, miner_address: Option<&str>, pure_client_mode: bool) -> Result<(), String> {
+    pub fn start(
+        &mut self,
+        data_dir: &str,
+        miner_address: Option<&str>,
+        pure_client_mode: bool,
+    ) -> Result<(), String> {
         // Check if we already have a tracked child process
         if self.child.is_some() {
             return Ok(()); // Already running, no need to start again
@@ -317,17 +596,15 @@ impl GethProcess {
                 // Read last 50 lines of log to check for corruption errors
                 if let Ok(file) = File::open(&log_path) {
                     let reader = BufReader::new(file);
-                    let all_lines: Vec<String> = reader
-                        .lines()
-                        .filter_map(Result::ok)
-                        .collect();
+                    let all_lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
                     let lines: Vec<String> = all_lines.iter().rev().take(50).cloned().collect();
 
                     // Look for signs of ACTUAL blockchain corruption (not normal operations)
                     for line in &lines {
                         if line.contains("database corruption")
                             || line.contains("FATAL") && line.contains("chaindata")
-                            || line.contains("corrupted") && line.contains("database") {
+                            || line.contains("corrupted") && line.contains("database")
+                        {
                             eprintln!("⚠️  Detected corrupted blockchain, will reinitialize...");
                             needs_reinit = true;
                             break;
@@ -371,17 +648,21 @@ impl GethProcess {
                 eprintln!("Warning: Failed to write chain ID marker file: {}", e);
             }
 
-            eprintln!("✅ Blockchain initialized successfully with chain ID {}", *CHAIN_ID);
+            eprintln!(
+                "✅ Blockchain initialized successfully with chain ID {}",
+                *CHAIN_ID
+            );
         }
 
         // Get bootstrap nodes - use cached/fallback to avoid blocking startup
         // The health check is performed asynchronously, so we use the synchronous fallback here
         // and the async health-checked version will be used for reconnection attempts
         let bootstrap_enode = crate::geth_bootstrap::get_all_bootstrap_enode_string();
-        
+
         // Log bootstrap configuration
         let node_count = bootstrap_enode.matches("enode://").count();
         eprintln!("Starting Geth with {} bootstrap node(s)", node_count);
+        let max_peers = get_configured_max_peers();
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
@@ -411,7 +692,7 @@ impl GethProcess {
             .arg("--cache.gc")
             .arg("10") // 10% for garbage collection
             .arg("--maxpeers")
-            .arg("100") // Increase peer connections for faster sync (was 50)
+            .arg(max_peers.to_string())
             // P2P discovery settings
             .arg("--port")
             .arg("30303") // P2P listening port
@@ -462,7 +743,8 @@ impl GethProcess {
             .open(&log_path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
 
-        let log_file_clone = log_file.try_clone()
+        let log_file_clone = log_file
+            .try_clone()
             .map_err(|e| format!("Failed to clone log file handle: {}", e))?;
 
         cmd.stdout(Stdio::from(log_file_clone))
@@ -490,7 +772,8 @@ impl GethProcess {
                     self.child = None;
                     return Err(format!(
                         "Geth process exited immediately with status: {}. Check logs at: {}",
-                        status, log_path.display()
+                        status,
+                        log_path.display()
                     ));
                 }
                 Ok(None) => {
@@ -560,7 +843,7 @@ impl GethProcess {
 // ============================================================================
 
 /// Start Geth with health-checked bootstrap nodes
-/// 
+///
 /// This function performs bootstrap node health checks before starting Geth,
 /// ensuring we connect to the most reliable nodes available.
 pub async fn start_geth_with_health_check(
@@ -570,12 +853,11 @@ pub async fn start_geth_with_health_check(
 ) -> Result<crate::geth_bootstrap::BootstrapHealthReport, String> {
     // First, perform health check on bootstrap nodes
     let health_report = crate::geth_bootstrap::check_all_bootstrap_nodes().await;
-    
+
     if !health_report.healthy {
         eprintln!(
             "Warning: Bootstrap health check failed - {} of {} nodes reachable",
-            health_report.reachable_nodes,
-            health_report.total_nodes
+            health_report.reachable_nodes, health_report.total_nodes
         );
         if let Some(ref recommendation) = health_report.recommendation {
             eprintln!("Recommendation: {}", recommendation);
@@ -583,11 +865,10 @@ pub async fn start_geth_with_health_check(
     } else {
         eprintln!(
             "Bootstrap health OK: {} of {} nodes reachable",
-            health_report.reachable_nodes,
-            health_report.total_nodes
+            health_report.reachable_nodes, health_report.total_nodes
         );
     }
-    
+
     // Start Geth (it will use the fallback bootstrap string if health check found issues)
     geth.start(data_dir, miner_address, false)?; // Use normal snap sync mode
 
@@ -655,57 +936,272 @@ pub async fn get_peers() -> Result<Vec<serde_json::Value>, String> {
     Ok(peers)
 }
 
-/// Reconnect to bootstrap nodes if peer count is low
-/// 
-/// This function checks the current peer count and if it's below the threshold,
-/// attempts to add healthy bootstrap nodes as peers.
+async fn get_peer_count_with_timeout(timeout: Duration) -> Result<u32, String> {
+    match tokio::time::timeout(timeout, get_peer_count()).await {
+        Ok(res) => res,
+        Err(_) => Err(format!(
+            "Timed out waiting for net_peerCount response after {}ms",
+            timeout.as_millis()
+        )),
+    }
+}
+
+fn is_saturated(peer_count: u32, max_peers: u32, headroom: u32) -> bool {
+    let threshold = max_peers.saturating_sub(headroom);
+    peer_count >= threshold
+}
+
+fn build_snapshot(
+    state: &PeerRecoveryState,
+    cfg: &PeerRecoveryCfg,
+    reason: PeerRecoveryReason,
+    peer_count: u32,
+    now: Instant,
+    target_source: String,
+    attempted: bool,
+    rpc_ok: bool,
+    trigger_stagnant: bool,
+) -> PeerRecoverySnapshot {
+    let window_remaining_ms = state
+        .rpc_ready_at
+        .and_then(|started| {
+            cfg.cold_window
+                .checked_sub(now.saturating_duration_since(started))
+        })
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let cooldown_remaining_ms = state
+        .cooldown_until
+        .and_then(|until| until.checked_duration_since(now))
+        .unwrap_or_default()
+        .as_millis() as u64;
+    PeerRecoverySnapshot {
+        reason,
+        peer_count,
+        min_peers: cfg.min_peers,
+        max_peers: cfg.max_peers,
+        window_remaining_ms,
+        cooldown_remaining_ms,
+        attempt_idx: state.attempt_idx,
+        target_source,
+        rpc_ok,
+        trigger_stagnant,
+        trigger_saturated: is_saturated(peer_count, cfg.max_peers, cfg.saturation_headroom),
+        trigger_healthy: peer_count >= cfg.min_peers,
+        attempted,
+        last_samples: state.sample_hist.iter().cloned().collect(),
+        last_attempt: state.last_attempt.clone(),
+    }
+}
+
+pub async fn reset_peer_recovery_state() {
+    let mut state = PEER_RECOVERY_STATE.lock().await;
+    *state = PeerRecoveryState::default();
+}
+
+pub async fn reconnect_to_bootstrap_with_snapshot(
+    min_peers: u32,
+) -> Result<PeerRecoverySnapshot, String> {
+    let cfg = PeerRecoveryCfg::with_min_peers(min_peers);
+    let now = Instant::now();
+    let now_ms = now_unix_ms();
+
+    let peer_res = get_peer_count_with_timeout(cfg.rpc_timeout).await;
+    let mut state = PEER_RECOVERY_STATE.lock().await;
+
+    let mut peer_count = state.sample_hist.back().map(|v| v.peer_count).unwrap_or(0);
+    let rpc_ok = match peer_res {
+        Ok(cnt) => {
+            peer_count = cnt;
+            state.rpc_fail_cnt = 0;
+            if state.rpc_ready_at.is_none() {
+                state.rpc_ready_at = Some(now);
+            }
+            push_peer_sample(&mut state.sample_hist, cnt, now_ms);
+            true
+        }
+        Err(err) => {
+            state.rpc_fail_cnt = state.rpc_fail_cnt.saturating_add(1);
+            if state.sample_hist.is_empty() {
+                push_peer_sample(&mut state.sample_hist, 0, now_ms);
+            }
+            state.last_attempt = Some(PeerAttemptResult {
+                source: "none".to_string(),
+                accepted_targets: 0,
+                attempted_targets: 0,
+                error: Some(err),
+                timestamp_ms: now_ms,
+            });
+            let reason = eval_recovery_reason(RecoveryEval {
+                rpc_ok: false,
+                window_active: true,
+                healthy: false,
+                saturated: false,
+                in_flight: state.in_flight,
+                cooling_down: false,
+                stagnant: false,
+                attempts_exhausted: false,
+            });
+            return Ok(build_snapshot(
+                &state,
+                &cfg,
+                reason,
+                peer_count,
+                now,
+                "none".to_string(),
+                false,
+                false,
+                false,
+            ));
+        }
+    };
+
+    let window_active = state
+        .rpc_ready_at
+        .map(|started| now.saturating_duration_since(started) <= cfg.cold_window)
+        .unwrap_or(false);
+    let healthy = peer_count >= cfg.min_peers;
+    let saturated = is_saturated(peer_count, cfg.max_peers, cfg.saturation_headroom);
+    let cooling_down = state
+        .cooldown_until
+        .map(|until| now < until)
+        .unwrap_or(false);
+    let stagnant = is_stagnant(&state.sample_hist, now_ms, cfg.stagnation_window);
+    let attempts_exhausted = state.attempt_idx >= cfg.max_attempts;
+
+    let reason = eval_recovery_reason(RecoveryEval {
+        rpc_ok,
+        window_active,
+        healthy,
+        saturated,
+        in_flight: state.in_flight,
+        cooling_down,
+        stagnant,
+        attempts_exhausted,
+    });
+
+    if reason != PeerRecoveryReason::Attempting {
+        return Ok(build_snapshot(
+            &state,
+            &cfg,
+            reason,
+            peer_count,
+            now,
+            "none".to_string(),
+            false,
+            true,
+            stagnant,
+        ));
+    }
+
+    let seed_enodes = get_seed_enodes_from_env()?;
+    let (targets, target_source, next_cursor) = if !seed_enodes.is_empty() {
+        let (picked, next) = select_seed_batch(&seed_enodes, state.seed_cursor, cfg.seed_cap);
+        (picked, "seed".to_string(), next)
+    } else {
+        let healthy_enodes = crate::geth_bootstrap::get_healthy_bootstrap_enode_string().await;
+        let mut fallback: Vec<String> = healthy_enodes
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        fallback.dedup();
+        (
+            fallback,
+            "bootstrap_fallback".to_string(),
+            state.seed_cursor,
+        )
+    };
+
+    if targets.is_empty() {
+        state.last_attempt = Some(PeerAttemptResult {
+            source: target_source.clone(),
+            accepted_targets: 0,
+            attempted_targets: 0,
+            error: Some("No recovery targets available".to_string()),
+            timestamp_ms: now_ms,
+        });
+        return Ok(build_snapshot(
+            &state,
+            &cfg,
+            PeerRecoveryReason::WaitingStagnation,
+            peer_count,
+            now,
+            target_source,
+            false,
+            true,
+            stagnant,
+        ));
+    }
+
+    state.in_flight = true;
+    state.attempt_idx = state.attempt_idx.saturating_add(1);
+    state.seed_cursor = next_cursor;
+    let attempt_idx = state.attempt_idx;
+    drop(state);
+
+    let mut accepted = 0usize;
+    let mut err_msg: Option<String> = None;
+    for enode in &targets {
+        match tokio::time::timeout(cfg.rpc_timeout, add_peer(enode)).await {
+            Ok(Ok(true)) => accepted += 1,
+            Ok(Ok(false)) => {}
+            Ok(Err(e)) => err_msg = Some(e),
+            Err(_) => {
+                err_msg = Some(format!(
+                    "Timed out waiting for admin_addPeer response after {}ms",
+                    cfg.rpc_timeout.as_millis()
+                ));
+            }
+        }
+    }
+
+    tokio::time::sleep(cfg.post_wait).await;
+    let post_peer_count = get_peer_count_with_timeout(cfg.rpc_timeout)
+        .await
+        .unwrap_or(peer_count);
+    let post_ms = now_unix_ms();
+
+    let mut state = PEER_RECOVERY_STATE.lock().await;
+    state.in_flight = false;
+    state.cooldown_until = Some(Instant::now() + cfg.cooldown);
+    push_peer_sample(&mut state.sample_hist, post_peer_count, post_ms);
+    state.last_attempt = Some(PeerAttemptResult {
+        source: target_source.clone(),
+        accepted_targets: accepted,
+        attempted_targets: targets.len(),
+        error: err_msg,
+        timestamp_ms: post_ms,
+    });
+
+    let post_reason = if post_peer_count >= cfg.min_peers {
+        PeerRecoveryReason::Healthy
+    } else if attempt_idx >= cfg.max_attempts {
+        PeerRecoveryReason::AttemptsExhausted
+    } else {
+        PeerRecoveryReason::CoolingDown
+    };
+
+    Ok(build_snapshot(
+        &state,
+        &cfg,
+        post_reason,
+        post_peer_count,
+        Instant::now(),
+        target_source,
+        true,
+        true,
+        true,
+    ))
+}
+
+/// Reconnect to peer candidates if geth peer count is low.
+///
+/// This keeps compatibility with existing command callers that expect a peer count.
 pub async fn reconnect_to_bootstrap_if_needed(min_peers: u32) -> Result<u32, String> {
-    let current_peers = get_peer_count().await.unwrap_or(0);
-    
-    if current_peers >= min_peers {
-        return Ok(current_peers);
-    }
-    
-    eprintln!(
-        "Peer count ({}) below threshold ({}), attempting to reconnect to bootstrap nodes",
-        current_peers,
-        min_peers
-    );
-    
-    // Get healthy bootstrap nodes
-    let healthy_enodes = crate::geth_bootstrap::get_healthy_bootstrap_enode_string().await;
-    
-    let mut added = 0;
-    for enode in healthy_enodes.split(',') {
-        if enode.is_empty() {
-            continue;
-        }
-        
-        match add_peer(enode).await {
-            Ok(true) => {
-                eprintln!("Successfully added bootstrap peer");
-                added += 1;
-            }
-            Ok(false) => {
-                // Peer already connected or couldn't be added
-            }
-            Err(e) => {
-                eprintln!("Failed to add bootstrap peer: {}", e);
-            }
-        }
-    }
-    
-    // Give peers time to connect
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
-    let new_peer_count = get_peer_count().await.unwrap_or(current_peers);
-    eprintln!(
-        "Peer count after reconnection attempt: {} (added {} bootstrap nodes)",
-        new_peer_count,
-        added
-    );
-    
-    Ok(new_peer_count)
+    let snapshot = reconnect_to_bootstrap_with_snapshot(min_peers).await?;
+    Ok(snapshot.peer_count)
 }
 
 /// Get Geth node info including enode
@@ -823,8 +1319,13 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
 
     // Convert wei to ether (1 ether = 10^18 wei)
     let balance_ether = balance_wei as f64 / 1e18;
-    
-    tracing::debug!("💰 Balance for {}: {} (raw: {})", address, balance_ether, balance_hex);
+
+    tracing::debug!(
+        "💰 Balance for {}: {} (raw: {})",
+        address,
+        balance_ether,
+        balance_hex
+    );
 
     Ok(format!("{:.6}", balance_ether))
 }
@@ -857,9 +1358,7 @@ pub async fn get_peer_count() -> Result<u32, String> {
         .as_str()
         .ok_or("Invalid peer count response")?;
 
-    // Convert hex to decimal
-    let peer_count = u32::from_str_radix(&peer_count_hex[2..], 16)
-        .map_err(|e| format!("Failed to parse peer count: {}", e))?;
+    let peer_count = parse_rpc_quantity_u32(peer_count_hex, "peer count")?;
 
     Ok(peer_count)
 }
@@ -1002,10 +1501,13 @@ pub async fn start_mining(miner_address: &str, threads: u32) -> Result<(), Strin
         Ok(coinbase) => {
             tracing::info!("⛏️ Mining started! Rewards will go to: {}", coinbase);
             if coinbase.to_lowercase() != miner_address.to_lowercase() {
-                tracing::warn!("⚠️ WARNING: Coinbase {} does not match requested miner address {}!", 
-                    coinbase, miner_address);
+                tracing::warn!(
+                    "⚠️ WARNING: Coinbase {} does not match requested miner address {}!",
+                    coinbase,
+                    miner_address
+                );
             }
-        },
+        }
         Err(e) => tracing::warn!("Could not verify coinbase: {}", e),
     }
 
@@ -1107,7 +1609,7 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
 
     // eth_syncing returns false if not syncing, or an object if syncing
     let result = &json_response["result"];
-    
+
     if result.is_boolean() && result.as_bool() == Some(false) {
         // Not syncing - fully synced
         let block_number = get_block_number().await?;
@@ -1123,9 +1625,15 @@ pub async fn get_sync_status() -> Result<SyncStatus, String> {
     }
 
     // Parse sync progress
-    let current_hex = result["currentBlock"].as_str().ok_or("Missing currentBlock")?;
-    let highest_hex = result["highestBlock"].as_str().ok_or("Missing highestBlock")?;
-    let starting_hex = result["startingBlock"].as_str().ok_or("Missing startingBlock")?;
+    let current_hex = result["currentBlock"]
+        .as_str()
+        .ok_or("Missing currentBlock")?;
+    let highest_hex = result["highestBlock"]
+        .as_str()
+        .ok_or("Missing highestBlock")?;
+    let starting_hex = result["startingBlock"]
+        .as_str()
+        .ok_or("Missing startingBlock")?;
 
     let current_block = u64::from_str_radix(current_hex.trim_start_matches("0x"), 16)
         .map_err(|e| format!("Invalid currentBlock: {}", e))?;
@@ -1458,11 +1966,12 @@ pub async fn get_network_difficulty_as_u64() -> Result<u64, String> {
 }
 
 // Static storage for mining session data
-static MINING_SESSION_DATA: std::sync::Mutex<MiningSessionData> = std::sync::Mutex::new(MiningSessionData {
-    last_hash_rate: 0.0,
-    session_start: 0,
-    total_attempts: 0,
-});
+static MINING_SESSION_DATA: std::sync::Mutex<MiningSessionData> =
+    std::sync::Mutex::new(MiningSessionData {
+        last_hash_rate: 0.0,
+        session_start: 0,
+        total_attempts: 0,
+    });
 
 #[derive(Clone, Debug)]
 struct MiningSessionData {
@@ -1512,14 +2021,21 @@ fn parse_elapsed_time(time_str: &str) -> Result<f64, String> {
     if time_str.ends_with("ms") {
         // Convert milliseconds to seconds
         let ms_str = &time_str[..time_str.len() - 2];
-        ms_str.parse::<f64>().map(|ms| ms / 1000.0).map_err(|e| format!("Failed to parse milliseconds: {}", e))
+        ms_str
+            .parse::<f64>()
+            .map(|ms| ms / 1000.0)
+            .map_err(|e| format!("Failed to parse milliseconds: {}", e))
     } else if time_str.ends_with('s') {
         // Already in seconds
         let s_str = &time_str[..time_str.len() - 1];
-        s_str.parse::<f64>().map_err(|e| format!("Failed to parse seconds: {}", e))
+        s_str
+            .parse::<f64>()
+            .map_err(|e| format!("Failed to parse seconds: {}", e))
     } else {
         // Assume seconds if no unit
-        time_str.parse::<f64>().map_err(|e| format!("Failed to parse time: {}", e))
+        time_str
+            .parse::<f64>()
+            .map_err(|e| format!("Failed to parse time: {}", e))
     }
 }
 
@@ -1549,11 +2065,11 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
     // Try to get blocks mined from logs first
     let log_path = data_path.join("geth.log");
 
-            // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
-            if !log_path.exists() {
-                // Return 0 for blocks and hash rate - no simulation
-                return Ok((0, 0.0));
-            }
+    // If log doesn't exist, return defaults (blocks will be calculated from balance in frontend)
+    if !log_path.exists() {
+        // Return 0 for blocks and hash rate - no simulation
+        return Ok((0, 0.0));
+    }
 
     let file = File::open(&log_path).map_err(|e| format!("Failed to open log file: {}", e))?;
     let reader = BufReader::new(file);
@@ -1583,8 +2099,10 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
 
         // Look for mining stats in logs - try multiple patterns
         // Geth may log hashrate in various formats
-        let has_hashrate_keyword = line.contains("hashrate") || line.contains("hash rate") || line.contains("Hashrate");
-        let has_mining_keyword = line.contains("Mining") || line.contains("mining") || line.contains("miner");
+        let has_hashrate_keyword =
+            line.contains("hashrate") || line.contains("hash rate") || line.contains("Hashrate");
+        let has_mining_keyword =
+            line.contains("Mining") || line.contains("mining") || line.contains("miner");
 
         if has_hashrate_keyword {
             // Try to extract hashrate if it's explicitly logged
@@ -1600,7 +2118,12 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
         }
 
         // Also look for lines with mining performance data
-        if has_mining_keyword && (line.contains("H/s") || line.contains("KH/s") || line.contains("MH/s") || line.contains("GH/s")) {
+        if has_mining_keyword
+            && (line.contains("H/s")
+                || line.contains("KH/s")
+                || line.contains("MH/s")
+                || line.contains("GH/s"))
+        {
             // Try to extract hash rate with units
             // Look for patterns like "123.45 MH/s" or "123.45MH/s"
             if let Some(hs_pos) = line.find("H/s") {
@@ -1610,10 +2133,15 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
                     let rate_str = &before_hs[last_space + 1..];
                     if let Ok(rate) = rate_str.parse::<f64>() {
                         // Convert based on units
-                        let multiplier = if line.contains("KH/s") { 1000.0 }
-                                       else if line.contains("MH/s") { 1_000_000.0 }
-                                       else if line.contains("GH/s") { 1_000_000_000.0 }
-                                       else { 1.0 }; // H/s
+                        let multiplier = if line.contains("KH/s") {
+                            1000.0
+                        } else if line.contains("MH/s") {
+                            1_000_000.0
+                        } else if line.contains("GH/s") {
+                            1_000_000_000.0
+                        } else {
+                            1.0
+                        }; // H/s
                         let actual_rate = rate * multiplier;
                         recent_hashrates.push(actual_rate);
                     }
@@ -1622,11 +2150,11 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
         }
     }
 
-            // If we found explicit hashrates in logs, use the average
-            if !recent_hashrates.is_empty() {
-                let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
-                return Ok((blocks_mined, avg_hashrate));
-            }
+    // If we found explicit hashrates in logs, use the average
+    if !recent_hashrates.is_empty() {
+        let avg_hashrate = recent_hashrates.iter().sum::<f64>() / recent_hashrates.len() as f64;
+        return Ok((blocks_mined, avg_hashrate));
+    }
 
     // Try to estimate hash rate from recent mining activity
     // Look for recent blocks with elapsed time information
@@ -1637,7 +2165,8 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
             // Extract elapsed time for this block
             if let Some(elapsed_pos) = line.find("elapsed=") {
                 let elapsed_str = &line[elapsed_pos + 8..];
-                if let Some(end_pos) = elapsed_str.find(|c: char| c == ' ' || c == 's' || c == '\n') {
+                if let Some(end_pos) = elapsed_str.find(|c: char| c == ' ' || c == 's' || c == '\n')
+                {
                     let time_str = &elapsed_str[..end_pos];
                     if let Ok(elapsed_seconds) = parse_elapsed_time(time_str) {
                         // Also try to get difficulty if available
@@ -1659,15 +2188,15 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
         }
     }
 
-            // Update session data
-            let mut session_data = match MINING_SESSION_DATA.lock() {
-                Ok(data) => data.clone(),
-                Err(_) => MiningSessionData {
-                    last_hash_rate: 0.0,
-                    session_start: current_time,
-                    total_attempts: 0,
-                },
-            };
+    // Update session data
+    let mut session_data = match MINING_SESSION_DATA.lock() {
+        Ok(data) => data.clone(),
+        Err(_) => MiningSessionData {
+            last_hash_rate: 0.0,
+            session_start: current_time,
+            total_attempts: 0,
+        },
+    };
 
     // Initialize session start if not set
     if session_data.session_start == 0 {
@@ -1702,10 +2231,11 @@ pub async fn get_mining_performance(data_dir: &str) -> Result<(u64, f64), String
     let mining_operations = 0;
     for line in &lines {
         // Look for various mining activity indicators
-        if line.contains("Commit new sealing work") ||
-           line.contains("Generating DAG") ||
-           line.contains("mining") ||
-           (line.contains("miner") && line.contains("start")) {
+        if line.contains("Commit new sealing work")
+            || line.contains("Generating DAG")
+            || line.contains("mining")
+            || (line.contains("miner") && line.contains("start"))
+        {
             // Mining operation detected
         }
     }
@@ -1768,9 +2298,14 @@ pub fn get_mining_logs(data_dir: &str, lines: usize) -> Result<Vec<String>, Stri
     Ok(all_lines[start..].to_vec())
 }
 
-pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str) -> Result<u64, String> {
-
-    println!("🔍 get_mined_blocks_count called for address: {}", miner_address);
+pub async fn get_mined_blocks_count(
+    app: &tauri::AppHandle,
+    miner_address: &str,
+) -> Result<u64, String> {
+    println!(
+        "🔍 get_mined_blocks_count called for address: {}",
+        miner_address
+    );
 
     // Get the current block number
     let block_number_payload = json!({
@@ -1807,7 +2342,8 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
     let normalized_miner = miner_address.to_lowercase();
 
     // Maintain cumulative count per address - only increases, never decreases
-    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
 
     // Incremental scanning: only scan blocks we haven't checked yet
     // Much more efficient than rescanning the same blocks repeatedly
@@ -1912,16 +2448,21 @@ pub async fn get_mined_blocks_count(app: &tauri::AppHandle, miner_address: &str)
                 let new_total = existing_count + block_result;
                 counts.insert(miner_address.to_string(), new_total);
 
-                println!("🔍 Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
-                         new_total, scanned_blocks);
+                println!(
+                    "🔍 Found 1 NEW block! (cumulative total: {}, scanned {} blocks)",
+                    new_total, scanned_blocks
+                );
 
                 // Emit event to frontend for real-time UI updates
-                let _ = app.emit("mining_scan_progress", serde_json::json!({
-                    "address": miner_address,
-                    "blocks_found_in_batch": 1,
-                    "total_scanned": scanned_blocks,
-                    "timestamp": chrono::Utc::now().timestamp()
-                }));
+                let _ = app.emit(
+                    "mining_scan_progress",
+                    serde_json::json!({
+                        "address": miner_address,
+                        "blocks_found_in_batch": 1,
+                        "total_scanned": scanned_blocks,
+                        "timestamp": chrono::Utc::now().timestamp()
+                    }),
+                );
             }
 
             // Small delay between discoveries for better visual feedback
@@ -2340,13 +2881,11 @@ pub async fn calculate_accurate_totals(
                     .and_then(|t| t.as_str())
                     .unwrap_or("")
                     .to_lowercase();
-                let value_hex = tx
-                    .get("value")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("0x0");
+                let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
 
                 // Parse value (Wei to Chiral: divide by 10^18)
-                if let Ok(value_wei) = u128::from_str_radix(&value_hex.trim_start_matches("0x"), 16) {
+                if let Ok(value_wei) = u128::from_str_radix(&value_hex.trim_start_matches("0x"), 16)
+                {
                     let value_chiral = value_wei as f64 / 1e18;
 
                     // Check if this is a received transaction
@@ -2468,7 +3007,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
         .ok_or("Invalid block number response")?;
     let latest_block_number = u64::from_str_radix(&latest_block_number_hex[2..], 16)
         .map_err(|e| format!("Failed to parse block number: {}", e))?;
-    
+
     let latest_timestamp_hex = json_response["result"]["timestamp"]
         .as_str()
         .ok_or("Invalid timestamp response")?;
@@ -2478,7 +3017,7 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     // Calculate actual average block time from the last 100 blocks (or fewer if network is new)
     let lookback_blocks = 100.min(latest_block_number.saturating_sub(1));
     let mut actual_block_time = 15.0; // Default fallback
-    
+
     if lookback_blocks > 0 {
         let previous_block_number = latest_block_number.saturating_sub(lookback_blocks);
         let previous_block = json!({
@@ -2528,7 +3067,6 @@ pub async fn get_network_hashrate() -> Result<String, String> {
     Ok(formatted)
 }
 
-
 pub async fn send_transaction(
     from_address: &str,
     to_address: &str,
@@ -2557,12 +3095,17 @@ pub async fn send_transaction(
             if count == 0 {
                 tracing::warn!("   ⚠️ NO PEERS CONNECTED - transaction will not propagate!");
             }
-        },
+        }
         Err(e) => tracing::error!("   Failed to get peer count: {}", e),
     }
 
-    let provider = Provider::<Http>::try_from(NETWORK_CONFIG.rpc_endpoint.as_str())
-        .map_err(|e| format!("Failed to connect to RPC ({}): {}", NETWORK_CONFIG.rpc_endpoint, e))?;
+    let provider =
+        Provider::<Http>::try_from(NETWORK_CONFIG.rpc_endpoint.as_str()).map_err(|e| {
+            format!(
+                "Failed to connect to RPC ({}): {}",
+                NETWORK_CONFIG.rpc_endpoint, e
+            )
+        })?;
 
     let wallet = wallet.with_chain_id(NETWORK_CONFIG.chain_id);
 
@@ -2584,15 +3127,22 @@ pub async fn send_transaction(
         .get_transaction_count(from_addr, Some(BlockNumber::Latest.into()))
         .await
         .map_err(|e| format!("Failed to get confirmed nonce: {}", e))?;
-    
+
     let nonce = provider
         .get_transaction_count(from_addr, Some(BlockNumber::Pending.into()))
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
-    
-    tracing::info!("   Confirmed nonce: {}, Pending nonce: {}", confirmed_nonce, nonce);
+
+    tracing::info!(
+        "   Confirmed nonce: {}, Pending nonce: {}",
+        confirmed_nonce,
+        nonce
+    );
     if nonce > confirmed_nonce {
-        tracing::warn!("   ⚠️ There are {} pending transactions for this address!", nonce - confirmed_nonce);
+        tracing::warn!(
+            "   ⚠️ There are {} pending transactions for this address!",
+            nonce - confirmed_nonce
+        );
     }
 
     // Get the actual gas price to be used in the transaction
@@ -2606,7 +3156,7 @@ pub async fn send_transaction(
     let max_fee = base_fee * 2;
     let priority_fee = U256::from(1u64);
     let gas_limit = U256::from(21000u64);
-    
+
     let gas_price = provider
         .get_gas_price()
         .await
@@ -2616,9 +3166,17 @@ pub async fn send_transaction(
 
     // Check sender's balance
 
-    let sender_balance = provider.get_balance(from_addr, None).await.map_err(|e| format!("Failed to get sender balance: {}", e))?;
+    let sender_balance = provider
+        .get_balance(from_addr, None)
+        .await
+        .map_err(|e| format!("Failed to get sender balance: {}", e))?;
     tracing::info!("   Sender balance: {} wei", sender_balance);
-    tracing::info!("   Amount to send: {} wei, Gas cost: {} wei, Total needed: {} wei", amount_wei, gas_cost, total_cost);
+    tracing::info!(
+        "   Amount to send: {} wei, Gas cost: {} wei, Total needed: {} wei",
+        amount_wei,
+        gas_cost,
+        total_cost
+    );
 
     if sender_balance < total_cost {
         return Err(format!(
@@ -2626,7 +3184,13 @@ pub async fn send_transaction(
             sender_balance, total_cost, amount_wei, gas_cost
         ));
     }
-    tracing::info!("   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei, Gas price: {} wei", base_fee, max_fee, priority_fee, gas_price);
+    tracing::info!(
+        "   Base fee: {} wei, Max fee: {} wei, Priority fee: {} wei, Gas price: {} wei",
+        base_fee,
+        max_fee,
+        priority_fee,
+        gas_price
+    );
 
     let tx = TransactionRequest::new()
         .to(to)
@@ -2642,20 +3206,36 @@ pub async fn send_transaction(
 
     let tx_hash = format!("{:?}", pending_tx.tx_hash());
 
-    tracing::info!("✅ Transaction sent: {} from {} to {} amount {} CHIRAL", 
-        tx_hash, from_address, to_address, amount_chiral);
-    tracing::info!("   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000, Chain ID: {}", 
-        nonce, gas_price, NETWORK_CONFIG.chain_id);
-    
+    tracing::info!(
+        "✅ Transaction sent: {} from {} to {} amount {} CHIRAL",
+        tx_hash,
+        from_address,
+        to_address,
+        amount_chiral
+    );
+    tracing::info!(
+        "   Nonce: {}, Gas Price: {} wei, Gas Limit: 21000, Chain ID: {}",
+        nonce,
+        gas_price,
+        NETWORK_CONFIG.chain_id
+    );
+
     // Verify the transaction was added to the local txpool
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
+
     // Check txpool status and content
     if let Ok(status) = get_txpool_status().await {
-        let pending_count = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+        let pending_count = status
+            .get("pending")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
         let queued_count = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
-        tracing::info!("   TxPool Status: pending={}, queued={}", pending_count, queued_count);
-        
+        tracing::info!(
+            "   TxPool Status: pending={}, queued={}",
+            pending_count,
+            queued_count
+        );
+
         // If there are pending transactions, log their details
         if pending_count != "0x0" && pending_count != "?" {
             if let Ok(content) = get_txpool_content().await {
@@ -2666,10 +3246,21 @@ pub async fn send_transaction(
                             tracing::info!("      Address: {}", addr);
                             if let Some(nonces_obj) = nonces.as_object() {
                                 for (nonce, tx_data) in nonces_obj {
-                                    let hash = tx_data.get("hash").and_then(|h| h.as_str()).unwrap_or("?");
-                                    let to_addr = tx_data.get("to").and_then(|t| t.as_str()).unwrap_or("?");
-                                    let value = tx_data.get("value").and_then(|v| v.as_str()).unwrap_or("?");
-                                    tracing::info!("         Nonce {}: hash={}, to={}, value={}", nonce, hash, to_addr, value);
+                                    let hash =
+                                        tx_data.get("hash").and_then(|h| h.as_str()).unwrap_or("?");
+                                    let to_addr =
+                                        tx_data.get("to").and_then(|t| t.as_str()).unwrap_or("?");
+                                    let value = tx_data
+                                        .get("value")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("?");
+                                    tracing::info!(
+                                        "         Nonce {}: hash={}, to={}, value={}",
+                                        nonce,
+                                        hash,
+                                        to_addr,
+                                        value
+                                    );
                                 }
                             }
                         }
@@ -2678,7 +3269,7 @@ pub async fn send_transaction(
             }
         }
     }
-    
+
     // Log connected peers to verify network propagation
     match get_peer_info().await {
         Ok(peers) => {
@@ -2686,9 +3277,14 @@ pub async fn send_transaction(
                 if peers_array.is_empty() {
                     tracing::warn!("   ⚠️ NO PEERS - Transaction cannot propagate to other nodes!");
                 } else {
-                    tracing::info!("   Connected to {} peer(s) - transaction should propagate", peers_array.len());
-                    for peer in peers_array.iter().take(3) {  // Show first 3 peers
-                        let remote_addr = peer.get("network")
+                    tracing::info!(
+                        "   Connected to {} peer(s) - transaction should propagate",
+                        peers_array.len()
+                    );
+                    for peer in peers_array.iter().take(3) {
+                        // Show first 3 peers
+                        let remote_addr = peer
+                            .get("network")
                             .and_then(|n| n.get("remoteAddress"))
                             .and_then(|a| a.as_str())
                             .unwrap_or("?");
@@ -2696,10 +3292,10 @@ pub async fn send_transaction(
                     }
                 }
             }
-        },
+        }
         Err(e) => tracing::warn!("   Could not get peer info: {}", e),
     }
-    
+
     // Try to get the transaction back to verify it's in the pool
     match get_transaction_by_hash(tx_hash.clone()).await {
         Ok(Some(tx_data)) => {
@@ -2708,7 +3304,7 @@ pub async fn send_transaction(
             if let Some(block) = tx_data.get("blockNumber") {
                 if block.is_null() {
                     tracing::info!("   Transaction is PENDING (not yet mined)");
-                    
+
                     // Spawn a background task to monitor the transaction
                     let tx_hash_clone = tx_hash.clone();
                     let from_clone = from_address.to_string();
@@ -2716,58 +3312,82 @@ pub async fn send_transaction(
                     let amount_clone = amount_chiral;
                     tokio::spawn(async move {
                         tracing::info!("🔍 Monitoring transaction {} for mining...", tx_hash_clone);
-                        for attempt in 1..=60 {  // Monitor for up to 60 seconds
+                        for attempt in 1..=60 {
+                            // Monitor for up to 60 seconds
                             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                            
+
                             match get_transaction_receipt(tx_hash_clone.clone()).await {
                                 Ok(Some(receipt)) => {
-                                    let block_num = receipt.get("blockNumber")
+                                    let block_num = receipt
+                                        .get("blockNumber")
                                         .and_then(|b| b.as_str())
                                         .unwrap_or("?");
-                                    let status = receipt.get("status")
+                                    let status = receipt
+                                        .get("status")
                                         .and_then(|s| s.as_str())
                                         .unwrap_or("?");
-                                    let gas_used = receipt.get("gasUsed")
+                                    let gas_used = receipt
+                                        .get("gasUsed")
                                         .and_then(|g| g.as_str())
                                         .unwrap_or("?");
-                                    
+
                                     if status == "0x1" {
                                         tracing::info!("🎉 TRANSACTION MINED SUCCESSFULLY!");
                                         tracing::info!("   Hash: {}", tx_hash_clone);
                                         tracing::info!("   Block: {}", block_num);
-                                        tracing::info!("   From: {} -> To: {}", from_clone, to_clone);
+                                        tracing::info!(
+                                            "   From: {} -> To: {}",
+                                            from_clone,
+                                            to_clone
+                                        );
                                         tracing::info!("   Amount: {} CHIRAL", amount_clone);
                                         tracing::info!("   Gas Used: {}", gas_used);
                                         tracing::info!("   Status: SUCCESS ✅");
-                                        
+
                                         // Check balances after mining to verify transfer
                                         if let Ok(sender_balance) = get_balance(&from_clone).await {
-                                            tracing::info!("   Sender balance after: {} CHIRAL", sender_balance);
+                                            tracing::info!(
+                                                "   Sender balance after: {} CHIRAL",
+                                                sender_balance
+                                            );
                                         }
                                         if let Ok(receiver_balance) = get_balance(&to_clone).await {
-                                            tracing::info!("   Receiver balance after: {} CHIRAL", receiver_balance);
+                                            tracing::info!(
+                                                "   Receiver balance after: {} CHIRAL",
+                                                receiver_balance
+                                            );
                                         }
                                     } else {
                                         tracing::error!("❌ TRANSACTION MINED BUT FAILED!");
                                         tracing::error!("   Hash: {}", tx_hash_clone);
                                         tracing::error!("   Block: {}", block_num);
-                                        tracing::error!("   Status: {} (0x0 = failed, 0x1 = success)", status);
+                                        tracing::error!(
+                                            "   Status: {} (0x0 = failed, 0x1 = success)",
+                                            status
+                                        );
                                         tracing::error!("   Gas Used: {}", gas_used);
                                         tracing::error!("   Full receipt: {:?}", receipt);
                                     }
                                     return;
-                                },
+                                }
                                 Ok(None) => {
                                     if attempt % 10 == 0 {
-                                        tracing::info!("   Still waiting for tx {} to be mined... ({}s)", tx_hash_clone, attempt);
+                                        tracing::info!(
+                                            "   Still waiting for tx {} to be mined... ({}s)",
+                                            tx_hash_clone,
+                                            attempt
+                                        );
                                     }
-                                },
+                                }
                                 Err(e) => {
                                     tracing::warn!("   Error checking receipt: {}", e);
                                 }
                             }
                         }
-                        tracing::warn!("⚠️ Transaction {} still not mined after 60 seconds", tx_hash_clone);
+                        tracing::warn!(
+                            "⚠️ Transaction {} still not mined after 60 seconds",
+                            tx_hash_clone
+                        );
                     });
                 } else {
                     tracing::info!("   Transaction is in block: {}", block);
@@ -2778,16 +3398,19 @@ pub async fn send_transaction(
                             if status_str == "0x1" {
                                 tracing::info!("   ✅ Transaction SUCCEEDED");
                             } else {
-                                tracing::error!("   ❌ Transaction FAILED (status: {})", status_str);
+                                tracing::error!(
+                                    "   ❌ Transaction FAILED (status: {})",
+                                    status_str
+                                );
                             }
                         }
                     }
                 }
             }
-        },
+        }
         Ok(None) => {
             tracing::warn!("⚠️  Transaction NOT found in local txpool: {}", tx_hash);
-        },
+        }
         Err(e) => {
             tracing::error!("❌ Failed to verify transaction in txpool: {}", e);
         }
@@ -2983,8 +3606,15 @@ pub async fn get_peer_info() -> Result<serde_json::Value, String> {
     if let Some(peers_array) = peers.as_array() {
         tracing::info!("Connected peers: {}", peers_array.len());
         for peer in peers_array {
-            let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-            let remote_addr = peer.get("network").and_then(|n| n.get("remoteAddress")).and_then(|a| a.as_str()).unwrap_or("?");
+            let name = peer
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown");
+            let remote_addr = peer
+                .get("network")
+                .and_then(|n| n.get("remoteAddress"))
+                .and_then(|a| a.as_str())
+                .unwrap_or("?");
             tracing::info!("  Peer: {} at {}", name, remote_addr);
         }
     }
@@ -2996,7 +3626,7 @@ pub async fn get_peer_info() -> Result<serde_json::Value, String> {
 #[tauri::command]
 pub async fn debug_network_tx() -> Result<String, String> {
     let mut report = String::new();
-    
+
     // 1. Check peer count
     match get_peer_count().await {
         Ok(count) => {
@@ -3004,44 +3634,54 @@ pub async fn debug_network_tx() -> Result<String, String> {
             if count == 0 {
                 report.push_str("⚠️ WARNING: No peers connected! Transactions cannot propagate.\n");
             }
-        },
+        }
         Err(e) => report.push_str(&format!("Failed to get peer count: {}\n", e)),
     }
-    
+
     // 2. Check txpool
     match get_txpool_status().await {
         Ok(status) => {
-            let pending = status.get("pending").and_then(|v| v.as_str()).unwrap_or("?");
+            let pending = status
+                .get("pending")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             let queued = status.get("queued").and_then(|v| v.as_str()).unwrap_or("?");
             report.push_str(&format!("TxPool: pending={}, queued={}\n", pending, queued));
-        },
+        }
         Err(e) => report.push_str(&format!("Failed to get txpool: {}\n", e)),
     }
-    
+
     // 3. Check chain ID
     match get_chain_id().await {
         Ok(id) => report.push_str(&format!("Chain ID: {}\n", id)),
         Err(e) => report.push_str(&format!("Failed to get chain ID: {}\n", e)),
     }
-    
+
     // 4. Get peer details
     match get_peer_info().await {
         Ok(peers) => {
             if let Some(peers_array) = peers.as_array() {
-                report.push_str(&format!("Connected peers details ({}):\n", peers_array.len()));
+                report.push_str(&format!(
+                    "Connected peers details ({}):\n",
+                    peers_array.len()
+                ));
                 for peer in peers_array {
-                    let name = peer.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-                    let remote_addr = peer.get("network")
+                    let name = peer
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown");
+                    let remote_addr = peer
+                        .get("network")
                         .and_then(|n| n.get("remoteAddress"))
                         .and_then(|a| a.as_str())
                         .unwrap_or("?");
                     report.push_str(&format!("  - {} at {}\n", name, remote_addr));
                 }
             }
-        },
+        }
         Err(e) => report.push_str(&format!("Failed to get peer info: {}\n", e)),
     }
-    
+
     tracing::info!("Network debug report:\n{}", report);
     Ok(report)
 }
@@ -3078,7 +3718,6 @@ pub async fn get_coinbase() -> Result<String, String> {
     Ok(coinbase.to_string())
 }
 
-
 // ============================================================================
 // Transaction History Scanning
 // ============================================================================
@@ -3088,7 +3727,7 @@ pub struct TransactionHistoryItem {
     pub hash: String,
     pub from: String,
     pub to: Option<String>,
-    pub value: String,  // Wei as string
+    pub value: String, // Wei as string
     pub block_number: u64,
     pub timestamp: u64,
     pub status: String,  // "success" or "failed"
@@ -3140,7 +3779,8 @@ pub async fn get_transaction_history(
         };
 
         // Get block timestamp
-        let timestamp = block.get("timestamp")
+        let timestamp = block
+            .get("timestamp")
             .and_then(|t| t.as_str())
             .and_then(|t| u64::from_str_radix(t.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
@@ -3153,26 +3793,31 @@ pub async fn get_transaction_history(
                     None => continue,
                 };
 
-                let tx_hash = tx_obj.get("hash")
+                let tx_hash = tx_obj
+                    .get("hash")
                     .and_then(|h| h.as_str())
                     .unwrap_or("")
                     .to_string();
 
-                let from = tx_obj.get("from")
+                let from = tx_obj
+                    .get("from")
                     .and_then(|f| f.as_str())
                     .unwrap_or("")
                     .to_lowercase();
 
-                let to = tx_obj.get("to")
+                let to = tx_obj
+                    .get("to")
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_lowercase());
 
-                let value = tx_obj.get("value")
+                let value = tx_obj
+                    .get("value")
                     .and_then(|v| v.as_str())
                     .unwrap_or("0x0")
                     .to_string();
 
-                let gas_price = tx_obj.get("gasPrice")
+                let gas_price = tx_obj
+                    .get("gasPrice")
                     .and_then(|g| g.as_str())
                     .map(|s| s.to_string());
 
@@ -3276,7 +3921,142 @@ pub async fn reset_incremental_scanning() {
     *last_scanned = 0;
 
     // Also reset cumulative counts
-    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+    static CUMULATIVE_COUNTS: Lazy<Mutex<HashMap<String, u64>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
     let mut counts = CUMULATIVE_COUNTS.lock().await;
     counts.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_quantity_accepts_hex() {
+        assert_eq!(parse_rpc_quantity_u32("0x0", "peer count").unwrap(), 0);
+        assert_eq!(parse_rpc_quantity_u32("0xa", "peer count").unwrap(), 10);
+        assert_eq!(parse_rpc_quantity_u32("0xff", "peer count").unwrap(), 255);
+    }
+
+    #[test]
+    fn parse_quantity_rejects_bad_format() {
+        assert!(parse_rpc_quantity_u32("10", "peer count").is_err());
+        assert!(parse_rpc_quantity_u32("0x", "peer count").is_err());
+        assert!(parse_rpc_quantity_u32("0x00", "peer count").is_err());
+        assert!(parse_rpc_quantity_u32("0xz", "peer count").is_err());
+    }
+
+    #[test]
+    fn parse_seed_list_trims_and_dedups() {
+        let parsed = parse_seed_enodes_list(
+            " enode://abc@1.1.1.1:30303 ,enode://abc@1.1.1.1:30303,, enode://def@2.2.2.2:30303 ",
+        )
+        .unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0], "enode://abc@1.1.1.1:30303");
+        assert_eq!(parsed[1], "enode://def@2.2.2.2:30303");
+    }
+
+    #[test]
+    fn parse_seed_list_rejects_invalid() {
+        let err = parse_seed_enodes_list("http://not-enode").unwrap_err();
+        assert!(err.contains("must start with enode://"));
+    }
+
+    #[test]
+    fn select_seed_batch_rotates_cursor() {
+        let seeds = vec![
+            "enode://a@1.1.1.1:30303".to_string(),
+            "enode://b@2.2.2.2:30303".to_string(),
+            "enode://c@3.3.3.3:30303".to_string(),
+        ];
+        let (round1, cursor1) = select_seed_batch(&seeds, 0, 2);
+        assert_eq!(round1, vec![seeds[0].clone(), seeds[1].clone()]);
+        let (round2, cursor2) = select_seed_batch(&seeds, cursor1, 2);
+        assert_eq!(round2, vec![seeds[2].clone(), seeds[0].clone()]);
+        let (round3, _) = select_seed_batch(&seeds, cursor2, 2);
+        assert_eq!(round3, vec![seeds[1].clone(), seeds[2].clone()]);
+    }
+
+    #[test]
+    fn stagnant_check_needs_span_and_no_growth() {
+        let now = now_unix_ms();
+        let mut samples = VecDeque::new();
+        samples.push_back(PeerCountSample {
+            peer_count: 2,
+            timestamp_ms: now.saturating_sub(30_000),
+        });
+        samples.push_back(PeerCountSample {
+            peer_count: 2,
+            timestamp_ms: now,
+        });
+        assert!(is_stagnant(&samples, now, Duration::from_secs(20)));
+
+        samples.push_back(PeerCountSample {
+            peer_count: 3,
+            timestamp_ms: now + 1,
+        });
+        assert!(!is_stagnant(&samples, now + 1, Duration::from_secs(20)));
+    }
+
+    #[test]
+    fn eval_reason_follows_gate_order() {
+        let mut inp = RecoveryEval {
+            rpc_ok: true,
+            window_active: true,
+            healthy: false,
+            saturated: false,
+            in_flight: false,
+            cooling_down: false,
+            stagnant: false,
+            attempts_exhausted: false,
+        };
+        assert_eq!(
+            eval_recovery_reason(inp),
+            PeerRecoveryReason::WaitingStagnation
+        );
+
+        inp.healthy = true;
+        assert_eq!(eval_recovery_reason(inp), PeerRecoveryReason::Healthy);
+        inp.healthy = false;
+        inp.saturated = true;
+        assert_eq!(eval_recovery_reason(inp), PeerRecoveryReason::Saturated);
+        inp.saturated = false;
+        inp.in_flight = true;
+        assert_eq!(eval_recovery_reason(inp), PeerRecoveryReason::Attempting);
+        inp.in_flight = false;
+        inp.cooling_down = true;
+        assert_eq!(eval_recovery_reason(inp), PeerRecoveryReason::CoolingDown);
+        inp.cooling_down = false;
+        inp.attempts_exhausted = true;
+        assert_eq!(
+            eval_recovery_reason(inp),
+            PeerRecoveryReason::AttemptsExhausted
+        );
+        inp.attempts_exhausted = false;
+        inp.rpc_ok = false;
+        assert_eq!(eval_recovery_reason(inp), PeerRecoveryReason::RpcDown);
+    }
+
+    #[test]
+    fn eval_reason_handles_window_expiry() {
+        let inp = RecoveryEval {
+            rpc_ok: true,
+            window_active: false,
+            healthy: false,
+            saturated: false,
+            in_flight: false,
+            cooling_down: false,
+            stagnant: true,
+            attempts_exhausted: false,
+        };
+        assert_eq!(eval_recovery_reason(inp), PeerRecoveryReason::WindowExpired);
+    }
+
+    #[test]
+    fn saturation_uses_headroom_threshold() {
+        assert!(!is_saturated(94, 100, 5));
+        assert!(is_saturated(95, 100, 5));
+        assert!(is_saturated(100, 100, 5));
+    }
 }
