@@ -39,8 +39,7 @@ use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source, ed2k_client,
     encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore, logger, manager,
     multi_source_download, p2p_chunk_network, p2p_download_recovery, peer_selection, protocols,
-    reputation, stream_auth,
-    webrtc_service,
+    reputation, stream_auth, webrtc_service,
 };
 use headless::create_dht_config_from_args;
 
@@ -94,11 +93,14 @@ use ethereum::{
     get_txpool_content,
     get_txpool_status,
     reconnect_to_bootstrap_if_needed,
+    reconnect_to_bootstrap_with_snapshot,
+    reset_peer_recovery_state,
     start_mining,
     stop_mining,
     EthAccount,
     GethProcess,
     MinedBlock,
+    PeerRecoverySnapshot,
 };
 use file_transfer::{DownloadMetricsSnapshot, FileTransferEvent, FileTransferService};
 use fs2::available_space;
@@ -465,6 +467,7 @@ async fn start_geth_node(
     let miner_address = state.miner_address.lock().await;
     let rpc_url = rpc_url.unwrap_or_else(|| "http://127.0.0.1:8545".to_string());
     *state.rpc_url.lock().await = rpc_url.clone();
+    reset_peer_recovery_state().await;
 
     geth.start(
         &data_dir,
@@ -620,7 +623,9 @@ async fn bittorrent_post_download_publish(
 #[tauri::command]
 async fn stop_geth_node(state: State<'_, AppState>) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
-    geth.stop()
+    let stop_res = geth.stop();
+    reset_peer_recovery_state().await;
+    stop_res
 }
 
 #[tauri::command]
@@ -1080,6 +1085,7 @@ async fn restart_geth_and_wait(state: &State<'_, AppState>, data_dir: &str) -> R
 
     // Stop Geth
     state.geth.lock().await.stop()?;
+    reset_peer_recovery_state().await;
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await; // Brief pause for shutdown
 
     // Restart with the stored miner address
@@ -4668,7 +4674,7 @@ async fn test_ftp_connection(
                 .add(&rustls::Certificate(cert.0))
                 .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
         }
-        
+
         let tls_config = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_cert_store)
@@ -4794,7 +4800,7 @@ async fn upload_to_external_ftp(
                 .add(&rustls::Certificate(cert.0))
                 .map_err(|e| format!("Failed to add certificate to store: {}", e))?;
         }
-        
+
         let tls_config = rustls::ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_cert_store)
@@ -7209,6 +7215,15 @@ async fn reconnect_geth_bootstrap(min_peers: Option<u32>) -> Result<u32, String>
     reconnect_to_bootstrap_if_needed(threshold).await
 }
 
+/// Reconnect to bootstrap/seed nodes and return a detailed state snapshot
+#[tauri::command]
+async fn reconnect_geth_bootstrap_snapshot(
+    min_peers: Option<u32>,
+) -> Result<PeerRecoverySnapshot, String> {
+    let threshold = min_peers.unwrap_or(3);
+    reconnect_to_bootstrap_with_snapshot(threshold).await
+}
+
 /// Add a specific peer to Geth
 #[tauri::command]
 async fn add_geth_peer(enode: String) -> Result<bool, String> {
@@ -9503,6 +9518,7 @@ fn main() {
             get_cached_bootstrap_health,
             clear_bootstrap_cache,
             reconnect_geth_bootstrap,
+            reconnect_geth_bootstrap_snapshot,
             add_geth_peer,
             get_geth_peers,
             get_geth_node_info,
