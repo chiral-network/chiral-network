@@ -1862,7 +1862,7 @@ fn classify_transaction(
 }
 
 /// Get transaction history for an address.
-/// Scans all blocks using JSON-RPC batch requests for efficiency.
+/// Scans only a recent block window using JSON-RPC batch requests for efficiency.
 #[tauri::command]
 async fn get_transaction_history(
     state: tauri::State<'_, AppState>,
@@ -1901,13 +1901,16 @@ async fn get_transaction_history(
     let mut transactions = Vec::new();
     let address_lower = address.to_lowercase();
 
-    // Scan all blocks from latest to genesis using batch RPC requests.
-    // Each batch fetches up to BATCH_SIZE blocks in a single HTTP request.
-    const BATCH_SIZE: u64 = 200;
+    // Scan only a recent block window from the chain tip.
+    const MAX_BLOCKS_TO_SCAN: u64 = 100;
+    const BATCH_SIZE: u64 = 100;
+    let first_block_to_scan = latest_block.saturating_sub(MAX_BLOCKS_TO_SCAN.saturating_sub(1));
     let mut cursor = latest_block;
 
     'outer: loop {
-        let batch_start = cursor.saturating_sub(BATCH_SIZE - 1);
+        let batch_start = cursor
+            .saturating_sub(BATCH_SIZE - 1)
+            .max(first_block_to_scan);
         // Build a JSON-RPC batch request
         let batch: Vec<serde_json::Value> = (batch_start..=cursor)
             .rev()
@@ -1998,7 +2001,7 @@ async fn get_transaction_history(
             break;
         }
 
-        if batch_start == 0 {
+        if batch_start <= first_block_to_scan {
             break;
         }
         cursor = batch_start - 1;
