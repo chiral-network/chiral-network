@@ -42,8 +42,6 @@
   }
 
   let showHistory = $state(false);
-  let animationFrame: number;
-  let time = $state(0);
   let sendPrice = $state('');
   let unlistenPeerDiscovered: (() => void) | null = null;
   let unlistenFileReceived: (() => void) | null = null;
@@ -56,20 +54,7 @@
   let unlistenDownloadComplete: (() => void) | null = null;
   let unlistenDownloadFailed: (() => void) | null = null;
 
-  // Wave animation
-  function animate() {
-    time = Date.now() / 1000;
-    animationFrame = requestAnimationFrame(animate);
-  }
-
-  // Calculate wave offset for a peer
-  function getWaveOffset(peer: NearbyPeer): number {
-    return Math.sin(time * 2 + peer.wavePhase) * 5;
-  }
-
   onMount(async () => {
-    animate();
-    
     // Check Tauri availability
     isTauri = checkTauriAvailability();
 
@@ -241,9 +226,6 @@
   });
 
   onDestroy(() => {
-    if (animationFrame) {
-      cancelAnimationFrame(animationFrame);
-    }
     if (unlistenPeerDiscovered) {
       unlistenPeerDiscovered();
     }
@@ -491,144 +473,149 @@
   }
 </script>
 
-<div class="p-6 h-[calc(100vh-64px)] flex flex-col">
+<div class="p-4 sm:p-6 h-[calc(100vh-64px)] flex flex-col gap-4 sm:gap-6">
   <!-- Header -->
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">ChiralDrop</h1>
-      <p class="text-gray-600 dark:text-gray-400 mt-1">
-        Your alias: <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
+  <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div class="space-y-1">
+      <h1 class="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">ChiralDrop</h1>
+      <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400">
+        Your alias:
+        <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
       </p>
     </div>
-    <button
-      onclick={() => showHistory = !showHistory}
-      class="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
-    >
-      <History class="w-4 h-4" />
-      <span>{showHistory ? 'Hide History' : 'Show History'}</span>
-    </button>
+    <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+      <div class="inline-flex items-center rounded-full border border-blue-200/70 bg-blue-50/80 px-3 py-1 text-xs font-medium text-blue-700 dark:border-blue-800/60 dark:bg-blue-900/30 dark:text-blue-300">
+        {$nearbyPeers.length} peers online
+      </div>
+      {#if $incomingPendingTransfers.length > 0}
+        <div class="inline-flex items-center rounded-full border border-amber-200/70 bg-amber-50/80 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/30 dark:text-amber-300">
+          {$incomingPendingTransfers.length} pending request{$incomingPendingTransfers.length === 1 ? '' : 's'}
+        </div>
+      {/if}
+      <button
+        onclick={() => showHistory = !showHistory}
+        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+      >
+        <History class="h-4 w-4" />
+        <span>{showHistory ? 'Hide History' : 'Show History'}</span>
+      </button>
+    </div>
   </div>
 
-  <div class="flex-1 flex gap-6 min-h-0">
-    <!-- Map Area -->
-    <div class="flex-1 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm relative overflow-hidden">
-      <!-- Wave background -->
-      <div class="absolute inset-0 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20"></div>
+  <div class="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_22rem] gap-4 sm:gap-6">
+    <!-- Peer Map -->
+    <div class="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-blue-50/70 to-cyan-50/60 dark:from-slate-900 dark:via-gray-900 dark:to-blue-950/50"></div>
+      <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-blue-300/25 blur-3xl dark:bg-blue-500/20"></div>
+      <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20"></div>
+      <div class="network-dot-grid absolute inset-0 opacity-45 dark:opacity-30"></div>
 
-      <!-- Wave pattern overlay -->
-      <svg class="absolute inset-0 w-full h-full opacity-20" preserveAspectRatio="none">
-        <defs>
-          <pattern id="wave-pattern" x="0" y="0" width="100" height="20" patternUnits="userSpaceOnUse">
-            <path
-              d="M0 10 Q 25 0, 50 10 T 100 10"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1"
-              class="text-blue-400"
-            />
-          </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#wave-pattern)" />
-      </svg>
-
-      <!-- Pulsing waves from user -->
-      <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-        <div class="pulse-wave pulse-wave-1"></div>
-        <div class="pulse-wave pulse-wave-2"></div>
-        <div class="pulse-wave pulse-wave-3"></div>
+      <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-200 dark:ring-gray-700">
+        Live Peer Mesh
+      </div>
+      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs text-slate-600 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-300 dark:ring-gray-700">
+        {$nearbyPeers.length} discovered
       </div>
 
-      <!-- User (center) -->
-      <div
-        class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-10"
-      >
+      <!-- User -->
+      <div class="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+        <span class="absolute -inset-4 rounded-full bg-blue-400/25 blur-xl dark:bg-blue-500/20"></span>
         <div
-          class="w-16 h-16 rounded-full flex items-center justify-center shadow-lg border-4 border-white dark:border-gray-700"
+          class="relative h-16 w-16 rounded-full border-4 border-white shadow-xl ring-4 ring-blue-200/60 dark:border-gray-700 dark:ring-blue-900/60 flex items-center justify-center"
           style="background-color: {$userAlias.colorHex}"
         >
-          <User class="w-8 h-8 text-white" />
+          <User class="h-8 w-8 text-white" />
         </div>
-        <span class="mt-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 px-2 py-1 rounded shadow">
+        <span class="mt-2 rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm ring-1 ring-gray-200 backdrop-blur dark:bg-gray-700/80 dark:text-gray-100 dark:ring-gray-600">
           You
         </span>
       </div>
 
       <!-- Nearby Peers -->
       {#each $nearbyPeers as peer (peer.peerId)}
-        {@const waveOffset = getWaveOffset(peer)}
         <button
           onclick={() => handlePeerClick(peer)}
-          class="absolute flex flex-col items-center transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 rounded-full"
-          style="left: {peer.position.x}%; top: calc({peer.position.y}% + {waveOffset}px); transform: translate(-50%, -50%);"
+          class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+          style="left: {peer.position.x}%; top: {peer.position.y}%; transform: translate(-50%, -50%);"
         >
-          <div
-            class="w-12 h-12 rounded-full flex items-center justify-center shadow-md border-2 border-white dark:border-gray-700"
-            style="background-color: {peer.alias.colorHex}"
-          >
-            <User class="w-6 h-6 text-white" />
+          <span class="peer-glow absolute inset-0 rounded-full bg-blue-400/20 blur-md dark:bg-blue-500/20"></span>
+          <div class="relative z-10 flex flex-col items-center">
+            <div
+              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-md transition-transform duration-200 group-hover:scale-110 dark:border-gray-700 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-blue-300/60 dark:ring-blue-900/70' : ''}"
+              style="background-color: {peer.alias.colorHex}"
+            >
+              <User class="h-6 w-6 text-white" />
+            </div>
+            <span class="mt-1 whitespace-nowrap rounded-full bg-white/90 px-2 py-0.5 text-xs font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 backdrop-blur dark:bg-gray-700/80 dark:text-gray-100 dark:ring-gray-600">
+              {peer.alias.displayName}
+            </span>
           </div>
-          <span class="mt-1 text-xs font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 px-2 py-0.5 rounded shadow whitespace-nowrap">
-            {peer.alias.displayName}
-          </span>
         </button>
       {/each}
 
       <!-- Empty state -->
       {#if $nearbyPeers.length === 0}
-        <div class="absolute inset-0 flex items-center justify-center">
-          <div class="text-center text-gray-500 dark:text-gray-400">
-            <p class="text-lg font-medium">No nearby users found</p>
-            <p class="text-sm mt-1">Connect to the network to discover peers</p>
+        <div class="absolute inset-0 flex items-center justify-center p-6">
+          <div class="max-w-sm rounded-2xl border border-white/70 bg-white/75 p-6 text-center shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-900/75">
+            <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-gray-700 dark:text-gray-300">
+              <User class="h-6 w-6" />
+            </div>
+            <p class="text-lg font-semibold text-gray-800 dark:text-gray-100">No nearby users found</p>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Connect to the network to discover peers</p>
           </div>
         </div>
       {/if}
     </div>
 
     <!-- Side Panel -->
-    <div class="w-80 flex flex-col gap-4">
+    <div class="flex min-h-0 flex-col gap-4">
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
-        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4">
-          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Incoming Transfers</h3>
-          <div class="space-y-3 max-h-48 overflow-y-auto">
+        <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-800/85">
+          <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Incoming Transfers</h3>
+          <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
-              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+              <div class="rounded-xl border border-amber-100 bg-amber-50/60 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
                 <div class="flex items-start gap-3">
                   <div
-                    class="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0"
+                    class="h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm"
                     style="background-color: {transfer.fromAlias.colorHex}"
                   >
-                    <User class="w-4 h-4 text-white" />
+                    <User class="h-4 w-4 text-white" />
                   </div>
-                  <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{transfer.fileName}</p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400">
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{transfer.fileName}</p>
+                    <p class="text-xs text-gray-600 dark:text-gray-400">
                       From {transfer.fromAlias.displayName} - {formatFileSize(transfer.fileSize)}
                     </p>
                     {#if transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0}
-                      <span class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-xs rounded-full">
-                        <Coins class="w-3 h-3" />
+                      <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                        <Coins class="h-3 w-3" />
                         {formatPriceWei(transfer.priceWei)}
                       </span>
                     {/if}
                   </div>
                 </div>
-                <div class="flex gap-2 mt-3">
+                <div class="mt-3 flex gap-2">
                   <button
                     onclick={() => handleAccept(transfer)}
-                    class="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 transition text-sm"
+                    class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600"
                   >
-                    <Check class="w-4 h-4" />
-                    {transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0
-                      ? `Pay & Accept`
-                      : 'Accept'}
+                    <span class="inline-flex items-center justify-center gap-1">
+                      <Check class="h-4 w-4" />
+                      {transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0
+                        ? `Pay & Accept`
+                        : 'Accept'}
+                    </span>
                   </button>
                   <button
                     onclick={() => handleDecline(transfer)}
-                    class="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 bg-red-500 text-white rounded-lg hover:bg-red-600 transition text-sm"
+                    class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600"
                   >
-                    <X class="w-4 h-4" />
-                    Decline
+                    <span class="inline-flex items-center justify-center gap-1">
+                      <X class="h-4 w-4" />
+                      Decline
+                    </span>
                   </button>
                 </div>
               </div>
@@ -639,35 +626,34 @@
 
       <!-- Selected Peer Panel -->
       {#if $selectedPeer}
-        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4">
-          <div class="flex items-center justify-between mb-4">
+        <div class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+          <div class="mb-4 flex items-center justify-between">
             <h3 class="font-semibold text-gray-900 dark:text-white">Send to Peer</h3>
             <button
               onclick={() => selectPeer(null)}
-              class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
+              class="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-gray-700"
             >
-              <X class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <X class="h-4 w-4 text-gray-500 dark:text-gray-400" />
             </button>
           </div>
-          <div class="flex items-center gap-3 mb-4">
+          <div class="mb-4 flex items-center gap-3 rounded-xl bg-gray-50 p-3 dark:bg-gray-700/70">
             <div
-              class="w-12 h-12 rounded-full flex items-center justify-center"
+              class="h-12 w-12 rounded-full flex items-center justify-center shadow-sm"
               style="background-color: {$selectedPeer.alias.colorHex}"
             >
-              <User class="w-6 h-6 text-white" />
+              <User class="h-6 w-6 text-white" />
             </div>
-            <div>
-              <p class="font-medium text-gray-900 dark:text-white">{$selectedPeer.alias.displayName}</p>
-              <p class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[180px]">{$selectedPeer.peerId}</p>
+            <div class="min-w-0">
+              <p class="truncate font-medium text-gray-900 dark:text-white">{$selectedPeer.alias.displayName}</p>
+              <p class="truncate text-xs text-gray-500 dark:text-gray-400">{$selectedPeer.peerId}</p>
             </div>
           </div>
-          <!-- Price Input -->
           <div class="mb-3">
-            <label for="chiraldrop-price" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
               Price (CHR) — leave empty for free
             </label>
             <div class="flex items-center gap-2">
-              <Coins class="w-4 h-4 text-amber-500 flex-shrink-0" />
+              <Coins class="h-4 w-4 flex-shrink-0 text-amber-500" />
               <input
                 id="chiraldrop-price"
                 type="number"
@@ -675,63 +661,65 @@
                 min="0"
                 placeholder="0 (free)"
                 bind:value={sendPrice}
-                class="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white"
+                class="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:focus:border-blue-500 dark:focus:ring-blue-900/50"
               />
             </div>
             {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
-              <p class="text-xs text-amber-500 mt-1">Connect wallet to set a price</p>
+              <p class="mt-1 text-xs text-amber-500">Connect wallet to set a price</p>
             {/if}
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition"
+            class="w-full rounded-xl bg-blue-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-600"
           >
-            <Send class="w-4 h-4" />
-            {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHR` : 'Select File to Send'}
+            <span class="inline-flex items-center justify-center gap-2">
+              <Send class="h-4 w-4" />
+              {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHR` : 'Select File to Send'}
+            </span>
           </button>
         </div>
       {:else}
-        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 text-center">
-          <div class="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-3">
-            <Upload class="w-6 h-6 text-gray-400" />
+        <div class="rounded-2xl border border-dashed border-gray-300 bg-white/80 p-5 text-center shadow-sm dark:border-gray-700 dark:bg-gray-800/85">
+          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
+            <Upload class="h-6 w-6 text-gray-400" />
           </div>
-          <p class="text-gray-600 dark:text-gray-400 text-sm">Click on a nearby user to send them a file</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">Select a nearby user to start a transfer</p>
         </div>
       {/if}
 
       <!-- Transaction History -->
       {#if showHistory}
-        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 flex-1 min-h-0 flex flex-col">
-          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Transaction History</h3>
-          <div class="flex-1 overflow-y-auto space-y-2">
+        <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+          <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Transaction History</h3>
+          <div class="flex-1 space-y-2 overflow-y-auto pr-1">
             {#if $transferHistory.length === 0}
-              <p class="text-gray-500 dark:text-gray-400 text-sm text-center py-4">No transfers yet</p>
+              <p class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">No transfers yet</p>
             {:else}
               {#each $transferHistory as transfer (transfer.id)}
-                <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-                  <div class="flex items-start gap-2">
-                    <FileIcon class="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-                    <div class="flex-1 min-w-0">
-                      <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{transfer.fileName}</p>
+                <div class="rounded-xl border border-gray-100 bg-gray-50/80 p-3 dark:border-gray-700 dark:bg-gray-700/60">
+                  <div class="flex items-start gap-2.5">
+                    <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
+                    <div class="min-w-0 flex-1">
+                      <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{transfer.fileName}</p>
                       <p class="text-xs text-gray-500 dark:text-gray-400">
                         {transfer.direction === 'incoming' ? 'From' : 'To'} {transfer.direction === 'incoming' ? transfer.fromAlias.displayName : transfer.toAlias.displayName}
                       </p>
-                      <div class="flex items-center gap-2 mt-1">
-                        <span class="text-xs {getStatusColor(transfer.status)} capitalize">{transfer.status}</span>
+                      <div class="mt-1 flex items-center gap-2">
+                        <span class="text-xs capitalize {getStatusColor(transfer.status)}">{transfer.status}</span>
                         <span class="text-xs text-gray-400">{formatFileSize(transfer.fileSize)}</span>
                         {#if transfer.priceWei && transfer.priceWei !== '0'}
                           <span class="text-xs text-amber-600 dark:text-amber-400">{formatPriceWei(transfer.priceWei)}</span>
                         {/if}
                       </div>
                       {#if transfer.paymentTxHash}
-                        <p class="text-xs text-gray-400 mt-1 font-mono truncate" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
+                        <p class="mt-1 truncate font-mono text-xs text-gray-400" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
                       {/if}
                       {#if transfer.balanceBefore && transfer.balanceAfter}
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                           {transfer.balanceBefore} → {transfer.balanceAfter} CHR
                         </p>
                       {/if}
-                      <p class="text-xs text-gray-400 mt-1">{formatTimestamp(transfer.timestamp)}</p>
+                      <p class="mt-1 text-xs text-gray-400">{formatTimestamp(transfer.timestamp)}</p>
                     </div>
                   </div>
                 </div>
@@ -745,38 +733,28 @@
 </div>
 
 <style>
-  .pulse-wave {
-    position: absolute;
-    border-radius: 50%;
-    border: 2px solid rgba(59, 130, 246, 0.5);
-    animation: pulse-expand 3s ease-out infinite;
-    transform: translate(-50%, -50%);
+  .network-dot-grid {
+    background-image: radial-gradient(rgba(148, 163, 184, 0.45) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0.2) 75%, rgba(0, 0, 0, 0));
   }
 
-  .pulse-wave-1 {
-    animation-delay: 0s;
+  .peer-node {
+    transition: transform 0.2s ease;
   }
 
-  .pulse-wave-2 {
-    animation-delay: 1s;
+  .peer-glow {
+    animation: peerPulse 2.8s ease-in-out infinite;
   }
 
-  .pulse-wave-3 {
-    animation-delay: 2s;
-  }
-
-  @keyframes pulse-expand {
-    0% {
-      width: 64px;
-      height: 64px;
-      opacity: 0.6;
-      border-width: 3px;
+  @keyframes peerPulse {
+    0%, 100% {
+      opacity: 0.35;
+      transform: scale(1);
     }
-    100% {
-      width: 400px;
-      height: 400px;
-      opacity: 0;
-      border-width: 1px;
+    50% {
+      opacity: 0.75;
+      transform: scale(1.12);
     }
   }
 </style>
