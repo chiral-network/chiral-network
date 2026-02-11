@@ -180,27 +180,72 @@
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
   const ACTIVE_DOWNLOADS_KEY = 'chiral_active_downloads';
 
+  function normalizeUniqueIds<T extends { id: string }>(
+    items: T[],
+    fallbackPrefix: string
+  ): { items: T[]; changed: boolean } {
+    const seen = new Set<string>();
+    let changed = false;
+
+    const normalized = items.map((item, index) => {
+      let nextId = (item.id || '').trim();
+      if (!nextId) {
+        nextId = `${fallbackPrefix}-${Date.now()}-${index}`;
+        changed = true;
+      }
+
+      if (seen.has(nextId)) {
+        let suffix = 1;
+        let candidate = `${nextId}-${suffix}`;
+        while (seen.has(candidate)) {
+          suffix += 1;
+          candidate = `${nextId}-${suffix}`;
+        }
+        nextId = candidate;
+        changed = true;
+      }
+
+      seen.add(nextId);
+      return nextId === item.id ? item : { ...item, id: nextId };
+    });
+
+    return { items: normalized, changed };
+  }
+
   // Load download history from localStorage
   function loadDownloadHistory() {
     try {
+      let idsChanged = false;
+
       const stored = localStorage.getItem(DOWNLOAD_HISTORY_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
-        downloadHistory = parsed.map((h: any) => ({
+        const mappedHistory = parsed.map((h: any) => ({
           ...h,
           completedAt: new Date(h.completedAt)
         }));
+        const normalizedHistory = normalizeUniqueIds(mappedHistory, 'history');
+        downloadHistory = normalizedHistory.items;
+        idsChanged = idsChanged || normalizedHistory.changed;
       }
 
       // Load active downloads
       const activeStored = localStorage.getItem(ACTIVE_DOWNLOADS_KEY);
       if (activeStored) {
         const parsed = JSON.parse(activeStored);
-        downloads = parsed.map((d: any) => ({
+        const mappedDownloads = parsed.map((d: any) => ({
           ...d,
           startedAt: new Date(d.startedAt),
           completedAt: d.completedAt ? new Date(d.completedAt) : undefined
         }));
+        const normalizedDownloads = normalizeUniqueIds(mappedDownloads, 'download');
+        downloads = normalizedDownloads.items;
+        idsChanged = idsChanged || normalizedDownloads.changed;
+      }
+
+      // Persist normalized IDs so old duplicates don't come back on next reload
+      if (idsChanged) {
+        saveDownloadHistory();
       }
     } catch (e) {
       log.error('Failed to load download history:', e);
@@ -217,8 +262,20 @@
   }
 
   function addToDownloadHistory(download: DownloadItem) {
+    let entryId = download.id;
+    const existingIds = new Set(downloadHistory.map(h => h.id));
+    if (existingIds.has(entryId)) {
+      let suffix = 1;
+      let candidate = `${entryId}-${suffix}`;
+      while (existingIds.has(candidate)) {
+        suffix += 1;
+        candidate = `${entryId}-${suffix}`;
+      }
+      entryId = candidate;
+    }
+
     const entry: HistoryEntry = {
-      id: download.id,
+      id: entryId,
       hash: download.hash,
       fileName: download.name,
       fileSize: download.size,
@@ -464,7 +521,7 @@
     isProcessingPayment = totalCost > 0;
 
     const newDownload: DownloadItem = {
-      id: `download-${Date.now()}`,
+      id: `download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       hash: result.hash,
       name: result.fileName,
       size: result.fileSize,
@@ -517,7 +574,7 @@
       // Update download with request ID
       let resolvedRequestId = response.requestId;
       if (downloads.some(d => d.id === resolvedRequestId && d.id !== newDownload.id)) {
-        resolvedRequestId = `${response.requestId}-${Date.now()}`;
+        resolvedRequestId = `${response.requestId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       }
 
       downloads = downloads.map(d =>
