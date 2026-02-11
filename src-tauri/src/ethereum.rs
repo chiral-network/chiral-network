@@ -1121,10 +1121,11 @@ pub async fn reconnect_to_bootstrap_with_snapshot(
             .map(|s| s.to_string())
             .collect();
         fallback.dedup();
+        let (picked, next) = select_seed_batch(&fallback, state.seed_cursor, cfg.seed_cap);
         (
-            fallback,
+            picked,
             "bootstrap_fallback".to_string(),
-            state.seed_cursor,
+            next,
         )
     };
 
