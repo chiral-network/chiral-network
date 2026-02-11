@@ -75,7 +75,6 @@ High-level summary:
 | Wallet onboarding (create/import/verify) | Implemented | `Wallet.svelte`, `WalletCreation.svelte`, `WalletLogin.svelte` |
 | Navbar, routing, auth gating | Implemented | `App.svelte`, `Navbar.svelte` |
 | DHT connect/disconnect + peer visibility | Implemented | `dhtService.ts`, `Network.svelte`, Rust DHT commands |
-| Network geographic map | Not Implemented | no geolocation mapping in `Network.svelte` |
 | ChiralDrop map + transfer flow | Implemented (core), Partial (advanced) | interactive wave map and transfer flows exist |
 | Upload protocols (WebRTC/BitTorrent selection) | Partial | selector exists; backend transport path does not switch by protocol |
 | Download by hash/magnet/torrent + tracker UI | Implemented (core), Partial (controls) | pause/resume/cancel are UI-local only |
@@ -98,12 +97,10 @@ Source requirement file: `v2-chiral-network/project-outline.md`
 | Existing wallet login by private key or mnemonic | Implemented | `src/lib/components/WalletLogin.svelte` |
 | Navbar with Download/Upload/Account/Network/Settings + logout + connection indicator | Implemented (plus extra pages) | `src/lib/components/Navbar.svelte` |
 | Network tab with peer visibility and connect/disconnect | Implemented | `src/pages/Network.svelte`, `src/lib/dhtService.ts` |
-| Network geographic distribution map | Not Implemented | absent in `Network.svelte` |
 | ChiralDrop alias + map + click peer + transfer + accept/decline + persisted history | Implemented (core), Partial (location realism) | `src/pages/ChiralDrop.svelte`, `src/lib/chiralDropStore.ts`, `src/lib/encryptedHistoryService.ts` |
 | Upload with WebRTC/BitTorrent options, file picker/drag-drop, upload history, remove | Partial | options and history exist, protocol selection not transport-enforced |
 | Download by hash/magnet/torrent with status tracking + history | Implemented (core), Partial (pause/cancel controls) | `src/pages/Download.svelte` |
 | Account page with balance/address/private key, tx history, send CHR | Implemented | `src/pages/Account.svelte` |
-| Default 1 CHR on wallet creation | Not Implemented | no automatic credit flow |
 
 ---
 
