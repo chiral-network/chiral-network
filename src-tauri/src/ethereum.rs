@@ -4438,7 +4438,20 @@ mod tests {
             .expect("snapshot")
         });
 
-        tokio::time::sleep(Duration::from_millis(40)).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let in_flight = {
+                    let state = PEER_RECOVERY_STATE.lock().await;
+                    state.in_flight
+                };
+                if in_flight {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("recovery attempt should enter in_flight before reset");
         reset_peer_recovery_state().await;
 
         let snapshot = attempt.await.expect("join attempt");
