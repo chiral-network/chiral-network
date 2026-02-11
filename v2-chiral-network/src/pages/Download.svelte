@@ -23,7 +23,8 @@
     Plus,
     Trash2,
     FolderOpen,
-    ExternalLink
+    ExternalLink,
+    Eye
   } from 'lucide-svelte';
   import { Zap, Gauge, Rocket } from 'lucide-svelte';
   import { networkConnected, walletAccount } from '$lib/stores';
@@ -51,6 +52,7 @@
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
   type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  type PreviewType = 'video' | 'audio' | 'image' | 'pdf' | 'unsupported';
 
   interface SearchResult {
     hash: string;
@@ -124,6 +126,27 @@
     return 'text-gray-400';
   }
 
+  function getFileExtension(fileNameOrPath: string): string {
+    const normalized = fileNameOrPath.split('?')[0];
+    const ext = normalized.split('.').pop();
+    return ext?.toLowerCase() || '';
+  }
+
+  function getPreviewType(fileNameOrPath: string): PreviewType {
+    const ext = getFileExtension(fileNameOrPath);
+
+    if (['mp4', 'webm', 'mov', 'm4v', 'ogg', 'ogv'].includes(ext)) return 'video';
+    if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'].includes(ext)) return 'audio';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
+    if (ext === 'pdf') return 'pdf';
+
+    return 'unsupported';
+  }
+
+  function canPreviewFile(fileNameOrPath: string): boolean {
+    return getPreviewType(fileNameOrPath) !== 'unsupported';
+  }
+
   // Format file size
   function formatFileSize(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -170,6 +193,11 @@
   let downloadHistory = $state<HistoryEntry[]>([]);
   let showSearchHistory = $state(false);
   let downloadsTab = $state<'active' | 'history'>('active');
+  let isViewerOpen = $state(false);
+  let viewerSource = $state('');
+  let viewerType = $state<PreviewType>('unsupported');
+  let viewerName = $state('');
+  let viewerError = $state<string | null>(null);
 
   // Speed tier state
   let selectedTier = $state<SpeedTier>('free');
@@ -254,6 +282,14 @@
 
   function saveDownloadHistory() {
     try {
+      const normalizedDownloads = normalizeUniqueIds(downloads, 'download');
+      if (normalizedDownloads.changed) {
+        downloads = normalizedDownloads.items;
+      }
+      const normalizedHistory = normalizeUniqueIds(downloadHistory, 'history');
+      if (normalizedHistory.changed) {
+        downloadHistory = normalizedHistory.items;
+      }
       localStorage.setItem(DOWNLOAD_HISTORY_KEY, JSON.stringify(downloadHistory));
       localStorage.setItem(ACTIVE_DOWNLOADS_KEY, JSON.stringify(downloads));
     } catch (e) {
@@ -863,6 +899,39 @@
     }
   }
 
+  async function handlePreviewFile(filePath: string, fileName: string) {
+    if (!isTauri) {
+      toasts.show('In-app preview requires the desktop app', 'error');
+      return;
+    }
+
+    const previewType = getPreviewType(fileName || filePath);
+    if (previewType === 'unsupported') {
+      toasts.show('Preview is not supported for this file type', 'warning');
+      return;
+    }
+
+    try {
+      const { convertFileSrc } = await import('@tauri-apps/api/core');
+      viewerType = previewType;
+      viewerSource = convertFileSrc(filePath);
+      viewerName = fileName || filePath.split(/[\\/]/).pop() || 'Preview';
+      viewerError = null;
+      isViewerOpen = true;
+    } catch (error) {
+      log.error('Failed to preview file:', error);
+      toasts.show(`Failed to preview file: ${error}`, 'error');
+    }
+  }
+
+  function closeViewer() {
+    isViewerOpen = false;
+    viewerSource = '';
+    viewerType = 'unsupported';
+    viewerName = '';
+    viewerError = null;
+  }
+
   function getTierLabel(tier?: SpeedTier): string {
     switch (tier) {
       case 'free': return 'Free';
@@ -1276,6 +1345,15 @@
                     </button>
                   {:else if isFinished}
                     {#if download.status === 'completed' && download.filePath}
+                      {#if canPreviewFile(download.name)}
+                        <button
+                          onclick={() => handlePreviewFile(download.filePath!, download.name)}
+                          class="p-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
+                          title="Preview in app"
+                        >
+                          <Eye class="w-4 h-4 text-indigo-500" />
+                        </button>
+                      {/if}
                       <button
                         onclick={() => handleOpenFile(download.filePath!)}
                         class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
@@ -1398,6 +1476,15 @@
                 {#if entry.status === 'completed'}
                   <div class="flex items-center gap-1 flex-shrink-0">
                     {#if entry.filePath}
+                      {#if canPreviewFile(entry.fileName)}
+                        <button
+                          onclick={() => handlePreviewFile(entry.filePath!, entry.fileName)}
+                          class="p-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
+                          title="Preview in app"
+                        >
+                          <Eye class="w-4 h-4 text-indigo-500" />
+                        </button>
+                      {/if}
                       <button
                         onclick={() => handleOpenFile(entry.filePath!)}
                         class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
@@ -1430,3 +1517,73 @@
     {/if}
   </div>
 </div>
+
+{#if isViewerOpen}
+  <div
+    class="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+    role="dialog"
+    aria-modal="true"
+    tabindex="0"
+    onclick={(e) => e.target === e.currentTarget && closeViewer()}
+    onkeydown={(e) => e.key === 'Escape' && closeViewer()}
+  >
+    <div class="w-full max-w-5xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 shadow-2xl flex flex-col">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <div class="min-w-0">
+          <p class="text-sm font-semibold truncate dark:text-white">{viewerName}</p>
+          <p class="text-xs text-gray-500 dark:text-gray-400 capitalize">{viewerType} preview</p>
+        </div>
+        <button
+          onclick={closeViewer}
+          class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title="Close preview"
+        >
+          <X class="w-5 h-5 text-gray-500 dark:text-gray-300" />
+        </button>
+      </div>
+
+      <div class="flex-1 p-4 overflow-auto bg-gray-50 dark:bg-gray-950">
+        {#if viewerError}
+          <div class="h-full flex items-center justify-center">
+            <p class="text-sm text-red-600 dark:text-red-400">{viewerError}</p>
+          </div>
+        {:else if viewerType === 'video'}
+          <video
+            class="w-full h-full max-h-[75vh] rounded-lg bg-black"
+            controls
+            src={viewerSource}
+            onerror={() => viewerError = 'Video preview failed to load'}
+          >
+            <track kind="captions" srclang="en" label="English captions" />
+          </video>
+        {:else if viewerType === 'audio'}
+          <div class="h-full flex items-center justify-center">
+            <audio
+              class="w-full max-w-2xl"
+              controls
+              src={viewerSource}
+              onerror={() => viewerError = 'Audio preview failed to load'}
+            ></audio>
+          </div>
+        {:else if viewerType === 'image'}
+          <img
+            class="max-h-[75vh] mx-auto object-contain rounded-lg"
+            src={viewerSource}
+            alt={viewerName}
+            onerror={() => viewerError = 'Image preview failed to load'}
+          />
+        {:else if viewerType === 'pdf'}
+          <iframe
+            class="w-full h-[75vh] rounded-lg border border-gray-200 dark:border-gray-700 bg-white"
+            src={viewerSource}
+            title={viewerName}
+          ></iframe>
+        {:else}
+          <div class="h-full flex items-center justify-center">
+            <p class="text-sm text-gray-600 dark:text-gray-400">Preview is not supported for this file type.</p>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
