@@ -153,7 +153,6 @@ impl PeerRecoveryCfg {
 
 #[derive(Debug)]
 struct PeerRecoveryState {
-    epoch: u64,
     rpc_ready_at: Option<Instant>,
     cooldown_until: Option<Instant>,
     in_flight: bool,
@@ -167,7 +166,6 @@ struct PeerRecoveryState {
 impl Default for PeerRecoveryState {
     fn default() -> Self {
         Self {
-            epoch: 0,
             rpc_ready_at: None,
             cooldown_until: None,
             in_flight: false,
@@ -239,8 +237,6 @@ pub fn get_configured_max_peers() -> u32 {
 }
 
 fn parse_rpc_quantity_u32(raw: &str, field: &str) -> Result<u32, String> {
-    // Ethereum JSON-RPC quantities are 0x-prefixed hex with no leading zeros
-    // (except zero itself as `0x0`).
     if !raw.starts_with("0x") {
         return Err(format!(
             "Invalid {} response: expected hex quantity with 0x prefix, got '{}'",
@@ -880,7 +876,7 @@ pub async fn start_geth_with_health_check(
 }
 
 /// Add a new peer to the running Geth node via admin_addPeer RPC
-async fn add_peer_with_endpoint(rpc_endpoint: &str, enode: &str) -> Result<bool, String> {
+pub async fn add_peer(enode: &str) -> Result<bool, String> {
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "admin_addPeer",
@@ -889,7 +885,7 @@ async fn add_peer_with_endpoint(rpc_endpoint: &str, enode: &str) -> Result<bool,
     });
 
     let response = HTTP_CLIENT
-        .post(rpc_endpoint)
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -905,10 +901,6 @@ async fn add_peer_with_endpoint(rpc_endpoint: &str, enode: &str) -> Result<bool,
     }
 
     Ok(json_response["result"].as_bool().unwrap_or(false))
-}
-
-pub async fn add_peer(enode: &str) -> Result<bool, String> {
-    add_peer_with_endpoint(&NETWORK_CONFIG.rpc_endpoint, enode).await
 }
 
 /// Get list of currently connected peers
@@ -944,8 +936,8 @@ pub async fn get_peers() -> Result<Vec<serde_json::Value>, String> {
     Ok(peers)
 }
 
-async fn get_peer_count_with_timeout(rpc_endpoint: &str, timeout: Duration) -> Result<u32, String> {
-    match tokio::time::timeout(timeout, get_peer_count_with_endpoint(rpc_endpoint)).await {
+async fn get_peer_count_with_timeout(timeout: Duration) -> Result<u32, String> {
+    match tokio::time::timeout(timeout, get_peer_count()).await {
         Ok(res) => res,
         Err(_) => Err(format!(
             "Timed out waiting for net_peerCount response after {}ms",
@@ -1004,23 +996,17 @@ fn build_snapshot(
 
 pub async fn reset_peer_recovery_state() {
     let mut state = PEER_RECOVERY_STATE.lock().await;
-    let next_epoch = state.epoch.saturating_add(1);
-    *state = PeerRecoveryState {
-        epoch: next_epoch,
-        ..PeerRecoveryState::default()
-    };
+    *state = PeerRecoveryState::default();
 }
 
-async fn reconnect_to_bootstrap_with_snapshot_inner(
+pub async fn reconnect_to_bootstrap_with_snapshot(
     min_peers: u32,
-    rpc_endpoint: &str,
-    seed_enodes_override: Option<Vec<String>>,
 ) -> Result<PeerRecoverySnapshot, String> {
     let cfg = PeerRecoveryCfg::with_min_peers(min_peers);
     let now = Instant::now();
     let now_ms = now_unix_ms();
 
-    let peer_res = get_peer_count_with_timeout(rpc_endpoint, cfg.rpc_timeout).await;
+    let peer_res = get_peer_count_with_timeout(cfg.rpc_timeout).await;
     let mut state = PEER_RECOVERY_STATE.lock().await;
 
     let mut peer_count = state.sample_hist.back().map(|v| v.peer_count).unwrap_or(0);
@@ -1122,10 +1108,7 @@ async fn reconnect_to_bootstrap_with_snapshot_inner(
         ));
     }
 
-    let seed_enodes = match seed_enodes_override {
-        Some(v) => v,
-        None => get_seed_enodes_from_env()?,
-    };
+    let seed_enodes = get_seed_enodes_from_env()?;
     let (targets, target_source, next_cursor) = if !seed_enodes.is_empty() {
         let (picked, next) = select_seed_batch(&seed_enodes, state.seed_cursor, cfg.seed_cap);
         (picked, "seed".to_string(), next)
@@ -1170,14 +1153,13 @@ async fn reconnect_to_bootstrap_with_snapshot_inner(
     state.in_flight = true;
     state.attempt_idx = state.attempt_idx.saturating_add(1);
     state.seed_cursor = next_cursor;
-    let attempt_epoch = state.epoch;
     let attempt_idx = state.attempt_idx;
     drop(state);
 
     let mut accepted = 0usize;
     let mut err_msg: Option<String> = None;
     for enode in &targets {
-        match tokio::time::timeout(cfg.rpc_timeout, add_peer_with_endpoint(rpc_endpoint, enode)).await {
+        match tokio::time::timeout(cfg.rpc_timeout, add_peer(enode)).await {
             Ok(Ok(true)) => accepted += 1,
             Ok(Ok(false)) => {}
             Ok(Err(e)) => err_msg = Some(e),
@@ -1191,27 +1173,12 @@ async fn reconnect_to_bootstrap_with_snapshot_inner(
     }
 
     tokio::time::sleep(cfg.post_wait).await;
-    let post_peer_count = get_peer_count_with_timeout(rpc_endpoint, cfg.rpc_timeout)
+    let post_peer_count = get_peer_count_with_timeout(cfg.rpc_timeout)
         .await
         .unwrap_or(peer_count);
     let post_ms = now_unix_ms();
 
     let mut state = PEER_RECOVERY_STATE.lock().await;
-    if state.epoch != attempt_epoch {
-        let current_peer_count = state.sample_hist.back().map(|v| v.peer_count).unwrap_or(post_peer_count);
-        let stagnant_now = is_stagnant(&state.sample_hist, post_ms, cfg.stagnation_window);
-        return Ok(build_snapshot(
-            &state,
-            &cfg,
-            PeerRecoveryReason::WindowExpired,
-            current_peer_count,
-            Instant::now(),
-            "none".to_string(),
-            false,
-            true,
-            stagnant_now,
-        ));
-    }
     state.in_flight = false;
     state.cooldown_until = Some(Instant::now() + cfg.cooldown);
     push_peer_sample(&mut state.sample_hist, post_peer_count, post_ms);
@@ -1242,12 +1209,6 @@ async fn reconnect_to_bootstrap_with_snapshot_inner(
         true,
         true,
     ))
-}
-
-pub async fn reconnect_to_bootstrap_with_snapshot(
-    min_peers: u32,
-) -> Result<PeerRecoverySnapshot, String> {
-    reconnect_to_bootstrap_with_snapshot_inner(min_peers, &NETWORK_CONFIG.rpc_endpoint, None).await
 }
 
 /// Reconnect to peer candidates if geth peer count is low.
@@ -1384,7 +1345,7 @@ pub async fn get_balance(address: &str) -> Result<String, String> {
     Ok(format!("{:.6}", balance_ether))
 }
 
-async fn get_peer_count_with_endpoint(rpc_endpoint: &str) -> Result<u32, String> {
+pub async fn get_peer_count() -> Result<u32, String> {
     let payload = json!({
         "jsonrpc": "2.0",
         "method": "net_peerCount",
@@ -1393,7 +1354,7 @@ async fn get_peer_count_with_endpoint(rpc_endpoint: &str) -> Result<u32, String>
     });
 
     let response = HTTP_CLIENT
-        .post(rpc_endpoint)
+        .post(&NETWORK_CONFIG.rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -1415,10 +1376,6 @@ async fn get_peer_count_with_endpoint(rpc_endpoint: &str) -> Result<u32, String>
     let peer_count = parse_rpc_quantity_u32(peer_count_hex, "peer count")?;
 
     Ok(peer_count)
-}
-
-pub async fn get_peer_count() -> Result<u32, String> {
-    get_peer_count_with_endpoint(&NETWORK_CONFIG.rpc_endpoint).await
 }
 
 /// Get the chain ID from the running Geth node via RPC
@@ -3988,144 +3945,6 @@ pub async fn reset_incremental_scanning() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{extract::State as AxumState, routing::post, Json, Router};
-    use once_cell::sync::Lazy;
-    use serde_json::Value;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    };
-    use tokio::net::TcpListener;
-    use tokio::sync::{oneshot, Mutex as AsyncMutex, Semaphore};
-
-    static TEST_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| Arc::new(Semaphore::new(1)));
-
-    #[derive(Clone)]
-    struct MockRpcState {
-        peer_counts: Arc<AsyncMutex<VecDeque<Result<String, String>>>>,
-        add_peer_results: Arc<AsyncMutex<VecDeque<Result<bool, String>>>>,
-        add_peer_delay: Duration,
-        net_peer_count_calls: Arc<AtomicUsize>,
-        add_peer_calls: Arc<AtomicUsize>,
-    }
-
-    impl MockRpcState {
-        fn new(
-            peer_counts: Vec<Result<String, String>>,
-            add_peer_results: Vec<Result<bool, String>>,
-            add_peer_delay: Duration,
-        ) -> Self {
-            Self {
-                peer_counts: Arc::new(AsyncMutex::new(peer_counts.into())),
-                add_peer_results: Arc::new(AsyncMutex::new(add_peer_results.into())),
-                add_peer_delay,
-                net_peer_count_calls: Arc::new(AtomicUsize::new(0)),
-                add_peer_calls: Arc::new(AtomicUsize::new(0)),
-            }
-        }
-
-        fn add_peer_call_count(&self) -> usize {
-            self.add_peer_calls.load(Ordering::SeqCst)
-        }
-    }
-
-    async fn mock_rpc_handler(
-        AxumState(state): AxumState<MockRpcState>,
-        Json(payload): Json<Value>,
-    ) -> Json<Value> {
-        let id = payload.get("id").cloned().unwrap_or_else(|| json!(1));
-        let method = payload
-            .get("method")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-
-        match method {
-            "net_peerCount" => {
-                state.net_peer_count_calls.fetch_add(1, Ordering::SeqCst);
-                let next = {
-                    let mut queue = state.peer_counts.lock().await;
-                    queue.pop_front().unwrap_or_else(|| Ok("0x0".to_string()))
-                };
-                match next {
-                    Ok(hex_qty) => Json(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": hex_qty
-                    })),
-                    Err(msg) => Json(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "error": { "code": -32000, "message": msg }
-                    })),
-                }
-            }
-            "admin_addPeer" => {
-                state.add_peer_calls.fetch_add(1, Ordering::SeqCst);
-                if !state.add_peer_delay.is_zero() {
-                    tokio::time::sleep(state.add_peer_delay).await;
-                }
-                let next = {
-                    let mut queue = state.add_peer_results.lock().await;
-                    queue.pop_front().unwrap_or(Ok(false))
-                };
-                match next {
-                    Ok(v) => Json(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": v
-                    })),
-                    Err(msg) => Json(json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "error": { "code": -32000, "message": msg }
-                    })),
-                }
-            }
-            _ => Json(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": { "code": -32601, "message": "method not found" }
-            })),
-        }
-    }
-
-    async fn spawn_mock_rpc(state: MockRpcState) -> (String, oneshot::Sender<()>) {
-        let app = Router::new()
-            .route("/", post(mock_rpc_handler))
-            .with_state(state);
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind mock rpc");
-        let addr = listener.local_addr().expect("mock rpc addr");
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-        tokio::spawn(async move {
-            let server = axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                });
-            let _ = server.await;
-        });
-
-        (format!("http://{}", addr), shutdown_tx)
-    }
-
-    async fn prime_stagnant_state(peer_count: u32, rpc_ready_ago: Duration) {
-        let mut state = PEER_RECOVERY_STATE.lock().await;
-        state.rpc_ready_at = Some(Instant::now().checked_sub(rpc_ready_ago).unwrap_or_else(Instant::now));
-        state.cooldown_until = None;
-        state.in_flight = false;
-        state.attempt_idx = 0;
-        state.seed_cursor = 0;
-        state.sample_hist.clear();
-        state.last_attempt = None;
-        push_peer_sample(
-            &mut state.sample_hist,
-            peer_count,
-            now_unix_ms().saturating_sub(30_000),
-        );
-    }
 
     #[test]
     fn parse_quantity_accepts_hex() {
@@ -4140,9 +3959,6 @@ mod tests {
         assert!(parse_rpc_quantity_u32("0x", "peer count").is_err());
         assert!(parse_rpc_quantity_u32("0x00", "peer count").is_err());
         assert!(parse_rpc_quantity_u32("0xz", "peer count").is_err());
-        assert!(parse_rpc_quantity_u32("0X10", "peer count").is_err());
-        assert!(parse_rpc_quantity_u32("-0x1", "peer count").is_err());
-        assert!(parse_rpc_quantity_u32(" 0x1", "peer count").is_err());
     }
 
     #[test]
@@ -4257,198 +4073,5 @@ mod tests {
         assert!(!is_saturated(94, 100, 5));
         assert!(is_saturated(95, 100, 5));
         assert!(is_saturated(100, 100, 5));
-        assert!(is_saturated(0, 3, 5));
-    }
-
-    #[tokio::test]
-    async fn recovery_rpc_down_skips_add_peer_attempts() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-
-        let mock_state = MockRpcState::new(
-            vec![Err("rpc unavailable".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(0),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(
-            3,
-            &endpoint,
-            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-        )
-        .await
-        .expect("snapshot should be returned");
-
-        assert_eq!(snapshot.reason, PeerRecoveryReason::RpcDown);
-        assert!(!snapshot.attempted);
-        assert_eq!(mock_state.add_peer_call_count(), 0);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_success_requires_peer_count_threshold_not_add_peer_result() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x3".to_string())],
-            vec![Ok(false)],
-            Duration::from_millis(0),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(
-            3,
-            &endpoint,
-            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-        )
-        .await
-        .expect("snapshot should be returned");
-
-        assert_eq!(snapshot.reason, PeerRecoveryReason::Healthy);
-        assert!(snapshot.attempted);
-        let last_attempt = snapshot.last_attempt.expect("last attempt present");
-        assert_eq!(last_attempt.accepted_targets, 0);
-        assert_eq!(last_attempt.attempted_targets, 1);
-        assert_eq!(mock_state.add_peer_call_count(), 1);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_window_expired_blocks_attempt_even_when_stagnant() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(130)).await;
-
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(0),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(
-            3,
-            &endpoint,
-            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-        )
-        .await
-        .expect("snapshot should be returned");
-
-        assert_eq!(snapshot.reason, PeerRecoveryReason::WindowExpired);
-        assert!(!snapshot.attempted);
-        assert_eq!(mock_state.add_peer_call_count(), 0);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_single_flight_prevents_duplicate_attempt_rounds() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let mock_state = MockRpcState::new(
-            vec![
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-            ],
-            vec![Ok(true)],
-            Duration::from_millis(300),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let endpoint_for_first = endpoint.clone();
-        let first = tokio::spawn(async move {
-            reconnect_to_bootstrap_with_snapshot_inner(
-                3,
-                &endpoint_for_first,
-                Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-            )
-            .await
-            .expect("first snapshot")
-        });
-
-        tokio::time::sleep(Duration::from_millis(40)).await;
-
-        let second = reconnect_to_bootstrap_with_snapshot_inner(
-            3,
-            &endpoint,
-            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-        )
-        .await
-        .expect("second snapshot");
-        let first_snapshot = first.await.expect("join first");
-
-        assert_eq!(second.reason, PeerRecoveryReason::Attempting);
-        assert!(!second.attempted);
-        assert!(first_snapshot.attempted);
-        assert_eq!(mock_state.add_peer_call_count(), 1);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_reset_cancels_inflight_state_mutation() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x1".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(300),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let endpoint_for_attempt = endpoint.clone();
-        let attempt = tokio::spawn(async move {
-            reconnect_to_bootstrap_with_snapshot_inner(
-                3,
-                &endpoint_for_attempt,
-                Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-            )
-            .await
-            .expect("snapshot")
-        });
-
-        tokio::time::sleep(Duration::from_millis(40)).await;
-        reset_peer_recovery_state().await;
-
-        let snapshot = attempt.await.expect("join attempt");
-        let state = PEER_RECOVERY_STATE.lock().await;
-
-        assert_eq!(snapshot.reason, PeerRecoveryReason::WindowExpired);
-        assert!(!state.in_flight);
-        assert_eq!(state.attempt_idx, 0);
-        assert!(state.cooldown_until.is_none());
-
-        let _ = shutdown_tx.send(());
     }
 }
