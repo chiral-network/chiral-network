@@ -4145,6 +4145,98 @@ mod tests {
         (port, shutdown_tx)
     }
 
+    fn local_core_geth_path() -> std::path::PathBuf {
+        if let Ok(path) = std::env::var("CHIRAL_TEST_GETH_BIN") {
+            return std::path::PathBuf::from(path);
+        }
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../.tools/geth/geth")
+    }
+
+    async fn wait_rpc_ready(endpoint: &str, timeout: Duration) {
+        let start = Instant::now();
+        loop {
+            let payload = json!({
+                "jsonrpc": "2.0",
+                "method": "web3_clientVersion",
+                "params": [],
+                "id": 1
+            });
+            let ok = HTTP_CLIENT
+                .post(endpoint)
+                .json(&payload)
+                .send()
+                .await
+                .is_ok();
+            if ok {
+                return;
+            }
+            assert!(
+                start.elapsed() < timeout,
+                "RPC endpoint {} did not become ready within {:?}",
+                endpoint,
+                timeout
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    fn spawn_real_geth(
+        geth_bin: &std::path::Path,
+        datadir: &std::path::Path,
+        http_port: u16,
+        authrpc_port: u16,
+        p2p_port: u16,
+    ) -> Child {
+        std::fs::create_dir_all(datadir).expect("create geth datadir");
+        Command::new(geth_bin)
+            .arg("--datadir")
+            .arg(datadir)
+            .arg("--http")
+            .arg("--http.addr")
+            .arg("127.0.0.1")
+            .arg("--http.port")
+            .arg(http_port.to_string())
+            .arg("--http.api")
+            .arg("admin,net,web3")
+            .arg("--authrpc.port")
+            .arg(authrpc_port.to_string())
+            .arg("--port")
+            .arg(p2p_port.to_string())
+            .arg("--maxpeers")
+            .arg("25")
+            .arg("--nodiscover")
+            .arg("--ipcdisable")
+            .arg("--nat")
+            .arg("none")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn real geth")
+    }
+
+    async fn fetch_enode(endpoint: &str) -> String {
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": "admin_nodeInfo",
+            "params": [],
+            "id": 1
+        });
+        let res = HTTP_CLIENT
+            .post(endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .expect("nodeinfo response")
+            .json::<serde_json::Value>()
+            .await
+            .expect("nodeinfo json");
+        res["result"]["enode"]
+            .as_str()
+            .expect("nodeinfo enode")
+            .to_string()
+    }
+
     async fn prime_stagnant_state(peer_count: u32, rpc_ready_ago: Duration) {
         let mut state = PEER_RECOVERY_STATE.lock().await;
         state.rpc_ready_at = Some(Instant::now().checked_sub(rpc_ready_ago).unwrap_or_else(Instant::now));
@@ -4502,6 +4594,47 @@ mod tests {
         assert_eq!(snapshot.reason, PeerRecoveryReason::RpcDown);
         assert!(!snapshot.attempted);
         assert_eq!(mock_state.add_peer_call_count(), 0);
+
+        let _ = shutdown_tx.send(());
+    }
+
+    #[tokio::test]
+    async fn recovery_add_peer_failure_clears_inflight_and_sets_cooldown() {
+        let _permit = TEST_SEMAPHORE
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test semaphore");
+        reset_peer_recovery_state().await;
+        prime_stagnant_state(1, Duration::from_secs(1)).await;
+
+        let mock_state = MockRpcState::new(
+            vec![Ok("0x1".to_string()), Ok("0x1".to_string())],
+            vec![Err("dial failed".to_string())],
+            Duration::from_millis(0),
+        );
+        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
+
+        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(
+            3,
+            &endpoint,
+            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
+        )
+        .await
+        .expect("snapshot should be returned");
+        let state = PEER_RECOVERY_STATE.lock().await;
+        let last_attempt = snapshot.last_attempt.expect("last attempt");
+
+        assert!(snapshot.attempted);
+        assert_eq!(snapshot.reason, PeerRecoveryReason::CoolingDown);
+        assert_eq!(snapshot.attempt_idx, 1);
+        assert_eq!(last_attempt.accepted_targets, 0);
+        assert_eq!(last_attempt.attempted_targets, 1);
+        assert!(last_attempt.error.is_some());
+        assert!(!state.in_flight);
+        assert_eq!(state.attempt_idx, 1);
+        assert!(state.cooldown_until.is_some());
+        assert_eq!(mock_state.add_peer_call_count(), 1);
 
         let _ = shutdown_tx.send(());
     }
@@ -4902,5 +5035,209 @@ mod tests {
 
         let _ = old_shutdown_tx.send(());
         let _ = new_shutdown_tx.send(());
+    }
+
+    #[tokio::test]
+    #[ignore = "manual real-geth run: requires local core-geth binary and open localhost ports"]
+    async fn recovery_real_geth_snapshot_transitions_live_and_dead_seeds() {
+        let _permit = TEST_SEMAPHORE
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test semaphore");
+        reset_peer_recovery_state().await;
+
+        let geth_bin = local_core_geth_path();
+        assert!(geth_bin.exists(), "Missing geth binary at {:?}", geth_bin);
+
+        let run_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../.tmp/geth-real-recovery-e2e");
+        let _ = std::fs::remove_dir_all(&run_root);
+        std::fs::create_dir_all(&run_root).expect("create run root");
+
+        let seed_http = 18645u16;
+        let target_http = 18646u16;
+        let mut seed = spawn_real_geth(
+            &geth_bin,
+            &run_root.join("seed"),
+            seed_http,
+            19645,
+            31413,
+        );
+        let mut target = spawn_real_geth(
+            &geth_bin,
+            &run_root.join("target"),
+            target_http,
+            19646,
+            31414,
+        );
+
+        let seed_endpoint = format!("http://127.0.0.1:{}", seed_http);
+        let target_endpoint = format!("http://127.0.0.1:{}", target_http);
+        wait_rpc_ready(&seed_endpoint, Duration::from_secs(30)).await;
+        wait_rpc_ready(&target_endpoint, Duration::from_secs(30)).await;
+
+        let seed_enode = fetch_enode(&seed_endpoint).await;
+        let (seed_ip, _) =
+            crate::geth_bootstrap::parse_enode_address(&seed_enode).expect("seed address");
+        let seed_node_id =
+            crate::geth_bootstrap::extract_node_id(&seed_enode).expect("seed node id");
+        let dead_enode = format!("enode://{}@{}:39999", seed_node_id, seed_ip);
+        unsafe {
+            std::env::set_var(
+                "CHIRAL_GETH_SEED_ENODES",
+                format!("{},{}", seed_enode, dead_enode),
+            );
+        }
+
+        let mut reasons = Vec::new();
+        let first = reconnect_to_bootstrap_with_snapshot_inner(1, &target_endpoint, None)
+            .await
+            .expect("first snapshot");
+        println!("real-e2e snapshot#1: {:?}", first);
+        reasons.push(first.reason);
+        tokio::time::sleep(Duration::from_secs(21)).await;
+        let second = reconnect_to_bootstrap_with_snapshot_inner(1, &target_endpoint, None)
+            .await
+            .expect("second snapshot");
+        println!("real-e2e snapshot#2: {:?}", second);
+        reasons.push(second.reason);
+
+        if second.reason == PeerRecoveryReason::CoolingDown {
+            tokio::time::sleep(Duration::from_secs(DEFAULT_RECOVERY_COOLDOWN_SECS + 1)).await;
+            let third = reconnect_to_bootstrap_with_snapshot_inner(1, &target_endpoint, None)
+                .await
+                .expect("third snapshot");
+            println!("real-e2e snapshot#3: {:?}", third);
+            reasons.push(third.reason);
+        }
+
+        assert!(
+            reasons.contains(&PeerRecoveryReason::WaitingStagnation),
+            "expected waiting_stagnation in {:?}",
+            reasons
+        );
+        assert!(
+            reasons.iter().any(|r| {
+                *r == PeerRecoveryReason::Healthy || *r == PeerRecoveryReason::CoolingDown
+            }),
+            "expected attempting result leading to healthy/cooling_down in {:?}",
+            reasons
+        );
+
+        reset_peer_recovery_state().await;
+        let _ = reconnect_to_bootstrap_with_snapshot_inner(2, &target_endpoint, None)
+            .await
+            .expect("window baseline snapshot");
+        tokio::time::sleep(Duration::from_secs(21)).await;
+        let _ = reconnect_to_bootstrap_with_snapshot_inner(2, &target_endpoint, None)
+            .await
+            .expect("attempt before expiry");
+        {
+            let mut state = PEER_RECOVERY_STATE.lock().await;
+            state.rpc_ready_at = Some(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(DEFAULT_RECOVERY_WINDOW_SECS + 5))
+                    .unwrap_or_else(Instant::now),
+            );
+            state.cooldown_until = None;
+            state.in_flight = false;
+        }
+        let expired = reconnect_to_bootstrap_with_snapshot_inner(2, &target_endpoint, None)
+            .await
+            .expect("expired snapshot");
+        println!("real-e2e snapshot#expired: {:?}", expired);
+        assert_eq!(expired.reason, PeerRecoveryReason::WindowExpired);
+        assert!(!expired.attempted);
+
+        unsafe {
+            std::env::remove_var("CHIRAL_GETH_SEED_ENODES");
+        }
+        let _ = target.kill();
+        let _ = target.wait();
+        let _ = seed.kill();
+        let _ = seed.wait();
+    }
+
+    #[tokio::test]
+    #[ignore = "manual real-geth run: validates startup bootnodes are independent from seed env"]
+    async fn geth_startup_bootnodes_unchanged_by_seed_env() {
+        let _permit = TEST_SEMAPHORE
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test semaphore");
+
+        let geth_bin = local_core_geth_path();
+        assert!(geth_bin.exists(), "Missing geth binary at {:?}", geth_bin);
+
+        let current_exe_parent = std::env::current_exe()
+            .expect("current exe")
+            .parent()
+            .expect("exe parent")
+            .to_path_buf();
+        let embedded_geth = current_exe_parent.join("bin").join("geth");
+        std::fs::create_dir_all(embedded_geth.parent().expect("bin dir")).expect("create bin dir");
+        std::fs::copy(&geth_bin, &embedded_geth).expect("copy geth to embedded bin path");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&embedded_geth)
+                .expect("embedded geth metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&embedded_geth, perms).expect("set embedded geth perms");
+        }
+
+        let known_bootstrap = crate::geth_bootstrap::get_bootstrap_nodes();
+        let bootstrap_enode = known_bootstrap
+            .first()
+            .expect("bootstrap node list")
+            .enode
+            .clone();
+        let seed_enode = known_bootstrap
+            .get(1)
+            .expect("secondary bootstrap node")
+            .enode
+            .clone();
+        unsafe {
+            std::env::set_var("CHIRAL_BOOTSTRAP_NODES", &bootstrap_enode);
+            std::env::set_var("CHIRAL_GETH_SEED_ENODES", &seed_enode);
+        }
+
+        let mut geth = GethProcess::new();
+        let datadir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../.tmp/geth-startup-bootnodes-check");
+        let _ = std::fs::remove_dir_all(&datadir);
+        std::fs::create_dir_all(&datadir).expect("create startup-check datadir");
+        geth.start(datadir.to_str().expect("datadir utf8"), None, false)
+            .expect("start geth");
+        let pid = geth.child.as_ref().expect("child pid").id();
+
+        let cmdline_path = format!("/proc/{}/cmdline", pid);
+        let cmdline_raw = std::fs::read(cmdline_path).expect("read geth cmdline");
+        let cmdline = String::from_utf8_lossy(&cmdline_raw).replace('\0', " ");
+
+        assert!(
+            cmdline.contains("--bootnodes"),
+            "expected --bootnodes in cmdline: {}",
+            cmdline
+        );
+        assert!(
+            cmdline.contains(&bootstrap_enode),
+            "expected bootstrap enode in cmdline: {}",
+            cmdline
+        );
+        assert!(
+            !cmdline.contains(&seed_enode),
+            "seed enode should not be used as startup bootnode: {}",
+            cmdline
+        );
+
+        let _ = geth.stop();
+        unsafe {
+            std::env::remove_var("CHIRAL_BOOTSTRAP_NODES");
+            std::env::remove_var("CHIRAL_GETH_SEED_ENODES");
+        }
     }
 }
