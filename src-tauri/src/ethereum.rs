@@ -4359,6 +4359,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_window_expired_stays_blocked_on_repeated_calls() {
+        let _permit = TEST_SEMAPHORE
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test semaphore");
+        reset_peer_recovery_state().await;
+        prime_stagnant_state(1, Duration::from_secs(130)).await;
+
+        let mock_state = MockRpcState::new(
+            vec![Ok("0x1".to_string()), Ok("0x1".to_string())],
+            vec![Ok(true)],
+            Duration::from_millis(0),
+        );
+        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
+        let seed_targets = vec!["enode://seed@127.0.0.1:30303".to_string()];
+
+        let first = reconnect_to_bootstrap_with_snapshot_inner(
+            3,
+            &endpoint,
+            Some(seed_targets.clone()),
+        )
+        .await
+        .expect("first snapshot");
+        let second = reconnect_to_bootstrap_with_snapshot_inner(3, &endpoint, Some(seed_targets))
+            .await
+            .expect("second snapshot");
+
+        assert_eq!(first.reason, PeerRecoveryReason::WindowExpired);
+        assert_eq!(second.reason, PeerRecoveryReason::WindowExpired);
+        assert!(!first.attempted);
+        assert!(!second.attempted);
+        assert_eq!(mock_state.add_peer_call_count(), 0);
+
+        let _ = shutdown_tx.send(());
+    }
+
+    #[tokio::test]
+    async fn recovery_saturated_blocks_attempts_even_when_stagnant() {
+        let _permit = TEST_SEMAPHORE
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test semaphore");
+        reset_peer_recovery_state().await;
+        prime_stagnant_state(95, Duration::from_secs(30)).await;
+
+        let mock_state = MockRpcState::new(
+            vec![Ok("0x5f".to_string())],
+            vec![Ok(true)],
+            Duration::from_millis(0),
+        );
+        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
+
+        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(
+            120,
+            &endpoint,
+            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
+        )
+        .await
+        .expect("snapshot should be returned");
+
+        assert_eq!(snapshot.reason, PeerRecoveryReason::Saturated);
+        assert!(!snapshot.attempted);
+        assert_eq!(mock_state.add_peer_call_count(), 0);
+
+        let _ = shutdown_tx.send(());
+    }
+
+    #[tokio::test]
     async fn recovery_single_flight_prevents_duplicate_attempt_rounds() {
         let _permit = TEST_SEMAPHORE
             .clone()
