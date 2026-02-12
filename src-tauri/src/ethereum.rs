@@ -5160,6 +5160,90 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "manual real-geth run: verifies bootstrap fallback path when seeds env is unset"]
+    async fn recovery_real_geth_fallback_when_seeds_unset() {
+        let _permit = TEST_SEMAPHORE
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("test semaphore");
+        reset_peer_recovery_state().await;
+        crate::geth_bootstrap::clear_bootstrap_cache().await;
+
+        let geth_bin = local_core_geth_path();
+        assert!(geth_bin.exists(), "Missing geth binary at {:?}", geth_bin);
+
+        let run_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../.tmp/geth-real-recovery-fallback");
+        let _ = std::fs::remove_dir_all(&run_root);
+        std::fs::create_dir_all(&run_root).expect("create run root");
+
+        let seed_http = 18745u16;
+        let target_http = 18746u16;
+        let mut seed = spawn_real_geth(
+            &geth_bin,
+            &run_root.join("seed"),
+            seed_http,
+            19745,
+            31513,
+        );
+        let mut target = spawn_real_geth(
+            &geth_bin,
+            &run_root.join("target"),
+            target_http,
+            19746,
+            31514,
+        );
+
+        let seed_endpoint = format!("http://127.0.0.1:{}", seed_http);
+        let target_endpoint = format!("http://127.0.0.1:{}", target_http);
+        wait_rpc_ready(&seed_endpoint, Duration::from_secs(30)).await;
+        wait_rpc_ready(&target_endpoint, Duration::from_secs(30)).await;
+
+        let seed_enode = fetch_enode(&seed_endpoint).await;
+        let (seed_ip, _) =
+            crate::geth_bootstrap::parse_enode_address(&seed_enode).expect("seed address");
+        let seed_node_id =
+            crate::geth_bootstrap::extract_node_id(&seed_enode).expect("seed node id");
+        let dead_enode = format!("enode://{}@{}:39999", seed_node_id, seed_ip);
+
+        unsafe {
+            std::env::remove_var("CHIRAL_GETH_SEED_ENODES");
+            std::env::set_var(
+                "CHIRAL_BOOTSTRAP_NODES",
+                format!("{},{}", seed_enode, dead_enode),
+            );
+        }
+
+        let first = reconnect_to_bootstrap_with_snapshot_inner(1, &target_endpoint, None)
+            .await
+            .expect("first snapshot");
+        println!("real-fallback snapshot#1: {:?}", first);
+        tokio::time::sleep(Duration::from_secs(21)).await;
+        let second = reconnect_to_bootstrap_with_snapshot_inner(1, &target_endpoint, None)
+            .await
+            .expect("second snapshot");
+        println!("real-fallback snapshot#2: {:?}", second);
+
+        assert_eq!(first.reason, PeerRecoveryReason::WaitingStagnation);
+        assert_eq!(second.target_source, "bootstrap_fallback");
+        assert!(second.attempted);
+        assert!(
+            second.reason == PeerRecoveryReason::Healthy
+                || second.reason == PeerRecoveryReason::CoolingDown
+        );
+
+        unsafe {
+            std::env::remove_var("CHIRAL_BOOTSTRAP_NODES");
+        }
+        crate::geth_bootstrap::clear_bootstrap_cache().await;
+        let _ = target.kill();
+        let _ = target.wait();
+        let _ = seed.kill();
+        let _ = seed.wait();
+    }
+
+    #[tokio::test]
     #[ignore = "manual real-geth run: validates startup bootnodes are independent from seed env"]
     async fn geth_startup_bootnodes_unchanged_by_seed_env() {
         let _permit = TEST_SEMAPHORE
