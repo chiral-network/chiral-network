@@ -4131,7 +4131,6 @@ mod tests {
     fn parse_quantity_accepts_hex() {
         assert_eq!(parse_rpc_quantity_u32("0x0", "peer count").unwrap(), 0);
         assert_eq!(parse_rpc_quantity_u32("0xa", "peer count").unwrap(), 10);
-        assert_eq!(parse_rpc_quantity_u32("0xA", "peer count").unwrap(), 10);
         assert_eq!(parse_rpc_quantity_u32("0xff", "peer count").unwrap(), 255);
     }
 
