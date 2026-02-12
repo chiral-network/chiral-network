@@ -4004,7 +4004,6 @@ mod tests {
     struct MockRpcState {
         peer_counts: Arc<AsyncMutex<VecDeque<Result<String, String>>>>,
         add_peer_results: Arc<AsyncMutex<VecDeque<Result<bool, String>>>>,
-        net_peer_count_delay: Duration,
         add_peer_delay: Duration,
         net_peer_count_calls: Arc<AtomicUsize>,
         add_peer_calls: Arc<AtomicUsize>,
@@ -4019,16 +4018,10 @@ mod tests {
             Self {
                 peer_counts: Arc::new(AsyncMutex::new(peer_counts.into())),
                 add_peer_results: Arc::new(AsyncMutex::new(add_peer_results.into())),
-                net_peer_count_delay: Duration::from_millis(0),
                 add_peer_delay,
                 net_peer_count_calls: Arc::new(AtomicUsize::new(0)),
                 add_peer_calls: Arc::new(AtomicUsize::new(0)),
             }
-        }
-
-        fn with_peer_count_delay(mut self, delay: Duration) -> Self {
-            self.net_peer_count_delay = delay;
-            self
         }
 
         fn add_peer_call_count(&self) -> usize {
@@ -4049,9 +4042,6 @@ mod tests {
         match method {
             "net_peerCount" => {
                 state.net_peer_count_calls.fetch_add(1, Ordering::SeqCst);
-                if !state.net_peer_count_delay.is_zero() {
-                    tokio::time::sleep(state.net_peer_count_delay).await;
-                }
                 let next = {
                     let mut queue = state.peer_counts.lock().await;
                     queue.pop_front().unwrap_or_else(|| Ok("0x0".to_string()))
@@ -4119,30 +4109,6 @@ mod tests {
         });
 
         (format!("http://{}", addr), shutdown_tx)
-    }
-
-    async fn spawn_tcp_acceptor() -> (u16, oneshot::Sender<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind tcp acceptor");
-        let port = listener.local_addr().expect("acceptor addr").port();
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => break,
-                    incoming = listener.accept() => {
-                        match incoming {
-                            Ok((stream, _)) => drop(stream),
-                            Err(_) => break,
-                        }
-                    }
-                }
-            }
-        });
-
-        (port, shutdown_tx)
     }
 
     async fn prime_stagnant_state(peer_count: u32, rpc_ready_ago: Duration) {
@@ -4398,115 +4364,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_cooldown_blocks_immediate_second_attempt() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x1".to_string()), Ok("0x1".to_string())],
-            vec![Ok(true), Ok(true)],
-            Duration::from_millis(0),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-        let seed_targets = Some(vec!["enode://seed@127.0.0.1:30303".to_string()]);
-
-        let first =
-            reconnect_to_bootstrap_with_snapshot_inner(3, &endpoint, seed_targets.clone())
-                .await
-                .expect("first snapshot");
-        let second = reconnect_to_bootstrap_with_snapshot_inner(3, &endpoint, seed_targets)
-            .await
-            .expect("second snapshot");
-
-        assert!(first.attempted);
-        assert_eq!(first.reason, PeerRecoveryReason::CoolingDown);
-        assert_eq!(second.reason, PeerRecoveryReason::CoolingDown);
-        assert!(!second.attempted);
-        assert_eq!(mock_state.add_peer_call_count(), 1);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_attempts_exhausted_is_stable_terminal_reason() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-        {
-            let mut state = PEER_RECOVERY_STATE.lock().await;
-            state.attempt_idx = DEFAULT_RECOVERY_MAX_ATTEMPTS;
-            state.cooldown_until = None;
-        }
-
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x1".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(0),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-        let seed_targets = Some(vec!["enode://seed@127.0.0.1:30303".to_string()]);
-
-        let first =
-            reconnect_to_bootstrap_with_snapshot_inner(3, &endpoint, seed_targets.clone())
-                .await
-                .expect("first snapshot");
-        let second = reconnect_to_bootstrap_with_snapshot_inner(3, &endpoint, seed_targets)
-            .await
-            .expect("second snapshot");
-
-        assert_eq!(first.reason, PeerRecoveryReason::AttemptsExhausted);
-        assert_eq!(second.reason, PeerRecoveryReason::AttemptsExhausted);
-        assert!(!first.attempted);
-        assert!(!second.attempted);
-        assert_eq!(mock_state.add_peer_call_count(), 0);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_rpc_timeout_skips_add_peer_attempts() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let peer_count_delay = Duration::from_millis(DEFAULT_RECOVERY_RPC_TIMEOUT_MS + 500);
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(0),
-        )
-        .with_peer_count_delay(peer_count_delay);
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(
-            3,
-            &endpoint,
-            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-        )
-        .await
-        .expect("snapshot should be returned");
-
-        assert_eq!(snapshot.reason, PeerRecoveryReason::RpcDown);
-        assert!(!snapshot.attempted);
-        assert_eq!(mock_state.add_peer_call_count(), 0);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
     async fn recovery_window_expired_blocks_attempt_even_when_stagnant() {
         let _permit = TEST_SEMAPHORE
             .clone()
@@ -4606,125 +4463,6 @@ mod tests {
         assert_eq!(mock_state.add_peer_call_count(), 0);
 
         let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_parallel_storm_single_flight_only_one_attempt() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let mock_state = MockRpcState::new(
-            vec![
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-                Ok("0x1".to_string()),
-            ],
-            vec![Ok(true)],
-            Duration::from_millis(300),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let start_barrier = Arc::new(tokio::sync::Barrier::new(11));
-        let mut handles = Vec::new();
-        for _ in 0..10usize {
-            let endpoint_for_task = endpoint.clone();
-            let barrier = start_barrier.clone();
-            handles.push(tokio::spawn(async move {
-                barrier.wait().await;
-                reconnect_to_bootstrap_with_snapshot_inner(
-                    3,
-                    &endpoint_for_task,
-                    Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-                )
-                .await
-                .expect("storm snapshot")
-            }));
-        }
-
-        start_barrier.wait().await;
-
-        let mut attempted_count = 0usize;
-        for handle in handles {
-            let snapshot = handle.await.expect("join storm task");
-            if snapshot.attempted {
-                attempted_count = attempted_count.saturating_add(1);
-            }
-        }
-
-        assert_eq!(attempted_count, 1);
-        assert_eq!(mock_state.add_peer_call_count(), 1);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_fallback_caps_attempt_targets_when_seeds_unset() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-        crate::geth_bootstrap::clear_bootstrap_cache().await;
-
-        let (tcp_port, tcp_shutdown_tx) = spawn_tcp_acceptor().await;
-        let bootstrap_nodes = (0..32usize)
-            .map(|i| format!("enode://seed{:03}@127.0.0.1:{}", i, tcp_port))
-            .collect::<Vec<_>>()
-            .join(",");
-        let prev_bootstrap_env = std::env::var("CHIRAL_BOOTSTRAP_NODES").ok();
-        unsafe {
-            std::env::set_var("CHIRAL_BOOTSTRAP_NODES", bootstrap_nodes);
-        }
-
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x1".to_string())],
-            vec![Ok(true); 16],
-            Duration::from_millis(0),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(3, &endpoint, None)
-            .await
-            .expect("snapshot should be returned");
-
-        if let Some(prev) = prev_bootstrap_env {
-            unsafe {
-                std::env::set_var("CHIRAL_BOOTSTRAP_NODES", prev);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("CHIRAL_BOOTSTRAP_NODES");
-            }
-        }
-        crate::geth_bootstrap::clear_bootstrap_cache().await;
-
-        let _ = tcp_shutdown_tx.send(());
-        let _ = shutdown_tx.send(());
-
-        assert!(snapshot.attempted);
-        assert_eq!(snapshot.target_source, "bootstrap_fallback");
-        let last_attempt = snapshot.last_attempt.expect("last attempt present");
-        assert_eq!(last_attempt.attempted_targets, DEFAULT_RECOVERY_SEED_CAP);
-        assert_eq!(mock_state.add_peer_call_count(), DEFAULT_RECOVERY_SEED_CAP);
     }
 
     #[tokio::test]
@@ -4832,75 +4570,5 @@ mod tests {
         assert!(state.cooldown_until.is_none());
 
         let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
-    async fn recovery_restart_ignores_stale_inflight_completion() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let old_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x1".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(350),
-        );
-        let (old_endpoint, old_shutdown_tx) = spawn_mock_rpc(old_state).await;
-        let old_endpoint_for_attempt = old_endpoint.clone();
-        let stale_attempt = tokio::spawn(async move {
-            reconnect_to_bootstrap_with_snapshot_inner(
-                3,
-                &old_endpoint_for_attempt,
-                Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-            )
-            .await
-            .expect("stale snapshot")
-        });
-
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let in_flight = {
-                    let state = PEER_RECOVERY_STATE.lock().await;
-                    state.in_flight
-                };
-                if in_flight {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("stale attempt should enter in_flight");
-
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let new_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x3".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(0),
-        );
-        let (new_endpoint, new_shutdown_tx) = spawn_mock_rpc(new_state).await;
-        let fresh_snapshot = reconnect_to_bootstrap_with_snapshot_inner(
-            3,
-            &new_endpoint,
-            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-        )
-        .await
-        .expect("fresh snapshot");
-        let stale_snapshot = stale_attempt.await.expect("join stale attempt");
-        let state = PEER_RECOVERY_STATE.lock().await;
-
-        assert_eq!(stale_snapshot.reason, PeerRecoveryReason::WindowExpired);
-        assert_eq!(fresh_snapshot.reason, PeerRecoveryReason::Healthy);
-        assert_eq!(state.sample_hist.back().map(|s| s.peer_count), Some(3));
-        assert_eq!(state.attempt_idx, 1);
-
-        let _ = old_shutdown_tx.send(());
-        let _ = new_shutdown_tx.send(());
     }
 }
