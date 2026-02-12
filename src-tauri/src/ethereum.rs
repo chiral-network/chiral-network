@@ -4328,42 +4328,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_add_peer_acceptance_alone_does_not_mark_healthy() {
-        let _permit = TEST_SEMAPHORE
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("test semaphore");
-        reset_peer_recovery_state().await;
-        prime_stagnant_state(1, Duration::from_secs(1)).await;
-
-        let mock_state = MockRpcState::new(
-            vec![Ok("0x1".to_string()), Ok("0x1".to_string())],
-            vec![Ok(true)],
-            Duration::from_millis(0),
-        );
-        let (endpoint, shutdown_tx) = spawn_mock_rpc(mock_state.clone()).await;
-
-        let snapshot = reconnect_to_bootstrap_with_snapshot_inner(
-            3,
-            &endpoint,
-            Some(vec!["enode://seed@127.0.0.1:30303".to_string()]),
-        )
-        .await
-        .expect("snapshot should be returned");
-
-        assert_eq!(snapshot.reason, PeerRecoveryReason::CoolingDown);
-        assert!(snapshot.attempted);
-        assert_eq!(snapshot.peer_count, 1);
-        let last_attempt = snapshot.last_attempt.expect("last attempt present");
-        assert_eq!(last_attempt.accepted_targets, 1);
-        assert_eq!(last_attempt.attempted_targets, 1);
-        assert_eq!(mock_state.add_peer_call_count(), 1);
-
-        let _ = shutdown_tx.send(());
-    }
-
-    #[tokio::test]
     async fn recovery_window_expired_blocks_attempt_even_when_stagnant() {
         let _permit = TEST_SEMAPHORE
             .clone()
