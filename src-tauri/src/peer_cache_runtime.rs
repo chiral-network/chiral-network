@@ -998,6 +998,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wan_safe_rejects_ipv6_loopback_and_unique_local() {
+        assert!(
+            !is_address_allowed_for_warmstart(&format!("/ip6/::1/tcp/4001/p2p/{}", PEER_A), false)
+                .await
+        );
+        assert!(
+            !is_address_allowed_for_warmstart(
+                &format!("/ip6/fd00::1/tcp/4001/p2p/{}", PEER_A),
+                false
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
     async fn wan_safe_rejects_localhost_dns() {
         assert!(
             !is_address_allowed_for_warmstart(
