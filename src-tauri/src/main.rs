@@ -454,6 +454,7 @@ async fn cancel_peer_cache_warmstart_task(state: &AppState, run_id: u64) {
 async fn snapshot_and_save_peer_cache_from_dht(
     state: &AppState,
     dht: &Arc<DhtService>,
+    run_id: u64,
 ) -> Result<(), String> {
     let peers = dht.get_connected_peers().await;
     let peers_with_addresses = dht.get_peer_addresses(peers).await?;
@@ -477,7 +478,8 @@ async fn snapshot_and_save_peer_cache_from_dht(
     if let Some(ctx) = namespace_ctx {
         peer_cache_runtime::save_namespaced_cache(&ctx, cache, success_map).await?;
         info!(
-            "peer_cache.save phase=save namespace={} peers={}",
+            "peer_cache.save phase=save run_id={} namespace={} peers={}",
+            run_id,
             ctx.namespace_key,
             peers_with_addresses.len()
         );
@@ -515,6 +517,11 @@ async fn spawn_peer_cache_warmstart_task(
         status.warmstart_skipped = 0;
         status.peers_selected_for_warmstart = 0;
         status.warmstart_last_reason = None;
+        status.warmstart_policy_mode = if peer_cache_runtime::warmstart_allow_lan() {
+            peer_cache_runtime::WarmstartPolicyMode::Lan
+        } else {
+            peer_cache_runtime::WarmstartPolicyMode::Wan
+        };
         status.last_warmstart_started_at = Some(now);
         status.last_warmstart_completed_at = None;
     }
@@ -540,7 +547,10 @@ async fn spawn_peer_cache_warmstart_task(
             status.warmstart_last_reason =
                 Some(peer_cache_runtime::WarmstartReasonCode::WarmstartDisabled);
             status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-            info!("peer_cache.warmstart phase=plan reason=warmstart_disabled");
+            info!(
+                "peer_cache.warmstart phase=plan run_id={} reason=warmstart_disabled",
+                run_id
+            );
             return;
         }
 
@@ -552,7 +562,10 @@ async fn spawn_peer_cache_warmstart_task(
             status.warmstart_last_reason =
                 Some(peer_cache_runtime::WarmstartReasonCode::NamespaceMismatch);
             status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-            info!("peer_cache.warmstart phase=plan reason=namespace_mismatch");
+            info!(
+                "peer_cache.warmstart phase=plan run_id={} reason=namespace_mismatch",
+                run_id
+            );
             return;
         }
 
@@ -571,7 +584,10 @@ async fn spawn_peer_cache_warmstart_task(
             status.warmstart_task_running = false;
             status.warmstart_last_reason = Some(peer_cache_runtime::WarmstartReasonCode::EmptyCache);
             status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
-            info!("peer_cache.warmstart phase=plan reason=empty_cache");
+            info!(
+                "peer_cache.warmstart phase=plan run_id={} reason=empty_cache",
+                run_id
+            );
             return;
         }
 
@@ -579,7 +595,8 @@ async fn spawn_peer_cache_warmstart_task(
         let mut skipped = 0usize;
         let mut budget_expired = false;
         for candidate in candidates {
-            if cancel_run.load(Ordering::SeqCst) == run_id {
+            if peer_cache_runtime::warmstart_should_cancel(cancel_run.load(Ordering::SeqCst), run_id)
+            {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
                 status.warmstart_task_running = false;
@@ -604,7 +621,8 @@ async fn spawn_peer_cache_warmstart_task(
             }
         }
         info!(
-            "peer_cache.warmstart phase=plan candidates={} filtered={} skipped={} budget_ms={}",
+            "peer_cache.warmstart phase=plan run_id={} candidates={} filtered={} skipped={} budget_ms={}",
+            run_id,
             filtered.len() + skipped,
             filtered.len(),
             skipped,
@@ -630,7 +648,8 @@ async fn spawn_peer_cache_warmstart_task(
             && attempted < max_attempts
             && (started.elapsed().as_millis() as u64) < budget_ms
         {
-            if cancel_run.load(Ordering::SeqCst) == run_id {
+            if peer_cache_runtime::warmstart_should_cancel(cancel_run.load(Ordering::SeqCst), run_id)
+            {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
                 status.warmstart_last_reason =
@@ -639,9 +658,7 @@ async fn spawn_peer_cache_warmstart_task(
             }
 
             let lifecycle = lifecycle_arc.lock().await.clone();
-            let active_phase = lifecycle.phase == peer_cache_runtime::DhtLifecyclePhase::Running
-                || lifecycle.phase == peer_cache_runtime::DhtLifecyclePhase::Starting;
-            if lifecycle.run_id != run_id || !active_phase {
+            if !peer_cache_runtime::warmstart_run_active(&lifecycle, run_id) {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
                 status.warmstart_last_reason =
@@ -689,6 +706,15 @@ async fn spawn_peer_cache_warmstart_task(
             }
         }
 
+        let lifecycle = lifecycle_arc.lock().await.clone();
+        if !peer_cache_runtime::warmstart_run_active(&lifecycle, run_id) {
+            info!(
+                "peer_cache.warmstart phase=execute run_id={} reason=stale_completion_ignored",
+                run_id
+            );
+            return;
+        }
+
         let mut status = status_arc.lock().await;
         status.warmstart_attempted = attempted;
         status.warmstart_succeeded = succeeded;
@@ -706,8 +732,8 @@ async fn spawn_peer_cache_warmstart_task(
         status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
         status.last_error = None;
         info!(
-            "peer_cache.warmstart phase=execute attempted={} succeeded={} skipped={} reason={:?}",
-            attempted, succeeded, status.warmstart_skipped, status.warmstart_last_reason
+            "peer_cache.warmstart phase=execute run_id={} attempted={} succeeded={} skipped={} reason={:?}",
+            run_id, attempted, succeeded, status.warmstart_skipped, status.warmstart_last_reason
         );
     });
 
@@ -2243,7 +2269,8 @@ async fn start_dht_node(
             match loaded {
                 Ok(loaded_cache) => {
                     info!(
-                        "peer_cache.load phase=load namespace={} peers={} mismatch={} migrated={}",
+                        "peer_cache.load phase=load run_id={} namespace={} peers={} mismatch={} migrated={}",
+                        run_id,
                         namespace_ctx.namespace_key,
                         loaded_cache.cache.peers.len(),
                         loaded_cache.namespace_mismatch,
@@ -2384,27 +2411,26 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
     sync_lifecycle_status(&state).await;
     cancel_peer_cache_warmstart_task(&state, current_run_id).await;
 
-    let dht_for_snapshot = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-    if let Some(ref dht) = dht_for_snapshot {
-        if let Err(err) = snapshot_and_save_peer_cache_from_dht(&state, dht).await {
-            let mut status = state.peer_cache_status.lock().await;
-            status.last_error = Some(format!("Failed to save peer cache on stop: {}", err));
-        }
-    }
-
     let dht = {
         let mut dht_guard = state.dht.lock().await;
         dht_guard.take()
     };
-
     if let Some(dht) = dht {
-        (*dht)
-            .shutdown()
-            .await
-            .map_err(|e| format!("Failed to stop DHT: {}", e))?;
+        let dht_for_snapshot = dht.clone();
+        peer_cache_runtime::run_snapshot_then_teardown(
+            async {
+                snapshot_and_save_peer_cache_from_dht(&state, &dht_for_snapshot, current_run_id)
+                    .await
+                    .map_err(|err| format!("Failed to save peer cache on stop: {}", err))
+            },
+            async {
+                (*dht)
+                    .shutdown()
+                    .await
+                    .map_err(|e| format!("Failed to stop DHT: {}", e))
+            },
+        )
+        .await?;
     }
 
     // Proxy reset
@@ -8485,23 +8511,29 @@ async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String
     sync_lifecycle_status(&state).await;
     cancel_peer_cache_warmstart_task(&state, current_run_id).await;
 
-    let dht_for_snapshot = {
-        let dht_guard = state.dht.lock().await;
-        dht_guard.as_ref().cloned()
-    };
-    if let Some(ref dht) = dht_for_snapshot {
-        if let Err(err) = snapshot_and_save_peer_cache_from_dht(&state, dht).await {
-            let mut status = state.peer_cache_status.lock().await;
-            status.last_error = Some(format!("Failed to save peer cache on reset: {}", err));
-        }
-    }
-
     let dht = {
         let mut dht_guard = state.dht.lock().await;
         dht_guard.take()
     };
     if let Some(dht) = dht {
-        let _ = dht.shutdown().await;
+        let dht_for_snapshot = dht.clone();
+        let result = peer_cache_runtime::run_snapshot_then_teardown(
+            async {
+                snapshot_and_save_peer_cache_from_dht(&state, &dht_for_snapshot, current_run_id)
+                    .await
+                    .map_err(|err| format!("Failed to save peer cache on reset: {}", err))
+            },
+            async {
+                dht.shutdown()
+                    .await
+                    .map_err(|e| format!("Failed to stop DHT on reset: {}", e))
+            },
+        )
+        .await;
+        if let Err(err) = result {
+            let mut status = state.peer_cache_status.lock().await;
+            status.last_error = Some(err);
+        }
     }
 
     // Stop WebRTC if running (just clear the reference)
@@ -8569,24 +8601,27 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
         sync_lifecycle_status(&state).await;
         cancel_peer_cache_warmstart_task(&state, current_run_id).await;
 
-        let dht_for_snapshot = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
-        if let Some(ref dht) = dht_for_snapshot {
-            if let Err(err) = snapshot_and_save_peer_cache_from_dht(&state, dht).await {
-                tracing::warn!("Failed to save peer cache during shutdown: {}", err);
-            }
-        }
-
-        // Stop DHT and related services
         let dht = {
             let mut dht_guard = state.dht.lock().await;
             dht_guard.take()
         };
         if let Some(dht) = dht {
-            if let Err(e) = dht.shutdown().await {
-                tracing::warn!("Failed to stop DHT: {}", e);
+            let dht_for_snapshot = dht.clone();
+            if let Err(err) = peer_cache_runtime::run_snapshot_then_teardown(
+                async {
+                    snapshot_and_save_peer_cache_from_dht(&state, &dht_for_snapshot, current_run_id)
+                        .await
+                        .map_err(|e| format!("Failed to save peer cache during shutdown: {}", e))
+                },
+                async {
+                    dht.shutdown()
+                        .await
+                        .map_err(|e| format!("Failed to stop DHT: {}", e))
+                },
+            )
+            .await
+            {
+                tracing::warn!("{}", err);
             }
         }
 
