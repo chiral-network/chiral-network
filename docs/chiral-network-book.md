@@ -490,6 +490,33 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 3. If failed → Circuit Relay
 ```
 
+### 8.5 DHT Peer Cache Warm-Start
+
+**Purpose**: Reduce time-to-first-peer after restart without introducing reputation logic.
+
+**Design Invariants**:
+
+- Cache is **namespaced per DHT network identity** (bootstrap set + DHT port, optional chain-id salt).
+- Cache is persisted as `peer_cache.<namespace>.json` to prevent cross-network warm-dials.
+- Startup warm-dials use **operational recency only**:
+  - `last_successful_connect_at`
+  - `last_seen`
+  - deterministic peer-id tie-break
+- Dials are bounded (candidate cap, attempt cap, concurrency cap, timeout, total budget).
+- Warm-start runs in background and does not block DHT startup completion.
+
+**Safety Policy**:
+
+- Default mode is WAN-safe: reject private, loopback, link-local, multicast, and unspecified IP ranges.
+- DNS multiaddrs are resolved and filtered by resolved IPs with bounded lookup.
+- LAN override is explicit (`CHIRAL_LAN_WARMSTART=1`) for development/local testing.
+
+**Lifecycle Guarantees**:
+
+- Single-flight `start`/`stop` lifecycle with run-id guard to prevent stale task writes.
+- Snapshot is taken **before DHT teardown** on stop/shutdown to avoid empty-cache writes.
+- Warm-start tasks are cancellable on stop/reset/shutdown.
+
 ---
 
 ## Chapter 9: Data Transfer Protocols
@@ -1668,4 +1695,3 @@ npm run build
 ---
 
 _This document consolidates all design and technical documentation for the Chiral Network project into a single comprehensive reference._
-
