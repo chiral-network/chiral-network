@@ -173,6 +173,22 @@ fn namespace_key_is_stable_for_bootstrap_permutations() {
 }
 
 #[test]
+fn namespace_key_ignores_duplicate_bootstrap_entries() {
+    let a = vec![
+        format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A),
+        format!("/ip4/2.2.2.2/tcp/4001/p2p/{}", PEER_B),
+    ];
+    let b = vec![
+        format!(" /ip4/2.2.2.2/tcp/4001/p2p/{} ", PEER_B),
+        format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A),
+        format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A),
+    ];
+    let key_a = compute_namespace_key(&a, 4001, None, false);
+    let key_b = compute_namespace_key(&b, 4001, None, false);
+    assert_eq!(key_a, key_b);
+}
+
+#[test]
 fn namespace_key_changes_with_port() {
     let bootstraps = vec![format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A)];
     let key_a = compute_namespace_key(&bootstraps, 4001, None, false);
