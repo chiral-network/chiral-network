@@ -48,12 +48,14 @@ impl DhtLifecycleState {
                 self.run_id = run_id;
                 Ok(())
             }
-            DhtLifecyclePhase::Starting => {
-                Err(format!("DHT node is already starting (run_id={})", self.run_id))
-            }
-            DhtLifecyclePhase::Running => {
-                Err(format!("DHT node is already running (run_id={})", self.run_id))
-            }
+            DhtLifecyclePhase::Starting => Err(format!(
+                "DHT node is already starting (run_id={})",
+                self.run_id
+            )),
+            DhtLifecyclePhase::Running => Err(format!(
+                "DHT node is already running (run_id={})",
+                self.run_id
+            )),
             DhtLifecyclePhase::Stopping => {
                 Err(format!("DHT node is stopping (run_id={})", self.run_id))
             }
@@ -77,9 +79,10 @@ impl DhtLifecycleState {
                 self.run_id = run_id;
                 Ok(())
             }
-            DhtLifecyclePhase::Stopping => {
-                Err(format!("DHT node is already stopping (run_id={})", self.run_id))
-            }
+            DhtLifecyclePhase::Stopping => Err(format!(
+                "DHT node is already stopping (run_id={})",
+                self.run_id
+            )),
         }
     }
 }
@@ -200,10 +203,7 @@ pub fn canonicalize_bootstrap_addr(input: &str) -> String {
         return addr.to_string();
     }
 
-    trimmed
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    trimmed.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn canonicalize_bootstrap_set(bootstrap_nodes: &[String]) -> Vec<String> {
@@ -282,7 +282,10 @@ pub async fn load_or_migrate_peer_cache(ctx: &NamespaceContext) -> Result<Loaded
         return load_namespaced_cache(&ctx.namespace_file, &ctx.namespace_key).await;
     }
 
-    if tokio::fs::try_exists(&ctx.legacy_file).await.unwrap_or(false) {
+    if tokio::fs::try_exists(&ctx.legacy_file)
+        .await
+        .unwrap_or(false)
+    {
         let mut legacy = PeerCache::load_from_file(&ctx.legacy_file).await?;
         legacy.filter_stale_peers();
         legacy.sort_and_limit();
@@ -324,8 +327,8 @@ async fn load_namespaced_cache(
         .await
         .map_err(|e| format!("Failed to read namespaced peer cache: {}", e))?;
 
-    let mut parsed: NamespacedPeerCacheFile =
-        serde_json::from_str(&json).map_err(|e| format!("Failed to parse namespaced peer cache: {}", e))?;
+    let mut parsed: NamespacedPeerCacheFile = serde_json::from_str(&json)
+        .map_err(|e| format!("Failed to parse namespaced peer cache: {}", e))?;
 
     let namespace_mismatch = parsed.header.namespace_key != expected_namespace_key;
     parsed.cache.filter_stale_peers();
@@ -361,7 +364,10 @@ pub async fn save_namespaced_cache(
     save_namespaced_cache_file(&ctx.namespace_file, &file).await
 }
 
-async fn save_namespaced_cache_file(path: &Path, file: &NamespacedPeerCacheFile) -> Result<(), String> {
+async fn save_namespaced_cache_file(
+    path: &Path,
+    file: &NamespacedPeerCacheFile,
+) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         tokio::fs::create_dir_all(dir)
             .await
@@ -403,7 +409,9 @@ pub fn build_warmstart_candidates(
                     .get(&entry.peer_id)
                     .copied()
                     .map(|v| v.min(now.saturating_add(CLOCK_SKEW_TOLERANCE_SECS))),
-                last_seen: entry.last_seen.min(now.saturating_add(CLOCK_SKEW_TOLERANCE_SECS)),
+                last_seen: entry
+                    .last_seen
+                    .min(now.saturating_add(CLOCK_SKEW_TOLERANCE_SECS)),
             };
 
             if let Some(prev) = per_peer_best.get(&candidate.peer_id) {
@@ -610,17 +618,43 @@ pub fn extract_cache_stats(cache: &PeerCache) -> PeerCacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+
+    const PEER_A: &str = "QmYwAPJzv5CZsnAzt8auVTL1YJ5hzyXH8VEkR92pT9XyM2";
+    const PEER_B: &str = "QmWATWfAtUq8f3m8M4s3B4P4YJ5x9x6vKf7r8T9uV1wXyZ";
+    const PEER_C: &str = "QmPChd2hVbrJ6U6fN5x8rVh9h1QKpG1Dk8r7T3xY2wZ1Ab";
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn make_entry(peer_id: &str, addresses: Vec<String>, last_seen: u64) -> PeerCacheEntry {
+        PeerCacheEntry {
+            peer_id: peer_id.to_string(),
+            addresses,
+            last_seen,
+            connection_count: 0,
+            successful_transfers: 0,
+            failed_transfers: 0,
+            total_bytes_transferred: 0,
+            average_latency_ms: 0,
+            is_bootstrap: false,
+            supports_relay: false,
+            reliability_score: 0.0,
+        }
+    }
 
     #[test]
     fn canonicalization_is_order_insensitive() {
         let a = vec![
-            "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWAAA".to_string(),
-            "/ip4/5.6.7.8/tcp/4001/p2p/12D3KooWBBB".to_string(),
+            format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A),
+            format!("/ip4/5.6.7.8/tcp/4001/p2p/{}", PEER_B),
         ];
         let b = vec![
-            " /ip4/5.6.7.8/tcp/4001/p2p/12D3KooWBBB ".to_string(),
-            "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWAAA".to_string(),
+            format!(" /ip4/5.6.7.8/tcp/4001/p2p/{} ", PEER_B),
+            format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A),
         ];
 
         let ka = compute_namespace_key(&a, 4001, None, false);
@@ -629,11 +663,95 @@ mod tests {
     }
 
     #[test]
+    fn canonicalize_bootstrap_addr_trims_and_normalizes_multiaddr() {
+        let raw = format!("  /ip4/1.2.3.4/tcp/4001/p2p/{}  ", PEER_A);
+        let canonical = canonicalize_bootstrap_addr(&raw);
+        assert_eq!(canonical, format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A));
+    }
+
+    #[test]
+    fn canonicalize_bootstrap_addr_collapses_whitespace_for_non_multiaddr() {
+        let canonical = canonicalize_bootstrap_addr("  alpha   beta   gamma ");
+        assert_eq!(canonical, "alpha beta gamma");
+    }
+
+    #[test]
+    fn canonicalize_bootstrap_set_deduplicates_and_sorts() {
+        let set = canonicalize_bootstrap_set(&[
+            format!(" /ip4/2.2.2.2/tcp/4001/p2p/{} ", PEER_B),
+            format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A),
+            format!("/ip4/2.2.2.2/tcp/4001/p2p/{}", PEER_B),
+        ]);
+        assert_eq!(set.len(), 2);
+        assert!(set[0] < set[1]);
+    }
+
+    #[test]
     fn namespace_key_changes_by_port() {
-        let nodes = vec!["/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWAAA".to_string()];
+        let nodes = vec![format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A)];
         let k1 = compute_namespace_key(&nodes, 4001, None, false);
         let k2 = compute_namespace_key(&nodes, 4002, None, false);
         assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn namespace_key_chain_id_changes_when_opted_in() {
+        let nodes = vec![format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A)];
+        let k1 = compute_namespace_key(&nodes, 4001, Some(1), true);
+        let k2 = compute_namespace_key(&nodes, 4001, Some(11155111), true);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn namespace_key_ignores_chain_id_when_opted_out() {
+        let nodes = vec![format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A)];
+        let k1 = compute_namespace_key(&nodes, 4001, Some(1), false);
+        let k2 = compute_namespace_key(&nodes, 4001, Some(11155111), false);
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn resolve_cache_paths_produces_namespaced_filename() {
+        let (namespace_file, legacy_file) = resolve_cache_paths("deadbeef").unwrap();
+        assert!(namespace_file
+            .to_string_lossy()
+            .contains("peer_cache.deadbeef.json"));
+        assert!(legacy_file.to_string_lossy().ends_with("peer_cache.json"));
+        assert_eq!(namespace_file.parent(), legacy_file.parent());
+    }
+
+    #[test]
+    fn build_namespace_context_canonicalizes_bootstraps() {
+        let input = vec![
+            format!(" /ip4/5.6.7.8/tcp/4001/p2p/{} ", PEER_B),
+            format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A),
+        ];
+        let ctx = build_namespace_context(&input, 4001, None).unwrap();
+        assert_eq!(ctx.namespace_meta.bootstrap_nodes.len(), 2);
+        assert!(
+            ctx.namespace_meta.bootstrap_nodes[0] < ctx.namespace_meta.bootstrap_nodes[1],
+            "bootstrap set should be stored in canonical sorted order"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_or_migrate_returns_empty_cache_when_no_files_exist() {
+        let temp = tempdir().unwrap();
+        let ctx = NamespaceContext {
+            namespace_key: "ns-empty".to_string(),
+            namespace_meta: PeerCacheNamespaceMeta {
+                port: 4001,
+                bootstrap_nodes: vec!["a".to_string()],
+                chain_id: None,
+            },
+            namespace_file: temp.path().join("peer_cache.ns-empty.json"),
+            legacy_file: temp.path().join("peer_cache.json"),
+        };
+
+        let loaded = load_or_migrate_peer_cache(&ctx).await.unwrap();
+        assert!(!loaded.legacy_migrated);
+        assert!(!loaded.namespace_mismatch);
+        assert_eq!(loaded.cache.peers.len(), 0);
     }
 
     #[tokio::test]
@@ -643,19 +761,11 @@ mod tests {
         let namespace = temp.path().join("peer_cache.ns.json");
 
         let mut cache = PeerCache::new();
-        cache.peers.push(PeerCacheEntry {
-            peer_id: "p1".to_string(),
-            addresses: vec!["/ip4/8.8.8.8/tcp/4001/p2p/12D3KooWAAA".to_string()],
-            last_seen: now_secs(),
-            connection_count: 0,
-            successful_transfers: 0,
-            failed_transfers: 0,
-            total_bytes_transferred: 0,
-            average_latency_ms: 0,
-            is_bootstrap: false,
-            supports_relay: false,
-            reliability_score: 0.0,
-        });
+        cache.peers.push(make_entry(
+            "p1",
+            vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+            now_secs(),
+        ));
         cache.save_to_file(&legacy).await.unwrap();
 
         let ctx = NamespaceContext {
@@ -678,32 +788,16 @@ mod tests {
     #[test]
     fn warmstart_candidates_prioritize_success_then_last_seen() {
         let mut cache = PeerCache::new();
-        cache.peers.push(PeerCacheEntry {
-            peer_id: "peer-a".to_string(),
-            addresses: vec!["/ip4/8.8.8.8/tcp/4001/p2p/12D3KooWAAA".to_string()],
-            last_seen: 10,
-            connection_count: 0,
-            successful_transfers: 0,
-            failed_transfers: 0,
-            total_bytes_transferred: 0,
-            average_latency_ms: 0,
-            is_bootstrap: false,
-            supports_relay: false,
-            reliability_score: 0.0,
-        });
-        cache.peers.push(PeerCacheEntry {
-            peer_id: "peer-b".to_string(),
-            addresses: vec!["/ip4/9.9.9.9/tcp/4001/p2p/12D3KooWBBB".to_string()],
-            last_seen: 20,
-            connection_count: 0,
-            successful_transfers: 0,
-            failed_transfers: 0,
-            total_bytes_transferred: 0,
-            average_latency_ms: 0,
-            is_bootstrap: false,
-            supports_relay: false,
-            reliability_score: 0.0,
-        });
+        cache.peers.push(make_entry(
+            "peer-a",
+            vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+            10,
+        ));
+        cache.peers.push(make_entry(
+            "peer-b",
+            vec![format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_B)],
+            20,
+        ));
 
         let mut success = HashMap::new();
         success.insert("peer-a".to_string(), 30);
@@ -714,24 +808,326 @@ mod tests {
     }
 
     #[test]
+    fn warmstart_candidates_place_missing_success_after_known_success() {
+        let mut cache = PeerCache::new();
+        cache.peers.push(make_entry(
+            "peer-known",
+            vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+            100,
+        ));
+        cache.peers.push(make_entry(
+            "peer-unknown",
+            vec![format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_B)],
+            200,
+        ));
+
+        let mut success = HashMap::new();
+        success.insert("peer-known".to_string(), 50);
+
+        let candidates = build_warmstart_candidates(&cache, &success, 10);
+        assert_eq!(candidates[0].peer_id, "peer-known");
+        assert_eq!(candidates[1].peer_id, "peer-unknown");
+    }
+
+    #[test]
+    fn warmstart_candidates_tie_break_by_peer_id() {
+        let mut cache = PeerCache::new();
+        cache.peers.push(make_entry(
+            "peer-b",
+            vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_B)],
+            100,
+        ));
+        cache.peers.push(make_entry(
+            "peer-a",
+            vec![format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_A)],
+            100,
+        ));
+
+        let candidates = build_warmstart_candidates(&cache, &HashMap::new(), 10);
+        assert_eq!(candidates[0].peer_id, "peer-a");
+        assert_eq!(candidates[1].peer_id, "peer-b");
+    }
+
+    #[test]
+    fn warmstart_candidates_choose_lexicographically_smallest_address_per_peer() {
+        let mut cache = PeerCache::new();
+        cache.peers.push(make_entry(
+            "peer-a",
+            vec![
+                format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_A),
+                format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A),
+            ],
+            100,
+        ));
+
+        let candidates = build_warmstart_candidates(&cache, &HashMap::new(), 10);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].address.contains("/ip4/1.1.1.1/"));
+    }
+
+    #[test]
+    fn warmstart_candidates_deduplicate_duplicate_addresses() {
+        let mut cache = PeerCache::new();
+        let addr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A);
+        cache
+            .peers
+            .push(make_entry("peer-a", vec![addr.clone(), addr.clone()], 100));
+
+        let candidates = build_warmstart_candidates(&cache, &HashMap::new(), 10);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].address, addr);
+    }
+
+    #[test]
+    fn warmstart_candidates_clamp_future_timestamps() {
+        let now = now_secs();
+        let mut cache = PeerCache::new();
+        cache.peers.push(make_entry(
+            "peer-a",
+            vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+            now + 10_000,
+        ));
+
+        let mut success = HashMap::new();
+        success.insert("peer-a".to_string(), now + 10_000);
+
+        let candidates = build_warmstart_candidates(&cache, &success, 10);
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].last_seen <= now + CLOCK_SKEW_TOLERANCE_SECS);
+        assert!(
+            candidates[0].last_successful_connect_at.unwrap_or_default()
+                <= now + CLOCK_SKEW_TOLERANCE_SECS
+        );
+    }
+
+    #[test]
+    fn warmstart_candidates_respect_limit() {
+        let mut cache = PeerCache::new();
+        for i in 0..25 {
+            cache.peers.push(make_entry(
+                &format!("peer-{}", i),
+                vec![format!("/ip4/8.8.8.{}/tcp/4001/p2p/{}", i + 1, PEER_A)],
+                i as u64,
+            ));
+        }
+
+        let candidates = build_warmstart_candidates(&cache, &HashMap::new(), 7);
+        assert_eq!(candidates.len(), 7);
+    }
+
+    #[test]
     fn unsupported_multiaddr_shape_rejected() {
-        assert!(!is_supported_dial_multiaddr_shape("/ip4/8.8.8.8/udp/4001/quic-v1/p2p/12D3KooWAAA"));
-        assert!(is_supported_dial_multiaddr_shape("/ip4/8.8.8.8/tcp/4001/p2p/12D3KooWAAA"));
+        assert!(!is_supported_dial_multiaddr_shape(&format!(
+            "/ip4/8.8.8.8/udp/4001/quic-v1/p2p/{}",
+            PEER_A
+        )));
+        assert!(is_supported_dial_multiaddr_shape(&format!(
+            "/ip4/8.8.8.8/tcp/4001/p2p/{}",
+            PEER_A
+        )));
+    }
+
+    #[test]
+    fn supported_multiaddr_requires_both_tcp_and_p2p() {
+        assert!(!is_supported_dial_multiaddr_shape("/ip4/8.8.8.8/tcp/4001"));
+        assert!(!is_supported_dial_multiaddr_shape(&format!(
+            "/p2p/{}",
+            PEER_A
+        )));
+    }
+
+    #[test]
+    fn supported_multiaddr_allows_dns_tcp_p2p() {
+        assert!(is_supported_dial_multiaddr_shape(&format!(
+            "/dns4/example.com/tcp/4001/p2p/{}",
+            PEER_A
+        )));
+    }
+
+    #[test]
+    fn invalid_multiaddr_shape_rejected() {
+        assert!(!is_supported_dial_multiaddr_shape("not-a-multiaddr"));
     }
 
     #[tokio::test]
     async fn wan_safe_rejects_private_ips() {
-        assert!(!is_address_allowed_for_warmstart(
-            "/ip4/192.168.1.10/tcp/4001/p2p/12D3KooWAAA",
-            false
-        )
-        .await);
+        assert!(
+            !is_address_allowed_for_warmstart(
+                &format!("/ip4/192.168.1.10/tcp/4001/p2p/{}", PEER_A),
+                false
+            )
+            .await
+        );
 
-        assert!(is_address_allowed_for_warmstart(
-            "/ip4/192.168.1.10/tcp/4001/p2p/12D3KooWAAA",
-            true
-        )
-        .await);
+        assert!(
+            is_address_allowed_for_warmstart(
+                &format!("/ip4/192.168.1.10/tcp/4001/p2p/{}", PEER_A),
+                true
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn wan_safe_rejects_loopback_ip() {
+        assert!(
+            !is_address_allowed_for_warmstart(
+                &format!("/ip4/127.0.0.1/tcp/4001/p2p/{}", PEER_A),
+                false
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn wan_safe_rejects_localhost_dns() {
+        assert!(
+            !is_address_allowed_for_warmstart(
+                &format!("/dns4/localhost/tcp/4001/p2p/{}", PEER_A),
+                false
+            )
+            .await
+        );
+        assert!(
+            is_address_allowed_for_warmstart(
+                &format!("/dns4/localhost/tcp/4001/p2p/{}", PEER_A),
+                true
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn wan_safe_rejects_unresolvable_dns() {
+        assert!(
+            !is_address_allowed_for_warmstart(
+                &format!(
+                    "/dns4/nonexistent-warmstart-peer.invalid/tcp/4001/p2p/{}",
+                    PEER_A
+                ),
+                false
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn address_policy_rejects_invalid_multiaddr() {
+        assert!(!is_address_allowed_for_warmstart("invalid", false).await);
+    }
+
+    #[test]
+    fn warmstart_allow_lan_env_defaults_false() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::remove_var("CHIRAL_LAN_WARMSTART");
+        }
+        assert!(!warmstart_allow_lan());
+    }
+
+    #[test]
+    fn warmstart_allow_lan_env_reads_one_as_true() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("CHIRAL_LAN_WARMSTART", "1");
+        }
+        assert!(warmstart_allow_lan());
+        unsafe {
+            std::env::remove_var("CHIRAL_LAN_WARMSTART");
+        }
+    }
+
+    #[test]
+    fn warmstart_allow_lan_env_reads_other_values_as_false() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("CHIRAL_LAN_WARMSTART", "true");
+        }
+        assert!(!warmstart_allow_lan());
+        unsafe {
+            std::env::remove_var("CHIRAL_LAN_WARMSTART");
+        }
+    }
+
+    #[test]
+    fn ip_policy_rejects_v6_unique_local_by_default() {
+        let ip: IpAddr = "fd00::1".parse().unwrap();
+        assert!(!is_ip_allowed(ip, false));
+        assert!(is_ip_allowed(ip, true));
+    }
+
+    #[tokio::test]
+    async fn dns_policy_rejects_localhost_when_lan_disabled() {
+        assert!(!dns_target_is_allowed("localhost", false).await);
+    }
+
+    #[tokio::test]
+    async fn dns_policy_accepts_localhost_when_lan_enabled() {
+        assert!(dns_target_is_allowed("localhost", true).await);
+    }
+
+    #[tokio::test]
+    async fn dns_policy_rejects_unknown_host() {
+        assert!(!dns_target_is_allowed("nonexistent-warmstart-peer.invalid", false).await);
+    }
+
+    #[test]
+    fn snapshot_cache_builds_entries_and_success_map() {
+        let now = now_secs();
+        let mut peers = HashMap::new();
+        peers.insert(
+            "peer-a".to_string(),
+            vec![
+                format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A),
+                "   ".to_string(),
+            ],
+        );
+        peers.insert("peer-b".to_string(), vec![]);
+
+        let (cache, success) = build_snapshot_cache(&peers, now);
+        assert_eq!(cache.peers.len(), 1);
+        assert_eq!(cache.peers[0].peer_id, "peer-a");
+        assert_eq!(success.get("peer-a"), Some(&now));
+        assert!(!success.contains_key("peer-b"));
+    }
+
+    #[test]
+    fn extract_cache_stats_reports_counts() {
+        let cache = PeerCache::from_peers(vec![
+            PeerCacheEntry {
+                peer_id: "peer-a".to_string(),
+                addresses: vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+                last_seen: 1,
+                connection_count: 0,
+                successful_transfers: 1,
+                failed_transfers: 0,
+                total_bytes_transferred: 100,
+                average_latency_ms: 0,
+                is_bootstrap: true,
+                supports_relay: true,
+                reliability_score: 0.0,
+            },
+            PeerCacheEntry {
+                peer_id: "peer-b".to_string(),
+                addresses: vec![format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_B)],
+                last_seen: 1,
+                connection_count: 0,
+                successful_transfers: 0,
+                failed_transfers: 1,
+                total_bytes_transferred: 50,
+                average_latency_ms: 0,
+                is_bootstrap: false,
+                supports_relay: false,
+                reliability_score: 0.0,
+            },
+        ]);
+
+        let stats = extract_cache_stats(&cache);
+        assert_eq!(stats.total_peers, 2);
+        assert_eq!(stats.relay_capable_peers, 1);
+        assert_eq!(stats.bootstrap_peers, 1);
+        assert_eq!(stats.total_transfers, 2);
+        assert_eq!(stats.total_bytes_transferred, 150);
     }
 
     #[test]
@@ -744,5 +1140,182 @@ mod tests {
         assert!(s.try_begin_stop(1).is_err());
         s.mark_stopped();
         assert!(s.try_begin_start(2).is_ok());
+    }
+
+    #[test]
+    fn lifecycle_mark_running_updates_phase_and_run_id() {
+        let mut s = DhtLifecycleState::default();
+        s.mark_running(7);
+        assert_eq!(s.phase, DhtLifecyclePhase::Running);
+        assert_eq!(s.run_id, 7);
+    }
+
+    #[test]
+    fn lifecycle_try_begin_stop_fails_when_already_stopped() {
+        let mut s = DhtLifecycleState::default();
+        assert!(s.try_begin_stop(1).is_err());
+    }
+
+    #[tokio::test]
+    async fn load_namespaced_cache_detects_namespace_mismatch() {
+        let now = now_secs();
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("peer_cache.ns1.json");
+        let file = NamespacedPeerCacheFile {
+            header: PeerCacheHeader {
+                schema_version: 1,
+                namespace_key: "ns-actual".to_string(),
+                namespace_meta: PeerCacheNamespaceMeta {
+                    port: 4001,
+                    bootstrap_nodes: vec!["a".to_string()],
+                    chain_id: None,
+                },
+                generated_at: now,
+            },
+            cache: PeerCache::from_peers(vec![make_entry(
+                "peer-a",
+                vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+                now,
+            )]),
+            last_successful_connect_at: HashMap::new(),
+        };
+        tokio::fs::write(&path, serde_json::to_string_pretty(&file).unwrap())
+            .await
+            .unwrap();
+
+        let loaded = load_namespaced_cache(&path, "ns-expected").await.unwrap();
+        assert!(loaded.namespace_mismatch);
+        assert_eq!(loaded.cache.peers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn load_or_migrate_prefers_namespaced_file_when_both_exist() {
+        let now = now_secs();
+        let temp = tempdir().unwrap();
+        let legacy_path = temp.path().join("peer_cache.json");
+        let namespace_path = temp.path().join("peer_cache.ns.json");
+
+        let mut legacy = PeerCache::new();
+        legacy.peers.push(make_entry(
+            "legacy",
+            vec!["/ip4/1.1.1.1/tcp/4001".to_string()],
+            10,
+        ));
+        legacy.save_to_file(&legacy_path).await.unwrap();
+
+        let namespaced = NamespacedPeerCacheFile {
+            header: PeerCacheHeader {
+                schema_version: 1,
+                namespace_key: "ns1".to_string(),
+                namespace_meta: PeerCacheNamespaceMeta {
+                    port: 4001,
+                    bootstrap_nodes: vec!["a".to_string()],
+                    chain_id: None,
+                },
+                generated_at: now,
+            },
+            cache: PeerCache::from_peers(vec![make_entry(
+                "namespaced",
+                vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+                now,
+            )]),
+            last_successful_connect_at: HashMap::new(),
+        };
+        tokio::fs::write(
+            &namespace_path,
+            serde_json::to_string_pretty(&namespaced).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let ctx = NamespaceContext {
+            namespace_key: "ns1".to_string(),
+            namespace_meta: PeerCacheNamespaceMeta {
+                port: 4001,
+                bootstrap_nodes: vec!["a".to_string()],
+                chain_id: None,
+            },
+            namespace_file: namespace_path,
+            legacy_file: legacy_path,
+        };
+        let loaded = load_or_migrate_peer_cache(&ctx).await.unwrap();
+        assert!(!loaded.legacy_migrated);
+        assert_eq!(loaded.cache.peers.len(), 1);
+        assert_eq!(loaded.cache.peers[0].peer_id, "namespaced");
+    }
+
+    #[tokio::test]
+    async fn save_namespaced_cache_round_trip() {
+        let now = now_secs();
+        let temp = tempdir().unwrap();
+        let ctx = NamespaceContext {
+            namespace_key: "ns-round".to_string(),
+            namespace_meta: PeerCacheNamespaceMeta {
+                port: 4001,
+                bootstrap_nodes: vec!["a".to_string()],
+                chain_id: None,
+            },
+            namespace_file: temp.path().join("peer_cache.ns-round.json"),
+            legacy_file: temp.path().join("peer_cache.json"),
+        };
+
+        let cache = PeerCache::from_peers(vec![make_entry(
+            "peer-a",
+            vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+            now,
+        )]);
+        let mut success = HashMap::new();
+        success.insert("peer-a".to_string(), 33);
+
+        save_namespaced_cache(&ctx, cache, success.clone())
+            .await
+            .unwrap();
+
+        let loaded = load_or_migrate_peer_cache(&ctx).await.unwrap();
+        assert_eq!(loaded.cache.peers.len(), 1);
+        assert_eq!(loaded.last_successful_connect_at, success);
+    }
+
+    #[test]
+    fn warmstart_candidates_preserve_best_last_seen_across_addresses() {
+        let cache = PeerCache::from_peers(vec![
+            make_entry(
+                "peer-a",
+                vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+                10,
+            ),
+            make_entry(
+                "peer-a",
+                vec![format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_A)],
+                99,
+            ),
+        ]);
+
+        let candidates = build_warmstart_candidates(&cache, &HashMap::new(), 10);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].last_seen, 99);
+    }
+
+    #[test]
+    fn warmstart_candidates_include_multiple_distinct_peers() {
+        let cache = PeerCache::from_peers(vec![
+            make_entry(
+                "peer-a",
+                vec![format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A)],
+                1,
+            ),
+            make_entry(
+                "peer-b",
+                vec![format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_B)],
+                2,
+            ),
+            make_entry(
+                "peer-c",
+                vec![format!("/ip4/7.7.7.7/tcp/4001/p2p/{}", PEER_C)],
+                3,
+            ),
+        ]);
+        let candidates = build_warmstart_candidates(&cache, &HashMap::new(), 10);
+        assert_eq!(candidates.len(), 3);
     }
 }
