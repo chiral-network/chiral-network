@@ -732,6 +732,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_namespace_context_chain_id_salt_is_opt_in_by_env() {
+        let _guard = env_lock().lock().unwrap();
+        let input = vec![format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A)];
+
+        unsafe {
+            std::env::remove_var("CHIRAL_CACHE_INCLUDE_CHAIN_ID");
+        }
+        let no_salt = build_namespace_context(&input, 4001, Some(1)).unwrap();
+
+        unsafe {
+            std::env::set_var("CHIRAL_CACHE_INCLUDE_CHAIN_ID", "1");
+        }
+        let with_salt = build_namespace_context(&input, 4001, Some(1)).unwrap();
+        let with_other_salt = build_namespace_context(&input, 4001, Some(11155111)).unwrap();
+
+        assert_eq!(
+            no_salt.namespace_key,
+            compute_namespace_key(&input, 4001, Some(1), false)
+        );
+        assert_eq!(
+            with_salt.namespace_key,
+            compute_namespace_key(&input, 4001, Some(1), true)
+        );
+        assert_ne!(with_salt.namespace_key, with_other_salt.namespace_key);
+
+        unsafe {
+            std::env::remove_var("CHIRAL_CACHE_INCLUDE_CHAIN_ID");
+        }
+    }
+
     #[tokio::test]
     async fn load_or_migrate_returns_empty_cache_when_no_files_exist() {
         let temp = tempdir().unwrap();
