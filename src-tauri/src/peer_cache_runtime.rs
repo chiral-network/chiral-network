@@ -467,14 +467,8 @@ pub fn is_supported_dial_multiaddr_shape(addr: &str) -> bool {
             | Protocol::Dns(_)
             | Protocol::Dns4(_)
             | Protocol::Dns6(_)
-            | Protocol::P2pCircuit
-            | Protocol::Tls
-            | Protocol::Ws(_)
-            | Protocol::Wss(_)
-            | Protocol::WebRTC
-            | Protocol::WebRTCDirect
-            | Protocol::Certhash(_) => {}
-            _ => {}
+            | Protocol::P2pCircuit => {}
+            _ => return false,
         }
     }
 
@@ -940,6 +934,26 @@ mod tests {
     fn supported_multiaddr_allows_dns_tcp_p2p() {
         assert!(is_supported_dial_multiaddr_shape(&format!(
             "/dns4/example.com/tcp/4001/p2p/{}",
+            PEER_A
+        )));
+    }
+
+    #[test]
+    fn supported_multiaddr_allows_tcp_relay_shape() {
+        assert!(is_supported_dial_multiaddr_shape(&format!(
+            "/ip4/1.1.1.1/tcp/4001/p2p/{}/p2p-circuit/p2p/{}",
+            PEER_A, PEER_B
+        )));
+    }
+
+    #[test]
+    fn supported_multiaddr_rejects_websocket_and_tls_wrappers() {
+        assert!(!is_supported_dial_multiaddr_shape(&format!(
+            "/ip4/8.8.8.8/tcp/4001/ws/p2p/{}",
+            PEER_A
+        )));
+        assert!(!is_supported_dial_multiaddr_shape(&format!(
+            "/ip4/8.8.8.8/tcp/4001/tls/p2p/{}",
             PEER_A
         )));
     }
