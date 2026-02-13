@@ -356,3 +356,13 @@ async fn warmstart_address_policy_rejects_dns_localhost_in_wan_mode() {
     .await;
     assert!(!allowed);
 }
+
+#[tokio::test]
+async fn warmstart_address_policy_allows_dns_localhost_in_lan_mode() {
+    let allowed = is_address_allowed_for_warmstart(
+        &format!("/dns4/localhost/tcp/4001/p2p/{}", PEER_C),
+        true,
+    )
+    .await;
+    assert!(allowed);
+}
