@@ -522,6 +522,18 @@ async fn spawn_peer_cache_warmstart_task(
         } else {
             peer_cache_runtime::WarmstartPolicyMode::Wan
         };
+        status.warmstart_total_ms = 0;
+        status.warmstart_plan_ms = 0;
+        status.warmstart_execute_ms = 0;
+        status.dns_resolve_calls = 0;
+        status.dns_resolve_ms_total = 0;
+        status.dns_cache_hits = 0;
+        status.dns_cache_misses = 0;
+        status.addr_validation_calls = 0;
+        status.addr_filtered_count = 0;
+        status.dial_timed_out = 0;
+        status.dial_failed_fast = 0;
+        status.time_to_first_success_ms = None;
         status.last_warmstart_started_at = Some(now);
         status.last_warmstart_completed_at = None;
     }
@@ -540,7 +552,10 @@ async fn spawn_peer_cache_warmstart_task(
         let max_concurrency = peer_cache_runtime::DEFAULT_MAX_WARMSTART_CONCURRENCY;
         let attempt_timeout_ms = peer_cache_runtime::DEFAULT_WARMSTART_ATTEMPT_TIMEOUT_MS;
         let budget_ms = peer_cache_runtime::DEFAULT_WARMSTART_BUDGET_MS;
-        let started = Instant::now();
+        let warmstart_started = Instant::now();
+        let plan_started = Instant::now();
+        let mut validation_metrics = peer_cache_runtime::AddressValidationMetrics::default();
+        let mut validation_cache = peer_cache_runtime::AddressValidationCache::default();
         if !peer_cache_runtime::warmstart_enabled() {
             let mut status = status_arc.lock().await;
             status.warmstart_task_running = false;
@@ -582,7 +597,8 @@ async fn spawn_peer_cache_warmstart_task(
         if candidates.is_empty() {
             let mut status = status_arc.lock().await;
             status.warmstart_task_running = false;
-            status.warmstart_last_reason = Some(peer_cache_runtime::WarmstartReasonCode::EmptyCache);
+            status.warmstart_last_reason =
+                Some(peer_cache_runtime::WarmstartReasonCode::EmptyCache);
             status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
             info!(
                 "peer_cache.warmstart phase=plan run_id={} reason=empty_cache",
@@ -595,8 +611,10 @@ async fn spawn_peer_cache_warmstart_task(
         let mut skipped = 0usize;
         let mut budget_expired = false;
         for candidate in candidates {
-            if peer_cache_runtime::warmstart_should_cancel(cancel_run.load(Ordering::SeqCst), run_id)
-            {
+            if peer_cache_runtime::warmstart_should_cancel(
+                cancel_run.load(Ordering::SeqCst),
+                run_id,
+            ) {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
                 status.warmstart_task_running = false;
@@ -607,13 +625,18 @@ async fn spawn_peer_cache_warmstart_task(
                 return;
             }
 
-            if started.elapsed().as_millis() as u64 >= budget_ms {
+            if warmstart_started.elapsed().as_millis() as u64 >= budget_ms {
                 budget_expired = true;
                 break;
             }
 
-            if peer_cache_runtime::is_address_allowed_for_warmstart(&candidate.address, allow_lan)
-                .await
+            if peer_cache_runtime::is_address_allowed_for_warmstart_cached(
+                &candidate.address,
+                allow_lan,
+                &mut validation_cache,
+                &mut validation_metrics,
+            )
+            .await
             {
                 filtered.push(candidate);
             } else {
@@ -632,6 +655,14 @@ async fn spawn_peer_cache_warmstart_task(
             let mut status = status_arc.lock().await;
             status.warmstart_skipped += skipped;
             status.warmstart_task_running = false;
+            status.warmstart_plan_ms = plan_started.elapsed().as_millis() as u64;
+            status.warmstart_total_ms = warmstart_started.elapsed().as_millis() as u64;
+            status.dns_resolve_calls = validation_metrics.dns_resolve_calls;
+            status.dns_resolve_ms_total = validation_metrics.dns_resolve_ms_total;
+            status.dns_cache_hits = validation_metrics.dns_cache_hits;
+            status.dns_cache_misses = validation_metrics.dns_cache_misses;
+            status.addr_validation_calls = validation_metrics.addr_validation_calls;
+            status.addr_filtered_count = validation_metrics.addr_filtered_count + skipped as u64;
             status.warmstart_last_reason = if budget_expired {
                 Some(peer_cache_runtime::WarmstartReasonCode::BudgetExpired)
             } else {
@@ -640,16 +671,23 @@ async fn spawn_peer_cache_warmstart_task(
             status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
             return;
         }
+        let plan_ms = plan_started.elapsed().as_millis() as u64;
 
         let mut attempted = 0usize;
         let mut succeeded = 0usize;
+        let mut dial_timed_out = 0u64;
+        let mut dial_failed_fast = 0u64;
+        let mut time_to_first_success_ms = None;
+        let execute_started = Instant::now();
         let mut cursor = 0usize;
         while cursor < filtered.len()
             && attempted < max_attempts
-            && (started.elapsed().as_millis() as u64) < budget_ms
+            && (warmstart_started.elapsed().as_millis() as u64) < budget_ms
         {
-            if peer_cache_runtime::warmstart_should_cancel(cancel_run.load(Ordering::SeqCst), run_id)
-            {
+            if peer_cache_runtime::warmstart_should_cancel(
+                cancel_run.load(Ordering::SeqCst),
+                run_id,
+            ) {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
                 status.warmstart_last_reason =
@@ -698,10 +736,19 @@ async fn spawn_peer_cache_warmstart_task(
                 match result {
                     Ok(Ok(())) => {
                         succeeded += 1;
+                        if time_to_first_success_ms.is_none() {
+                            time_to_first_success_ms =
+                                Some(warmstart_started.elapsed().as_millis() as u64);
+                        }
                         let mut success = last_success_arc.lock().await;
                         success.insert(candidate.peer_id, peer_cache_runtime::now_secs());
                     }
-                    Ok(Err(_)) | Err(_) => {}
+                    Ok(Err(_)) => {
+                        dial_failed_fast += 1;
+                    }
+                    Err(_) => {
+                        dial_timed_out += 1;
+                    }
                 }
             }
         }
@@ -720,11 +767,23 @@ async fn spawn_peer_cache_warmstart_task(
         status.warmstart_succeeded = succeeded;
         status.warmstart_skipped += skipped;
         status.warmstart_task_running = false;
+        status.warmstart_plan_ms = plan_ms;
+        status.warmstart_execute_ms = execute_started.elapsed().as_millis() as u64;
+        status.warmstart_total_ms = warmstart_started.elapsed().as_millis() as u64;
+        status.dns_resolve_calls = validation_metrics.dns_resolve_calls;
+        status.dns_resolve_ms_total = validation_metrics.dns_resolve_ms_total;
+        status.dns_cache_hits = validation_metrics.dns_cache_hits;
+        status.dns_cache_misses = validation_metrics.dns_cache_misses;
+        status.addr_validation_calls = validation_metrics.addr_validation_calls;
+        status.addr_filtered_count = validation_metrics.addr_filtered_count;
+        status.dial_timed_out = dial_timed_out;
+        status.dial_failed_fast = dial_failed_fast;
+        status.time_to_first_success_ms = time_to_first_success_ms;
         status.warmstart_last_reason = if status.warmstart_cancelled {
             Some(peer_cache_runtime::WarmstartReasonCode::Cancelled)
         } else if succeeded > 0 {
             Some(peer_cache_runtime::WarmstartReasonCode::Success)
-        } else if (started.elapsed().as_millis() as u64) >= budget_ms || budget_expired {
+        } else if (warmstart_started.elapsed().as_millis() as u64) >= budget_ms || budget_expired {
             Some(peer_cache_runtime::WarmstartReasonCode::BudgetExpired)
         } else {
             Some(peer_cache_runtime::WarmstartReasonCode::NoSuccess)
@@ -732,8 +791,21 @@ async fn spawn_peer_cache_warmstart_task(
         status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
         status.last_error = None;
         info!(
-            "peer_cache.warmstart phase=execute run_id={} attempted={} succeeded={} skipped={} reason={:?}",
-            run_id, attempted, succeeded, status.warmstart_skipped, status.warmstart_last_reason
+            "peer_cache.warmstart phase=execute run_id={} attempted={} succeeded={} skipped={} timed_out={} failed_fast={} total_ms={} plan_ms={} execute_ms={} dns_calls={} dns_hits={} dns_misses={} first_success_ms={:?} reason={:?}",
+            run_id,
+            attempted,
+            succeeded,
+            status.warmstart_skipped,
+            status.dial_timed_out,
+            status.dial_failed_fast,
+            status.warmstart_total_ms,
+            status.warmstart_plan_ms,
+            status.warmstart_execute_ms,
+            status.dns_resolve_calls,
+            status.dns_cache_hits,
+            status.dns_cache_misses,
+            status.time_to_first_success_ms,
+            status.warmstart_last_reason
         );
     });
 
