@@ -130,6 +130,8 @@ pub struct PeerCacheStatus {
     pub warmstart_skipped: usize,
     pub warmstart_cancelled: bool,
     pub warmstart_task_running: bool,
+    pub last_warmstart_started_at: Option<u64>,
+    pub last_warmstart_completed_at: Option<u64>,
     pub warmstart_budget_ms: u64,
     pub warmstart_max_attempts: usize,
     pub warmstart_max_concurrency: usize,
@@ -156,6 +158,8 @@ impl Default for PeerCacheStatus {
             warmstart_skipped: 0,
             warmstart_cancelled: false,
             warmstart_task_running: false,
+            last_warmstart_started_at: None,
+            last_warmstart_completed_at: None,
             warmstart_budget_ms: DEFAULT_WARMSTART_BUDGET_MS,
             warmstart_max_attempts: DEFAULT_MAX_WARMSTART_ATTEMPTS,
             warmstart_max_concurrency: DEFAULT_MAX_WARMSTART_CONCURRENCY,
@@ -1142,6 +1146,27 @@ mod tests {
         assert_eq!(stats.bootstrap_peers, 1);
         assert_eq!(stats.total_transfers, 2);
         assert_eq!(stats.total_bytes_transferred, 150);
+    }
+
+    #[test]
+    fn peer_cache_status_defaults_include_no_warmstart_timestamps() {
+        let status = PeerCacheStatus::default();
+        assert!(status.last_warmstart_started_at.is_none());
+        assert!(status.last_warmstart_completed_at.is_none());
+    }
+
+    #[test]
+    fn peer_cache_status_serializes_warmstart_timestamps() {
+        let mut status = PeerCacheStatus::default();
+        status.last_warmstart_started_at = Some(10);
+        status.last_warmstart_completed_at = Some(20);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json.get("lastWarmstartStartedAt").and_then(|v| v.as_u64()), Some(10));
+        assert_eq!(
+            json.get("lastWarmstartCompletedAt")
+                .and_then(|v| v.as_u64()),
+            Some(20)
+        );
     }
 
     #[test]
