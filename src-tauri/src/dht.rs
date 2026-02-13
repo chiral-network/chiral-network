@@ -322,6 +322,7 @@ pub enum DhtCommand {
     },
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
+    ConnectPeerMultiaddr(Multiaddr),
     ConnectToPeerById(PeerId),
     DisconnectPeer(PeerId),
     SetPrivacyProxies {
@@ -1917,6 +1918,59 @@ async fn run_dht_node(
                                             error!("Invalid multiaddr format: {}", addr);
                                             let _ = event_tx
                                                 .send(DhtEvent::Error(format!("Invalid address: {}", addr)))
+                                                .await;
+                                        }
+                                    }
+                                    Some(DhtCommand::ConnectPeerMultiaddr(multiaddr)) => {
+                                        info!("Attempting to connect to: {}", multiaddr);
+                                        let maybe_peer_id = multiaddr.iter().find_map(|p| {
+                                            if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
+                                                Some(peer_id.clone())
+                                            } else {
+                                                None
+                                            }
+                                        });
+
+                                        if let Some(peer_id) = maybe_peer_id.clone() {
+                                            // Check if the address contains a private IP
+                                            let has_private_ip = multiaddr.iter().any(|p| {
+                                                if let Protocol::Ip4(ipv4) = p {
+                                                    is_private_or_loopback_v4(ipv4)
+                                                } else {
+                                                    false
+                                                }
+                                            });
+
+                                            {
+                                                let mut mgr = proxy_mgr.lock().await;
+                                                mgr.set_target(peer_id.clone());
+                                            }
+
+                                            match swarm.dial(multiaddr.clone()) {
+                                                Ok(_) => {
+                                                    info!("Requested direct connection to: {}", multiaddr);
+                                                    info!("  Waiting for ConnectionEstablished event...");
+                                                }
+                                                Err(e) => {
+                                                    error!("Failed to dial {}: {}", multiaddr, e);
+                                                    let _ = event_tx
+                                                        .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
+                                                        .await;
+
+                                                    if has_private_ip {
+                                                        warn!(
+                                                            "⚠️ Failed to dial private IP address - this may indicate NAT/firewall issues"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            error!("No peer ID found in multiaddr: {}", multiaddr);
+                                            let _ = event_tx
+                                                .send(DhtEvent::Error(format!(
+                                                    "Invalid address format: {}",
+                                                    multiaddr
+                                                )))
                                                 .await;
                                         }
                                     }
@@ -5524,6 +5578,13 @@ impl DhtService {
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::ConnectPeer(addr))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn connect_peer_multiaddr(&self, addr: Multiaddr) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::ConnectPeerMultiaddr(addr))
             .await
             .map_err(|e| e.to_string())
     }

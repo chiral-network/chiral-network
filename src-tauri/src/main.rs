@@ -630,7 +630,7 @@ async fn spawn_peer_cache_warmstart_task(
                 break;
             }
 
-            if peer_cache_runtime::is_address_allowed_for_warmstart_cached(
+            if let Some(parsed_addr) = peer_cache_runtime::parse_warmstart_dial_target_cached(
                 &candidate.address,
                 allow_lan,
                 &mut validation_cache,
@@ -638,7 +638,7 @@ async fn spawn_peer_cache_warmstart_task(
             )
             .await
             {
-                filtered.push(candidate);
+                filtered.push((candidate, parsed_addr));
             } else {
                 skipped += 1;
             }
@@ -718,13 +718,12 @@ async fn spawn_peer_cache_warmstart_task(
                 break;
             }
 
-            let jobs = batch.into_iter().map(|candidate| {
+            let jobs = batch.into_iter().map(|(candidate, parsed_addr)| {
                 let dht = dht.clone();
                 async move {
-                    let addr = candidate.address.clone();
                     let result = tokio::time::timeout(
                         Duration::from_millis(attempt_timeout_ms),
-                        dht.connect_peer(addr.clone()),
+                        dht.connect_peer_multiaddr(parsed_addr.clone()),
                     )
                     .await;
                     (candidate, result)
