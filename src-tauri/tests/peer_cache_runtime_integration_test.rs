@@ -316,6 +316,29 @@ fn warmstart_candidates_limit_is_applied_deterministically() {
     assert_eq!(candidates[0].peer_id, "peer-0");
 }
 
+#[test]
+fn warmstart_candidates_prefer_last_success_over_last_seen() {
+    let now = now_secs();
+    let mut cache = PeerCache::new();
+    cache.peers.push(entry(
+        "peer-success",
+        &format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A),
+        now - 1000,
+    ));
+    cache.peers.push(entry(
+        "peer-recent",
+        &format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_B),
+        now,
+    ));
+
+    let mut success = HashMap::new();
+    success.insert("peer-success".to_string(), now);
+
+    let candidates = build_warmstart_candidates(&cache, &success, 10);
+    assert_eq!(candidates[0].peer_id, "peer-success");
+    assert_eq!(candidates[1].peer_id, "peer-recent");
+}
+
 #[tokio::test]
 async fn warmstart_address_policy_allows_public_ip_in_wan_mode() {
     let allowed =
