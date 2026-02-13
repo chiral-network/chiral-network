@@ -136,6 +136,18 @@ pub struct PeerCacheStatus {
     pub warmstart_policy_mode: WarmstartPolicyMode,
     pub last_warmstart_started_at: Option<u64>,
     pub last_warmstart_completed_at: Option<u64>,
+    pub warmstart_total_ms: u64,
+    pub warmstart_plan_ms: u64,
+    pub warmstart_execute_ms: u64,
+    pub dns_resolve_calls: u64,
+    pub dns_resolve_ms_total: u64,
+    pub dns_cache_hits: u64,
+    pub dns_cache_misses: u64,
+    pub addr_validation_calls: u64,
+    pub addr_filtered_count: u64,
+    pub dial_timed_out: u64,
+    pub dial_failed_fast: u64,
+    pub time_to_first_success_ms: Option<u64>,
     pub warmstart_budget_ms: u64,
     pub warmstart_max_attempts: usize,
     pub warmstart_max_concurrency: usize,
@@ -167,6 +179,18 @@ impl Default for PeerCacheStatus {
             warmstart_policy_mode: WarmstartPolicyMode::Wan,
             last_warmstart_started_at: None,
             last_warmstart_completed_at: None,
+            warmstart_total_ms: 0,
+            warmstart_plan_ms: 0,
+            warmstart_execute_ms: 0,
+            dns_resolve_calls: 0,
+            dns_resolve_ms_total: 0,
+            dns_cache_hits: 0,
+            dns_cache_misses: 0,
+            addr_validation_calls: 0,
+            addr_filtered_count: 0,
+            dial_timed_out: 0,
+            dial_failed_fast: 0,
+            time_to_first_success_ms: None,
             warmstart_budget_ms: DEFAULT_WARMSTART_BUDGET_MS,
             warmstart_max_attempts: DEFAULT_MAX_WARMSTART_ATTEMPTS,
             warmstart_max_concurrency: DEFAULT_MAX_WARMSTART_CONCURRENCY,
@@ -194,6 +218,22 @@ pub enum WarmstartReasonCode {
 pub enum WarmstartPolicyMode {
     Wan,
     Lan,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AddressValidationCache {
+    dns_verdict: HashMap<(String, bool), bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressValidationMetrics {
+    pub dns_resolve_calls: u64,
+    pub dns_resolve_ms_total: u64,
+    pub dns_cache_hits: u64,
+    pub dns_cache_misses: u64,
+    pub addr_validation_calls: u64,
+    pub addr_filtered_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -523,7 +563,10 @@ pub fn is_supported_dial_multiaddr_shape(addr: &str) -> bool {
         Ok(ma) => ma,
         Err(_) => return false,
     };
+    is_supported_dial_multiaddr_shape_parsed(&ma)
+}
 
+fn is_supported_dial_multiaddr_shape_parsed(ma: &Multiaddr) -> bool {
     let mut has_tcp = false;
     let mut has_p2p = false;
 
@@ -545,12 +588,28 @@ pub fn is_supported_dial_multiaddr_shape(addr: &str) -> bool {
 }
 
 pub async fn is_address_allowed_for_warmstart(addr: &str, allow_lan: bool) -> bool {
+    let mut cache = AddressValidationCache::default();
+    let mut metrics = AddressValidationMetrics::default();
+    is_address_allowed_for_warmstart_cached(addr, allow_lan, &mut cache, &mut metrics).await
+}
+
+pub async fn is_address_allowed_for_warmstart_cached(
+    addr: &str,
+    allow_lan: bool,
+    cache: &mut AddressValidationCache,
+    metrics: &mut AddressValidationMetrics,
+) -> bool {
+    metrics.addr_validation_calls += 1;
     let ma = match addr.parse::<Multiaddr>() {
         Ok(ma) => ma,
-        Err(_) => return false,
+        Err(_) => {
+            metrics.addr_filtered_count += 1;
+            return false;
+        }
     };
 
-    if !is_supported_dial_multiaddr_shape(addr) {
+    if !is_supported_dial_multiaddr_shape_parsed(&ma) {
+        metrics.addr_filtered_count += 1;
         return false;
     }
 
@@ -567,7 +626,8 @@ pub async fn is_address_allowed_for_warmstart(addr: &str, allow_lan: bool) -> bo
                 }
             }
             Protocol::Dns(host) | Protocol::Dns4(host) | Protocol::Dns6(host) => {
-                if !dns_target_is_allowed(host.as_ref(), allow_lan).await {
+                if !dns_target_is_allowed_cached(host.as_ref(), allow_lan, cache, metrics).await {
+                    metrics.addr_filtered_count += 1;
                     return false;
                 }
             }
@@ -602,10 +662,7 @@ pub fn warmstart_run_active(lifecycle: &DhtLifecycleState, run_id: u64) -> bool 
             || lifecycle.phase == DhtLifecyclePhase::Starting)
 }
 
-pub async fn run_snapshot_then_teardown<S, T>(
-    snapshot: S,
-    teardown: T,
-) -> Result<(), String>
+pub async fn run_snapshot_then_teardown<S, T>(snapshot: S, teardown: T) -> Result<(), String>
 where
     S: Future<Output = Result<(), String>>,
     T: Future<Output = Result<(), String>>,
@@ -638,11 +695,48 @@ fn is_ip_allowed(ip: IpAddr, allow_lan: bool) -> bool {
 }
 
 async fn dns_target_is_allowed(host: &str, allow_lan: bool) -> bool {
+    let mut cache = AddressValidationCache::default();
+    let mut metrics = AddressValidationMetrics::default();
+    dns_target_is_allowed_cached(host, allow_lan, &mut cache, &mut metrics).await
+}
+
+async fn dns_target_is_allowed_cached(
+    host: &str,
+    allow_lan: bool,
+    cache: &mut AddressValidationCache,
+    metrics: &mut AddressValidationMetrics,
+) -> bool {
+    if std::env::var("CHIRAL_DISABLE_WARMSTART_DNS_CACHE")
+        .ok()
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        return dns_target_is_allowed_uncached(host, allow_lan, metrics).await;
+    }
+    let key = (host.to_string(), allow_lan);
+    if let Some(verdict) = cache.dns_verdict.get(&key) {
+        metrics.dns_cache_hits += 1;
+        return *verdict;
+    }
+    metrics.dns_cache_misses += 1;
+    let verdict = dns_target_is_allowed_uncached(host, allow_lan, metrics).await;
+    cache.dns_verdict.insert(key, verdict);
+    verdict
+}
+
+async fn dns_target_is_allowed_uncached(
+    host: &str,
+    allow_lan: bool,
+    metrics: &mut AddressValidationMetrics,
+) -> bool {
+    let started = std::time::Instant::now();
+    metrics.dns_resolve_calls += 1;
     let lookup = tokio::time::timeout(
         std::time::Duration::from_millis(500),
         tokio::net::lookup_host((host, 0)),
     )
     .await;
+    metrics.dns_resolve_ms_total += started.elapsed().as_millis() as u64;
 
     let Ok(Ok(iter)) = lookup else {
         return false;
@@ -1252,6 +1346,57 @@ mod tests {
         assert!(!dns_target_is_allowed("nonexistent-warmstart-peer.invalid", false).await);
     }
 
+    #[tokio::test]
+    async fn dns_validation_cache_reuses_resolved_hostname() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::remove_var("CHIRAL_DISABLE_WARMSTART_DNS_CACHE");
+        }
+
+        let mut cache = AddressValidationCache::default();
+        let mut metrics = AddressValidationMetrics::default();
+        let addr = format!("/dns4/localhost/tcp/4001/p2p/{}", PEER_A);
+
+        for _ in 0..200 {
+            assert!(
+                is_address_allowed_for_warmstart_cached(&addr, true, &mut cache, &mut metrics)
+                    .await
+            );
+        }
+
+        assert_eq!(metrics.addr_validation_calls, 200);
+        assert_eq!(metrics.dns_resolve_calls, 1);
+        assert_eq!(metrics.dns_cache_misses, 1);
+        assert_eq!(metrics.dns_cache_hits, 199);
+    }
+
+    #[tokio::test]
+    async fn dns_validation_cache_disable_env_forces_repeated_resolution() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("CHIRAL_DISABLE_WARMSTART_DNS_CACHE", "1");
+        }
+
+        let mut cache = AddressValidationCache::default();
+        let mut metrics = AddressValidationMetrics::default();
+        let addr = format!("/dns4/localhost/tcp/4001/p2p/{}", PEER_A);
+
+        for _ in 0..200 {
+            assert!(
+                is_address_allowed_for_warmstart_cached(&addr, true, &mut cache, &mut metrics)
+                    .await
+            );
+        }
+
+        assert_eq!(metrics.addr_validation_calls, 200);
+        assert_eq!(metrics.dns_resolve_calls, 200);
+        assert_eq!(metrics.dns_cache_misses, 0);
+        assert_eq!(metrics.dns_cache_hits, 0);
+        unsafe {
+            std::env::remove_var("CHIRAL_DISABLE_WARMSTART_DNS_CACHE");
+        }
+    }
+
     #[test]
     fn snapshot_cache_builds_entries_and_success_map() {
         let now = now_secs();
@@ -1324,7 +1469,10 @@ mod tests {
         status.last_warmstart_started_at = Some(10);
         status.last_warmstart_completed_at = Some(20);
         let json = serde_json::to_value(&status).unwrap();
-        assert_eq!(json.get("lastWarmstartStartedAt").and_then(|v| v.as_u64()), Some(10));
+        assert_eq!(
+            json.get("lastWarmstartStartedAt").and_then(|v| v.as_u64()),
+            Some(10)
+        );
         assert_eq!(
             json.get("lastWarmstartCompletedAt")
                 .and_then(|v| v.as_u64()),
