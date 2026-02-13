@@ -339,6 +339,26 @@ fn warmstart_candidates_prefer_last_success_over_last_seen() {
     assert_eq!(candidates[1].peer_id, "peer-recent");
 }
 
+#[test]
+fn warmstart_candidates_use_peer_id_as_deterministic_tie_breaker() {
+    let now = now_secs();
+    let mut cache = PeerCache::new();
+    cache.peers.push(entry(
+        "peer-b",
+        &format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A),
+        now,
+    ));
+    cache.peers.push(entry(
+        "peer-a",
+        &format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_B),
+        now,
+    ));
+
+    let candidates = build_warmstart_candidates(&cache, &HashMap::new(), 10);
+    assert_eq!(candidates[0].peer_id, "peer-a");
+    assert_eq!(candidates[1].peer_id, "peer-b");
+}
+
 #[tokio::test]
 async fn warmstart_address_policy_allows_public_ip_in_wan_mode() {
     let allowed =
