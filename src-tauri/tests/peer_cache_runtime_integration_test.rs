@@ -144,6 +144,22 @@ fn namespace_key_changes_with_port() {
 }
 
 #[test]
+fn namespace_key_chain_id_changes_when_included() {
+    let bootstraps = vec![format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A)];
+    let key_a = compute_namespace_key(&bootstraps, 4001, Some(1), true);
+    let key_b = compute_namespace_key(&bootstraps, 4001, Some(11155111), true);
+    assert_ne!(key_a, key_b);
+}
+
+#[test]
+fn namespace_key_chain_id_is_ignored_when_not_included() {
+    let bootstraps = vec![format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A)];
+    let key_a = compute_namespace_key(&bootstraps, 4001, Some(1), false);
+    let key_b = compute_namespace_key(&bootstraps, 4001, Some(11155111), false);
+    assert_eq!(key_a, key_b);
+}
+
+#[test]
 fn canonicalize_bootstrap_set_is_sorted_and_unique() {
     let set = canonicalize_bootstrap_set(&[
         format!(" /ip4/2.2.2.2/tcp/4001/p2p/{} ", PEER_B),
