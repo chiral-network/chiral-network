@@ -581,9 +581,9 @@ async fn spawn_peer_cache_warmstart_task(
             }
 
             let lifecycle = lifecycle_arc.lock().await.clone();
-            if lifecycle.run_id != run_id
-                || lifecycle.phase != peer_cache_runtime::DhtLifecyclePhase::Running
-            {
+            let active_phase = lifecycle.phase == peer_cache_runtime::DhtLifecyclePhase::Running
+                || lifecycle.phase == peer_cache_runtime::DhtLifecyclePhase::Starting;
+            if lifecycle.run_id != run_id || !active_phase {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
                 break;
