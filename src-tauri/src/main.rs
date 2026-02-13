@@ -447,6 +447,7 @@ async fn cancel_peer_cache_warmstart_task(state: &AppState, run_id: u64) {
     let mut status = state.peer_cache_status.lock().await;
     status.warmstart_task_running = false;
     status.warmstart_cancelled = true;
+    status.warmstart_last_reason = Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
     status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
 }
 
@@ -475,6 +476,11 @@ async fn snapshot_and_save_peer_cache_from_dht(
 
     if let Some(ctx) = namespace_ctx {
         peer_cache_runtime::save_namespaced_cache(&ctx, cache, success_map).await?;
+        info!(
+            "peer_cache.save phase=save namespace={} peers={}",
+            ctx.namespace_key,
+            peers_with_addresses.len()
+        );
         let mut status = state.peer_cache_status.lock().await;
         status.namespace_key = Some(ctx.namespace_key.clone());
         status.namespace_file_path = Some(ctx.namespace_file.to_string_lossy().to_string());
@@ -508,6 +514,7 @@ async fn spawn_peer_cache_warmstart_task(
         status.warmstart_succeeded = 0;
         status.warmstart_skipped = 0;
         status.peers_selected_for_warmstart = 0;
+        status.warmstart_last_reason = None;
         status.last_warmstart_started_at = Some(now);
         status.last_warmstart_completed_at = None;
     }
@@ -527,13 +534,25 @@ async fn spawn_peer_cache_warmstart_task(
         let attempt_timeout_ms = peer_cache_runtime::DEFAULT_WARMSTART_ATTEMPT_TIMEOUT_MS;
         let budget_ms = peer_cache_runtime::DEFAULT_WARMSTART_BUDGET_MS;
         let started = Instant::now();
+        if !peer_cache_runtime::warmstart_enabled() {
+            let mut status = status_arc.lock().await;
+            status.warmstart_task_running = false;
+            status.warmstart_last_reason =
+                Some(peer_cache_runtime::WarmstartReasonCode::WarmstartDisabled);
+            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
+            info!("peer_cache.warmstart phase=plan reason=warmstart_disabled");
+            return;
+        }
 
         if loaded_cache.namespace_mismatch {
             let mut status = status_arc.lock().await;
             status.namespace_mismatch = true;
             status.warmstart_task_running = false;
             status.warmstart_cancelled = false;
+            status.warmstart_last_reason =
+                Some(peer_cache_runtime::WarmstartReasonCode::NamespaceMismatch);
             status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
+            info!("peer_cache.warmstart phase=plan reason=namespace_mismatch");
             return;
         }
 
@@ -547,20 +566,32 @@ async fn spawn_peer_cache_warmstart_task(
             let mut status = status_arc.lock().await;
             status.peers_selected_for_warmstart = candidates.len();
         }
+        if candidates.is_empty() {
+            let mut status = status_arc.lock().await;
+            status.warmstart_task_running = false;
+            status.warmstart_last_reason = Some(peer_cache_runtime::WarmstartReasonCode::EmptyCache);
+            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
+            info!("peer_cache.warmstart phase=plan reason=empty_cache");
+            return;
+        }
 
         let mut filtered = Vec::new();
         let mut skipped = 0usize;
+        let mut budget_expired = false;
         for candidate in candidates {
             if cancel_run.load(Ordering::SeqCst) == run_id {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
                 status.warmstart_task_running = false;
                 status.warmstart_skipped += skipped;
+                status.warmstart_last_reason =
+                    Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
                 status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
                 return;
             }
 
             if started.elapsed().as_millis() as u64 >= budget_ms {
+                budget_expired = true;
                 break;
             }
 
@@ -571,6 +602,25 @@ async fn spawn_peer_cache_warmstart_task(
             } else {
                 skipped += 1;
             }
+        }
+        info!(
+            "peer_cache.warmstart phase=plan candidates={} filtered={} skipped={} budget_ms={}",
+            filtered.len() + skipped,
+            filtered.len(),
+            skipped,
+            budget_ms
+        );
+        if filtered.is_empty() {
+            let mut status = status_arc.lock().await;
+            status.warmstart_skipped += skipped;
+            status.warmstart_task_running = false;
+            status.warmstart_last_reason = if budget_expired {
+                Some(peer_cache_runtime::WarmstartReasonCode::BudgetExpired)
+            } else {
+                Some(peer_cache_runtime::WarmstartReasonCode::AllFiltered)
+            };
+            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
+            return;
         }
 
         let mut attempted = 0usize;
@@ -583,6 +633,8 @@ async fn spawn_peer_cache_warmstart_task(
             if cancel_run.load(Ordering::SeqCst) == run_id {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
+                status.warmstart_last_reason =
+                    Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
                 break;
             }
 
@@ -592,6 +644,8 @@ async fn spawn_peer_cache_warmstart_task(
             if lifecycle.run_id != run_id || !active_phase {
                 let mut status = status_arc.lock().await;
                 status.warmstart_cancelled = true;
+                status.warmstart_last_reason =
+                    Some(peer_cache_runtime::WarmstartReasonCode::Cancelled);
                 break;
             }
 
@@ -640,8 +694,21 @@ async fn spawn_peer_cache_warmstart_task(
         status.warmstart_succeeded = succeeded;
         status.warmstart_skipped += skipped;
         status.warmstart_task_running = false;
+        status.warmstart_last_reason = if status.warmstart_cancelled {
+            Some(peer_cache_runtime::WarmstartReasonCode::Cancelled)
+        } else if succeeded > 0 {
+            Some(peer_cache_runtime::WarmstartReasonCode::Success)
+        } else if (started.elapsed().as_millis() as u64) >= budget_ms || budget_expired {
+            Some(peer_cache_runtime::WarmstartReasonCode::BudgetExpired)
+        } else {
+            Some(peer_cache_runtime::WarmstartReasonCode::NoSuccess)
+        };
         status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
         status.last_error = None;
+        info!(
+            "peer_cache.warmstart phase=execute attempted={} succeeded={} skipped={} reason={:?}",
+            attempted, succeeded, status.warmstart_skipped, status.warmstart_last_reason
+        );
     });
 
     let mut guard = state.peer_cache_warmstart_task.lock().await;
@@ -1836,6 +1903,7 @@ async fn start_dht_node(
     state.peer_cache_cancel_run.store(0, Ordering::SeqCst);
     {
         let mut status = state.peer_cache_status.lock().await;
+        status.namespace_chain_id_missing = false;
         status.namespace_mismatch = false;
         status.legacy_migrated = false;
         status.peers_loaded = 0;
@@ -1845,6 +1913,9 @@ async fn start_dht_node(
         status.warmstart_skipped = 0;
         status.warmstart_cancelled = false;
         status.warmstart_task_running = false;
+        status.warmstart_last_reason = None;
+        status.last_warmstart_started_at = None;
+        status.last_warmstart_completed_at = None;
         status.last_error = None;
     }
 
@@ -2171,6 +2242,13 @@ async fn start_dht_node(
             let loaded = peer_cache_runtime::load_or_migrate_peer_cache(&namespace_ctx).await;
             match loaded {
                 Ok(loaded_cache) => {
+                    info!(
+                        "peer_cache.load phase=load namespace={} peers={} mismatch={} migrated={}",
+                        namespace_ctx.namespace_key,
+                        loaded_cache.cache.peers.len(),
+                        loaded_cache.namespace_mismatch,
+                        loaded_cache.legacy_migrated
+                    );
                     {
                         let mut cache_guard = state.peer_cache_last_cache.lock().await;
                         *cache_guard = Some(loaded_cache.cache.clone());
@@ -2186,6 +2264,7 @@ async fn start_dht_node(
                             Some(namespace_ctx.namespace_file.to_string_lossy().to_string());
                         status.legacy_file_path =
                             Some(namespace_ctx.legacy_file.to_string_lossy().to_string());
+                        status.namespace_chain_id_missing = namespace_ctx.namespace_meta.chain_id.is_none();
                         status.namespace_mismatch = loaded_cache.namespace_mismatch;
                         status.legacy_migrated = loaded_cache.legacy_migrated;
                         status.peers_loaded = loaded_cache.cache.peers.len();
@@ -2359,6 +2438,21 @@ async fn stop_publishing_file(state: State<'_, AppState>, file_hash: String) -> 
 
 #[tauri::command]
 async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Result<(), String> {
+    if std::env::var("CHIRAL_ENABLE_PEER_DIAL")
+        .ok()
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        == false
+    {
+        return Err(
+            "Manual peer dial is disabled. Set CHIRAL_ENABLE_PEER_DIAL=1 to enable.".to_string(),
+        );
+    }
+    let allow_lan = peer_cache_runtime::warmstart_allow_lan();
+    if !peer_cache_runtime::is_address_allowed_for_warmstart(&peer_address, allow_lan).await {
+        return Err("Peer address failed dial safety policy validation".to_string());
+    }
+
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
