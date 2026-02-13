@@ -272,7 +272,7 @@ impl PeerCache {
 }
 
 /// Statistics about the peer cache
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerCacheStats {
     pub total_peers: usize,
     pub relay_capable_peers: usize,
