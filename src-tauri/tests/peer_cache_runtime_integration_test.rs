@@ -120,6 +120,43 @@ async fn mismatch_namespace_sets_flag_but_keeps_cache_payload() {
     assert_eq!(loaded.cache.peers.len(), 1);
 }
 
+#[tokio::test]
+async fn network_switch_loads_correct_namespaced_cache_after_mismatch() {
+    let temp = TempDir::new().unwrap();
+    let now = now_secs();
+    let ctx_a = namespace_context(&temp, "ns-a");
+    let ctx_b = namespace_context(&temp, "ns-b");
+
+    let cache_a = PeerCache::from_peers(vec![entry(
+        "peer-a",
+        &format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A),
+        now,
+    )]);
+    let cache_b = PeerCache::from_peers(vec![entry(
+        "peer-b",
+        &format!("/ip4/9.9.9.9/tcp/4001/p2p/{}", PEER_B),
+        now,
+    )]);
+    save_namespaced_cache(&ctx_a, cache_a, HashMap::new())
+        .await
+        .unwrap();
+    save_namespaced_cache(&ctx_b, cache_b, HashMap::new())
+        .await
+        .unwrap();
+
+    // Read ns-a through the wrong namespace key to force mismatch.
+    let mut wrong = namespace_context(&temp, "ns-wrong");
+    wrong.namespace_file = ctx_a.namespace_file.clone();
+    let mismatched = load_or_migrate_peer_cache(&wrong).await.unwrap();
+    assert!(mismatched.namespace_mismatch);
+
+    // Ensure a subsequent load for ns-b still resolves the right file and peer set.
+    let loaded_b = load_or_migrate_peer_cache(&ctx_b).await.unwrap();
+    assert!(!loaded_b.namespace_mismatch);
+    assert_eq!(loaded_b.cache.peers.len(), 1);
+    assert_eq!(loaded_b.cache.peers[0].peer_id, "peer-b");
+}
+
 #[test]
 fn namespace_key_is_stable_for_bootstrap_permutations() {
     let a = vec![
