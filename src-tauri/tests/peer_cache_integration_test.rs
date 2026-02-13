@@ -7,7 +7,7 @@
 // 3. Peer cache is loaded on next startup
 // 4. Cached peers are reconnected
 
-use chiral_network::peer_cache::{PeerCache, PeerCacheEntry, get_peer_cache_path};
+use chiral_network::peer_cache::{PeerCache, PeerCacheEntry};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
@@ -66,6 +66,7 @@ async fn test_peer_cache_full_lifecycle() {
     
     // Phase 1: Save peer cache (simulating shutdown)
     let mut cache = PeerCache::from_peers(peer_entries);
+    cache.sort_and_limit();
     cache.save_to_file(&cache_path).await.unwrap();
     
     assert!(cache_path.exists(), "Cache file should be created");
@@ -199,7 +200,8 @@ async fn test_peer_cache_respects_size_limit() {
     
     // Should contain highest reliability peers
     assert!(loaded.peers[0].reliability_score > 0.9);
-    assert!(loaded.peers[99].reliability_score > loaded.peers.len() as f64 / 150.0);
+    // Top-100 from 0..149/150 keeps reliability range [50/150, 149/150].
+    assert!(loaded.peers[99].reliability_score >= 50.0 / 150.0);
 }
 
 #[tokio::test]
