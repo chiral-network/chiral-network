@@ -119,6 +119,7 @@ pub struct PeerCacheStatus {
     pub namespace_key: Option<String>,
     pub namespace_file_path: Option<String>,
     pub legacy_file_path: Option<String>,
+    pub namespace_chain_id_missing: bool,
     pub namespace_mismatch: bool,
     pub legacy_migrated: bool,
     pub last_loaded_at: Option<u64>,
@@ -130,6 +131,7 @@ pub struct PeerCacheStatus {
     pub warmstart_skipped: usize,
     pub warmstart_cancelled: bool,
     pub warmstart_task_running: bool,
+    pub warmstart_last_reason: Option<WarmstartReasonCode>,
     pub last_warmstart_started_at: Option<u64>,
     pub last_warmstart_completed_at: Option<u64>,
     pub warmstart_budget_ms: u64,
@@ -147,6 +149,7 @@ impl Default for PeerCacheStatus {
             namespace_key: None,
             namespace_file_path: None,
             legacy_file_path: None,
+            namespace_chain_id_missing: false,
             namespace_mismatch: false,
             legacy_migrated: false,
             last_loaded_at: None,
@@ -158,6 +161,7 @@ impl Default for PeerCacheStatus {
             warmstart_skipped: 0,
             warmstart_cancelled: false,
             warmstart_task_running: false,
+            warmstart_last_reason: None,
             last_warmstart_started_at: None,
             last_warmstart_completed_at: None,
             warmstart_budget_ms: DEFAULT_WARMSTART_BUDGET_MS,
@@ -167,6 +171,19 @@ impl Default for PeerCacheStatus {
             last_error: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WarmstartReasonCode {
+    NamespaceMismatch,
+    WarmstartDisabled,
+    EmptyCache,
+    AllFiltered,
+    BudgetExpired,
+    Cancelled,
+    Success,
+    NoSuccess,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -258,12 +275,8 @@ pub fn build_namespace_context(
     port: u16,
     chain_id: Option<u64>,
 ) -> Result<NamespaceContext, String> {
-    let include_chain = std::env::var("CHIRAL_CACHE_INCLUDE_CHAIN_ID")
-        .ok()
-        .map(|v| v == "1")
-        .unwrap_or(false);
     let canonical_bootstraps = canonicalize_bootstrap_set(bootstrap_nodes);
-    let key = compute_namespace_key(&canonical_bootstraps, port, chain_id, include_chain);
+    let key = compute_namespace_key(&canonical_bootstraps, port, chain_id, true);
     let (namespace_file, legacy_file) = resolve_cache_paths(&key)?;
 
     Ok(NamespaceContext {
@@ -520,6 +533,13 @@ pub fn warmstart_allow_lan() -> bool {
         .unwrap_or(false)
 }
 
+pub fn warmstart_enabled() -> bool {
+    std::env::var("CHIRAL_DISABLE_WARMSTART")
+        .ok()
+        .map(|v| v != "1")
+        .unwrap_or(true)
+}
+
 fn is_ip_allowed(ip: IpAddr, allow_lan: bool) -> bool {
     if allow_lan {
         return true;
@@ -733,34 +753,18 @@ mod tests {
     }
 
     #[test]
-    fn build_namespace_context_chain_id_salt_is_opt_in_by_env() {
-        let _guard = env_lock().lock().unwrap();
+    fn build_namespace_context_includes_chain_id_when_present() {
         let input = vec![format!("/ip4/1.2.3.4/tcp/4001/p2p/{}", PEER_A)];
-
-        unsafe {
-            std::env::remove_var("CHIRAL_CACHE_INCLUDE_CHAIN_ID");
-        }
-        let no_salt = build_namespace_context(&input, 4001, Some(1)).unwrap();
-
-        unsafe {
-            std::env::set_var("CHIRAL_CACHE_INCLUDE_CHAIN_ID", "1");
-        }
-        let with_salt = build_namespace_context(&input, 4001, Some(1)).unwrap();
-        let with_other_salt = build_namespace_context(&input, 4001, Some(11155111)).unwrap();
+        let with_chain_1 = build_namespace_context(&input, 4001, Some(1)).unwrap();
+        let with_chain_2 = build_namespace_context(&input, 4001, Some(11155111)).unwrap();
+        let without_chain = build_namespace_context(&input, 4001, None).unwrap();
 
         assert_eq!(
-            no_salt.namespace_key,
-            compute_namespace_key(&input, 4001, Some(1), false)
-        );
-        assert_eq!(
-            with_salt.namespace_key,
+            with_chain_1.namespace_key,
             compute_namespace_key(&input, 4001, Some(1), true)
         );
-        assert_ne!(with_salt.namespace_key, with_other_salt.namespace_key);
-
-        unsafe {
-            std::env::remove_var("CHIRAL_CACHE_INCLUDE_CHAIN_ID");
-        }
+        assert_ne!(with_chain_1.namespace_key, with_chain_2.namespace_key);
+        assert_ne!(with_chain_1.namespace_key, without_chain.namespace_key);
     }
 
     #[tokio::test]
@@ -1114,6 +1118,27 @@ mod tests {
     }
 
     #[test]
+    fn warmstart_enabled_defaults_true() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::remove_var("CHIRAL_DISABLE_WARMSTART");
+        }
+        assert!(warmstart_enabled());
+    }
+
+    #[test]
+    fn warmstart_enabled_respects_disable_env() {
+        let _guard = env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("CHIRAL_DISABLE_WARMSTART", "1");
+        }
+        assert!(!warmstart_enabled());
+        unsafe {
+            std::env::remove_var("CHIRAL_DISABLE_WARMSTART");
+        }
+    }
+
+    #[test]
     fn ip_policy_rejects_v6_unique_local_by_default() {
         let ip: IpAddr = "fd00::1".parse().unwrap();
         assert!(!is_ip_allowed(ip, false));
@@ -1359,6 +1384,27 @@ mod tests {
         let loaded = load_or_migrate_peer_cache(&ctx).await.unwrap();
         assert_eq!(loaded.cache.peers.len(), 1);
         assert_eq!(loaded.last_successful_connect_at, success);
+    }
+
+    #[tokio::test]
+    async fn corrupt_namespaced_cache_returns_parse_error() {
+        let temp = tempdir().unwrap();
+        let ctx = NamespaceContext {
+            namespace_key: "ns-corrupt".to_string(),
+            namespace_meta: PeerCacheNamespaceMeta {
+                port: 4001,
+                bootstrap_nodes: vec!["a".to_string()],
+                chain_id: Some(1),
+            },
+            namespace_file: temp.path().join("peer_cache.ns-corrupt.json"),
+            legacy_file: temp.path().join("peer_cache.json"),
+        };
+        tokio::fs::write(&ctx.namespace_file, "{ invalid json")
+            .await
+            .unwrap();
+
+        let err = load_or_migrate_peer_cache(&ctx).await.unwrap_err();
+        assert!(err.contains("Failed to parse namespaced peer cache"));
     }
 
     #[test]
