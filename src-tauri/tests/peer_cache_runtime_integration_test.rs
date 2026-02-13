@@ -1,8 +1,9 @@
 use chiral_network::peer_cache::{PeerCache, PeerCacheEntry};
 use chiral_network::peer_cache_runtime::{
-    build_snapshot_cache, build_warmstart_candidates, canonicalize_bootstrap_set,
-    compute_namespace_key, is_address_allowed_for_warmstart, load_or_migrate_peer_cache, now_secs,
-    save_namespaced_cache, DhtLifecycleState, NamespaceContext, PeerCacheNamespaceMeta,
+    build_namespace_context, build_snapshot_cache, build_warmstart_candidates,
+    canonicalize_bootstrap_set, compute_namespace_key, is_address_allowed_for_warmstart,
+    load_or_migrate_peer_cache, now_secs, save_namespaced_cache, DhtLifecycleState,
+    NamespaceContext, PeerCacheNamespaceMeta,
 };
 use futures::future::join_all;
 use std::collections::HashMap;
@@ -210,6 +211,15 @@ fn namespace_key_chain_id_is_ignored_when_not_included() {
     let key_a = compute_namespace_key(&bootstraps, 4001, Some(1), false);
     let key_b = compute_namespace_key(&bootstraps, 4001, Some(11155111), false);
     assert_eq!(key_a, key_b);
+}
+
+#[test]
+fn chain_change_creates_distinct_namespace_file() {
+    let bootstraps = vec![format!("/ip4/1.1.1.1/tcp/4001/p2p/{}", PEER_A)];
+    let ctx_a = build_namespace_context(&bootstraps, 4001, Some(1)).unwrap();
+    let ctx_b = build_namespace_context(&bootstraps, 4001, Some(11155111)).unwrap();
+    assert_ne!(ctx_a.namespace_key, ctx_b.namespace_key);
+    assert_ne!(ctx_a.namespace_file, ctx_b.namespace_file);
 }
 
 #[test]
