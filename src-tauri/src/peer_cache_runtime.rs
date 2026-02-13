@@ -408,10 +408,52 @@ async fn save_namespaced_cache_file(
     tokio::fs::write(&tmp_path, json)
         .await
         .map_err(|e| format!("Failed to write namespaced peer cache temp file: {}", e))?;
+    sync_file_to_disk(&tmp_path).await?;
 
     tokio::fs::rename(&tmp_path, path)
         .await
-        .map_err(|e| format!("Failed to move namespaced peer cache into place: {}", e))
+        .map_err(|e| format!("Failed to move namespaced peer cache into place: {}", e))?;
+    sync_parent_dir(path).await?;
+    Ok(())
+}
+
+async fn sync_file_to_disk(path: &Path) -> Result<(), String> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(&path)
+            .map_err(|e| format!("Failed to open file for fsync: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to fsync file: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Failed to join file fsync task: {}", e))??;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn sync_parent_dir(path: &Path) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| "Failed to resolve parent dir for fsync".to_string())?
+        .to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let dir_file = std::fs::File::open(&dir)
+            .map_err(|e| format!("Failed to open parent dir for fsync: {}", e))?;
+        dir_file
+            .sync_all()
+            .map_err(|e| format!("Failed to fsync parent dir: {}", e))
+    })
+    .await
+    .map_err(|e| format!("Failed to join dir fsync task: {}", e))??;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn sync_parent_dir(_path: &Path) -> Result<(), String> {
+    // Directory fsync portability is OS-dependent; file fsync is still enforced.
+    Ok(())
 }
 
 pub fn build_warmstart_candidates(
