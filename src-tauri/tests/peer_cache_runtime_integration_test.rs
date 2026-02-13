@@ -201,6 +201,38 @@ fn lifecycle_allows_stop_from_starting_and_restart_after_stopped() {
 }
 
 #[tokio::test]
+async fn lifecycle_parallel_stop_has_single_winner() {
+    let mut initial = DhtLifecycleState::default();
+    initial.mark_running(42);
+    let state = Arc::new(Mutex::new(initial));
+
+    let mut tasks = Vec::new();
+    for _ in 0..10 {
+        let state = state.clone();
+        tasks.push(tokio::spawn(async move {
+            let mut guard = state.lock().await;
+            guard.try_begin_stop(42).is_ok()
+        }));
+    }
+
+    let results = join_all(tasks).await;
+    let success = results
+        .into_iter()
+        .map(|r| r.unwrap())
+        .filter(|ok| *ok)
+        .count();
+    assert_eq!(success, 1);
+}
+
+#[test]
+fn lifecycle_rejects_start_while_stopping() {
+    let mut state = DhtLifecycleState::default();
+    state.mark_running(5);
+    assert!(state.try_begin_stop(5).is_ok());
+    assert!(state.try_begin_start(6).is_err());
+}
+
+#[tokio::test]
 async fn snapshot_save_and_load_roundtrip_preserves_success_map() {
     let temp = TempDir::new().unwrap();
     let now = now_secs();
