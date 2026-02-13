@@ -496,7 +496,7 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 
 **Design Invariants**:
 
-- Cache is **namespaced per DHT network identity** (bootstrap set + DHT port, optional chain-id salt).
+- Cache is **namespaced per DHT network identity** (bootstrap set + DHT port + chain-id when available).
 - Cache is persisted as `peer_cache.<namespace>.json` to prevent cross-network warm-dials.
 - Startup warm-dials use **operational recency only**:
   - `last_successful_connect_at`
@@ -514,8 +514,14 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 **Lifecycle Guarantees**:
 
 - Single-flight `start`/`stop` lifecycle with run-id guard to prevent stale task writes.
+- Concurrent `start` attempts fail deterministically with lifecycle-state errors (no implicit status-only success path).
 - Snapshot is taken **before DHT teardown** on stop/shutdown to avoid empty-cache writes.
 - Warm-start tasks are cancellable on stop/reset/shutdown.
+
+**Operational Guardrails**:
+
+- Manual `connect_to_peer` dials are disabled by default and require `CHIRAL_ENABLE_PEER_DIAL=1`.
+- Manual dials use the same warm-start address safety policy (`/tcp` + `/p2p/<peer_id>` + WAN/LAN filtering).
 
 ---
 
