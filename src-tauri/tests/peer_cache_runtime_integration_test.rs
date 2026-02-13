@@ -2,8 +2,9 @@ use chiral_network::peer_cache::{PeerCache, PeerCacheEntry};
 use chiral_network::peer_cache_runtime::{
     build_namespace_context, build_snapshot_cache, build_warmstart_candidates,
     canonicalize_bootstrap_set, compute_namespace_key, is_address_allowed_for_warmstart,
-    load_or_migrate_peer_cache, now_secs, save_namespaced_cache, DhtLifecycleState,
-    NamespaceContext, PeerCacheNamespaceMeta,
+    load_or_migrate_peer_cache, now_secs, save_namespaced_cache, warmstart_run_active,
+    warmstart_should_cancel, DhtLifecyclePhase, DhtLifecycleState, NamespaceContext,
+    PeerCacheNamespaceMeta, PeerCacheStatus, WarmstartReasonCode,
 };
 use futures::future::join_all;
 use std::collections::HashMap;
@@ -119,6 +120,18 @@ async fn mismatch_namespace_sets_flag_but_keeps_cache_payload() {
     let loaded = load_or_migrate_peer_cache(&ctx_b).await.unwrap();
     assert!(loaded.namespace_mismatch);
     assert_eq!(loaded.cache.peers.len(), 1);
+}
+
+#[test]
+fn namespace_mismatch_reason_keeps_attempt_counters_zero() {
+    let mut status = PeerCacheStatus::default();
+    status.namespace_mismatch = true;
+    status.warmstart_task_running = false;
+    status.warmstart_last_reason = Some(WarmstartReasonCode::NamespaceMismatch);
+
+    assert_eq!(status.warmstart_attempted, 0);
+    assert_eq!(status.warmstart_succeeded, 0);
+    assert_eq!(status.warmstart_skipped, 0);
 }
 
 #[tokio::test]
@@ -285,6 +298,54 @@ async fn lifecycle_parallel_stop_has_single_winner() {
         .filter(|ok| *ok)
         .count();
     assert_eq!(success, 1);
+}
+
+#[tokio::test]
+async fn restart_ignores_stale_completion_with_run_guard() {
+    let status = Arc::new(Mutex::new(PeerCacheStatus::default()));
+    let lifecycle = Arc::new(Mutex::new(DhtLifecycleState {
+        phase: DhtLifecyclePhase::Running,
+        run_id: 1,
+    }));
+
+    let status_task = status.clone();
+    let lifecycle_task = lifecycle.clone();
+    let task = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let lc = lifecycle_task.lock().await.clone();
+        if warmstart_run_active(&lc, 1) {
+            status_task.lock().await.warmstart_attempted += 1;
+        }
+    });
+
+    {
+        let mut lc = lifecycle.lock().await;
+        lc.run_id = 2;
+        lc.phase = DhtLifecyclePhase::Running;
+    }
+
+    task.await.unwrap();
+    assert_eq!(status.lock().await.warmstart_attempted, 0);
+}
+
+#[tokio::test]
+async fn reset_cancels_inflight_mutation_with_cancel_token() {
+    let status = Arc::new(Mutex::new(PeerCacheStatus::default()));
+    let cancel_run = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let run_id = 7u64;
+
+    let status_task = status.clone();
+    let cancel_task = cancel_run.clone();
+    let task = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if !warmstart_should_cancel(cancel_task.load(std::sync::atomic::Ordering::SeqCst), run_id) {
+            status_task.lock().await.warmstart_attempted += 1;
+        }
+    });
+
+    cancel_run.store(run_id, std::sync::atomic::Ordering::SeqCst);
+    task.await.unwrap();
+    assert_eq!(status.lock().await.warmstart_attempted, 0);
 }
 
 #[test]
