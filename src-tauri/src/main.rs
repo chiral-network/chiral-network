@@ -38,8 +38,8 @@ pub mod webhook_manager;
 use chiral_network::{
     analytics, bandwidth, bittorrent_handler, dht, download_restart, download_source, ed2k_client,
     encryption, file_transfer, ftp_bookmarks, ftp_client, http_download, keystore, logger, manager,
-    multi_source_download, p2p_chunk_network, p2p_download_recovery, peer_selection, protocols,
-    reputation, stream_auth, webrtc_service,
+    multi_source_download, p2p_chunk_network, p2p_download_recovery, peer_cache,
+    peer_cache_runtime, peer_selection, protocols, reputation, stream_auth, webrtc_service,
 };
 use headless::create_dht_config_from_args;
 
@@ -114,6 +114,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     io::{BufRead, BufReader},
     sync::Arc,
@@ -412,6 +413,232 @@ struct AppState {
 
     // FTP server for serving uploaded files
     ftp_server: Arc<chiral_network::ftp_server::FtpServer>,
+
+    // DHT lifecycle and peer-cache warm-start state
+    dht_lifecycle: Arc<Mutex<peer_cache_runtime::DhtLifecycleState>>,
+    dht_run_counter: Arc<AtomicU64>,
+    peer_cache_status: Arc<Mutex<peer_cache_runtime::PeerCacheStatus>>,
+    peer_cache_namespace: Arc<Mutex<Option<peer_cache_runtime::NamespaceContext>>>,
+    peer_cache_last_cache: Arc<Mutex<Option<peer_cache::PeerCache>>>,
+    peer_cache_last_success: Arc<Mutex<HashMap<String, u64>>>,
+    peer_cache_warmstart_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    peer_cache_cancel_run: Arc<AtomicU64>,
+}
+
+async fn sync_lifecycle_status(state: &AppState) {
+    let lifecycle = state.dht_lifecycle.lock().await.clone();
+    let mut status = state.peer_cache_status.lock().await;
+    status.lifecycle = lifecycle;
+}
+
+async fn cancel_peer_cache_warmstart_task(state: &AppState, run_id: u64) {
+    state.peer_cache_cancel_run.store(run_id, Ordering::SeqCst);
+
+    let handle = {
+        let mut guard = state.peer_cache_warmstart_task.lock().await;
+        guard.take()
+    };
+
+    if let Some(handle) = handle {
+        handle.abort();
+        let _ = timeout(Duration::from_secs(1), handle).await;
+    }
+
+    let mut status = state.peer_cache_status.lock().await;
+    status.warmstart_task_running = false;
+    status.warmstart_cancelled = true;
+}
+
+async fn snapshot_and_save_peer_cache_from_dht(
+    state: &AppState,
+    dht: &Arc<DhtService>,
+) -> Result<(), String> {
+    let peers = dht.get_connected_peers().await;
+    let peers_with_addresses = dht.get_peer_addresses(peers).await?;
+    let now = peer_cache_runtime::now_secs();
+    let (cache, success_map) = peer_cache_runtime::build_snapshot_cache(&peers_with_addresses, now);
+
+    {
+        let mut last_cache = state.peer_cache_last_cache.lock().await;
+        *last_cache = Some(cache.clone());
+    }
+    {
+        let mut last_success = state.peer_cache_last_success.lock().await;
+        *last_success = success_map.clone();
+    }
+
+    let namespace_ctx = {
+        let guard = state.peer_cache_namespace.lock().await;
+        guard.clone()
+    };
+
+    if let Some(ctx) = namespace_ctx {
+        peer_cache_runtime::save_namespaced_cache(&ctx, cache, success_map).await?;
+        let mut status = state.peer_cache_status.lock().await;
+        status.namespace_key = Some(ctx.namespace_key.clone());
+        status.namespace_file_path = Some(ctx.namespace_file.to_string_lossy().to_string());
+        status.last_saved_at = Some(now);
+        status.last_error = None;
+    }
+
+    Ok(())
+}
+
+async fn spawn_peer_cache_warmstart_task(
+    state: &AppState,
+    dht: Arc<DhtService>,
+    run_id: u64,
+    loaded_cache: peer_cache_runtime::LoadedPeerCache,
+) {
+    let old_handle = {
+        let mut guard = state.peer_cache_warmstart_task.lock().await;
+        guard.take()
+    };
+    if let Some(handle) = old_handle {
+        handle.abort();
+    }
+
+    {
+        let mut status = state.peer_cache_status.lock().await;
+        status.warmstart_task_running = true;
+        status.warmstart_cancelled = false;
+        status.warmstart_attempted = 0;
+        status.warmstart_succeeded = 0;
+        status.warmstart_skipped = 0;
+        status.peers_selected_for_warmstart = 0;
+    }
+
+    let status_arc = state.peer_cache_status.clone();
+    let lifecycle_arc = state.dht_lifecycle.clone();
+    let cancel_run = state.peer_cache_cancel_run.clone();
+    let last_success_arc = state.peer_cache_last_success.clone();
+
+    let handle = tokio::spawn(async move {
+        use futures::future::join_all;
+
+        let allow_lan = peer_cache_runtime::warmstart_allow_lan();
+        let max_candidates = peer_cache_runtime::DEFAULT_MAX_WARMSTART_CANDIDATES;
+        let max_attempts = peer_cache_runtime::DEFAULT_MAX_WARMSTART_ATTEMPTS;
+        let max_concurrency = peer_cache_runtime::DEFAULT_MAX_WARMSTART_CONCURRENCY;
+        let attempt_timeout_ms = peer_cache_runtime::DEFAULT_WARMSTART_ATTEMPT_TIMEOUT_MS;
+        let budget_ms = peer_cache_runtime::DEFAULT_WARMSTART_BUDGET_MS;
+        let started = Instant::now();
+
+        if loaded_cache.namespace_mismatch {
+            let mut status = status_arc.lock().await;
+            status.namespace_mismatch = true;
+            status.warmstart_task_running = false;
+            status.warmstart_cancelled = false;
+            return;
+        }
+
+        let candidates = peer_cache_runtime::build_warmstart_candidates(
+            &loaded_cache.cache,
+            &loaded_cache.last_successful_connect_at,
+            max_candidates,
+        );
+
+        {
+            let mut status = status_arc.lock().await;
+            status.peers_selected_for_warmstart = candidates.len();
+        }
+
+        let mut filtered = Vec::new();
+        let mut skipped = 0usize;
+        for candidate in candidates {
+            if cancel_run.load(Ordering::SeqCst) == run_id {
+                let mut status = status_arc.lock().await;
+                status.warmstart_cancelled = true;
+                status.warmstart_task_running = false;
+                status.warmstart_skipped += skipped;
+                return;
+            }
+
+            if started.elapsed().as_millis() as u64 >= budget_ms {
+                break;
+            }
+
+            if peer_cache_runtime::is_address_allowed_for_warmstart(&candidate.address, allow_lan)
+                .await
+            {
+                filtered.push(candidate);
+            } else {
+                skipped += 1;
+            }
+        }
+
+        let mut attempted = 0usize;
+        let mut succeeded = 0usize;
+        let mut cursor = 0usize;
+        while cursor < filtered.len()
+            && attempted < max_attempts
+            && (started.elapsed().as_millis() as u64) < budget_ms
+        {
+            if cancel_run.load(Ordering::SeqCst) == run_id {
+                let mut status = status_arc.lock().await;
+                status.warmstart_cancelled = true;
+                break;
+            }
+
+            let lifecycle = lifecycle_arc.lock().await.clone();
+            if lifecycle.run_id != run_id
+                || lifecycle.phase != peer_cache_runtime::DhtLifecyclePhase::Running
+            {
+                let mut status = status_arc.lock().await;
+                status.warmstart_cancelled = true;
+                break;
+            }
+
+            let take = std::cmp::min(max_concurrency, filtered.len() - cursor);
+            let mut batch = Vec::with_capacity(take);
+            for _ in 0..take {
+                if attempted + batch.len() >= max_attempts {
+                    break;
+                }
+                batch.push(filtered[cursor].clone());
+                cursor += 1;
+            }
+
+            if batch.is_empty() {
+                break;
+            }
+
+            let jobs = batch.into_iter().map(|candidate| {
+                let dht = dht.clone();
+                async move {
+                    let addr = candidate.address.clone();
+                    let result = tokio::time::timeout(
+                        Duration::from_millis(attempt_timeout_ms),
+                        dht.connect_peer(addr.clone()),
+                    )
+                    .await;
+                    (candidate, result)
+                }
+            });
+
+            for (candidate, result) in join_all(jobs).await {
+                attempted += 1;
+                match result {
+                    Ok(Ok(())) => {
+                        succeeded += 1;
+                        let mut success = last_success_arc.lock().await;
+                        success.insert(candidate.peer_id, peer_cache_runtime::now_secs());
+                    }
+                    Ok(Err(_)) | Err(_) => {}
+                }
+            }
+        }
+
+        let mut status = status_arc.lock().await;
+        status.warmstart_attempted = attempted;
+        status.warmstart_succeeded = succeeded;
+        status.warmstart_skipped += skipped;
+        status.warmstart_task_running = false;
+        status.last_error = None;
+    });
+
+    let mut guard = state.peer_cache_warmstart_task.lock().await;
+    *guard = Some(handle);
 }
 
 /// Tauri command to create a new Chiral account
@@ -1593,14 +1820,16 @@ async fn start_dht_node(
     // pure_client_mode: Option<bool>, false
     // force_server_mode: Option<bool>, false
 ) -> Result<String, String> {
+    let run_id = state.dht_run_counter.fetch_add(1, Ordering::SeqCst) + 1;
     {
-        let dht_guard = state.dht.lock().await;
-        if dht_guard.is_some() {
-            return Err("DHT node is already running".to_string());
-        }
+        let mut lifecycle = state.dht_lifecycle.lock().await;
+        lifecycle.try_begin_start(run_id)?;
     }
+    sync_lifecycle_status(&state).await;
+    state.peer_cache_cancel_run.store(0, Ordering::SeqCst);
 
     let autonat_server_list = autonat_servers.unwrap_or(bootstrap_nodes.clone());
+    let result: Result<String, String> = async {
 
     // Get the proxy from the command line, if it was provided at launch
     let cli_proxy = state.socks5_proxy_cli.lock().await.clone();
@@ -1907,6 +2136,57 @@ async fn start_dht_node(
     // Also attach DHT to HTTP server state for provider-side metrics
     state.http_server_state.set_dht(dht_arc.clone()).await;
 
+    let chain_id_for_namespace = Some(get_chain_id());
+    let namespace_result = peer_cache_runtime::build_namespace_context(
+        &bootstrap_nodes_for_monitor,
+        port,
+        chain_id_for_namespace,
+    );
+    match namespace_result {
+        Ok(namespace_ctx) => {
+            {
+                let mut ns_guard = state.peer_cache_namespace.lock().await;
+                *ns_guard = Some(namespace_ctx.clone());
+            }
+            let loaded = peer_cache_runtime::load_or_migrate_peer_cache(&namespace_ctx).await;
+            match loaded {
+                Ok(loaded_cache) => {
+                    {
+                        let mut cache_guard = state.peer_cache_last_cache.lock().await;
+                        *cache_guard = Some(loaded_cache.cache.clone());
+                    }
+                    {
+                        let mut success_guard = state.peer_cache_last_success.lock().await;
+                        *success_guard = loaded_cache.last_successful_connect_at.clone();
+                    }
+                    {
+                        let mut status = state.peer_cache_status.lock().await;
+                        status.namespace_key = Some(namespace_ctx.namespace_key.clone());
+                        status.namespace_file_path =
+                            Some(namespace_ctx.namespace_file.to_string_lossy().to_string());
+                        status.legacy_file_path =
+                            Some(namespace_ctx.legacy_file.to_string_lossy().to_string());
+                        status.namespace_mismatch = loaded_cache.namespace_mismatch;
+                        status.legacy_migrated = loaded_cache.legacy_migrated;
+                        status.peers_loaded = loaded_cache.cache.peers.len();
+                        status.last_loaded_at = Some(peer_cache_runtime::now_secs());
+                        status.last_error = None;
+                    }
+                    spawn_peer_cache_warmstart_task(&state, dht_arc.clone(), run_id, loaded_cache)
+                        .await;
+                }
+                Err(err) => {
+                    let mut status = state.peer_cache_status.lock().await;
+                    status.last_error = Some(format!("Failed to load peer cache: {}", err));
+                }
+            }
+        }
+        Err(err) => {
+            let mut status = state.peer_cache_status.lock().await;
+            status.last_error = Some(format!("Failed to build peer cache namespace: {}", err));
+        }
+    }
+
     // Monitor peer health and auto-reconnect to bootstrap when needed
     let dht_for_monitor = dht_arc.clone();
     let app_for_monitor = app.clone();
@@ -1965,10 +2245,57 @@ async fn start_dht_node(
     });
 
     Ok(peer_id)
+    }
+    .await;
+
+    match &result {
+        Ok(_) => {
+            {
+                let mut lifecycle = state.dht_lifecycle.lock().await;
+                lifecycle.mark_running(run_id);
+            }
+            sync_lifecycle_status(&state).await;
+        }
+        Err(err) => {
+            {
+                let mut lifecycle = state.dht_lifecycle.lock().await;
+                lifecycle.mark_stopped();
+            }
+            sync_lifecycle_status(&state).await;
+            let mut status = state.peer_cache_status.lock().await;
+            status.last_error = Some(err.clone());
+            status.warmstart_task_running = false;
+        }
+    }
+
+    result
 }
 
 #[tauri::command]
 async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let current_run_id = {
+        let lifecycle = state.dht_lifecycle.lock().await;
+        lifecycle.run_id
+    };
+
+    {
+        let mut lifecycle = state.dht_lifecycle.lock().await;
+        lifecycle.try_begin_stop(current_run_id)?;
+    }
+    sync_lifecycle_status(&state).await;
+    cancel_peer_cache_warmstart_task(&state, current_run_id).await;
+
+    let dht_for_snapshot = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+    if let Some(ref dht) = dht_for_snapshot {
+        if let Err(err) = snapshot_and_save_peer_cache_from_dht(&state, dht).await {
+            let mut status = state.peer_cache_status.lock().await;
+            status.last_error = Some(format!("Failed to save peer cache on stop: {}", err));
+        }
+    }
+
     let dht = {
         let mut dht_guard = state.dht.lock().await;
         dht_guard.take()
@@ -1987,6 +2314,12 @@ async fn stop_dht_node(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
         proxies.clear();
     }
     let _ = app.emit("proxy_reset", ());
+
+    {
+        let mut lifecycle = state.dht_lifecycle.lock().await;
+        lifecycle.mark_stopped();
+    }
+    sync_lifecycle_status(&state).await;
 
     Ok(())
 }
@@ -2036,6 +2369,25 @@ async fn get_dht_peer_count(state: State<'_, AppState>) -> Result<usize, String>
     } else {
         Ok(0) // Return 0 if DHT is not running
     }
+}
+
+#[tauri::command]
+async fn get_peer_cache_status(
+    state: State<'_, AppState>,
+) -> Result<peer_cache_runtime::PeerCacheStatus, String> {
+    Ok(state.peer_cache_status.lock().await.clone())
+}
+
+#[tauri::command]
+async fn get_peer_cache_stats(
+    state: State<'_, AppState>,
+) -> Result<peer_cache::PeerCacheStats, String> {
+    let cache = {
+        let guard = state.peer_cache_last_cache.lock().await;
+        guard.clone()
+    }
+    .unwrap_or_default();
+    Ok(peer_cache_runtime::extract_cache_stats(&cache))
 }
 
 #[tauri::command]
@@ -8007,11 +8359,36 @@ fn get_logs_directory(app: tauri::AppHandle) -> Result<String, String> {
 }
 #[tauri::command]
 async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String> {
-    // Stop DHT if running
-    if let Some(dht) = state.dht.lock().await.as_ref() {
+    let current_run_id = {
+        let lifecycle = state.dht_lifecycle.lock().await;
+        lifecycle.run_id
+    };
+
+    {
+        let mut lifecycle = state.dht_lifecycle.lock().await;
+        let _ = lifecycle.try_begin_stop(current_run_id);
+    }
+    sync_lifecycle_status(&state).await;
+    cancel_peer_cache_warmstart_task(&state, current_run_id).await;
+
+    let dht_for_snapshot = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+    if let Some(ref dht) = dht_for_snapshot {
+        if let Err(err) = snapshot_and_save_peer_cache_from_dht(&state, dht).await {
+            let mut status = state.peer_cache_status.lock().await;
+            status.last_error = Some(format!("Failed to save peer cache on reset: {}", err));
+        }
+    }
+
+    let dht = {
+        let mut dht_guard = state.dht.lock().await;
+        dht_guard.take()
+    };
+    if let Some(dht) = dht {
         let _ = dht.shutdown().await;
     }
-    *state.dht.lock().await = None;
 
     // Stop WebRTC if running (just clear the reference)
     *state.webrtc.lock().await = None;
@@ -8025,6 +8402,13 @@ async fn reset_network_services(state: State<'_, AppState>) -> Result<(), String
     // Stop any running pumps
     *state.file_transfer_pump.lock().await = None;
     *state.multi_source_pump.lock().await = None;
+
+    {
+        let mut lifecycle = state.dht_lifecycle.lock().await;
+        lifecycle.mark_stopped();
+    }
+    sync_lifecycle_status(&state).await;
+
     Ok(())
 }
 
@@ -8060,11 +8444,33 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
             tracing::info!("Proof-of-storage watcher stopped");
         }
 
+        let current_run_id = {
+            let lifecycle = state.dht_lifecycle.lock().await;
+            lifecycle.run_id
+        };
+        {
+            let mut lifecycle = state.dht_lifecycle.lock().await;
+            let _ = lifecycle.try_begin_stop(current_run_id);
+        }
+        sync_lifecycle_status(&state).await;
+        cancel_peer_cache_warmstart_task(&state, current_run_id).await;
+
+        let dht_for_snapshot = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+        if let Some(ref dht) = dht_for_snapshot {
+            if let Err(err) = snapshot_and_save_peer_cache_from_dht(&state, dht).await {
+                tracing::warn!("Failed to save peer cache during shutdown: {}", err);
+            }
+        }
+
         // Stop DHT and related services
-        if let Some(dht) = {
+        let dht = {
             let mut dht_guard = state.dht.lock().await;
             dht_guard.take()
-        } {
+        };
+        if let Some(dht) = dht {
             if let Err(e) = dht.shutdown().await {
                 tracing::warn!("Failed to stop DHT: {}", e);
             }
@@ -8083,6 +8489,12 @@ async fn shutdown_application(app_handle: tauri::AppHandle) {
             *state.file_transfer_pump.lock().await = None;
             *state.multi_source_pump.lock().await = None;
         }
+
+        {
+            let mut lifecycle = state.dht_lifecycle.lock().await;
+            lifecycle.mark_stopped();
+        }
+        sync_lifecycle_status(&state).await;
 
         if let Ok(mut geth) = state.geth.try_lock() {
             if let Err(e) = geth.stop() {
@@ -9460,6 +9872,16 @@ fn main() {
 
             // FTP server for serving uploaded files (created earlier for protocol manager)
             ftp_server: ftp_server_arc,
+
+            // DHT lifecycle and peer-cache warm-start state
+            dht_lifecycle: Arc::new(Mutex::new(peer_cache_runtime::DhtLifecycleState::default())),
+            dht_run_counter: Arc::new(AtomicU64::new(0)),
+            peer_cache_status: Arc::new(Mutex::new(peer_cache_runtime::PeerCacheStatus::default())),
+            peer_cache_namespace: Arc::new(Mutex::new(None)),
+            peer_cache_last_cache: Arc::new(Mutex::new(None)),
+            peer_cache_last_success: Arc::new(Mutex::new(HashMap::new())),
+            peer_cache_warmstart_task: Arc::new(Mutex::new(None)),
+            peer_cache_cancel_run: Arc::new(AtomicU64::new(0)),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,
@@ -9563,6 +9985,8 @@ fn main() {
             ensure_directory_exists,
             get_dht_health,
             get_dht_peer_count,
+            get_peer_cache_status,
+            get_peer_cache_stats,
             get_dht_peer_id,
             get_peer_id,
             is_dht_running,
