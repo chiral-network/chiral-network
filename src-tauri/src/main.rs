@@ -447,6 +447,7 @@ async fn cancel_peer_cache_warmstart_task(state: &AppState, run_id: u64) {
     let mut status = state.peer_cache_status.lock().await;
     status.warmstart_task_running = false;
     status.warmstart_cancelled = true;
+    status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
 }
 
 async fn snapshot_and_save_peer_cache_from_dht(
@@ -499,6 +500,7 @@ async fn spawn_peer_cache_warmstart_task(
     }
 
     {
+        let now = peer_cache_runtime::now_secs();
         let mut status = state.peer_cache_status.lock().await;
         status.warmstart_task_running = true;
         status.warmstart_cancelled = false;
@@ -506,6 +508,8 @@ async fn spawn_peer_cache_warmstart_task(
         status.warmstart_succeeded = 0;
         status.warmstart_skipped = 0;
         status.peers_selected_for_warmstart = 0;
+        status.last_warmstart_started_at = Some(now);
+        status.last_warmstart_completed_at = None;
     }
 
     let status_arc = state.peer_cache_status.clone();
@@ -529,6 +533,7 @@ async fn spawn_peer_cache_warmstart_task(
             status.namespace_mismatch = true;
             status.warmstart_task_running = false;
             status.warmstart_cancelled = false;
+            status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
             return;
         }
 
@@ -551,6 +556,7 @@ async fn spawn_peer_cache_warmstart_task(
                 status.warmstart_cancelled = true;
                 status.warmstart_task_running = false;
                 status.warmstart_skipped += skipped;
+                status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
                 return;
             }
 
@@ -634,6 +640,7 @@ async fn spawn_peer_cache_warmstart_task(
         status.warmstart_succeeded = succeeded;
         status.warmstart_skipped += skipped;
         status.warmstart_task_running = false;
+        status.last_warmstart_completed_at = Some(peer_cache_runtime::now_secs());
         status.last_error = None;
     });
 
