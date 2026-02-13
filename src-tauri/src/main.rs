@@ -1834,6 +1834,19 @@ async fn start_dht_node(
     }
     sync_lifecycle_status(&state).await;
     state.peer_cache_cancel_run.store(0, Ordering::SeqCst);
+    {
+        let mut status = state.peer_cache_status.lock().await;
+        status.namespace_mismatch = false;
+        status.legacy_migrated = false;
+        status.peers_loaded = 0;
+        status.peers_selected_for_warmstart = 0;
+        status.warmstart_attempted = 0;
+        status.warmstart_succeeded = 0;
+        status.warmstart_skipped = 0;
+        status.warmstart_cancelled = false;
+        status.warmstart_task_running = false;
+        status.last_error = None;
+    }
 
     let autonat_server_list = autonat_servers.unwrap_or(bootstrap_nodes.clone());
     let result: Result<String, String> = async {
