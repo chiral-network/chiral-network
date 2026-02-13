@@ -4,6 +4,7 @@ use libp2p::Multiaddr;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -132,6 +133,7 @@ pub struct PeerCacheStatus {
     pub warmstart_cancelled: bool,
     pub warmstart_task_running: bool,
     pub warmstart_last_reason: Option<WarmstartReasonCode>,
+    pub warmstart_policy_mode: WarmstartPolicyMode,
     pub last_warmstart_started_at: Option<u64>,
     pub last_warmstart_completed_at: Option<u64>,
     pub warmstart_budget_ms: u64,
@@ -162,6 +164,7 @@ impl Default for PeerCacheStatus {
             warmstart_cancelled: false,
             warmstart_task_running: false,
             warmstart_last_reason: None,
+            warmstart_policy_mode: WarmstartPolicyMode::Wan,
             last_warmstart_started_at: None,
             last_warmstart_completed_at: None,
             warmstart_budget_ms: DEFAULT_WARMSTART_BUDGET_MS,
@@ -184,6 +187,13 @@ pub enum WarmstartReasonCode {
     Cancelled,
     Success,
     NoSuccess,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WarmstartPolicyMode {
+    Wan,
+    Lan,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -540,6 +550,28 @@ pub fn warmstart_enabled() -> bool {
         .unwrap_or(true)
 }
 
+pub fn warmstart_should_cancel(cancel_run: u64, run_id: u64) -> bool {
+    cancel_run == run_id
+}
+
+pub fn warmstart_run_active(lifecycle: &DhtLifecycleState, run_id: u64) -> bool {
+    lifecycle.run_id == run_id
+        && (lifecycle.phase == DhtLifecyclePhase::Running
+            || lifecycle.phase == DhtLifecyclePhase::Starting)
+}
+
+pub async fn run_snapshot_then_teardown<S, T>(
+    snapshot: S,
+    teardown: T,
+) -> Result<(), String>
+where
+    S: Future<Output = Result<(), String>>,
+    T: Future<Output = Result<(), String>>,
+{
+    snapshot.await?;
+    teardown.await
+}
+
 fn is_ip_allowed(ip: IpAddr, allow_lan: bool) -> bool {
     if allow_lan {
         return true;
@@ -636,8 +668,10 @@ pub fn extract_cache_stats(cache: &PeerCache) -> PeerCacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
+    use tokio::sync::Mutex as AsyncMutex;
 
     const PEER_A: &str = "QmYwAPJzv5CZsnAzt8auVTL1YJ5hzyXH8VEkR92pT9XyM2";
     const PEER_B: &str = "QmWATWfAtUq8f3m8M4s3B4P4YJ5x9x6vKf7r8T9uV1wXyZ";
@@ -1139,6 +1173,22 @@ mod tests {
     }
 
     #[test]
+    fn warmstart_run_active_requires_matching_run_id_and_active_phase() {
+        let mut lifecycle = DhtLifecycleState::default();
+        lifecycle.mark_running(10);
+        assert!(warmstart_run_active(&lifecycle, 10));
+        assert!(!warmstart_run_active(&lifecycle, 11));
+        lifecycle.phase = DhtLifecyclePhase::Stopping;
+        assert!(!warmstart_run_active(&lifecycle, 10));
+    }
+
+    #[test]
+    fn warmstart_should_cancel_matches_run_id_only() {
+        assert!(warmstart_should_cancel(7, 7));
+        assert!(!warmstart_should_cancel(8, 7));
+    }
+
+    #[test]
     fn ip_policy_rejects_v6_unique_local_by_default() {
         let ip: IpAddr = "fd00::1".parse().unwrap();
         assert!(!is_ip_allowed(ip, false));
@@ -1384,6 +1434,48 @@ mod tests {
         let loaded = load_or_migrate_peer_cache(&ctx).await.unwrap();
         assert_eq!(loaded.cache.peers.len(), 1);
         assert_eq!(loaded.last_successful_connect_at, success);
+    }
+
+    #[tokio::test]
+    async fn snapshot_then_teardown_runs_in_order() {
+        let events = Arc::new(AsyncMutex::new(Vec::<&'static str>::new()));
+        let snapshot_events = events.clone();
+        let teardown_events = events.clone();
+
+        run_snapshot_then_teardown(
+            async move {
+                snapshot_events.lock().await.push("snapshot");
+                Ok(())
+            },
+            async move {
+                teardown_events.lock().await.push("teardown");
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+
+        let events = events.lock().await.clone();
+        assert_eq!(events, vec!["snapshot", "teardown"]);
+    }
+
+    #[tokio::test]
+    async fn snapshot_then_teardown_skips_teardown_on_snapshot_error() {
+        let events = Arc::new(AsyncMutex::new(Vec::<&'static str>::new()));
+        let teardown_events = events.clone();
+
+        let result = run_snapshot_then_teardown(
+            async { Err::<(), String>("snapshot failed".to_string()) },
+            async move {
+                teardown_events.lock().await.push("teardown");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        let events = events.lock().await.clone();
+        assert!(events.is_empty());
     }
 
     #[tokio::test]
