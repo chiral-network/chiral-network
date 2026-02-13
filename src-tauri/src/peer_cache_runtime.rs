@@ -590,7 +590,9 @@ fn is_supported_dial_multiaddr_shape_parsed(ma: &Multiaddr) -> bool {
 pub async fn is_address_allowed_for_warmstart(addr: &str, allow_lan: bool) -> bool {
     let mut cache = AddressValidationCache::default();
     let mut metrics = AddressValidationMetrics::default();
-    is_address_allowed_for_warmstart_cached(addr, allow_lan, &mut cache, &mut metrics).await
+    parse_warmstart_dial_target_cached(addr, allow_lan, &mut cache, &mut metrics)
+        .await
+        .is_some()
 }
 
 pub async fn is_address_allowed_for_warmstart_cached(
@@ -599,43 +601,56 @@ pub async fn is_address_allowed_for_warmstart_cached(
     cache: &mut AddressValidationCache,
     metrics: &mut AddressValidationMetrics,
 ) -> bool {
+    parse_warmstart_dial_target_cached(addr, allow_lan, cache, metrics)
+        .await
+        .is_some()
+}
+
+pub async fn parse_warmstart_dial_target_cached(
+    addr: &str,
+    allow_lan: bool,
+    cache: &mut AddressValidationCache,
+    metrics: &mut AddressValidationMetrics,
+) -> Option<Multiaddr> {
     metrics.addr_validation_calls += 1;
     let ma = match addr.parse::<Multiaddr>() {
         Ok(ma) => ma,
         Err(_) => {
             metrics.addr_filtered_count += 1;
-            return false;
+            return None;
         }
     };
 
     if !is_supported_dial_multiaddr_shape_parsed(&ma) {
         metrics.addr_filtered_count += 1;
-        return false;
+        return None;
     }
 
     for protocol in ma.iter() {
         match protocol {
             Protocol::Ip4(ip) => {
                 if !is_ip_allowed(IpAddr::V4(ip), allow_lan) {
-                    return false;
+                    metrics.addr_filtered_count += 1;
+                    return None;
                 }
             }
             Protocol::Ip6(ip) => {
                 if !is_ip_allowed(IpAddr::V6(ip), allow_lan) {
-                    return false;
+                    metrics.addr_filtered_count += 1;
+                    return None;
                 }
             }
             Protocol::Dns(host) | Protocol::Dns4(host) | Protocol::Dns6(host) => {
                 if !dns_target_is_allowed_cached(host.as_ref(), allow_lan, cache, metrics).await {
                     metrics.addr_filtered_count += 1;
-                    return false;
+                    return None;
                 }
             }
             _ => {}
         }
     }
 
-    true
+    Some(ma)
 }
 
 pub fn warmstart_allow_lan() -> bool {
@@ -1252,6 +1267,20 @@ mod tests {
     #[tokio::test]
     async fn address_policy_rejects_invalid_multiaddr() {
         assert!(!is_address_allowed_for_warmstart("invalid", false).await);
+    }
+
+    #[tokio::test]
+    async fn parse_warmstart_dial_target_returns_multiaddr_when_allowed() {
+        let mut cache = AddressValidationCache::default();
+        let mut metrics = AddressValidationMetrics::default();
+        let addr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", PEER_A);
+
+        let parsed =
+            parse_warmstart_dial_target_cached(&addr, false, &mut cache, &mut metrics).await;
+
+        assert_eq!(parsed.map(|m| m.to_string()), Some(addr));
+        assert_eq!(metrics.addr_validation_calls, 1);
+        assert_eq!(metrics.addr_filtered_count, 0);
     }
 
     #[test]
