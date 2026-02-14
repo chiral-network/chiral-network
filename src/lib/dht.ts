@@ -296,7 +296,7 @@ export class DhtService {
 
       try {
         console.log(
-          "🔽 DhtService.downloadFile: Invoking download_blocks_from_network with:",
+          "[DL] DhtService.downloadFile: Invoking download_blocks_from_network with:",
           {
             merkleRoot: fileMetadata.merkleRoot,
             fileHash: fileMetadata.fileHash,
@@ -312,7 +312,7 @@ export class DhtService {
         });
       } catch (error) {
         console.error(
-          "🔽 Frontend: download_blocks_from_network invoke failed:",
+          "[DL] Frontend: download_blocks_from_network invoke failed:",
           error
         );
         throw error;
@@ -321,7 +321,7 @@ export class DhtService {
       // Wait until the event arrives
       return await metadataPromise;
     } catch (error) {
-      console.error("🔽 Frontend: Failed to download file:", error);
+      console.error("[DL] Frontend: Failed to download file:", error);
       throw error;
     }
   }

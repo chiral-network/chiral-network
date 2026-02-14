@@ -45,7 +45,7 @@ export class P2PFileTransferService {
     string,
     (transfer: P2PTransfer) => void
   >();
-  private webrtcSessions = new Map<string, any>(); // peerId -> WebRTCSession
+  private webrtcSessions = new Map<string, any>(); // peerId → WebRTCSession
   private signalingService: SignalingService;
 
   constructor() {

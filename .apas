@@ -1,0 +1,9 @@
+{
+  "id": "511caa0f-25b6-4800-8aa3-3e5d6bdb1053",
+  "name": "chiral-network",
+  "created_at": "2026-01-28T17:57:56.657523524+00:00",
+  "prompt": null,
+  "deadloop_claude_session_id": "30ff5405-3626-4780-8af8-35cf199aded6",
+  "interactive_claude_session_id": "3de16c40-e0fd-49c4-a005-ab1b53791f50",
+  "is_paused": true
+}

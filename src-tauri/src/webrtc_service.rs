@@ -39,7 +39,7 @@ lazy_static::lazy_static! {
     /// Global map of progress bars for active uploads, keyed by (peer_id, file_hash)
     static ref UPLOAD_PROGRESS_BARS: Mutex<HashMap<String, ProgressBar>> = Mutex::new(HashMap::new());
 
-    /// Requested output paths for WebRTC downloads (file_hash -> output_path).
+    /// Requested output paths for WebRTC downloads (file_hash → output_path).
     /// This lets the download initiator (GUI/E2E API) control the final save location,
     /// while the assembler lives in this library crate (no access to binary AppState).
     static ref REQUESTED_WEBRTC_DOWNLOAD_OUTPUT_PATHS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
@@ -52,7 +52,7 @@ pub async fn set_requested_download_output_path(file_hash: String, output_path: 
     // This log is intentionally INFO (not DEBUG) because it is a high-signal clue when
     // diagnosing "WebRTC saved to the wrong folder" issues in real-network runs.
     if let Some((k, v)) = map.iter().last() {
-        info!("📌 WebRTC requested output path set: {} -> {}", k, v);
+        info!("[PIN] WebRTC requested output path set: {} -> {}", k, v);
     }
 }
 
@@ -347,10 +347,10 @@ pub struct PeerConnection {
     pub last_activity: Instant,
     pub peer_connection: Option<Arc<RTCPeerConnection>>,
     pub data_channel: Option<Arc<RTCDataChannel>>,
-    pub pending_chunks: HashMap<String, Vec<FileChunk>>, // file_hash -> chunks
-    pub received_chunks: HashMap<String, HashMap<u32, FileChunk>>, // file_hash -> chunk_index -> chunk
-    pub acked_chunks: HashMap<String, std::collections::HashSet<u32>>, // file_hash -> acked chunk indices
-    pub pending_acks: HashMap<String, u32>, // file_hash -> number of unacked chunks
+    pub pending_chunks: HashMap<String, Vec<FileChunk>>, // file_hash → chunks
+    pub received_chunks: HashMap<String, HashMap<u32, FileChunk>>, // file_hash → chunk_index -> chunk
+    pub acked_chunks: HashMap<String, std::collections::HashSet<u32>>, // file_hash → acked chunk indices
+    pub pending_acks: HashMap<String, u32>, // file_hash → number of unacked chunks
     /// Retry context for connection resilience
     pub retry_context: Option<WebRtcRetryContext>,
 }
@@ -1323,7 +1323,7 @@ impl WebRTCService {
         // Serialize request and send over data channel
         match serde_json::to_string(request) {
             Ok(request_json) => {
-                info!("📨 Sending file request JSON to peer {}: {}", peer_id, request_json);
+                info!("[MSG] Sending file request JSON to peer {}: {}", peer_id, request_json);
                 if let Err(e) = dc.send_text(request_json).await {
                     error!("Failed to send file request over data channel: {}", e);
                 } else {
@@ -1357,13 +1357,13 @@ impl WebRTCService {
             .await
             .unwrap_or_default();
         
-        info!("📂 Checking {} stored files for hash {}", stored_files.len(), request.file_hash);
+        info!("[DIR] Checking {} stored files for hash {}", stored_files.len(), request.file_hash);
         
         let has_file = stored_files
             .iter()
             .any(|(hash, _)| hash == &request.file_hash);
 
-        info!("📂 File {} found: {}", request.file_hash, has_file);
+        info!("[DIR] File {} found: {}", request.file_hash, has_file);
 
         if has_file {
             // Spawn file transfer as a separate task so the message handler
@@ -1410,7 +1410,7 @@ impl WebRTCService {
             error!("❌ File {} not found locally - cannot fulfill request from peer {}", request.file_hash, peer_id);
             // Log available files for debugging
             let available_hashes: Vec<_> = stored_files.iter().map(|(h, _)| h.clone()).collect();
-            info!("📂 Available file hashes: {:?}", available_hashes);
+            info!("[DIR] Available file hashes: {:?}", available_hashes);
             
             let _ = event_tx
                 .send(WebRTCEvent::TransferFailed {
@@ -1444,7 +1444,7 @@ impl WebRTCService {
                     let state = dc.ready_state();
                     if state == RTCDataChannelState::Open {
                         if start.elapsed().as_millis() > 100 {
-                            info!("📡 Data channel ready after {}ms for peer {}", start.elapsed().as_millis(), peer_id);
+                            info!("🌐 Data channel ready after {}ms for peer {}", start.elapsed().as_millis(), peer_id);
                         }
                         break dc.clone();
                     }
@@ -1580,7 +1580,7 @@ impl WebRTCService {
         multi_source_service: Option<&Arc<MultiSourceDownloadService>>,
         payment_checkpoint: &Option<Arc<PaymentCheckpointService>>,
     ) {
-        debug!("📩 Data channel message received from peer {}: {} bytes", peer_id, msg.data.len());
+        debug!("[MSG] Data channel message received from peer {}: {} bytes", peer_id, msg.data.len());
 
         // First, try to decode as a binary-framed FileChunk (preferred, avoids JSON overhead).
         match decode_chunk_frame(&msg.data) {
@@ -1988,7 +1988,7 @@ impl WebRTCService {
         // Initialize transfer tracking in connections
         {
             let mut conns = connections.lock().await;
-            info!("🔒 Acquired connections lock for transfer tracking, peer: {}", peer_id);
+            info!("[LOCK] Acquired connections lock for transfer tracking, peer: {}", peer_id);
             if let Some(connection) = conns.get_mut(peer_id) {
                 info!("📝 Initializing transfer tracking for peer {}, data_channel present: {}", 
                       peer_id, connection.data_channel.is_some());
@@ -2015,7 +2015,7 @@ impl WebRTCService {
         // Initialize pending ACK counter
         {
             let mut conns = connections.lock().await;
-            info!("🔒 Acquired connections lock for pending_acks init, peer: {}", peer_id);
+            info!("[LOCK] Acquired connections lock for pending_acks init, peer: {}", peer_id);
             if let Some(connection) = conns.get_mut(peer_id) {
                 info!("✅ Found peer {} in connections, initializing pending_acks", peer_id);
                 connection.pending_acks.insert(request.file_hash.clone(), 0);
@@ -2033,7 +2033,7 @@ impl WebRTCService {
             let conns = connections.lock().await;
             if let Some(connection) = conns.get(peer_id) {
                 if let Some(dc) = &connection.data_channel {
-                    info!("📡 Data channel state before loop: {:?} for peer {}", dc.ready_state(), peer_id);
+                    info!("🌐 Data channel state before loop: {:?} for peer {}", dc.ready_state(), peer_id);
                 } else {
                     error!("⚠️ No data channel found for peer {} before starting loop!", peer_id);
                 }
@@ -2046,7 +2046,7 @@ impl WebRTCService {
         for chunk_index in 0..total_chunks {
             // Log EVERY chunk for first 100 to debug stall
             if chunk_index < 100 {
-                info!("🔁 LOOP: Starting chunk {} for peer {}", chunk_index, peer_id);
+                info!("[LOOP] LOOP: Starting chunk {} for peer {}", chunk_index, peer_id);
             }
 
             // Log first few chunks, last chunk, and every 50th chunk
@@ -2076,7 +2076,7 @@ impl WebRTCService {
                         break;
                     }
 
-                    info!("⏸️  Paused at chunk {} - waiting for payment", chunk_index);
+                    info!("[PAUSE]  Paused at chunk {} - waiting for payment", chunk_index);
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }
@@ -2151,7 +2151,7 @@ impl WebRTCService {
             
             // Log after flow control (for first 100 chunks)
             if chunk_index < 100 {
-                info!("🔓 FLOW_CONTROL_PASSED: chunk {} for peer {}", chunk_index, peer_id);
+                info!("[UNLOCK] FLOW_CONTROL_PASSED: chunk {} for peer {}", chunk_index, peer_id);
             }
 
             let start = (chunk_index as usize) * CHUNK_SIZE;
@@ -2162,12 +2162,12 @@ impl WebRTCService {
                 if let Some(ref recipient_key) = request.recipient_public_key {
                     // Encrypted transfer - no HMAC authentication needed (AES-256-GCM provides AEAD)
                     if chunk_index < 100 {
-                        info!("🔐 Encrypting chunk {} for peer {}", chunk_index, peer_id);
+                        info!("[LOCK] Encrypting chunk {} for peer {}", chunk_index, peer_id);
                     }
                     match Self::encrypt_chunk_for_peer(&chunk_data, recipient_key, keystore).await {
                         Ok((encrypted_data, key_bundle)) => {
                             if chunk_index < 100 {
-                                info!("🔐 Encryption done for chunk {}", chunk_index);
+                                info!("[LOCK] Encryption done for chunk {}", chunk_index);
                             }
                             (encrypted_data, Some(key_bundle))
                         }
@@ -2306,7 +2306,7 @@ impl WebRTCService {
         {
             let pb_key = format!("{}:{}", peer_id, &request.file_hash);
             if let Some(pb) = UPLOAD_PROGRESS_BARS.lock().await.remove(&pb_key) {
-                pb.finish_with_message(format!("✓ Uploaded {}", &request.file_hash[..8]));
+                pb.finish_with_message(format!("✅ Uploaded {}", &request.file_hash[..8]));
             }
         }
 
@@ -2456,7 +2456,7 @@ impl WebRTCService {
                 if chunks.len() == total_chunks as usize {
                     // Finish and remove progress bar
                     if let Some(pb) = DOWNLOAD_PROGRESS_BARS.lock().await.remove(&chunk.file_hash) {
-                        pb.finish_with_message(format!("✓ Downloaded {}", &chunk.file_hash[..8]));
+                        pb.finish_with_message(format!("✅ Downloaded {}", &chunk.file_hash[..8]));
                     }
 
                     // Assemble file
@@ -2731,7 +2731,7 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
-                    info!("🧊 ICE candidate generated for peer {}: {}", peer_id, candidate.address);
+                    info!("[ICE] ICE candidate generated for peer {}: {}", peer_id, candidate.address);
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {
@@ -3020,7 +3020,7 @@ impl WebRTCService {
 
             Box::pin(async move {
                 if let Some(candidate) = candidate {
-                    info!("🧊 ICE candidate generated for peer {}: {}", peer_id, candidate.address);
+                    info!("[ICE] ICE candidate generated for peer {}: {}", peer_id, candidate.address);
                     if let Ok(candidate_str) =
                         serde_json::to_string(&candidate.to_json().unwrap_or_default())
                     {

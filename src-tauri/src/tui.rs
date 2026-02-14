@@ -376,7 +376,7 @@ fn render_content(f: &mut Frame, area: Rect, state: &TuiState, context: &TuiCont
 fn render_network_panel(f: &mut Frame, area: Rect, context: &TuiContext, metrics: &Option<LiveMetrics>) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("📡 Network Status");
+        .title("🌐 Network Status");
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -742,7 +742,7 @@ fn render_footer(f: &mut Frame, area: Rect, state: &TuiState) {
             .split(area);
 
         let result_color = if *is_error { Color::Red } else { Color::Green };
-        let result_prefix = if *is_error { "❌ " } else { "✓ " };
+        let result_prefix = if *is_error { "❌ " } else { "✅ " };
         let result_widget = Paragraph::new(format!("{}{}", result_prefix, result))
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(result_color))
@@ -771,7 +771,7 @@ fn render_footer(f: &mut Frame, area: Rect, state: &TuiState) {
             Span::raw(" Select Panel  "),
             Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(" Next  "),
-            Span::styled("[←→]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("[<-->]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(" Navigate"),
         ];
 

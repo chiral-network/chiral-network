@@ -574,7 +574,7 @@ pub async fn run_headless(mut args: CliArgs) -> Result<(), Box<dyn std::error::E
 
 fn log_reachability_snapshot(snapshot: &DhtMetricsSnapshot) {
     info!(
-        "📡 Reachability: {:?} (confidence {:?})",
+        "🌐 Reachability: {:?} (confidence {:?})",
         snapshot.reachability, snapshot.reachability_confidence
     );
     if let Some(ts) = snapshot.last_probe_at {

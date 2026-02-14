@@ -33,7 +33,7 @@ Main module defining the unified download source abstraction.
 pub enum DownloadSource {
     P2p(P2pSourceInfo),
     Http(HttpSourceInfo),
-    Ftp(FtpSourceInfo),  // ✅ FTP variant added
+    Ftp(FtpSourceInfo),  // [OK] FTP variant added
 }
 
 pub struct FtpSourceInfo {
@@ -376,7 +376,7 @@ FtpSourceInfo {
 
 ## Current Status
 
-✅ **Implemented:**
+[OK] **Implemented:**
 
 - FTP source type definition (`FtpSourceInfo`)
 - `DownloadSource` enum with FTP variant
@@ -394,19 +394,19 @@ FtpSourceInfo {
 - Error handling and retry logic
 - Connection pooling
 
-✅ **Recently Implemented:**
+[OK] **Recently Implemented:**
 
 - FTP seeding with embedded FTP server
 - Dynamic seeding capability based on server availability
 
-⏳ **TODO (Future Work):**
+[WAIT] **TODO (Future Work):**
 
 - Bandwidth limiting (per-source)
 
 ## FTP Data Fetching & Verification Implementation
 
 **Task:** FTP Data Fetching & Verification  
-**Status:** ✅ **COMPLETED**
+**Status:** [OK] **COMPLETED**
 
 ### Overview
 
@@ -629,14 +629,14 @@ fn test_ftp_priority_score() {
 
 ### Status Summary
 
-✅ **Connection Management** - Establishes, pools, and cleans up FTP connections
-✅ **Data Fetching** - Downloads byte ranges from FTP servers with proper error handling
-✅ **Data Verification** - Verifies chunk sizes and prepared for hash verification
-✅ **Error Handling** - Comprehensive FTP-specific error messages and retry logic
-✅ **Integration** - Seamlessly integrates with existing multi-source download system
-✅ **FTP Seeding** - Full seeding support with embedded FTP server
-✅ **Testing** - Unit tests for FTP functionality included
-✅ **Transfer Event Bus** - Full lifecycle event emission for UI updates
+[OK] **Connection Management** - Establishes, pools, and cleans up FTP connections
+[OK] **Data Fetching** - Downloads byte ranges from FTP servers with proper error handling
+[OK] **Data Verification** - Verifies chunk sizes and prepared for hash verification
+[OK] **Error Handling** - Comprehensive FTP-specific error messages and retry logic
+[OK] **Integration** - Seamlessly integrates with existing multi-source download system
+[OK] **FTP Seeding** - Full seeding support with embedded FTP server
+[OK] **Testing** - Unit tests for FTP functionality included
+[OK] **Transfer Event Bus** - Full lifecycle event emission for UI updates
 
 The FTP data fetching and verification implementation is **complete and production-ready**.
 
@@ -722,19 +722,19 @@ fn extract_file_name(url: &str) -> String {
 ```
 User initiates FTP download
     │
-    ▼
+    [v]
 TransferStarted
     │ (FTP connection initiated)
-    ▼
+    [v]
 SourceConnected
     │ (FTP server connection established)
-    ▼
+    [v]
 ChunkCompleted
     │ (file data received)
-    ▼
+    [v]
 SourceDisconnected
     │ (connection closed)
-    ▼
+    [v]
 TransferCompleted
 ```
 
@@ -743,13 +743,13 @@ TransferCompleted
 ```
 FTP connection attempt
     │
-    ▼
+    [v]
 TransferStarted
     │
-    ▼
+    [v]
 [Connection fails]
     │
-    ▼
+    [v]
 TransferFailed
     │ (with ErrorCategory::Network and error message)
 ```
@@ -766,7 +766,7 @@ Event emission is **opt-in** through new constructors. Existing code using `FtpP
 
 ### 1. FTP Resume Capability
 
-**Status:** ✅ **COMPLETED**
+**Status:** [OK] **COMPLETED**
 
 #### Overview
 
@@ -830,7 +830,7 @@ let mut output_file = if resume_position > 0 {
 
 ### 2. FTP Directory Listing
 
-**Status:** ✅ **COMPLETED**
+**Status:** [OK] **COMPLETED**
 
 #### Overview
 
@@ -906,7 +906,7 @@ const files = await invoke('list_ftp_directory', {
 
 // Display files
 files.forEach(file => {
-  console.log(`${file.is_directory ? '📁' : '📄'} ${file.name} (${file.size} bytes)`);
+  console.log(`${file.is_directory ? '[DIR]' : '[FILE]'} ${file.name} (${file.size} bytes)`);
 });
 ```
 
@@ -914,7 +914,7 @@ files.forEach(file => {
 
 ### 3. FTP File Operations
 
-**Status:** ✅ **COMPLETED**
+**Status:** [OK] **COMPLETED**
 
 #### Overview
 
@@ -1024,7 +1024,7 @@ await invoke('create_ftp_directory', {
 
 ### 4. FTP Server Bookmarks System
 
-**Status:** ✅ **COMPLETED**
+**Status:** [OK] **COMPLETED**
 
 #### Overview
 
@@ -1198,12 +1198,12 @@ let updated = manager.import_bookmarks(&json, true)?;
 
 | Feature | Status | Tauri Commands | Key Benefits |
 |---------|--------|----------------|--------------|
-| **Resume Downloads** | ✅ | Built into `download_from_ftp_with_progress` | Saves bandwidth, handles interruptions |
-| **Directory Listing** | ✅ | `list_ftp_directory` | Browse before download |
-| **Delete Files** | ✅ | `delete_ftp_file` | Remote file management |
-| **Rename Files** | ✅ | `rename_ftp_file` | Remote file organization |
-| **Create Directories** | ✅ | `create_ftp_directory` | Remote folder creation |
-| **Bookmarks** | ✅ | 6 commands | Quick server access, usage tracking |
+| **Resume Downloads** | [OK] | Built into `download_from_ftp_with_progress` | Saves bandwidth, handles interruptions |
+| **Directory Listing** | [OK] | `list_ftp_directory` | Browse before download |
+| **Delete Files** | [OK] | `delete_ftp_file` | Remote file management |
+| **Rename Files** | [OK] | `rename_ftp_file` | Remote file organization |
+| **Create Directories** | [OK] | `create_ftp_directory` | Remote folder creation |
+| **Bookmarks** | [OK] | 6 commands | Quick server access, usage tracking |
 
 ### Total Tauri Commands Added
 
@@ -1235,11 +1235,11 @@ let updated = manager.import_bookmarks(&json, true)?;
 
 The FTP implementation now includes advanced features for production use:
 
-✅ **Core Functionality** - Download, upload, seeding
-✅ **Resume Capability** - Automatic resume of interrupted transfers
-✅ **Directory Browsing** - List and explore remote directories
-✅ **File Management** - Delete, rename, and create operations
-✅ **Bookmark System** - Save and manage favorite servers
+[OK] **Core Functionality** - Download, upload, seeding
+[OK] **Resume Capability** - Automatic resume of interrupted transfers
+[OK] **Directory Browsing** - List and explore remote directories
+[OK] **File Management** - Delete, rename, and create operations
+[OK] **Bookmark System** - Save and manage favorite servers
 
 **Future Enhancements:**
 

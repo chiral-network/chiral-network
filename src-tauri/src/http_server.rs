@@ -123,7 +123,7 @@ async fn serve_metadata(
     
     // Debug: List all registered files
     let files = state.files.read().await;
-    tracing::info!("📋 Currently registered files: {:?}", files.keys().collect::<Vec<_>>());
+    tracing::info!("[LIST] Currently registered files: {:?}", files.keys().collect::<Vec<_>>());
     drop(files);
 
     match state.get_file_metadata(&file_hash).await {

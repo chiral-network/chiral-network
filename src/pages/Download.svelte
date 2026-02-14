@@ -234,7 +234,7 @@
           }
         } else if (payload.Added) {
             const { info_hash, name } = payload.Added;
-            console.log(`➕ BitTorrent Added: ${info_hash} - ${name}`);
+            console.log(`+ BitTorrent Added: ${info_hash} - ${name}`);
             torrentDownloads.set(info_hash, {
                 info_hash,
                 name: name || 'Torrent Download',
@@ -2925,7 +2925,7 @@ async function loadAndResumeDownloads() {
               <div class="mt-2">
                 <Progress value={100} class="h-2" />
                 <div class="text-xs mt-1">
-                  <span class="text-green-600 dark:text-green-400">✓ Download complete{#if torrent.size > 0} - {toHumanReadableSize(torrent.size)}{/if}</span>
+                  <span class="text-green-600 dark:text-green-400">✅ Download complete{#if torrent.size > 0} - {toHumanReadableSize(torrent.size)}{/if}</span>
                 </div>
               </div>
             {/if}

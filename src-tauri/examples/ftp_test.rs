@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Test 1: Creating FTP downloader with default config");
     let downloader = FtpDownloader::new();
     let config = FtpDownloadConfig::default();
-    println!("✓ FTP downloader created successfully");
+    println!("[OK] FTP downloader created successfully");
     println!("  - Timeout: {}s", config.timeout_secs);
     println!("  - Max retries: {}", config.max_retries);
     println!("  - Passive mode: {}", config.passive_mode);
@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         connection_pool_size: 8,
     };
     let custom_downloader = FtpDownloader::with_config(custom_config.clone());
-    println!("✓ Custom FTP downloader created successfully");
+    println!("[OK] Custom FTP downloader created successfully");
     println!("  - Timeout: {}s", custom_config.timeout_secs);
     println!("  - Max retries: {}", custom_config.max_retries);
     println!("  - Passive mode: {}", custom_config.passive_mode);
@@ -40,14 +40,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test 3: Test anonymous credentials
     println!("Test 3: Testing anonymous credentials");
     let anonymous_creds = FtpCredentials::anonymous();
-    println!("✓ Anonymous credentials created");
+    println!("[OK] Anonymous credentials created");
     println!("  - Username: {}", anonymous_creds.username);
     println!("  - Password: {}\n", anonymous_creds.password);
 
     // Test 4: Test authenticated credentials
     println!("Test 4: Testing authenticated credentials");
     let auth_creds = FtpCredentials::new("testuser".to_string(), "testpass".to_string());
-    println!("✓ Authenticated credentials created");
+    println!("[OK] Authenticated credentials created");
     println!("  - Username: {}", auth_creds.username);
     println!("  - Password: [REDACTED]\n");
 
@@ -56,14 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ftp_url = "ftp://ftp.gnu.org/gnu/hello/hello-2.10.tar.gz";
     match Url::parse(ftp_url) {
         Ok(url) => {
-            println!("✓ FTP URL parsed successfully");
+            println!("[OK] FTP URL parsed successfully");
             println!("  - URL: {}", ftp_url);
             println!("  - Scheme: {}", url.scheme());
             println!("  - Host: {}", url.host_str().unwrap_or("N/A"));
             println!("  - Path: {}\n", url.path());
         }
         Err(e) => {
-            println!("✗ Failed to parse URL: {}\n", e);
+            println!("[X] Failed to parse URL: {}\n", e);
         }
     }
 
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match downloader.connect_and_login(&gnu_url, None).await {
         Ok(mut stream) => {
-            println!("✓ Connected to GNU FTP server");
+            println!("[OK] Connected to GNU FTP server");
 
             // Test file size retrieval
             let remote_path = gnu_url.path();
@@ -89,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  - File size: {} bytes ({:.2} KB)", size, size as f64 / 1024.0);
                 }
                 Err(e) => {
-                    println!("  ✗ Failed to get file size: {}", e);
+                    println!("  [X] Failed to get file size: {}", e);
                 }
             }
 
@@ -97,22 +97,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Downloading first 1KB...");
             match downloader.download_range(&mut stream, remote_path, 0, 1024).await {
                 Ok(data) => {
-                    println!("  ✓ Downloaded {} bytes", data.len());
+                    println!("  [OK] Downloaded {} bytes", data.len());
                     println!("  First 32 bytes: {:?}", &data[..32.min(data.len())]);
                 }
                 Err(e) => {
-                    println!("  ✗ Failed to download range: {}", e);
+                    println!("  [X] Failed to download range: {}", e);
                 }
             }
 
             // Disconnect
             match downloader.disconnect(&mut stream).await {
-                Ok(_) => println!("  ✓ Disconnected successfully"),
-                Err(e) => println!("  ✗ Disconnect error: {}", e),
+                Ok(_) => println!("  [OK] Disconnected successfully"),
+                Err(e) => println!("  [X] Disconnect error: {}", e),
             }
         }
         Err(e) => {
-            println!("✗ Failed to connect: {}", e);
+            println!("[X] Failed to connect: {}", e);
         }
     }
     */

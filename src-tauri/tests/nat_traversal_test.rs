@@ -16,18 +16,14 @@ mod nat_traversal_tests {
         let settings = json!({
             "enableAutonat": true,
             "autonatProbeInterval": 30,
-            "autonatServers": [],
-            "enableAutorelay": true,
-            "preferredRelays": []
+            "autonatServers": []
         });
 
         assert_eq!(settings["enableAutonat"], true);
         assert_eq!(settings["autonatProbeInterval"], 30);
         assert!(settings["autonatServers"].is_array());
-        assert_eq!(settings["enableAutorelay"], true);
-        assert!(settings["preferredRelays"].is_array());
 
-        println!("✅ NAT settings structure is correct");
+        println!("[OK] NAT settings structure is correct");
     }
 
     #[test]
@@ -36,32 +32,13 @@ mod nat_traversal_tests {
         let settings = json!({
             "enableAutonat": true,
             "autonatProbeInterval": 30,
-            "autonatServers": [],
-            "enableAutorelay": true,
-            "preferredRelays": []
+            "autonatServers": []
         });
 
         let servers = settings["autonatServers"].as_array().unwrap();
         assert_eq!(servers.len(), 0);
 
-        println!("✅ Custom AutoNAT servers can be configured");
-    }
-
-    #[test]
-    fn test_preferred_relay_nodes() {
-        // Test that preferred relay nodes can be specified
-        let settings = json!({
-            "enableAutonat": true,
-            "autonatProbeInterval": 30,
-            "autonatServers": [],
-            "enableAutorelay": true,
-            "preferredRelays": []
-        });
-
-        let relays = settings["preferredRelays"].as_array().unwrap();
-        assert_eq!(relays.len(), 0);
-
-        println!("✅ Preferred relay nodes can be configured");
+        println!("[OK] Custom AutoNAT servers can be configured");
     }
 
     #[test]
@@ -84,7 +61,7 @@ mod nat_traversal_tests {
         });
         assert_eq!(settings_default["autonatProbeInterval"], 30);
 
-        println!("✅ Probe interval bounds are correct");
+        println!("[OK] Probe interval bounds are correct");
     }
 
     #[test]
@@ -92,27 +69,11 @@ mod nat_traversal_tests {
         let settings = json!({
             "enableAutonat": false,
             "autonatProbeInterval": 30,
-            "autonatServers": [],
-            "enableAutorelay": true,
-            "preferredRelays": []
+            "autonatServers": []
         });
 
         assert_eq!(settings["enableAutonat"], false);
-        println!("✅ AutoNAT can be disabled");
-    }
-
-    #[test]
-    fn test_autorelay_can_be_disabled() {
-        let settings = json!({
-            "enableAutonat": true,
-            "autonatProbeInterval": 30,
-            "autonatServers": [],
-            "enableAutorelay": false,
-            "preferredRelays": []
-        });
-
-        assert_eq!(settings["enableAutorelay"], false);
-        println!("✅ AutoRelay can be disabled");
+        println!("[OK] AutoNAT can be disabled");
     }
 
     #[test]
@@ -124,10 +85,6 @@ mod nat_traversal_tests {
             "autonatServers": [
                 "/ip4/1.2.3.4/tcp/4001/p2p/QmTest1",
                 "/ip4/5.6.7.8/tcp/4001/p2p/QmTest2"
-            ],
-            "enableAutorelay": true,
-            "preferredRelays": [
-                "/ip4/9.10.11.12/tcp/4001/p2p/QmRelay1"
             ]
         });
 
@@ -138,6 +95,6 @@ mod nat_traversal_tests {
         let deserialized: serde_json::Value = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(original, deserialized);
-        println!("✅ Settings serialize/deserialize correctly");
+        println!("[OK] Settings serialize/deserialize correctly");
     }
 }

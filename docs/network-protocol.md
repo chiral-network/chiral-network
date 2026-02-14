@@ -78,10 +78,10 @@ Distance = XOR(NodeID_A, NodeID_B)
 ```
 K-Buckets (k=20, b=160):
 ┌────────────────────────────────┐
-│ Bucket 0: Distance 2^0        │ → [20 nodes max]
-│ Bucket 1: Distance 2^1        │ → [20 nodes max]
+│ Bucket 0: Distance 2^0        │ -> [20 nodes max]
+│ Bucket 1: Distance 2^1        │ -> [20 nodes max]
 │ ...                            │
-│ Bucket 159: Distance 2^159    │ → [20 nodes max]
+│ Bucket 159: Distance 2^159    │ -> [20 nodes max]
 └────────────────────────────────┘
 ```
 
@@ -201,7 +201,7 @@ message ChunkInfo {
 
 ```
 1. Request Chunk
-   → REQUEST_CHUNK {
+   -> REQUEST_CHUNK {
        file_hash: "sha256...",
        chunk_index: 5,
        offset: 0,
@@ -209,7 +209,7 @@ message ChunkInfo {
      }
 
 2. Receive Chunk
-   ← CHUNK_DATA {
+   <- CHUNK_DATA {
        file_hash: "sha256...",
        chunk_index: 5,
        data: [binary],
@@ -222,7 +222,7 @@ message ChunkInfo {
    - Decrypt if needed
 
 4. Acknowledge
-   → CHUNK_ACK {
+   -> CHUNK_ACK {
        file_hash: "sha256...",
        chunk_index: 5,
        status: "verified"
@@ -463,25 +463,6 @@ STUN Response:
 }
 ```
 
-#### TURN Relay
-
-```
-Relay Protocol:
-Client A → TURN Server → Client B
-
-1. Allocate Relay
-   → ALLOCATE_REQUEST
-   ← ALLOCATE_RESPONSE(relay_address)
-
-2. Create Permission
-   → CREATE_PERMISSION(peer_address)
-   ← PERMISSION_CREATED
-
-3. Send Data
-   → SEND_INDICATION(data, peer_address)
-   Server → Peer: DATA_INDICATION
-```
-
 ### 3. WebRTC Integration
 
 #### Signaling Protocol
@@ -579,12 +560,12 @@ Message Structure:
 ```
 Client: HELLO {
   versions: [0x0003, 0x0002, 0x0001],
-  capabilities: ["serve", "relay", "mine"]
+  capabilities: ["serve", "mine"]
 }
 
 Server: HELLO_ACK {
   selected_version: 0x0002,
-  capabilities: ["serve", "relay"],
+  capabilities: ["serve"],
   features: ["encryption", "compression"]
 }
 ```
@@ -594,8 +575,7 @@ Server: HELLO_ACK {
 ```
 Capabilities Bitmap:
 Bit 0: Storage Node
-Bit 1: Relay Node
-Bit 2: Mining Node
+Bit 1: Mining Node
 Bit 3: DHT Node
 Bit 4: Bootstrap Node
 Bit 5: Archive Node
@@ -617,9 +597,7 @@ Super Nodes (High Bandwidth/Storage)
     │       
     │       
     │
-    └── Relay Nodes
-            │
-            └── NAT-ed Clients
+    └── NAT-ed Clients (via SOCKS5 proxy)
 ```
 
 ### Routing Strategies
@@ -747,12 +725,12 @@ network.registerProtocol({
 ### Protocol Upgrade Path
 
 ```
-Version 1.0.0 → 1.1.0:
+Version 1.0.0 -> 1.1.0:
 - Backward compatible
 - New optional fields
 - Deprecation warnings
 
-Version 1.x → 2.0.0:
+Version 1.x -> 2.0.0:
 - Breaking changes
 - Migration period
 - Dual-stack support
@@ -764,13 +742,13 @@ Version 1.x → 2.0.0:
 
 ```
 TRACE [2024-01-01 00:00:00] DHT FIND_NODE
-  → Target: 0x1234...
-  ← Nodes: 20
+  -> Target: 0x1234...
+  <- Nodes: 20
   Duration: 150ms
 
 DEBUG [2024-01-01 00:00:01] FILE_TRANSFER
-  → Request chunk 5 of file 0xabcd...
-  ← Received 262144 bytes
+  -> Request chunk 5 of file 0xabcd...
+  <- Received 262144 bytes
   Verification: OK
 ```
 

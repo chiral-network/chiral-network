@@ -251,7 +251,7 @@ describe("Payment Checkpoint E2E Tests", () => {
       expect(mockPayment.getBalance()).toBeLessThan(100);
     });
 
-    it("should handle multiple checkpoints (10MB → 20MB → 40MB) in 50MB file", async () => {
+    it("should handle multiple checkpoints (10MB -> 20MB -> 40MB) in 50MB file", async () => {
       const testFile = TestDataFactory.createMockFile("large-video.mkv", 50 * 1024 * 1024);
       const uploaderPeer = TestDataFactory.createMockPeers(1, "WebRTC")[0];
       const downloaderPeer = "downloader_node_456";

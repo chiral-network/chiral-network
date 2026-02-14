@@ -49,7 +49,7 @@
 
   function getSortIcon(column: keyof PeerMetrics): string {
     if (sortBy !== column) return '↕️';
-    return sortOrder === 'asc' ? '↑' : '↓';
+    return sortOrder === 'asc' ? '^' : 'v';
   }
 
   async function cleanupInactivePeers() {
@@ -204,7 +204,7 @@
               </td>
               <td class="encryption">
                 <span class={peer.encryption_support ? 'text-green-600' : 'text-gray-400'}>
-                  {peer.encryption_support ? '✓' : '✗'}
+                  {peer.encryption_support ? '✅' : '❌'}
                 </span>
               </td>
               <td class="health">

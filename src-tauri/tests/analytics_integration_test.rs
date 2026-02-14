@@ -45,7 +45,7 @@ mod analytics_integration_tests {
             "Download bytes should be 12288 (4KB + 8KB)"
         );
 
-        println!("✅ Bandwidth tracking test passed!");
+        println!("[OK] Bandwidth tracking test passed!");
     }
 
     #[tokio::test]
@@ -95,7 +95,7 @@ mod analytics_integration_tests {
         assert_eq!(metrics.successful_transfers, 2);
         assert_eq!(metrics.failed_transfers, 1);
 
-        println!("✅ Performance metrics test passed!");
+        println!("[OK] Performance metrics test passed!");
     }
 
     #[tokio::test]
@@ -126,7 +126,7 @@ mod analytics_integration_tests {
         assert_eq!(activity.completed_uploads, 2);
         assert_eq!(activity.completed_downloads, 1);
 
-        println!("✅ Network activity test passed!");
+        println!("[OK] Network activity test passed!");
     }
 
     #[tokio::test]
@@ -155,7 +155,7 @@ mod analytics_integration_tests {
         assert_eq!(activity.total_peers_connected, 3);
         assert_eq!(activity.unique_peers_all_time, 3);
 
-        println!("✅ Peer tracking test passed!");
+        println!("[OK] Peer tracking test passed!");
     }
 
     #[tokio::test]
@@ -189,7 +189,7 @@ mod analytics_integration_tests {
         let contribution = analytics.get_resource_contribution().await;
         assert_eq!(contribution.total_seedtime_hours, 3.5);
 
-        println!("✅ Resource contribution test passed!");
+        println!("[OK] Resource contribution test passed!");
     }
 
     #[tokio::test]
@@ -212,7 +212,7 @@ mod analytics_integration_tests {
         );
 
         println!(
-            "✅ Latency tracking test passed! Avg latency: {:.2}ms",
+            "[OK] Latency tracking test passed! Avg latency: {:.2}ms",
             metrics.avg_latency_ms
         );
     }
@@ -234,7 +234,7 @@ mod analytics_integration_tests {
         let history = analytics.get_bandwidth_history(Some(10)).await;
         assert!(history.len() <= 10, "Should respect limit parameter");
 
-        println!("✅ Bandwidth history test passed!");
+        println!("[OK] Bandwidth history test passed!");
     }
 
     #[tokio::test]
@@ -256,7 +256,7 @@ mod analytics_integration_tests {
         let history = analytics.get_contribution_history(Some(5)).await;
         assert!(history.len() <= 5, "Should respect limit parameter");
 
-        println!("✅ Contribution history test passed!");
+        println!("[OK] Contribution history test passed!");
     }
 
     #[tokio::test]
@@ -295,7 +295,7 @@ mod analytics_integration_tests {
             "Successful transfers should be reset to 0"
         );
 
-        println!("✅ Reset stats test passed!");
+        println!("[OK] Reset stats test passed!");
     }
 
     #[tokio::test]
@@ -340,7 +340,7 @@ mod analytics_integration_tests {
         let metrics = analytics.get_performance_metrics().await;
         assert_eq!(metrics.total_connections, 5, "Should have 5 connections");
 
-        println!("✅ Concurrent operations test passed!");
+        println!("[OK] Concurrent operations test passed!");
     }
 
     #[tokio::test]
@@ -385,7 +385,7 @@ mod analytics_integration_tests {
         assert_eq!(contribution.bandwidth_contributed_bytes, file_size);
         assert_eq!(contribution.files_shared, 1);
 
-        println!("✅ Complete upload flow test passed!");
+        println!("[OK] Complete upload flow test passed!");
         println!("   - File size: {} bytes", file_size);
         println!(
             "   - Upload speed: {:.2} kbps",
@@ -449,7 +449,7 @@ mod analytics_integration_tests {
         assert_eq!(metrics.successful_transfers, 1);
         assert!(metrics.avg_download_speed_kbps > 0.0);
 
-        println!("✅ Complete download flow test passed!");
+        println!("[OK] Complete download flow test passed!");
         println!("   - File size: {} bytes", file_size);
         println!(
             "   - Download speed: {:.2} kbps",

@@ -702,11 +702,16 @@
   })
 
   async function fetchBalance() {
-    if (!isTauri || !isGethRunning || !$etcAccount) return
+    console.log('[Account.fetchBalance] Called: isTauri=', isTauri, 'isGethRunning=', isGethRunning, 'etcAccount=', $etcAccount?.address);
+    if (!isTauri || !isGethRunning || !$etcAccount) {
+      console.log('[Account.fetchBalance] Skipping: isTauri=', isTauri, 'isGethRunning=', isGethRunning, 'hasAccount=', !!$etcAccount);
+      return;
+    }
     try {
       await walletService.refreshBalance()
+      console.log('[Account.fetchBalance] After refresh, wallet balance:', $wallet.balance);
     } catch (error) {
-      console.error('Failed to fetch balance:', error)
+      console.error('[Account.fetchBalance] Failed to fetch balance:', error)
     }
   }
 
@@ -2683,7 +2688,7 @@
             </div>
           {:else if !$transactionPagination.hasMore}
             <div class="text-center py-3">
-              <p class="text-sm text-green-600">✓ All transactions loaded</p>
+              <p class="text-sm text-green-600">✅ All transactions loaded</p>
               {#if $transactionPagination.oldestBlockScanned !== null}
                 <p class="text-xs text-muted-foreground mt-1">
                   Scanned all blocks from #{$transactionPagination.oldestBlockScanned.toLocaleString()} to current
@@ -2737,7 +2742,7 @@
               </div>
             {:else if !$miningPagination.hasMore && $miningPagination.oldestBlockScanned !== null}
               <div class="text-center py-3 border-t">
-                <p class="text-sm text-green-600">✓ {$t('transactions.miningRewards.allLoaded')}</p>
+                <p class="text-sm text-green-600">✅ {$t('transactions.miningRewards.allLoaded')}</p>
                 <p class="text-xs text-muted-foreground mt-1">
                   {$t('transactions.miningRewards.scannedAll')}
                 </p>

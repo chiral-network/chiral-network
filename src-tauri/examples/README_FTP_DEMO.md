@@ -72,7 +72,7 @@ cargo run --example ftp_demo local
 
 Test: Download from Local FTP server (127.0.0.1:21)
 -----------------------------------------------
-✓ Download successful!
+[OK] Download successful!
   Bytes downloaded: 35
   File saved to: "downloaded_test_file.txt"
   File size on disk: 35 bytes
@@ -166,13 +166,13 @@ Change line 36 in `ftp_demo.rs`:
 
 ## What This Demo Proves
 
-1. ✅ **FTP Client Works**: Successfully connects and downloads files
-2. ✅ **Cross-Platform**: Works on Windows, Mac, and Linux
-3. ✅ **URL Parsing**: Correctly parses `ftp://host:port/path`
-4. ✅ **Authentication**: Anonymous login works
-5. ✅ **Binary Transfer**: File contents preserved correctly
-6. ✅ **Error Handling**: Clean error messages when server unavailable
-7. ✅ **Connection Management**: Proper connect/disconnect lifecycle
+1. [OK] **FTP Client Works**: Successfully connects and downloads files
+2. [OK] **Cross-Platform**: Works on Windows, Mac, and Linux
+3. [OK] **URL Parsing**: Correctly parses `ftp://host:port/path`
+4. [OK] **Authentication**: Anonymous login works
+5. [OK] **Binary Transfer**: File contents preserved correctly
+6. [OK] **Error Handling**: Clean error messages when server unavailable
+7. [OK] **Connection Management**: Proper connect/disconnect lifecycle
 
 ---
 
@@ -192,10 +192,10 @@ This proves the implementation without needing a running server.
 ## Summary
 
 Use local FTP server mode: `cargo run --example ftp_demo local`
-- ✅ **Tested on Windows** (working perfectly)
-- ⚠️ Mac/Linux (should work, but not yet tested)
-- ✅ No internet/firewall dependencies
-- ✅ Fast and predictable
-- ✅ Easy to set up (install Python/pyftpdlib, run 2 commands)
+- [OK] **Tested on Windows** (working perfectly)
+- [WARN] Mac/Linux (should work, but not yet tested)
+- [OK] No internet/firewall dependencies
+- [OK] Fast and predictable
+- [OK] Easy to set up (install Python/pyftpdlib, run 2 commands)
 
 The demo is designed to be cross-platform with platform-specific instructions for Windows, Mac, and Linux.

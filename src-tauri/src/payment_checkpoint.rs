@@ -306,7 +306,7 @@ impl PaymentCheckpointService {
             // For upfront mode, no more checkpoints
             u64::MAX
         } else {
-            // Exponential scaling: 1 → 2 → 4 → 8 → 16 MB
+            // Exponential scaling: 1 → 2 -> 4 -> 8 -> 16 MB
             let next_mb = (checkpoint_mb * 2).max(MIN_CHECKPOINT_MB);
             checkpoint.last_checkpoint_mb = next_mb;
             next_mb

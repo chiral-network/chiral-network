@@ -499,7 +499,7 @@
   "button": {
     "clearCache": "Vider le cache",
     "clearing": "Vidage...",
-    "cleared": "✓ Cache vidé !"
+    "cleared": "✅ Cache vidé !"
   },
   "account": {
     "title": "Compte",
@@ -1111,8 +1111,8 @@
       "revenue": "Revenus",
       "cost": "Coût",
       "profitMargin": "Marge bénéficiaire",
-      "profitable": "✓ Rentable",
-      "notProfitable": "✗ Non rentable",
+      "profitable": "✅ Rentable",
+      "notProfitable": "❌ Non rentable",
       "profitableDesc": "Les gains de minage dépassent les coûts d’électricité",
       "notProfitableDesc": "Les coûts d’électricité dépassent les gains de minage",
       "calculationDetails": "Détails du calcul :",
@@ -1176,7 +1176,7 @@
       "hoverTooltip": "{level} : {count}",
       "prev": "Précédent",
       "next": "Suivant",
-      "scoreFormat": "{score}/5,0 ⭐"
+      "scoreFormat": "{score}/5,0 *"
     },
     "pageTitle": "Système de réputation - Réseau Chiral",
     "sortBy": "Trier par",

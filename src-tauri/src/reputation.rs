@@ -240,7 +240,7 @@ impl TransactionVerdict {
     /// If called without issuer context, falls back to target-only key
     pub fn dht_key_for_target(target_id: &str) -> String {
         println!(
-            "🔑 Computing DHT key for target: '{}' (len={} bytes)",
+            "[KEY] Computing DHT key for target: '{}' (len={} bytes)",
             target_id,
             target_id.len()
         );
@@ -248,7 +248,7 @@ impl TransactionVerdict {
         hasher.update(target_id.as_bytes());
         hasher.update(b"tx-rep");
         let hash = hex::encode(hasher.finalize());
-        println!("🔑 Computed target-only key: {}", hash);
+        println!("[KEY] Computed target-only key: {}", hash);
         hash
     }
 
@@ -967,7 +967,7 @@ impl ReputationContract {
     pub fn new(chain_id: u64) -> Self {
         Self {
             contract_address: None,
-            rpc_url: "http://127.0.0.1:8545".to_string(),
+            rpc_url: crate::ethereum::NETWORK_CONFIG.rpc_endpoint.clone(),
             chain_id,
         }
     }

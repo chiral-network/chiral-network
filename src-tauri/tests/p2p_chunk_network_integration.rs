@@ -54,10 +54,10 @@ fn test_hash_and_verify() {
     let h0_modified = simple_hash(b"This is chunk 0 data for testing!");
     assert_ne!(h0, h0_modified, "Modified data should have different hash");
 
-    println!("  ✓ Hash generation works correctly");
-    println!("  ✓ Different data produces different hashes");
-    println!("  ✓ Hashes are deterministic");
-    println!("  ✓ Modified data produces different hash");
+    println!("  [OK] Hash generation works correctly");
+    println!("  [OK] Different data produces different hashes");
+    println!("  [OK] Hashes are deterministic");
+    println!("  [OK] Modified data produces different hash");
     println!("  PASSED\n");
 }
 
@@ -95,10 +95,10 @@ fn test_chunk_creation() {
     let exact_chunks = ((exact_file_size + CHUNK_SIZE - 1) / CHUNK_SIZE) as u32;
     assert_eq!(exact_chunks, 4, "Exact boundary file should have 4 chunks");
 
-    println!("  ✓ Chunk offsets calculated correctly");
-    println!("  ✓ Chunk sizes calculated correctly");
-    println!("  ✓ Number of chunks calculated correctly");
-    println!("  ✓ Edge cases handled (empty, exact boundary)");
+    println!("  [OK] Chunk offsets calculated correctly");
+    println!("  [OK] Chunk sizes calculated correctly");
+    println!("  [OK] Number of chunks calculated correctly");
+    println!("  [OK] Edge cases handled (empty, exact boundary)");
     println!("  PASSED\n");
 }
 
@@ -146,10 +146,10 @@ fn test_state_persistence() {
     // Cleanup
     fs::remove_dir_all(&tmp_dir).ok();
 
-    println!("  ✓ State persisted to disk");
-    println!("  ✓ State loaded from disk");
-    println!("  ✓ All fields preserved correctly");
-    println!("  ✓ Chunk states preserved");
+    println!("  [OK] State persisted to disk");
+    println!("  [OK] State loaded from disk");
+    println!("  [OK] All fields preserved correctly");
+    println!("  [OK] Chunk states preserved");
     println!("  PASSED\n");
 }
 
@@ -190,9 +190,9 @@ fn test_corruption_detection() {
     // Cleanup
     fs::remove_dir_all(&tmp_dir).ok();
 
-    println!("  ✓ Valid chunk verified successfully");
-    println!("  ✓ Corrupted chunk detected");
-    println!("  ✓ Missing chunk detected");
+    println!("  [OK] Valid chunk verified successfully");
+    println!("  [OK] Corrupted chunk detected");
+    println!("  [OK] Missing chunk detected");
     println!("  PASSED\n");
 }
 
@@ -290,11 +290,11 @@ fn test_multi_peer_coordinator() {
     assert!(peer1.score() > peer2.score(), "Reliable peer should have higher score");
     assert!(peer1.score() > peer3.score(), "Faster peer should have higher score");
 
-    println!("  ✓ Peer stats tracking works");
-    println!("  ✓ Success/failure recording works");
-    println!("  ✓ Banning after 5 consecutive failures works");
-    println!("  ✓ Consecutive fails reset on success");
-    println!("  ✓ Scoring algorithm prefers reliable/fast peers");
+    println!("  [OK] Peer stats tracking works");
+    println!("  [OK] Success/failure recording works");
+    println!("  [OK] Banning after 5 consecutive failures works");
+    println!("  [OK] Consecutive fails reset on success");
+    println!("  [OK] Scoring algorithm prefers reliable/fast peers");
     println!("  PASSED\n");
 }
 
@@ -315,7 +315,7 @@ fn test_full_download_flow() {
 
     // Compute "merkle root" (combined hash for testing)
     let merkle_root = simple_hash(format!("{}:{}", hash0, hash1).as_bytes());
-    println!("  ✓ Step 1: Created test chunks");
+    println!("  [OK] Step 1: Created test chunks");
     println!("    - Chunk 0: {} bytes, hash: {}", chunk0_data.len(), &hash0[..8]);
     println!("    - Chunk 1: {} bytes, hash: {}", chunk1_data.len(), &hash1[..8]);
     println!("    - Merkle root: {}", &merkle_root[..8]);
@@ -350,7 +350,7 @@ fn test_full_download_flow() {
 
     fs::write(&state_file, &initial_state).expect("Failed to write state");
     assert!(state_file.exists());
-    println!("  ✓ Step 2: Created download state file");
+    println!("  [OK] Step 2: Created download state file");
 
     // === STEP 3: Simulate chunk downloads ===
     // Write chunk files (simulating download from peers)
@@ -361,7 +361,7 @@ fn test_full_download_flow() {
     let downloaded_state = initial_state
         .replace(r#""state": "Pending""#, r#""state": "Downloaded""#);
     fs::write(&state_file, &downloaded_state).unwrap();
-    println!("  ✓ Step 3: Downloaded chunks to disk");
+    println!("  [OK] Step 3: Downloaded chunks to disk");
     println!("    - Chunk 0: {} bytes written", chunk0_data.len());
     println!("    - Chunk 1: {} bytes written", chunk1_data.len());
 
@@ -380,7 +380,7 @@ fn test_full_download_flow() {
         .replace(r#""state": "Downloaded""#, r#""state": "Verified""#)
         .replace(r#""verified_bytes": 0"#, &format!(r#""verified_bytes": {}"#, file_size));
     fs::write(&state_file, &verified_state).unwrap();
-    println!("  ✓ Step 4: Verified chunks against hashes");
+    println!("  [OK] Step 4: Verified chunks against hashes");
 
     // === STEP 5: Complete download ===
     // Read final state and verify all chunks are verified
@@ -392,13 +392,13 @@ fn test_full_download_flow() {
     // Simulate download complete - remove meta file
     fs::remove_file(&state_file).expect("Failed to remove meta file");
     assert!(!state_file.exists(), "Meta file should be removed after completion");
-    println!("  ✓ Step 5: Download completed, meta file cleaned up");
+    println!("  [OK] Step 5: Download completed, meta file cleaned up");
 
     // === STEP 6: Verify final file could be assembled ===
     // In real implementation, chunks would be assembled into final file
     let assembled_size = chunk0_read.len() + chunk1_read.len();
     assert_eq!(assembled_size, file_size, "Assembled size should match");
-    println!("  ✓ Step 6: File assembly verified ({} bytes)", assembled_size);
+    println!("  [OK] Step 6: File assembly verified ({} bytes)", assembled_size);
 
     // Cleanup
     fs::remove_dir_all(&tmp_dir).ok();

@@ -531,7 +531,7 @@
   "button": {
     "clearCache": "Clear Cache",
     "clearing": "Clearing...",
-    "cleared": "✓ Cleared!"
+    "cleared": "✅ Cleared!"
   },
   "account": {
     "title": "Account",
@@ -1172,8 +1172,8 @@
       "revenue": "Revenue",
       "cost": "Cost",
       "profitMargin": "Profit Margin",
-      "profitable": "✓ Profitable",
-      "notProfitable": "✗ Not Profitable",
+      "profitable": "✅ Profitable",
+      "notProfitable": "❌ Not Profitable",
       "profitableDesc": "Mining earnings exceed electricity costs",
       "notProfitableDesc": "Electricity costs exceed mining earnings",
       "calculationDetails": "Calculation Details:",
