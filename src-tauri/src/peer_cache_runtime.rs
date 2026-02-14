@@ -801,7 +801,6 @@ pub fn build_snapshot_cache(
             total_bytes_transferred: 0,
             average_latency_ms: 0,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.0,
         });
     }
@@ -844,7 +843,6 @@ mod tests {
             total_bytes_transferred: 0,
             average_latency_ms: 0,
             is_bootstrap: false,
-            supports_relay: false,
             reliability_score: 0.0,
         }
     }
@@ -1472,7 +1470,6 @@ mod tests {
                 total_bytes_transferred: 50,
                 average_latency_ms: 0,
                 is_bootstrap: false,
-                supports_relay: false,
                 reliability_score: 0.0,
             },
         ]);

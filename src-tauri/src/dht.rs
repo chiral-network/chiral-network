@@ -4,6 +4,7 @@ pub use self::models::*;
 use bon::Builder;
 // use self::protocol::*;
 use crate::config::CHAIN_ID;
+use std::time::Instant;
 use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
