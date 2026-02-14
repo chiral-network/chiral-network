@@ -499,7 +499,7 @@
   "button": {
     "clearCache": "Limpar Cache",
     "clearing": "Limpando...",
-    "cleared": "✓ Limpo!"
+    "cleared": "✅ Limpo!"
   },
   "account": {
     "title": "Conta",
@@ -1112,8 +1112,8 @@
       "revenue": "Receita",
       "cost": "Custo",
       "profitMargin": "Margem de Lucro",
-      "profitable": "✓ Lucrativo",
-      "notProfitable": "✗ Não Lucrativo",
+      "profitable": "✅ Lucrativo",
+      "notProfitable": "❌ Não Lucrativo",
       "profitableDesc": "Ganhos de mineração excedem custos de eletricidade",
       "notProfitableDesc": "Custos de eletricidade excedem ganhos de mineração",
       "calculationDetails": "Detalhes do Cálculo:",

@@ -177,7 +177,7 @@
             // Tauri converts parameters to camelCase, so we use infoHash here
             const params = { infoHash }
             console.log('🔍 Calling search_by_infohash with params:', JSON.stringify(params))
-            // Search DHT by info_hash (uses two-step lookup: info_hash -> merkle_root -> metadata)
+            // Search DHT by info_hash (uses two-step lookup: info_hash → merkle_root -> metadata)
             const metadata = await invoke('search_by_infohash', params) as FileMetadata | null
             console.log('🔍 DHT search result:', metadata)
             if (metadata) {

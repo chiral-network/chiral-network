@@ -297,7 +297,7 @@
   }
 
   // Parse a log line and extract a severity prefix (if present) and the rest of the message.
-  // Example: "INFO [09-14|16:32:29.577] Message..." -> { prefix: 'INFO', rest: '[09-14|16:32:29.577] Message...' }
+  // Example: "INFO [09-14|16:32:29.577] Message..." → { prefix: 'INFO', rest: '[09-14|16:32:29.577] Message...' }
   function splitLogPrefix(line: string): { prefix: string | null; rest: string } {
     if (!line) return { prefix: null, rest: '' }
     // Match leading ALL-CAPS token (usually INFO, WARN, ERROR, DEBUG) optionally followed by a timestamp bracket

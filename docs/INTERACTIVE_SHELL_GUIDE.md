@@ -32,17 +32,17 @@ Chiral Network provides multiple interface modes to suit different deployment sc
 
 Choose REPL or TUI mode when you need:
 
-- ✅ Server-side management via SSH
-- ✅ Quick testing and debugging
-- ✅ Runtime control without GUI overhead
-- ✅ Scriptable operations
-- ✅ Low resource usage
+- [OK] Server-side management via SSH
+- [OK] Quick testing and debugging
+- [OK] Runtime control without GUI overhead
+- [OK] Scriptable operations
+- [OK] Low resource usage
 
 ---
 
 ## Implementation Roadmap
 
-### Phase 1: REPL Mode ✅ **COMPLETED**
+### Phase 1: REPL Mode [OK] **COMPLETED**
 
 **Status:** Released in v0.1.0
 
@@ -50,16 +50,16 @@ Core interactive shell functionality with command-line interface.
 
 **Implemented Features:**
 
-- ✅ Interactive command prompt with rustyline
-- ✅ Command history and navigation (↑/↓ arrows)
-- ✅ Network status monitoring (`status`, `peers`, `dht`)
-- ✅ File operations (`add`, `download`, `list`)
-- ✅ Mining control (`mining start/stop/status`)
-- ✅ Clean shell output (no log spam)
-- ✅ Scriptable interface (pipe commands)
-- ✅ Box-drawn UI with proper alignment
-- ✅ Comprehensive command reference
-- ✅ All CLI flags support (--dht-port, --bootstrap, etc.)
+- [OK] Interactive command prompt with rustyline
+- [OK] Command history and navigation (^/v arrows)
+- [OK] Network status monitoring (`status`, `peers`, `dht`)
+- [OK] File operations (`add`, `download`, `list`)
+- [OK] Mining control (`mining start/stop/status`)
+- [OK] Clean shell output (no log spam)
+- [OK] Scriptable interface (pipe commands)
+- [OK] Box-drawn UI with proper alignment
+- [OK] Comprehensive command reference
+- [OK] All CLI flags support (--dht-port, --bootstrap, etc.)
 
 **Files:**
 
@@ -73,7 +73,7 @@ Core interactive shell functionality with command-line interface.
 ./chiral-network --interactive [options]
 ```
 
-### Phase 2: Enhanced REPL Features ✅ **COMPLETED**
+### Phase 2: Enhanced REPL Features [OK] **COMPLETED**
 
 **Status:** Released in v0.1.0
 
@@ -81,14 +81,14 @@ Advanced REPL capabilities and improved UX.
 
 **Implemented Features:**
 
-- ✅ Tab completion for commands and subcommands (rustyline Completer trait)
-- ✅ Syntax highlighting for hashes (Qm...) and peer IDs (12D3KooW...)
-- ✅ Real-time download progress display (`downloads` command)
-- ✅ Configuration management commands (`config list/get/set/reset`)
-- ✅ Advanced peer filtering (`peers list --trust --sort --limit`)
-- ✅ File versioning commands (`versions list/info`)
-- ✅ Reputation management commands (`reputation list/info`)
-- ✅ Enhanced error messages with Levenshtein distance suggestions
+- [OK] Tab completion for commands and subcommands (rustyline Completer trait)
+- [OK] Syntax highlighting for hashes (Qm...) and peer IDs (12D3KooW...)
+- [OK] Real-time download progress display (`downloads` command)
+- [OK] Configuration management commands (`config list/get/set/reset`)
+- [OK] Advanced peer filtering (`peers list --trust --sort --limit`)
+- [OK] File versioning commands (`versions list/info`)
+- [OK] Reputation management commands (`reputation list/info`)
+- [OK] Enhanced error messages with Levenshtein distance suggestions
 
 **Technical Implementation:**
 
@@ -104,7 +104,7 @@ Advanced REPL capabilities and improved UX.
 - `indicatif = "0.17"` - Progress bars (for future use)
 - `strsim = "0.11"` - Levenshtein distance for suggestions
 
-### Phase 3: TUI Mode ✅ **COMPLETED**
+### Phase 3: TUI Mode [OK] **COMPLETED**
 
 **Status:** Released in v0.1.0
 
@@ -112,18 +112,18 @@ Full-screen terminal dashboard with live updates.
 
 **Implemented Features:**
 
-- ✅ Live dashboard with automatic 1-second refresh
-- ✅ Real-time network metrics visualization
-- ✅ Multiple panels (Network, Downloads, Peers, Mining)
-- ✅ Tab-based panel switching with indicators
-- ✅ Keyboard navigation (number keys, Tab, arrows)
-- ✅ Command mode (press `:` to enter commands)
-- ✅ Real-time peer list display
-- ✅ Download tracking with status colors
-- ✅ Mining panel with stats display
-- ✅ Command execution with result feedback
-- ✅ Mouse support via crossterm
-- ✅ Clean terminal rendering with proper cleanup
+- [OK] Live dashboard with automatic 1-second refresh
+- [OK] Real-time network metrics visualization
+- [OK] Multiple panels (Network, Downloads, Peers, Mining)
+- [OK] Tab-based panel switching with indicators
+- [OK] Keyboard navigation (number keys, Tab, arrows)
+- [OK] Command mode (press `:` to enter commands)
+- [OK] Real-time peer list display
+- [OK] Download tracking with status colors
+- [OK] Mining panel with stats display
+- [OK] Command execution with result feedback
+- [OK] Mouse support via crossterm
+- [OK] Clean terminal rendering with proper cleanup
 
 **Technology Stack:**
 
@@ -142,7 +142,7 @@ Full-screen terminal dashboard with live updates.
 - Command parser integrated with TUI display
 - Graceful terminal state management (raw mode, alternate screen)
 
-### Phase 4: Advanced Features ✅ **COMPLETED**
+### Phase 4: Advanced Features [OK] **COMPLETED**
 
 **Status:** Released in v0.1.0
 
@@ -152,12 +152,12 @@ Advanced monitoring and management capabilities.
 
 **Implemented Features:**
 
-- ✅ Export metrics to files (JSON, CSV)
-- ✅ Custom REPL scripts and macros
-- ✅ Plugin system for custom commands (framework ready)
-- ✅ Advanced analytics and reporting
-- ✅ Remote REPL access (secure RPC with token auth)
-- ✅ Webhook notifications for events
+- [OK] Export metrics to files (JSON, CSV)
+- [OK] Custom REPL scripts and macros
+- [OK] Plugin system for custom commands (framework ready)
+- [OK] Advanced analytics and reporting
+- [OK] Remote REPL access (secure RPC with token auth)
+- [OK] Webhook notifications for events
 
 **Technical Implementation:**
 
@@ -190,7 +190,7 @@ Advanced monitoring and management capabilities.
 - Advanced plugin API with custom command registration
 - Real-time script debugging and profiling
 
-### Phase 5: Mining Integration ✅ **COMPLETED**
+### Phase 5: Mining Integration [OK] **COMPLETED**
 
 **Status:** Released in v0.1.0
 
@@ -208,16 +208,16 @@ Backend functions fully implemented in `ethereum.rs` and integrated into REPL/TU
 
 **Implemented Features:**
 
-#### 5.1: Core Mining Integration ✅
+#### 5.1: Core Mining Integration [OK]
 
 REPL mining commands fully connected to Geth mining functions.
 
-- ✅ `cmd_mining()` calls real mining functions
-- ✅ Display real mining status (hash rate, blocks found, rewards)
-- ✅ Mining start/stop with thread control
-- ✅ Comprehensive error handling
-- ✅ Miner address management (from CLI flag or coinbase)
-- ✅ Real-time status updates with colored output
+- [OK] `cmd_mining()` calls real mining functions
+- [OK] Display real mining status (hash rate, blocks found, rewards)
+- [OK] Mining start/stop with thread control
+- [OK] Comprehensive error handling
+- [OK] Miner address management (from CLI flag or coinbase)
+- [OK] Real-time status updates with colored output
 
 **Working Commands:**
 ```bash
@@ -226,63 +226,63 @@ chiral> mining start 4   # Starts mining with 4 threads
 chiral> mining stop      # Stops mining gracefully
 ```
 
-#### 5.2: Mining Dashboard ✅
+#### 5.2: Mining Dashboard [OK]
 
 Real-time mining statistics and monitoring.
 
-- ✅ Live mining dashboard with comprehensive stats
-- ✅ Hash rate display from actual Geth data
-- ✅ Block discovery tracking
-- ✅ Mining rewards accumulator
-- ✅ Recent block history with timestamps
-- ✅ Formatted time ago display (e.g., "2m ago")
+- [OK] Live mining dashboard with comprehensive stats
+- [OK] Hash rate display from actual Geth data
+- [OK] Block discovery tracking
+- [OK] Mining rewards accumulator
+- [OK] Recent block history with timestamps
+- [OK] Formatted time ago display (e.g., "2m ago")
 
 **Commands:**
-- ✅ `mining dashboard` - Real-time mining view with all stats
-- ✅ `mining performance` - Detailed performance metrics
-- ✅ `mining logs [lines]` - View recent mining logs
+- [OK] `mining dashboard` - Real-time mining view with all stats
+- [OK] `mining performance` - Detailed performance metrics
+- [OK] `mining logs [lines]` - View recent mining logs
 
-#### 5.3: Mining History & Analytics ✅
+#### 5.3: Mining History & Analytics [OK]
 
 Track and analyze mining performance over time.
 
-- ✅ Recent mining blocks with timestamps
-- ✅ Total rewards calculation per address
-- ✅ Performance metrics (hash rate, efficiency)
-- ✅ Mining block history display
-- ✅ Average reward per block calculation
-- ✅ Network difficulty tracking
+- [OK] Recent mining blocks with timestamps
+- [OK] Total rewards calculation per address
+- [OK] Performance metrics (hash rate, efficiency)
+- [OK] Mining block history display
+- [OK] Average reward per block calculation
+- [OK] Network difficulty tracking
 
 **Commands:**
-- ✅ `mining rewards` - Total rewards earned with block history
-- ✅ `mining performance` - Performance metrics and efficiency
-- ✅ `export` commands work with all mining data (Phase 4 integration)
+- [OK] `mining rewards` - Total rewards earned with block history
+- [OK] `mining performance` - Performance metrics and efficiency
+- [OK] `export` commands work with all mining data (Phase 4 integration)
 
-#### 5.4-5.5: Advanced Features ✅
+#### 5.4-5.5: Advanced Features [OK]
 
 *Core implementation completed - Additional enhancements deferred to future releases*
 
 Advanced configuration and smart mining features base implementation:
-- ✅ Thread configuration via CLI
-- ✅ Mining control commands (start/stop with thread count)
-- ✅ Box border alignment fixes for all mining outputs
-- 📋 Thread configuration persistence (future)
-- 📋 Mining scheduling (future)
-- 📋 Profitability calculator (future)
-- 📋 Power/temperature monitoring (future)
+- [OK] Thread configuration via CLI
+- [OK] Mining control commands (start/stop with thread count)
+- [OK] Box border alignment fixes for all mining outputs
+- [LIST] Thread configuration persistence (future)
+- [LIST] Mining scheduling (future)
+- [LIST] Profitability calculator (future)
+- [LIST] Power/temperature monitoring (future)
 
-#### 5.6: TUI Mining Panel ✅
+#### 5.6: TUI Mining Panel [OK]
 
 Dedicated mining panel in TUI mode with live data.
 
-- ✅ Real-time mining status display
-- ✅ Live hash rate updates (1-second refresh)
-- ✅ Blocks found counter
-- ✅ Miner address display
-- ✅ Total rewards display
-- ✅ Mining efficiency metrics
-- ✅ Status color coding (green = active, red = inactive)
-- ✅ Integration with TUI metrics polling system
+- [OK] Real-time mining status display
+- [OK] Live hash rate updates (1-second refresh)
+- [OK] Blocks found counter
+- [OK] Miner address display
+- [OK] Total rewards display
+- [OK] Mining efficiency metrics
+- [OK] Status color coding (green = active, red = inactive)
+- [OK] Integration with TUI metrics polling system
 
 **Implementation Details:**
 - `MiningMetrics` struct for live data
@@ -290,14 +290,14 @@ Dedicated mining panel in TUI mode with live data.
 - Real data from `ethereum.rs` functions
 - Graceful fallback for missing data
 
-#### 5.7: Mining Webhook Integration ✅
+#### 5.7: Mining Webhook Integration [OK]
 
 Mining events integrated with Phase 4 webhook system.
 
-- ✅ All webhook events support mining context
-- ✅ `block_found` event available
-- ✅ Mining start/stop can trigger webhooks
-- ✅ Webhook testing with mining data
+- [OK] All webhook events support mining context
+- [OK] `block_found` event available
+- [OK] Mining start/stop can trigger webhooks
+- [OK] Webhook testing with mining data
 
 **Technical Implementation:**
 
@@ -330,10 +330,10 @@ Mining events integrated with Phase 4 webhook system.
 
 **Dependencies:**
 
-- ✅ Geth process running with `--enable-geth` flag
-- ✅ Miner address via `--miner-address` flag
-- ✅ Network connection for blockchain sync
-- ✅ Geth data directory configuration
+- [OK] Geth process running with `--enable-geth` flag
+- [OK] Miner address via `--miner-address` flag
+- [OK] Network connection for blockchain sync
+- [OK] Geth data directory configuration
 ---
 
 ## Mode Comparison
@@ -342,14 +342,14 @@ Mining events integrated with Phase 4 webhook system.
 
 | Feature                 | GUI                  | Headless     | REPL           | TUI (Future)      |
 | ----------------------- | -------------------- | ------------ | -------------- | ----------------- |
-| **Display Required**    | ✅ Yes (X11/Wayland) | ❌ No        | ❌ No          | ❌ No             |
-| **Works over SSH**      | ❌ No                | ✅ Yes       | ✅ Yes         | ✅ Yes            |
-| **Runtime Interaction** | ✅ Full              | ❌ None      | ✅ Commands    | ✅ Full           |
-| **Resource Usage**      | 🔴 High              | 🟢 Low       | 🟢 Low         | 🟡 Medium         |
-| **Visual Feedback**     | 🟢 Best              | ⚫ Logs only | 🟡 Text output | 🟢 Live dashboard |
-| **Learning Curve**      | 🟢 Easy              | -            | 🟡 Medium      | 🟡 Medium         |
-| **Automation**          | ❌ No                | ⚠️ Limited   | ✅ Yes         | ⚠️ Limited        |
-| **Monitoring**          | 🟢 Real-time         | ⚫ Logs      | 🟡 On-demand   | 🟢 Real-time      |
+| **Display Required**    | [OK] Yes (X11/Wayland) | [X] No        | [X] No          | [X] No             |
+| **Works over SSH**      | [X] No                | [OK] Yes       | [OK] Yes         | [OK] Yes            |
+| **Runtime Interaction** | [OK] Full              | [X] None      | [OK] Commands    | [OK] Full           |
+| **Resource Usage**      | [!] High              | [GREEN] Low       | [GREEN] Low         | [YELLOW] Medium         |
+| **Visual Feedback**     | [GREEN] Best              | (*) Logs only | [YELLOW] Text output | [GREEN] Live dashboard |
+| **Learning Curve**      | [GREEN] Easy              | -            | [YELLOW] Medium      | [YELLOW] Medium         |
+| **Automation**          | [X] No                | [WARN] Limited   | [OK] Yes         | [WARN] Limited        |
+| **Monitoring**          | [GREEN] Real-time         | (*) Logs      | [YELLOW] On-demand   | [GREEN] Real-time      |
 
 ### Which Mode Should I Use?
 
@@ -420,9 +420,6 @@ All interactive modes support these flags:
 
 # NAT traversal
 --disable-autonat              # Disable AutoNAT probes
---disable-autorelay            # Disable AutoRelay client
---enable-relay                 # Run as relay server
---relay <MULTIADDR>            # Preferred relay nodes
 
 # Privacy
 --socks5-proxy <ADDR>          # SOCKS5 proxy (e.g., 127.0.0.1:9050)
@@ -442,7 +439,7 @@ REPL (Read-Eval-Print Loop) is an interactive command-line interface where you t
 
 **Key Features:**
 
-- Command history (↑/↓ arrows)
+- Command history (^/v arrows)
 - Clean output (no log spam)
 - Scriptable (pipe commands)
 - Lightweight and fast
@@ -556,8 +553,8 @@ chiral> downloads
 
 REPL saves command history to `~/.chiral_history`:
 
-- Press **↑** to recall previous commands
-- Press **↓** to move forward in history
+- Press **^** to recall previous commands
+- Press **v** to move forward in history
 - History persists across sessions
 
 ### Exiting REPL
@@ -588,20 +585,19 @@ Peer ID: 12D3KooWQqWtv2GVLaKVUTyShXJXfp2U3WZZAGTnzEzpAfZYp6A6
 
 chiral> status
 
-📊 Network Status:
+[STATS] Network Status:
   ┌────────────────────────────────────────────────────────┐
   │ Connected Peers: 42                                    │
   │ Reachability: Public                                   │
   │ NAT Status: Active                                     │
   │ AutoNAT: Enabled                                       │
-  │ Circuit Relay: None                                    │
   └────────────────────────────────────────────────────────┘
 
 chiral> peers count
-📡 Connected peers: 42
+[NET] Connected peers: 42
 
 chiral> add /tmp/test.txt
-✓ Added and seeding: test.txt (QmHash...)
+[OK] Added and seeding: test.txt (QmHash...)
   Size: 1024 bytes
 
 chiral> quit
@@ -642,18 +638,18 @@ COMMANDS
 
 ## TUI Mode
 
-> **Status:** ✅ Available in v0.1.0
+> **Status:** [OK] Available in v0.1.0
 >
 > TUI (Terminal User Interface) mode provides a full-screen dashboard with live updates, similar to `htop` or `btop`.
 
 ### Features
 
-- 📊 **Live Dashboard** - Real-time network stats with 1-second refresh
-- 🎨 **Multiple Panels** - Network, downloads, peers, mining
-- ⌨️ **Keyboard Navigation** - Switch between panels with number keys, Tab, or arrows
-- 🖱️ **Mouse Support** - Crossterm-based mouse interactions
-- 📋 **Command Mode** - Press `:` to execute commands from TUI
-- 🎯 **Panel Indicators** - Visual tabs showing current panel
+- [STATS] **Live Dashboard** - Real-time network stats with 1-second refresh
+- [THEME] **Multiple Panels** - Network, downloads, peers, mining
+- [KEY] **Keyboard Navigation** - Switch between panels with number keys, Tab, or arrows
+- [MOUSE] **Mouse Support** - Crossterm-based mouse interactions
+- [LIST] **Command Mode** - Press `:` to execute commands from TUI
+- [TARGET] **Panel Indicators** - Visual tabs showing current panel
 
 ### Interface Layout
 
@@ -661,18 +657,18 @@ COMMANDS
 ┌─────────────────────────────────────────────────────────────┐
 │ Chiral Network v0.1.0          [Q]uit [H]elp              │
 ├─────────────────────────┬────────────────────────────────────┤
-│ 📡 Network [1]          │ 📥 Active Downloads [2]            │
+│ [NET] Network [1]          │ [IN] Active Downloads [2]            │
 │ Peers: 42 ████████░░    │ ┌──────────────────────────────────┐ │
 │ DHT: 1,234 entries      │ │ file.pdf [████████░░] 75%       │ │
 │ NAT: Public             │ │   8 peers, 4.2 MB/s, ETA 2m     │ │
-│ Relay: Connected        │ │                                  │ │
+│                         │ │                                  │ │
 │                         │ │ video.mp4 [███░░░░░░] 30%       │ │
 ├─────────────────────────┤ │   3 peers, 1.8 MB/s, ETA 8m     │ │
-│ ⚡ Mining [3]           │ └──────────────────────────────────┘ │
+│ [FAST] Mining [3]           │ └──────────────────────────────────┘ │
 │ Status: Active          │                                    │
-│ Hash Rate: 234 MH/s     │ 📤 Seeding Files [4]              │
-│ Blocks Found: 12        │ • document.pdf (12) ↑ 2.1 MB/s    │
-│ Rewards: 24.5 ETC       │ • video.mp4 (3) ↑ 0.8 MB/s        │
+│ Hash Rate: 234 MH/s     │ [OUT] Seeding Files [4]              │
+│ Blocks Found: 12        │ • document.pdf (12) ^ 2.1 MB/s    │
+│ Rewards: 24.5 ETC       │ • video.mp4 (3) ^ 0.8 MB/s        │
 └─────────────────────────┴────────────────────────────────────┘
 Command: █                    [Tab] for autocomplete
 ```
@@ -686,8 +682,8 @@ Command: █                    [Tab] for autocomplete
 | `:`         | Enter command mode              |
 | `Tab`       | Next panel                      |
 | `Shift+Tab` | Previous panel                  |
-| `←`         | Previous panel                  |
-| `→`         | Next panel                      |
+| `<-`         | Previous panel                  |
+| `->`         | Next panel                      |
 | `Esc`       | Cancel command mode (when in `:` mode) |
 | `Enter`     | Execute command (when in `:` mode) |
 | `Backspace` | Delete character (when in `:` mode) |
@@ -731,8 +727,6 @@ Press `Enter` to execute, `Esc` to cancel.
 - Reachability status (Public/Private/Unknown)
 - NAT status and traversal info
 - AutoNAT configuration
-- Circuit Relay status with peer ID
-- DCUtR hole punching success rate
 - DHT reachability and confidence
 - Observed addresses count
 - Download success/failure/retry stats
@@ -971,7 +965,7 @@ done
 **Scenario:** Running as a bootstrap node with monitoring
 
 ```bash
-./chiral-network --interactive --is-bootstrap --enable-relay
+./chiral-network --interactive --is-bootstrap
 
 chiral> status
 # Monitor incoming connections
@@ -1005,7 +999,7 @@ netstat -tuln | grep 4001
 
 ```bash
 chiral> peers count
-📡 Connected peers: 0
+[NET] Connected peers: 0
 
 # Check DHT status
 chiral> dht status
@@ -1020,7 +1014,7 @@ chiral> dht status
 
 ```bash
 chiral> unknown-command
-❌ Unknown command: 'unknown-command'
+[X] Unknown command: 'unknown-command'
    Type 'help' for available commands
 
 # Check spelling
@@ -1033,7 +1027,7 @@ chiral> help
 
 ```bash
 chiral> mining status
-❌ Error: Mining requires geth. Start with --enable-geth flag
+[X] Error: Mining requires geth. Start with --enable-geth flag
 
 # Solution: Restart with geth enabled
 ./chiral-network --interactive --enable-geth
@@ -1135,5 +1129,5 @@ cargo build --release
 
 **Last Updated:** December 2024
 **Version:** v0.1.0
-**REPL Status:** ✅ Available
-**TUI Status:** ✅ Available
+**REPL Status:** [OK] Available
+**TUI Status:** [OK] Available

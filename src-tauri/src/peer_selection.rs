@@ -225,7 +225,7 @@ pub enum SelectionStrategy {
 #[derive(Default)]
 pub struct PeerSelectionService {
     metrics: HashMap<String, PeerMetrics>,
-    selection_history: HashMap<String, u64>, // peer_id -> last_selected_timestamp
+    selection_history: HashMap<String, u64>, // peer_id → last_selected_timestamp
 }
 
 impl PeerSelectionService {

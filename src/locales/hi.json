@@ -499,7 +499,7 @@
   "button": {
     "clearCache": "कैश साफ़ करें",
     "clearing": "साफ़ हो रहा...",
-    "cleared": "✓ साफ़ किया गया!"
+    "cleared": "✅ साफ़ किया गया!"
   },
   "account": {
     "title": "खाता",
@@ -1112,8 +1112,8 @@
       "revenue": "राजस्व",
       "cost": "लागत",
       "profitMargin": "लाभ मार्जिन",
-      "profitable": "✓ लाभप्रद",
-      "notProfitable": "✗ लाभप्रद नहीं",
+      "profitable": "✅ लाभप्रद",
+      "notProfitable": "❌ लाभप्रद नहीं",
       "profitableDesc": "माइनिंग आय बिजली लागत से अधिक है",
       "notProfitableDesc": "बिजली लागत माइनिंग आय से अधिक है",
       "calculationDetails": "गणना विवरण:",

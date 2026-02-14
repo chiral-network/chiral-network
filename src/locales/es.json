@@ -386,7 +386,7 @@
   "button": {
     "clearCache": "Borrar caché",
     "clearing": "Borrando...",
-    "cleared": "✓ ¡Borrado!"
+    "cleared": "✅ ¡Borrado!"
   },
   "account": {
     "title": "Cuenta",

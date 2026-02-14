@@ -386,7 +386,7 @@
   "button": {
     "clearCache": "清除缓存",
     "clearing": "正在清除...",
-    "cleared": "✓ 已清除！"
+    "cleared": "✅ 已清除！"
   },
   "account": {
     "title": "账户",

@@ -491,7 +491,7 @@
   "button": {
     "clearCache": "Очистить кэш",
     "clearing": "Очистка...",
-    "cleared": "✓ Очищено!"
+    "cleared": "✅ Очищено!"
   },
   "account": {
     "title": "Аккаунт",

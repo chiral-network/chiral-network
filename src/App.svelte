@@ -39,7 +39,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { diagnosticLogger } from './lib/diagnostics/logger';
     // gets path name not entire url:
-    // ex: http://locatlhost:1420/download -> /download
+    // ex: http://locatlhost:1420/download → /download
     
     // get path name based on current url
     // if no path name, default to 'download'
@@ -701,11 +701,15 @@ $: canShowLockAction = !showFirstRunWizard;
         // Pure-client mode uses partial sync (limited blocks) instead of full sync
         if (currentSettings.autoStartGeth && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
           try {
-            // Check if Geth is already running
+            // Check if Geth (local or shared remote RPC) is already running
             const isGethRunning = await invoke<boolean>('is_geth_running').catch(() => false);
-            
+
             if (isGethRunning) {
-              // Geth already running
+              // Shared RPC or local Geth is reachable — mark as running so
+              // wallet/transaction logic isn't gated behind gethStatus
+              const { gethStatus } = await import('./lib/services/gethService');
+              gethStatus.set('running');
+              diagnosticLogger.info('GETH', 'Geth RPC is already reachable, skipping local Geth start');
             } else {
               // Check if Geth is installed
               const isGethInstalled = await invoke<boolean>('check_geth_binary').catch(() => false);

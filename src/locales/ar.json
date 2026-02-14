@@ -499,7 +499,7 @@
   "button": {
     "clearCache": "مسح الذاكرة المؤقتة",
     "clearing": "جارٍ المسح...",
-    "cleared": "✓ تم المسح!"
+    "cleared": "✅ تم المسح!"
   },
   "account": {
     "title": "الحساب",
@@ -1111,8 +1111,8 @@
       "revenue": "الإيرادات",
       "cost": "التكلفة",
       "profitMargin": "هامش الربح",
-      "profitable": "✓ مربح",
-      "notProfitable": "✗ غير مربح",
+      "profitable": "✅ مربح",
+      "notProfitable": "❌ غير مربح",
       "profitableDesc": "أرباح التعدين أعلى من تكاليف الكهرباء",
       "notProfitableDesc": "تكاليف الكهرباء أعلى من أرباح التعدين",
       "calculationDetails": "تفاصيل الحساب:",

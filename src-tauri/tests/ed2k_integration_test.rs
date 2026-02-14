@@ -16,7 +16,7 @@ async fn test_ed2k_constants() {
     assert_eq!(ED2K_CHUNK_SIZE % OUR_CHUNK_SIZE, 0);
     assert_eq!(ED2K_CHUNK_SIZE / OUR_CHUNK_SIZE, 38); // 38 of our chunks per ed2k chunk
     
-    println!("✅ ed2k constants verified: 9.28MB chunks = 38 * 256KB chunks");
+    println!("[OK] ed2k constants verified: 9.28MB chunks = 38 * 256KB chunks");
 }
 
 /// Test that we can create Ed2kSourceInfo
@@ -36,7 +36,7 @@ fn test_ed2k_source_creation() {
     assert_eq!(ed2k_source.file_hash, "31D6CFE0D16AE931B73C59D7E0C089C0");
     assert_eq!(ed2k_source.file_size, 10485760);
     
-    println!("✅ Ed2kSourceInfo creation works correctly");
+    println!("[OK] Ed2kSourceInfo creation works correctly");
 }
 
 /// Test DownloadSource::Ed2k variant
@@ -66,7 +66,7 @@ fn test_download_source_ed2k() {
     let identifier = download_source.identifier();
     assert!(!identifier.is_empty(), "Identifier should not be empty");
     
-    println!("✅ DownloadSource::Ed2k variant works correctly");
+    println!("[OK] DownloadSource::Ed2k variant works correctly");
     println!("  Priority: {}", priority);
     println!("  Display: {}", display);
     println!("  Identifier: {}", identifier);
@@ -103,10 +103,10 @@ fn test_ed2k_chunk_mapping_logic() {
     assert_eq!(ed2k_chunk_id, 1);
     assert_eq!(offset_within_ed2k, 0);
     
-    println!("✅ ed2k chunk mapping logic verified");
-    println!("  Chunk at offset 0 → ed2k chunk 0, offset 0");
-    println!("  Chunk at offset 256KB → ed2k chunk 0, offset 256KB"); 
-    println!("  Chunk at offset 9.28MB → ed2k chunk 1, offset 0");
+    println!("[OK] ed2k chunk mapping logic verified");
+    println!("  Chunk at offset 0 -> ed2k chunk 0, offset 0");
+    println!("  Chunk at offset 256KB -> ed2k chunk 0, offset 256KB"); 
+    println!("  Chunk at offset 9.28MB -> ed2k chunk 1, offset 0");
 }
 
 /// Test that MultiSourceDownloadService types compile correctly 
@@ -115,7 +115,7 @@ async fn test_multi_source_service_types() {
     // This test just verifies that the types compile correctly
     // A full integration test would require setting up the DHT and WebRTC mocks
     
-    println!("✅ MultiSourceDownloadService types compile correctly");
+    println!("[OK] MultiSourceDownloadService types compile correctly");
     println!("  (Full service creation test would require DHT/WebRTC mocks)");
 }
 
@@ -132,7 +132,7 @@ fn test_ed2k_url_validation() {
     for url in valid_urls {
         assert!(url.starts_with("ed2k://"));
         assert!(url.contains("|"));
-        println!("✅ Valid ed2k URL: {}", url);
+        println!("[OK] Valid ed2k URL: {}", url);
     }
     
     // Test our Ed2kSourceInfo with different URLs
@@ -149,22 +149,22 @@ fn test_ed2k_url_validation() {
     assert!(server_info.server_url.starts_with("ed2k://"));
     assert_eq!(server_info.file_hash.len(), 32); // MD4 hash should be 32 hex chars
     
-    println!("✅ ed2k URL validation tests passed");
+    println!("[OK] ed2k URL validation tests passed");
 }
 
 #[tokio::test]
 async fn test_ed2k_integration_readiness() {
-    println!("\n🔧 ed2k Implementation Integration Test Summary:");
+    println!("\n[CFG] ed2k Implementation Integration Test Summary:");
     println!("===============================================");
     
     // Test 1: Constants
     assert_eq!(ED2K_CHUNK_SIZE, 9_728_000);
-    println!("✅ ed2k chunk size constant: {} bytes", ED2K_CHUNK_SIZE);
+    println!("[OK] ed2k chunk size constant: {} bytes", ED2K_CHUNK_SIZE);
     
     // Test 2: Chunk mapping
     let chunks_per_ed2k = ED2K_CHUNK_SIZE / 256_000;
     assert_eq!(chunks_per_ed2k, 38);
-    println!("✅ Chunk mapping: 1 ed2k chunk = {} our chunks", chunks_per_ed2k);
+    println!("[OK] Chunk mapping: 1 ed2k chunk = {} our chunks", chunks_per_ed2k);
     
     // Test 3: Data structures
     let ed2k_info = Ed2kSourceInfo {
@@ -179,19 +179,19 @@ async fn test_ed2k_integration_readiness() {
     
     let download_source = DownloadSource::Ed2k(ed2k_info.clone());
     let priority = download_source.priority_score();
-    println!("✅ DownloadSource::Ed2k priority score: {}", priority);
+    println!("[OK] DownloadSource::Ed2k priority score: {}", priority);
     
     // Test 4: Calculate how many ed2k chunks would be needed for this file
     let total_ed2k_chunks = (ed2k_info.file_size as usize + ED2K_CHUNK_SIZE - 1) / ED2K_CHUNK_SIZE;
     let total_our_chunks = (ed2k_info.file_size as usize + 256_000 - 1) / 256_000;
     
-    println!("✅ For {}MB file:", ed2k_info.file_size / 1_000_000);
+    println!("[OK] For {}MB file:", ed2k_info.file_size / 1_000_000);
     println!("  - ed2k chunks needed: {}", total_ed2k_chunks);
     println!("  - Our chunks needed: {}", total_our_chunks);
     println!("  - Chunks per ed2k chunk: ~{}", total_our_chunks / total_ed2k_chunks.max(1));
     
-    println!("\n🎉 ed2k Implementation Status: READY FOR TESTING");
-    println!("📋 All core data structures and calculations work correctly");
-    println!("🔗 Integration with existing multi-source download system: COMPLETE");
-    println!("⚡ Ready for live ed2k server testing");
+    println!("\n[DONE] ed2k Implementation Status: READY FOR TESTING");
+    println!("[LIST] All core data structures and calculations work correctly");
+    println!("[LINK] Integration with existing multi-source download system: COMPLETE");
+    println!("[FAST] Ready for live ed2k server testing");
 }

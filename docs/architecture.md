@@ -20,11 +20,11 @@ Each layer communicates through well-defined interfaces, allowing for independen
                               │
         ┌─────────────────────┴─────────────────────┐
         │                                           │
-┌───────▼──────────────┐              ┌────────────▼────────┐
+┌───────[v]──────────────┐              ┌────────────[v]────────┐
 │  Payment Layer       │              │ Data Transfer Layer │
 │  (Blockchain)        │              │  (Protocols)        │
 │                      │              │                     │
-│  • ETH-compatible    │◄─────────────┤  • HTTP             │
+│  • ETH-compatible    │[<]─────────────┤  • HTTP             │
 │  • Payment contracts │  Settlement  │  • WebTorrent       │
 │  • Mining rewards    │              │  • BitTorrent       │
 │  • Gas fees          │              │  • ed2k             │
@@ -190,7 +190,7 @@ export class ProtocolManager {
 
 The network supports **two protocol styles** for file transfer and payment.
 
-**⚠️ IMPORTANT**: **Both styles ALWAYS start with DHT discovery** as the first step. DHT discovery is the common mechanism for:
+**[WARN] IMPORTANT**: **Both styles ALWAYS start with DHT discovery** as the first step. DHT discovery is the common mechanism for:
 
 - Finding which nodes are seeding a file
 - Discovering what protocols each node supports (HTTP, BitTorrent, WebTorrent, ed2k, or private protocol)
@@ -294,7 +294,7 @@ Node behind NAT (no public IP):
 
 ```
 1. DHT Discovery Phase (COMMON STEP):
-   - Query DHT for file hash → Get seeder list with protocols
+   - Query DHT for file hash -> Get seeder list with protocols
    - DHT returns peers advertising HTTP, BitTorrent, WebTorrent, or ed2k
    - [Work Needed] specification on metadata format
 
@@ -357,7 +357,7 @@ Characteristics:
 
 Complete Flow:
 1. DHT Discovery Phase (COMMON STEP):
-   - Query DHT for file hash → Get seeder list
+   - Query DHT for file hash -> Get seeder list
    - DHT returns peers advertising "chiral-private" protocol
    - Get private endpoint addresses
 
@@ -399,7 +399,7 @@ Characteristics:
 
 Complete Flow:
 1. DHT Discovery Phase (COMMON STEP):
-   - Query DHT for file hash → Get seeder list
+   - Query DHT for file hash -> Get seeder list
    - DHT returns peers advertising "chiral-private" protocol
    - Get private endpoint addresses
 
@@ -822,12 +822,12 @@ function selectDefaultSeedingProtocol(): Protocol {
 **Default Protocol Matrix**:
 
 ```
-Network Capability              → Default Seeding Protocol
+Network Capability              -> Default Seeding Protocol
 ───────────────────────────────────────────────────────────
-Public IP                       → HTTP
-Behind NAT + UPnP Available     → HTTP (auto port forward)
-Behind NAT + UPnP Failed        → WebTorrent (or BitTorrent? TBD)
-Browser Only                    → WebTorrent (only option)
+Public IP                       -> HTTP
+Behind NAT + UPnP Available     -> HTTP (auto port forward)
+Behind NAT + UPnP Failed        -> WebTorrent (or BitTorrent? TBD)
+Browser Only                    -> WebTorrent (only option)
 ```
 
 #### Protocol Selection Strategy (Downloader Side)
@@ -844,7 +844,7 @@ function selectDownloadProtocol(context: TransferContext): Protocol {
     fileCharacteristics: analyzeFile()
   };
 
-  // Browser client → WebTorrent only option
+  // Browser client -> WebTorrent only option
   if (context.environment === 'browser') {
     return Protocol.WebTorrent;
   }
@@ -854,17 +854,17 @@ function selectDownloadProtocol(context: TransferContext): Protocol {
     return context.userPreference;
   }
 
-  // Large files with many BitTorrent seeders → BitTorrent
+  // Large files with many BitTorrent seeders -> BitTorrent
   if (context.fileSize > 100MB && context.seeders.bittorrent > 5) {
     return Protocol.BitTorrent;
   }
 
-  // HTTP seeders available and good connectivity → HTTP
+  // HTTP seeders available and good connectivity -> HTTP
   if (context.seeders.http.length > 0 && !context.networkRestricted) {
     return Protocol.HTTP;
   }
 
-  // Restricted network → HTTP fallback (works through proxies)
+  // Restricted network -> HTTP fallback (works through proxies)
   if (context.networkRestricted) {
     return Protocol.HTTP;
   }
@@ -905,15 +905,15 @@ Unlike Style 1 public protocols where payment happens separately, Style 2 integr
 │ 2. Get list of seeders with available protocols           │
 │ 3. Select peers based on protocol preference              │
 └────────────────────────────────────────────────────────────┘
-                            ↓
+                            v
             ┌───────────────┴────────────────┐
-            ↓                                ↓
+            v                                v
 ┌───────────────────────────┐  ┌─────────────────────────────┐
 │ Style 1: Out-of-Band      │  │ Style 2: In-Band            │
 ├───────────────────────────┤  ├─────────────────────────────┤
 │ 4. Transfer all chunks    │  │ 4. Request chunk + payment  │
 │    via public protocol    │  │    (atomic exchange)        │
-│ 5. Verify all chunks      │  │ 5. Verify chunk → repeat    │
+│ 5. Verify all chunks      │  │ 5. Verify chunk -> repeat    │
 │ 6. Send payment (AFTER)   │  │ 6. Payment DURING transfer  │
 │                           │  │                             │
 │ Issue: Trust required     │  │ Benefit: Trustless          │
@@ -966,7 +966,7 @@ Protocol Design:
 Session Flow:
 1. OPEN_SESSION(file_hash, payment_channel_address)
 2. REQUEST_CHUNKS(chunk_ids: [0, 1, 2, 3, 4])
-3. STREAM_CHUNKS → chunks sent as they're available
+3. STREAM_CHUNKS -> chunks sent as they're available
 4. PAYMENT_BATCH(chunk_ids, amount)
 5. CLOSE_SESSION
 
@@ -1025,12 +1025,12 @@ DHT Structure:
 
 ```
 File Processing Pipeline:
-1. File Input → SHA-256 Hash Generation (CID)
-2. File Chunking → 256KB chunks
-3. Chunk Encryption → AES-256 (optional)
-4. DHT Registration → Publish file metadata to DHT
-5. Continuous Seeding → File available while node is online
-6. No Permanent Storage → File disappears when all seeders go offline
+1. File Input -> SHA-256 Hash Generation (CID)
+2. File Chunking -> 256KB chunks
+3. Chunk Encryption -> AES-256 (optional)
+4. DHT Registration -> Publish file metadata to DHT
+5. Continuous Seeding -> File available while node is online
+6. No Permanent Storage -> File disappears when all seeders go offline
 ```
 
 #### Node Structure (All Nodes Are Equal)
@@ -1237,7 +1237,7 @@ Protocol Layers:
                           │
         ┌─────────────────┴─────────────────┐
         │                                   │
-┌───────▼──────────┐          ┌────────────▼─────────────┐
+┌───────[v]──────────┐          ┌────────────[v]─────────────┐
 │  Protocol Layer  │          │   Blockchain Layer       │
 │                  │          │   (Payment)              │
 │  • HTTP          │          │                          │
@@ -1246,7 +1246,7 @@ Protocol Layers:
 │  • ed2k          │          │  • Transaction Pool      │
 └──────────────────┘          └──────────────────────────┘
         │
-┌───────▼──────────┐
+┌───────[v]──────────┐
 │  Transport Layer │
 │                  │
 │  • TCP/UDP       │
@@ -1254,12 +1254,11 @@ Protocol Layers:
 │  • WebSocket     │
 └──────────────────┘
         │
-┌───────▼──────────┐
+┌───────[v]──────────┐
 │  Network Layer   │
 │                  │
 │  • IP            │
 │  • NAT Traversal │
-│  • Circuit Relay │
 └──────────────────┘
 ```
 
@@ -1312,21 +1311,21 @@ Backend Services (Decoupled):
 ##### File Upload (Seeding):
 
 ```
-1. Select File → Generate SHA-256 Hash (CID)
-2. Create Chunks → 256 KB chunks
-3. Optional Encryption → AES-256-GCM
-4. Announce Protocols → Specify which protocols to support (HTTP/WebTorrent/BitTorrent/ed2k)
-5. Register in DHT → Publish metadata with protocol info
-6. Set Price → Configure per-MB rate (protocol-agnostic)
-7. Start Seeding → File available via selected protocols
-8. Continuous Seeding → File available while node online
-9. Earn Payments → Receive Chiral when others download (any protocol)
+1. Select File -> Generate SHA-256 Hash (CID)
+2. Create Chunks -> 256 KB chunks
+3. Optional Encryption -> AES-256-GCM
+4. Announce Protocols -> Specify which protocols to support (HTTP/WebTorrent/BitTorrent/ed2k)
+5. Register in DHT -> Publish metadata with protocol info
+6. Set Price -> Configure per-MB rate (protocol-agnostic)
+7. Start Seeding -> File available via selected protocols
+8. Continuous Seeding -> File available while node online
+9. Earn Payments -> Receive Chiral when others download (any protocol)
 ```
 
 ##### File Download (Multi-Protocol):
 
 ```
-1. Input Hash (CID) → Query DHT
+1. Input Hash (CID) -> Query DHT
 
 2. Get Seeder List (Protocol-Aware):
    - HTTP seeders: [Peer A, Peer B]
@@ -1351,7 +1350,7 @@ Backend Services (Decoupled):
    - Chunks 11-15: WebTorrent from Peer C
    - Parallel downloading maximizes bandwidth
 
-6. Verify Chunks → SHA-256 hash verification (protocol-independent)
+6. Verify Chunks -> SHA-256 hash verification (protocol-independent)
 
 7. Track Performance:
    - Monitor speed per peer/protocol
@@ -1569,9 +1568,9 @@ Seeder Offline:
 5. File Unavailable: If ALL seeders go offline (BitTorrent-style)
 
 Multi-Protocol Resilience:
-1. HTTP seeder down → Switch to BitTorrent seeders
-2. BitTorrent seeder slow → Add WebTorrent seeders
-3. ed2k seeder unreachable → Use HTTP as fallback
+1. HTTP seeder down -> Switch to BitTorrent seeders
+2. BitTorrent seeder slow -> Add WebTorrent seeders
+3. ed2k seeder unreachable -> Use HTTP as fallback
 4. Multi-protocol = Higher availability
 ```
 
@@ -1594,10 +1593,10 @@ Data Layer Partition:
 
 ```
 Protocol-Specific Failure:
-1. HTTP server down → Client uses BitTorrent/WebTorrent
-2. WebRTC connection fails → Fallback to HTTP/BitTorrent
-3. BitTorrent blocked by ISP → Use HTTP/WebTorrent
-4. ed2k network unavailable → Use other protocols
+1. HTTP server down -> Client uses BitTorrent/WebTorrent
+2. WebRTC connection fails -> Fallback to HTTP/BitTorrent
+3. BitTorrent blocked by ISP -> Use HTTP/WebTorrent
+4. ed2k network unavailable -> Use other protocols
 
 Key Advantage: Multi-protocol support provides natural redundancy
 ```
@@ -1627,21 +1626,21 @@ Techniques:
 
 ## Implementation Priorities
 
-### Phase 1: Core Infrastructure ✅ COMPLETED
+### Phase 1: Core Infrastructure [OK] COMPLETED
 
 1. Basic blockchain with wallet
 2. Desktop GUI (Svelte 5 + Tauri 2)
 3. Fully decentralized DHT discovery (Kademlia)
 4. Basic file chunking and hashing
 
-### Phase 2: P2P Network ✅ COMPLETED
+### Phase 2: P2P Network [OK] COMPLETED
 
 1. Full libp2p v0.54 integration
 2. Kademlia DHT implementation
-3. NAT traversal (AutoNAT v2, Circuit Relay v2)
+3. NAT traversal (AutoNAT v2)
 4. CPU mining with Geth
 
-### Phase 3: File Sharing & Protocols 🚧 IN PROGRESS
+### Phase 3: File Sharing & Protocols [WIP] IN PROGRESS
 
 1. **Multi-Protocol Support**:
    - HTTP/HTTPS protocol implementation
@@ -1654,7 +1653,7 @@ Techniques:
 3. **Reputation System**: Trust-based peer selection
 4. **Enhanced Security**: File encryption, chunk verification
 
-### Phase 4: Advanced Features 📅 PLANNED
+### Phase 4: Advanced Features [DATE] PLANNED
 
 1. Multi-protocol simultaneous transfers
 2. Automatic protocol selection
@@ -1749,8 +1748,8 @@ Techniques:
 **Rationale**: Automatically select most appropriate protocol based on node's network capability.
 **Decision**:
 
-- **Public IP nodes** → Serve via **HTTP** by default (most compatible, no NAT issues)
-- **NAT'd nodes** → Serve via **WebTorrent** by default (WebRTC NAT traversal)
+- **Public IP nodes** -> Serve via **HTTP** by default (most compatible, no NAT issues)
+- **NAT'd nodes** -> Serve via **WebTorrent** by default (WebRTC NAT traversal)
   **Alternative Under Discussion**: Use **BitTorrent** instead of WebTorrent for NAT'd nodes
   - Pros: More efficient, better swarming, proven NAT traversal
   - Cons: Not browser-native, may be blocked by ISPs

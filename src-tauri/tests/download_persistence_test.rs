@@ -2,8 +2,8 @@
 // Comprehensive integration tests for download persistence
 //
 // Tests required by Elliot's deliverables:
-// - Crash between write and metadata flush → safe resume
-// - Disk-full mid-stream → Failed(DiskFull); artifacts preserved
+// - Crash between write and metadata flush -> safe resume
+// - Disk-full mid-stream -> Failed(DiskFull); artifacts preserved
 // - Cross-device finalize correctness
 
 use chiral_network::download_persistence::{

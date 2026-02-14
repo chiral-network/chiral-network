@@ -597,12 +597,14 @@ export class WalletService {
 
     // Skip if we're restoring an account
     if (this.isRestoringAccount) {
+      console.log("[refreshBalance] Account restoration in progress, skipping");
       return;
     }
 
     // Check if Geth is running before trying to query blockchain
     try {
       const isRunning = await invoke<boolean>("is_geth_running");
+      console.log("[refreshBalance] is_geth_running returned:", isRunning);
       if (!isRunning) {
         console.log("[refreshBalance] Geth not running, skipping");
         return; // Silently skip if Geth is not running
@@ -616,6 +618,7 @@ export class WalletService {
     let accountAddress: string;
     try {
       accountAddress = await invoke<string>("get_active_account_address");
+      console.log("[refreshBalance] Active account address:", accountAddress);
     } catch (error) {
       console.log("[refreshBalance] No active account:", error);
       return;
@@ -629,24 +632,14 @@ export class WalletService {
           address: accountAddress,
         })) as string;
         realBalance = parseFloat(balanceStr);
+        console.log("[refreshBalance] Got balance from geth:", balanceStr, "-> parsed:", realBalance);
       } catch (e) {
         const errorMsg = String(e);
-        // Only log if it's not a known blockchain state issue
-        if (
-          !errorMsg.includes("missing trie node") &&
-          !errorMsg.includes("not available")
-        ) {
-          console.log("[refreshBalance] Could not get balance from geth:", e);
-        }
+        console.log("[refreshBalance] Could not get balance from geth:", errorMsg);
       }
 
       const prevWallet = get(wallet);
-
-      // If geth returns zero but we already have a non-zero balance (e.g., from an imported snapshot),
-      // avoid clobbering it until real data is available.
-      if (realBalance === 0 && prevWallet.balance > 0) {
-        return;
-      }
+      console.log("[refreshBalance] Previous wallet balance:", prevWallet.balance);
 
       // Reconcile any lingering pending/ submitted sent txs by checking their receipts
       const pendingSentTxs = get(transactions).filter(
@@ -717,9 +710,10 @@ export class WalletService {
         })
         .reduce((sum, tx) => sum + tx.amount, 0);
 
-      // Use real balance from Geth (no fallback - if Geth says 0, show 0 unless guarded above)
+      // Use real balance from Geth - always trust the RPC response when the query succeeded
       const actualBalance = realBalance;
       const availableBalance = Math.max(0, actualBalance - pendingSent);
+      console.log("[refreshBalance] Updating wallet: actualBalance=", actualBalance, "pendingSent=", pendingSent, "availableBalance=", availableBalance);
       wallet.update((current) => ({
         ...current,
         balance: availableBalance,
@@ -729,7 +723,7 @@ export class WalletService {
       // Note: totalRewards and blocksFound are now both set together in refreshTransactions
       // to ensure they stay consistent (totalRewards = blocksFound * blockReward)
     } catch (error) {
-      console.error("Failed to refresh balance:", error);
+      console.error("[refreshBalance] Failed to refresh balance:", error);
     }
   }
 

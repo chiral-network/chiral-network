@@ -82,7 +82,6 @@ class DiagnosticsService {
       this.checkPeerConnections(),
       this.checkBootstrapNodes(),
       this.checkNATTraversal(),
-      this.checkRelayConnections(),
       this.checkWebRTCSupport(),
       this.checkProxyConfiguration(),
       this.checkEncryptionCapability(),
@@ -496,81 +495,6 @@ class DiagnosticsService {
   }
 
   /**
-   * Circuit Relay connections check
-   */
-  private async checkRelayConnections(): Promise<DiagResult> {
-    try {
-      if (!this.isTauri) {
-        return {
-          id: "relay_check",
-          category: "network",
-          label: "Circuit Relay",
-          status: "info",
-          details: "Skipped in web build",
-          timestamp: Date.now(),
-        };
-      }
-
-      const health = await dhtService.getHealth();
-
-      if (!health) {
-        return {
-          id: "relay_check",
-          category: "network",
-          label: "Circuit Relay",
-          status: "warn",
-          details: "DHT health unavailable",
-          timestamp: Date.now(),
-        };
-      }
-
-      const { autorelayEnabled, activeRelayCount, relayReservationStatus } = health;
-
-      if (!autorelayEnabled) {
-        return {
-          id: "relay_check",
-          category: "network",
-          label: "Circuit Relay",
-          status: "info",
-          details: "AutoRelay disabled",
-          timestamp: Date.now(),
-        };
-      }
-
-      const relayCount = activeRelayCount ?? 0;
-
-      if (relayCount === 0) {
-        return {
-          id: "relay_check",
-          category: "network",
-          label: "Circuit Relay",
-          status: "warn",
-          details: "No active relay connections",
-          timestamp: Date.now(),
-        };
-      }
-
-      return {
-        id: "relay_check",
-        category: "network",
-        label: "Circuit Relay",
-        status: "pass",
-        details: `${relayCount} relay(s), status: ${relayReservationStatus || "unknown"}`,
-        timestamp: Date.now(),
-      };
-    } catch (error) {
-      return {
-        id: "relay_check",
-        category: "network",
-        label: "Circuit Relay",
-        status: "fail",
-        error: error instanceof Error ? error.message : String(error),
-        timestamp: Date.now(),
-      };
-    }
-  }
-
-  /**
    * WebRTC support check
    */
   private async checkWebRTCSupport(): Promise<DiagResult> {
@@ -943,10 +867,10 @@ class DiagnosticsService {
 
         categoryResults.forEach((result) => {
           const statusIcon = {
-            pass: "✓",
-            fail: "✗",
-            warn: "⚠",
-            info: "ℹ",
+            pass: "✅",
+            fail: "❌",
+            warn: "⚠️",
+            info: "ℹ️",
           }[result.status];
 
           lines.push(`  ${statusIcon} ${result.label}: ${result.details || result.error || "no details"}`);

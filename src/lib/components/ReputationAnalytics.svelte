@@ -322,7 +322,7 @@
               {$t(`reputation.trustLevels.${peer.trustLevel}`)}
             </Badge>
             <span class="text-sm font-semibold text-gray-900">
-              {(peer.score * 5).toFixed(1)}/5.0 ⭐
+              {(peer.score * 5).toFixed(1)}/5.0 *
             </span>
           </div>
           <div class="sm:hidden -mt-2"></div>

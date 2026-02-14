@@ -337,7 +337,7 @@ class PaymentCheckpointService {
    * @returns Next checkpoint size in MB
    */
   calculateNextCheckpoint(currentCheckpointMb: number): number {
-    // Exponential scaling: 10 → 20 → 40 → 80 MB
+    // Exponential scaling: 10 → 20 -> 40 -> 80 MB
     return currentCheckpointMb * 2;
   }
 

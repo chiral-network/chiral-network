@@ -3,7 +3,7 @@
   import { t } from 'svelte-i18n';
   import { 
     Download, Upload, Wallet, Globe, BarChart3, Settings, Cpu,
-    Star, Server, Database, Search, ArrowRight, Droplet
+    Star, Database, Search, ArrowRight, Droplet
   } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { getContext } from 'svelte';
@@ -84,13 +84,6 @@
       category: 'navigation',
       action: () => performNavigation('mining', '/mining'),
       shortcut: 'Ctrl+M'
-    },
-    {
-      id: 'nav:relay',
-      labelKey: 'commandPalette.actions.goToRelay',
-      icon: Server,
-      category: 'navigation',
-      action: () => performNavigation('relay', '/relay')
     },
     {
       id: 'nav:analytics',
@@ -176,7 +169,7 @@
         event.preventDefault();
         selectedIndex = Math.max(selectedIndex - 1, 0);
         break;
-      case 'Enter':
+      case '↵':
         event.preventDefault();
         if (filteredActions[selectedIndex]) {
           filteredActions[selectedIndex].action();

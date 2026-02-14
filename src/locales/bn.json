@@ -499,7 +499,7 @@
   "button": {
     "clearCache": "ক্যাশ সাফ করুন",
     "clearing": "সাফ করা হচ্ছে...",
-    "cleared": "✓ সাফ হয়েছে!"
+    "cleared": "✅ সাফ হয়েছে!"
   },
   "account": {
     "title": "অ্যাকাউন্ট",
@@ -1111,8 +1111,8 @@
       "revenue": "আয়",
       "cost": "খরচ",
       "profitMargin": "লাভের মার্জিন",
-      "profitable": "✓ লাভজনক",
-      "notProfitable": "✗ লাভজনক নয়",
+      "profitable": "✅ লাভজনক",
+      "notProfitable": "❌ লাভজনক নয়",
       "profitableDesc": "মাইনিং আয় বিদ্যুৎ ব্যয়ের চেয়ে বেশি",
       "notProfitableDesc": "বিদ্যুৎ ব্যয় মাইনিং আয়ের চেয়ে বেশি",
       "calculationDetails": "হিসাবের বিস্তারিত:",

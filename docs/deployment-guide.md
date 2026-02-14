@@ -6,28 +6,6 @@ This guide provides comprehensive instructions for deploying the Chiral Network 
 
 ## Prerequisites
 
-### System Requirements
-
-#### Minimum Requirements
-
-| Component | Specification                              |
-| --------- | ------------------------------------------ |
-| CPU       | 2 cores @ 2.0 GHz                          |
-| RAM       | 4 GB                                       |
-| Storage   | 100 GB SSD                                 |
-| Network   | 10 Mbps symmetric                          |
-| OS        | Ubuntu 20.04+ / Windows 10+ / macOS 10.15+ |
-
-#### Recommended Production
-
-| Component | Specification     |
-| --------- | ----------------- |
-| CPU       | 8 cores @ 3.0 GHz |
-| RAM       | 16 GB             |
-| Storage   | 1 TB NVMe SSD     |
-| Network   | 1 Gbps symmetric  |
-| OS        | Ubuntu 22.04 LTS  |
-
 ### Software Dependencies
 
 ```bash
@@ -137,16 +115,6 @@ npm run tauri build
 ```
 
 The built application will be in `src-tauri/target/release/`.
-
-#### Build the Relay Server (Optional)
-
-If you need to run your own relay server for NAT traversal:
-
-```bash
-cd relay
-cargo build --release
-sudo cp target/release/chiral-relay /usr/local/bin/
-```
 
 ## Configuration
 
@@ -299,7 +267,7 @@ chiral-node tools genesis \
   --secret "<optional stable peer-id seed>"
 ```
 
-- `run-bootstrap.sh` builds `chiral-network` (if needed) and launches `--headless --is-bootstrap`, which disables provider storage and AutoRelay so the node stays focused on routing DHT traffic.
+- `run-bootstrap.sh` builds `chiral-network` (if needed) and launches `--headless --is-bootstrap`, which disables provider storage so the node stays focused on routing DHT traffic.
 - Pass `--enable-geth` (or set `ENABLE_GETH=true`) so the bootstrap host keeps a local Geth process online for RPC/state; leave mining disabled to keep the bootstrap focused on routing.
 - Keep at least one bootstrap instance running at all times. Plan to provision multiple bootstrap nodes/IPs to avoid a single point of failure.
 

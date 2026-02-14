@@ -257,7 +257,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       const message = await ProxyLatencyOptimizationService.getOptimizationStatusMessage();
 
-      expect(message).toBe('✅ Proxy latency optimization enabled');
+      expect(message).toBe('[OK] Proxy latency optimization enabled');
     });
 
     it('should return unavailable message when no optimal proxies', async () => {
@@ -266,7 +266,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       const message = await ProxyLatencyOptimizationService.getOptimizationStatusMessage();
 
-      expect(message).toBe('⚠️ No optimal proxies available');
+      expect(message).toBe('[WARN] No optimal proxies available');
     });
 
     it('should return browser mode message when Tauri unavailable', async () => {
@@ -274,7 +274,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       const message = await ProxyLatencyOptimizationService.getOptimizationStatusMessage();
 
-      expect(message).toBe('⚠️ Running in browser mode - Tauri API unavailable');
+      expect(message).toBe('[WARN] Running in browser mode - Tauri API unavailable');
     });
 
     it('should return error message on failure', async () => {
@@ -283,7 +283,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       const message = await ProxyLatencyOptimizationService.getOptimizationStatusMessage();
 
-      expect(message).toContain('❌ Error:');
+      expect(message).toContain('[X] Error:');
       expect(message).toContain('Status query failed');
     });
 
@@ -293,7 +293,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       const message = await ProxyLatencyOptimizationService.getOptimizationStatusMessage();
 
-      expect(message).toBe('❌ Error: Failed to get optimization status: String error');
+      expect(message).toBe('[X] Error: Failed to get optimization status: String error');
     });
   });
 
@@ -303,7 +303,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       ProxyLatencyOptimizationService.logProxyPerformance('proxy-123', 50);
 
-      expect(consoleSpy).toHaveBeenCalledWith('🚀 Proxy proxy-123 latency: 50ms');
+      expect(consoleSpy).toHaveBeenCalledWith('[START] Proxy proxy-123 latency: 50ms');
     });
 
     it('should log offline status when latency is undefined', () => {
@@ -311,7 +311,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       ProxyLatencyOptimizationService.logProxyPerformance('proxy-456', undefined);
 
-      expect(consoleSpy).toHaveBeenCalledWith('❌ Proxy proxy-456 offline or unavailable');
+      expect(consoleSpy).toHaveBeenCalledWith('[X] Proxy proxy-456 offline or unavailable');
     });
 
     it('should handle zero latency', () => {
@@ -319,7 +319,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       ProxyLatencyOptimizationService.logProxyPerformance('proxy-789', 0);
 
-      expect(consoleSpy).toHaveBeenCalledWith('🚀 Proxy proxy-789 latency: 0ms');
+      expect(consoleSpy).toHaveBeenCalledWith('[START] Proxy proxy-789 latency: 0ms');
     });
 
     it('should handle very high latency', () => {
@@ -327,7 +327,7 @@ describe('proxyLatencyOptimization.ts', () => {
 
       ProxyLatencyOptimizationService.logProxyPerformance('proxy-slow', 9999);
 
-      expect(consoleSpy).toHaveBeenCalledWith('🚀 Proxy proxy-slow latency: 9999ms');
+      expect(consoleSpy).toHaveBeenCalledWith('[START] Proxy proxy-slow latency: 9999ms');
     });
   });
 });

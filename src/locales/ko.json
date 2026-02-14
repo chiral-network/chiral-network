@@ -386,7 +386,7 @@
   "button": {
     "clearCache": "캐시 비우기",
     "clearing": "삭제 중...",
-    "cleared": "✓ 삭제 완료!"
+    "cleared": "✅ 삭제 완료!"
   },
   "account": {
     "title": "계정",

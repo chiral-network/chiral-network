@@ -1724,7 +1724,7 @@ function sectionMatches(section: string, query: string) {
           <div class="rounded-md border border-dashed border-slate-200 p-3 text-xs text-muted-foreground space-y-1">
             <p>Custom bootstrap nodes: {localSettings.customBootstrapNodes?.length || 0}</p>
             {#if localSettings.customBootstrapNodes && localSettings.customBootstrapNodes.length > 0}
-              <p class="text-green-600">✓ Using custom bootstrap nodes</p>
+              <p class="text-green-600">✅ Using custom bootstrap nodes</p>
             {:else}
               <p class="text-blue-600">Using default hardcoded bootstrap nodes</p>
             {/if}
@@ -2404,12 +2404,12 @@ function sectionMatches(section: string, query: string) {
             <div class="mb-4 p-3 bg-gray-50 rounded-lg">
               <h3 class="font-medium mb-2">{$t("settings.diagnostics.resultsTitle")}</h3>
               <div class="flex gap-4 text-sm">
-                <span class="text-green-600">✓ {diagnosticsReport.summary.passed} passed</span>
+                <span class="text-green-600">✅ {diagnosticsReport.summary.passed} passed</span>
                 {#if diagnosticsReport.summary.warnings > 0}
-                  <span class="text-amber-600">⚠ {diagnosticsReport.summary.warnings} warnings</span>
+                  <span class="text-amber-600">⚠️ {diagnosticsReport.summary.warnings} warnings</span>
                 {/if}
                 {#if diagnosticsReport.summary.failed > 0}
-                  <span class="text-red-600">✗ {diagnosticsReport.summary.failed} failed</span>
+                  <span class="text-red-600">❌ {diagnosticsReport.summary.failed} failed</span>
                 {/if}
               </div>
             </div>

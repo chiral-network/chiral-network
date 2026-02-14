@@ -4,6 +4,7 @@ pub use self::models::*;
 use bon::Builder;
 // use self::protocol::*;
 use crate::config::CHAIN_ID;
+use std::time::Instant;
 use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
@@ -225,7 +226,7 @@ use sha2::{Digest, Sha256};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -261,9 +262,7 @@ static LAST_CONNECTION_ERROR_LOG: AtomicU64 = AtomicU64::new(0);
 use libp2p::{
     autonat::v2,
     core::{
-        muxing::StreamMuxerBox,
-        // FIXED E0432: ListenerEvent is removed, only import what is available.
-        transport::{Boxed, DialOpts, ListenerId, Transport, TransportError, TransportEvent},
+        transport::{DialOpts, ListenerId, Transport, TransportError, TransportEvent},
     },
     identify::{self, Event as IdentifyEvent},
     identity,
@@ -322,7 +321,6 @@ pub enum DhtCommand {
     },
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
-    ConnectPeerMultiaddr(Multiaddr),
     ConnectToPeerById(PeerId),
     DisconnectPeer(PeerId),
     SetPrivacyProxies {
@@ -1345,7 +1343,7 @@ async fn run_dht_node(
             // IMPORTANT:
             // We MUST go through serde for FileMetadata here to ensure:
             // - field renames (merkleRoot/fileName/...) are correct
-            // - CID custom serialization runs (cids -> Vec<String>)
+            // - CID custom serialization runs (cids → Vec<String>)
             //
             // Then we add a few legacy/extra fields for backwards compatibility.
             let mut dht_metadata = serde_json::to_value(&merged_metadata).unwrap_or_else(|_| serde_json::json!({}));
@@ -1902,45 +1900,10 @@ async fn run_dht_node(
                                                         info!("  Waiting for ConnectionEstablished event...");
                                                     }
                                                     Err(e) => {
-                                                        if let Some(fallback_addr) =
-                                                            fallback_dial_addr_without_terminal_peer(
-                                                                &multiaddr,
-                                                            )
-                                                        {
-                                                            warn!(
-                                                                "Dial with terminal /p2p failed, retrying stripped dial addr={} fallback={} err={}",
-                                                                multiaddr, fallback_addr, e
-                                                            );
-                                                            match swarm.dial(fallback_addr.clone()) {
-                                                                Ok(_) => {
-                                                                    info!(
-                                                                        "Requested direct connection using stripped dial addr: {}",
-                                                                        fallback_addr
-                                                                    );
-                                                                    info!("  Waiting for ConnectionEstablished event...");
-                                                                }
-                                                                Err(retry_err) => {
-                                                                    error!(
-                                                                        "Failed to dial {} (fallback {}): {}",
-                                                                        addr, fallback_addr, retry_err
-                                                                    );
-                                                                    let _ = event_tx
-                                                                        .send(DhtEvent::Error(format!(
-                                                                            "Failed to connect: {}",
-                                                                            retry_err
-                                                                        )))
-                                                                        .await;
-                                                                }
-                                                            }
-                                                        } else {
-                                                            error!("Failed to dial {}: {}", addr, e);
-                                                            let _ = event_tx
-                                                                .send(DhtEvent::Error(format!(
-                                                                    "Failed to connect: {}",
-                                                                    e
-                                                                )))
-                                                                .await;
-                                                        }
+                                                        error!("Failed to dial {}: {}", addr, e);
+                                                        let _ = event_tx
+                                                            .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
+                                                            .await;
                                                     }
                                                 }
                                             } else {
@@ -1953,96 +1916,6 @@ async fn run_dht_node(
                                             error!("Invalid multiaddr format: {}", addr);
                                             let _ = event_tx
                                                 .send(DhtEvent::Error(format!("Invalid address: {}", addr)))
-                                                .await;
-                                        }
-                                    }
-                                    Some(DhtCommand::ConnectPeerMultiaddr(multiaddr)) => {
-                                        info!("Attempting to connect to: {}", multiaddr);
-                                        let maybe_peer_id = multiaddr.iter().find_map(|p| {
-                                            if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
-                                                Some(peer_id.clone())
-                                            } else {
-                                                None
-                                            }
-                                        });
-
-                                        if let Some(peer_id) = maybe_peer_id.clone() {
-                                            // Check if the address contains a private IP
-                                            let has_private_ip = multiaddr.iter().any(|p| {
-                                                if let Protocol::Ip4(ipv4) = p {
-                                                    is_private_or_loopback_v4(ipv4)
-                                                } else {
-                                                    false
-                                                }
-                                            });
-
-                                            {
-                                                let mut mgr = proxy_mgr.lock().await;
-                                                mgr.set_target(peer_id.clone());
-                                            }
-
-                                            match swarm.dial(multiaddr.clone()) {
-                                                Ok(_) => {
-                                                    info!("Requested direct connection to: {}", multiaddr);
-                                                    info!("  Waiting for ConnectionEstablished event...");
-                                                }
-                                                Err(e) => {
-                                                    if let Some(fallback_addr) =
-                                                        fallback_dial_addr_without_terminal_peer(
-                                                            &multiaddr,
-                                                        )
-                                                    {
-                                                        warn!(
-                                                            "Dial with terminal /p2p failed, retrying stripped dial addr={} fallback={} err={}",
-                                                            multiaddr, fallback_addr, e
-                                                        );
-                                                        match swarm.dial(fallback_addr.clone()) {
-                                                            Ok(_) => {
-                                                                info!(
-                                                                    "Requested direct connection using stripped dial addr: {}",
-                                                                    fallback_addr
-                                                                );
-                                                                info!(
-                                                                    "  Waiting for ConnectionEstablished event..."
-                                                                );
-                                                            }
-                                                            Err(retry_err) => {
-                                                                error!(
-                                                                    "Failed to dial {} (fallback {}): {}",
-                                                                    multiaddr, fallback_addr, retry_err
-                                                                );
-                                                                let _ = event_tx
-                                                                    .send(DhtEvent::Error(format!(
-                                                                        "Failed to connect: {}",
-                                                                        retry_err
-                                                                    )))
-                                                                    .await;
-                                                            }
-                                                        }
-                                                    } else {
-                                                        error!("Failed to dial {}: {}", multiaddr, e);
-                                                        let _ = event_tx
-                                                            .send(DhtEvent::Error(format!(
-                                                                "Failed to connect: {}",
-                                                                e
-                                                            )))
-                                                            .await;
-                                                    }
-
-                                                    if has_private_ip {
-                                                        warn!(
-                                                            "⚠️ Failed to dial private IP address - this may indicate NAT/firewall issues"
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            error!("No peer ID found in multiaddr: {}", multiaddr);
-                                            let _ = event_tx
-                                                .send(DhtEvent::Error(format!(
-                                                    "Invalid address format: {}",
-                                                    multiaddr
-                                                )))
                                                 .await;
                                         }
                                     }
@@ -2089,7 +1962,7 @@ async fn run_dht_node(
                                         let query_id = swarm.behaviour_mut().kademlia.get_providers(key);
                                         info!("Querying providers for file: {} (query_id: {:?})", file_hash, query_id);
 
-                                        // Store the query_id -> (file_hash, start_time) mapping for error handling and timeout detection
+                                        // Store the query_id → (file_hash, start_time) mapping for error handling and timeout detection
                                         get_providers_queries.lock().await.insert(query_id, (file_hash.clone(), std::time::Instant::now()));
 
                                         // Store the query for async handling
@@ -2147,7 +2020,7 @@ async fn run_dht_node(
                                         }
                                     }
                                     Some(DhtCommand::PutDhtValue { key, value, sender }) => {
-                                        info!("🔑 Storing DHT value with key: {} ({} bytes)", key, value.len());
+                                        info!("[KEY] Storing DHT value with key: {} ({} bytes)", key, value.len());
                                         let record_key = kad::RecordKey::new(&key);
                                         let record = kad::Record {
                                             key: record_key,
@@ -2870,21 +2743,21 @@ async fn run_dht_node(
                                                 }
 
                                                 if error_str.contains("rsa") {
-                                                    error!("   ℹ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
+                                                    error!("   ℹ️ Hint: This node uses RSA keys. Enable 'rsa' feature if needed.");
                                                 } else if error_str.contains("Timeout") {
                                                     if is_bootstrap {
-                                                        warn!("   ℹ Hint: Bootstrap nodes may be unreachable or overloaded.");
+                                                        warn!("   ℹ️ Hint: Bootstrap nodes may be unreachable or overloaded.");
                                                     } else {
-                                                        warn!("   ℹ Hint: Peer may be unreachable (timeout).");
+                                                        warn!("   ℹ️ Hint: Peer may be unreachable (timeout).");
                                                     }
                                                 } else if error_str.contains("Connection refused") {
                                                     if is_bootstrap {
-                                                        warn!("   ℹ Hint: Bootstrap nodes are not accepting connections.");
+                                                        warn!("   ℹ️ Hint: Bootstrap nodes are not accepting connections.");
                                                     } else {
-                                                        warn!("   ℹ Hint: Peer is not accepting connections.");
+                                                        warn!("   ℹ️ Hint: Peer is not accepting connections.");
                                                     }
                                                 } else if error_str.contains("Transport") {
-                                                    warn!("   ℹ Hint: Transport protocol negotiation failed.");
+                                                    warn!("   ℹ️ Hint: Transport protocol negotiation failed.");
                                                 }
                                         } else {
                                             // Rate limit connection errors to once every 30 seconds
@@ -3504,7 +3377,7 @@ async fn handle_kademlia_event(
                                         // Verify this is the file we were searching for
                                         if file_hash == search_file_hash {
                                             info!(
-                                                "🔧 Constructing metadata for found file: {}",
+                                                "⚙️ Constructing metadata for found file: {}",
                                                 file_hash
                                             );
                                             let mut metadata =
@@ -3515,10 +3388,10 @@ async fn handle_kademlia_event(
                                                     file_size_val,
                                                     created_at_val,
                                                 );
-                                            info!("🔧 Metadata constructed successfully");
+                                            info!("⚙️ Metadata constructed successfully");
 
                                             // Merge providers with existing seeders from metadata
-                                            info!("🔧 Merging providers with metadata seeders");
+                                            info!("⚙️ Merging providers with metadata seeders");
                                             if let Some(providers) = &pending_search.found_providers
                                             {
                                                 // Add providers that aren't already in seeders
@@ -3536,7 +3409,7 @@ async fn handle_kademlia_event(
                                             // This ensures that if we uploaded via both WebRTC and Bitswap locally,
                                             // the search result will include CIDs from local cache even if DHT
                                             // record only has one protocol's data
-                                            info!("🔧 Merging with local cache");
+                                            info!("⚙️ Merging with local cache");
                                             {
                                                 let cache = file_metadata_cache.lock().await;
                                                 if let Some(cached) =
@@ -3551,7 +3424,7 @@ async fn handle_kademlia_event(
                                             }
 
                                             // Send event to frontend for search results
-                                            info!("📡 Sending DhtEvent::FileDiscovered for file: {} (CIDs: {:?}, FTP: {})",
+                                            info!("🌐 Sending DhtEvent::FileDiscovered for file: {} (CIDs: {:?}, FTP: {})",
                                             metadata.file_name,
                                             metadata.cids.as_ref().map(|v| v.len()),
                                             metadata.ftp_sources.as_ref().map(|v| v.len()).unwrap_or(0));
@@ -3559,7 +3432,7 @@ async fn handle_kademlia_event(
                                                 .send(DhtEvent::FileDiscovered(metadata.clone()))
                                                 .await;
                                             info!(
-                                                "📡 Sending result through channel for file: {}",
+                                                "🌐 Sending result through channel for file: {}",
                                                 metadata.file_name
                                             );
                                             let _ = pending_search.sender.send(Ok(Some(metadata)));
@@ -4075,7 +3948,7 @@ async fn handle_kademlia_event(
                 //     }
                 // }
                 // QueryResult::Bootstrap(Err(BootstrapError::Timeout { peer, .. })) => {
-                //     eprintln!("⏰ Bootstrap timed out; contacted peers: {:?}", peer);
+                //     eprintln!("[TIME] Bootstrap timed out; contacted peers: {:?}", peer);
                 // }
                 // QueryResult::Bootstrap(Err(e)) => {
                 //     eprintln!("❌ Bootstrap failed: {:?}", e);
@@ -4191,7 +4064,7 @@ async fn handle_mdns_event(
                             .or_insert_with(Vec::new)
                             .push(multiaddr.to_string());
                     }
-                    Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", multiaddr, e),
+                    Err(e) => warn!("❌ Failed to dial bootstrap {}: {}", multiaddr, e),
                 }
             }
             for (peer_id, addresses) in discovered {
@@ -4315,13 +4188,13 @@ async fn handle_upnp_event(
             // Notify the UI
             let _ = event_tx
                 .send(DhtEvent::Info(format!(
-                    "✓ UPnP port mapping successful: {}",
+                    "✅ UPnP port mapping successful: {}",
                     addr
                 )))
                 .await;
         }
         upnp::Event::ExpiredExternalAddr(addr) => {
-            warn!("⏰ UPnP: External address expired: {}", addr);
+            warn!("[TIME] UPnP: External address expired: {}", addr);
 
             let _ = event_tx
                 .send(DhtEvent::Warning(format!(
@@ -4370,7 +4243,7 @@ async fn flush_pending_providers(
         let provider_key = kad::RecordKey::new(&file_hash.as_bytes());
         match swarm.behaviour_mut().kademlia.start_providing(provider_key) {
             Ok(_) => {
-                info!("📢 Re-announced provider record for {}", file_hash);
+                info!("[ANNOUNCE] Re-announced provider record for {}", file_hash);
             }
             Err(e) => {
                 warn!(
@@ -5040,7 +4913,7 @@ impl DhtService {
                     .kademlia
                     .remove_address(&peer_id, &addr);
                 debug!(
-                    "🧹 Cleaned up unreachable address at startup: {} -> {}",
+                    "[CLEAN] Cleaned up unreachable address at startup: {} -> {}",
                     peer_id, addr
                 );
             }
@@ -5075,7 +4948,7 @@ impl DhtService {
                 let wan_mode = enable_autonat;
                 if wan_mode && !ma_plausibly_reachable(&addr) {
                     warn!(
-                        "⏭️  [WAN Mode] Skipping unreachable bootstrap addr: {}",
+                        "[SKIP]  [WAN Mode] Skipping unreachable bootstrap addr: {}",
                         addr
                     );
                     continue;
@@ -5098,10 +4971,10 @@ impl DhtService {
                                 .add_address(&peer_id, addr.clone());
                         }
                     }
-                    Err(e) => warn!("✗ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
+                    Err(e) => warn!("❌ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
                 }
             } else {
-                warn!("✗ Invalid bootstrap address format: {}", bootstrap_addr);
+                warn!("❌ Invalid bootstrap address format: {}", bootstrap_addr);
             }
         }
 
@@ -5130,11 +5003,11 @@ impl DhtService {
             if successful_connections > 0 {
                 let _ = swarm.behaviour_mut().kademlia.bootstrap();
                 info!(
-                    "✓ Starting Kademlia bootstrap with {} bootstrap connection(s)",
+                    "✅ Starting Kademlia bootstrap with {} bootstrap connection(s)",
                     successful_connections
                 );
             } else {
-                warn!("⚠ No bootstrap connections succeeded - cannot bootstrap DHT");
+                warn!("⚠️ No bootstrap connections succeeded - cannot bootstrap DHT");
                 warn!("  Node will operate in standalone mode until peers connect");
                 warn!("  Consider checking network connectivity and bootstrap node addresses");
             }
@@ -5624,10 +5497,10 @@ impl DhtService {
             }
             Err(_) => {
                 warn!(
-                    "⏰ Search timed out for file: {} (after {}ms)",
+                    "[TIME] Search timed out for file: {} (after {}ms)",
                     file_hash, timeout_ms
                 );
-                warn!("⏰ Timeout occurred - no result received through channel");
+                warn!("[TIME] Timeout occurred - no result received through channel");
                 // Check if this might be due to connectivity issues
                 // let health = self.check_health(5, false).await;
                 // if health.peer_count < 5 {
@@ -5650,13 +5523,6 @@ impl DhtService {
     pub async fn connect_peer(&self, addr: String) -> Result<(), String> {
         self.cmd_tx
             .send(DhtCommand::ConnectPeer(addr))
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    pub async fn connect_peer_multiaddr(&self, addr: Multiaddr) -> Result<(), String> {
-        self.cmd_tx
-            .send(DhtCommand::ConnectPeerMultiaddr(addr))
             .await
             .map_err(|e| e.to_string())
     }
@@ -6653,7 +6519,7 @@ impl DhtService {
 
         // This is a simplified example. In a real app, you would get the provider,
         // contract address, and signer from the AppState or configuration.
-        let provider = Provider::<Http>::try_from("http://127.0.0.1:8545")
+        let provider = Provider::<Http>::try_from(crate::ethereum::NETWORK_CONFIG.rpc_endpoint.as_str())
             .map_err(|e| format!("Failed to create provider: {}", e))?;
         let client = Arc::new(provider);
 
@@ -6986,19 +6852,6 @@ fn is_private_or_loopback_v4(ip: Ipv4Addr) -> bool {
         || o[0] == 127
 }
 
-fn fallback_dial_addr_without_terminal_peer(addr: &Multiaddr) -> Option<Multiaddr> {
-    let has_relay_circuit = addr.iter().any(|p| matches!(p, Protocol::P2pCircuit));
-    if has_relay_circuit {
-        return None;
-    }
-    let mut stripped = addr.clone();
-    if matches!(stripped.iter().last(), Some(Protocol::P2p(_))) {
-        stripped.pop();
-        return Some(stripped);
-    }
-    None
-}
-
 async fn record_identify_push_metrics(metrics: &Arc<Mutex<DhtMetrics>>, info: &identify::Info) {
     if let Ok(mut metrics_guard) = metrics.try_lock() {
         for addr in &info.listen_addrs {
@@ -7145,29 +6998,6 @@ mod tests {
     use tokio::time::timeout;
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
-    }
-
-    #[test]
-    fn fallback_dial_addr_strips_terminal_peer_id_for_direct_addr() {
-        let peer = PeerId::random();
-        let addr: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", peer)
-            .parse()
-            .unwrap();
-        let fallback = fallback_dial_addr_without_terminal_peer(&addr).unwrap();
-        assert_eq!(fallback.to_string(), "/ip4/8.8.8.8/tcp/4001");
-    }
-
-    #[test]
-    fn fallback_dial_addr_disabled_for_relay_addr() {
-        let relay = PeerId::random();
-        let target = PeerId::random();
-        let addr: Multiaddr = format!(
-            "/ip4/8.8.8.8/tcp/4001/p2p/{}/p2p-circuit/p2p/{}",
-            relay, target
-        )
-        .parse()
-        .unwrap();
-        assert!(fallback_dial_addr_without_terminal_peer(&addr).is_none());
     }
 
     // needed because metrics is used to retrieve listenining addresses
@@ -7471,7 +7301,7 @@ mod tests {
         );
 
         // 5. Node A leaves the network (Graceful Shutdown)
-        info!("📉 Node A leaving the network...");
+        info!("[DOWN] Node A leaving the network...");
         seeder_a.shutdown().await.unwrap();
 
         // 6. Verify Searcher C now only sees Node B

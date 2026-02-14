@@ -75,19 +75,19 @@ The fundamental innovation of Chiral Network is the **complete decoupling of pay
 | ----------------------- | ------------------------------------------------------------------- |
 | **Decentralization**    | No centralized servers - all peer discovery via DHT                 |
 | **Economic Incentives** | Seeders earn cryptocurrency for sharing files                       |
-| **Privacy-First**       | Circuit Relay v2, AutoNAT v2, SOCKS5 proxy support                  |
+| **Privacy-First**       | AutoNAT v2, UPnP, SOCKS5 proxy support                             |
 | **Legitimate Use**      | Designed for personal, educational, and organizational file sharing |
-| **Non-Commercial**      | No marketplace, pricing, or trading features                        |
+| **Token Economy**       | Chiral token-based download speed tiers; no external marketplaces or advertising |
 
 ### 1.4 What Chiral Network is NOT
 
 To maintain focus and legal compliance, Chiral Network explicitly does not implement:
 
-- ❌ Global file search/discovery (could enable piracy)
-- ❌ Marketplace or trading features
-- ❌ VPN or general anonymity network functionality
-- ❌ Content recommendations or social features
-- ❌ Exit node functionality for non-P2P traffic
+- [X] Global file search/discovery (could enable piracy)
+- [X] External payment systems, advertising, or third-party marketplaces
+- [X] VPN or general anonymity network functionality
+- [X] Content recommendations or social features
+- [X] Exit node functionality for non-P2P traffic
 
 ---
 
@@ -95,7 +95,7 @@ To maintain focus and legal compliance, Chiral Network explicitly does not imple
 
 ### 2.1 Fully Decentralized P2P
 
-All peer discovery happens through the Kademlia DHT. There are no centralized servers, trackers, or coordinators. Every node is an equal participant that can simultaneously seed, download, relay traffic, and mine blocks.
+All peer discovery happens through the Kademlia DHT. There are no centralized servers, trackers, or coordinators. Every node is an equal participant that can simultaneously seed, download, and mine blocks.
 
 ### 2.2 BitTorrent-Style Sharing
 
@@ -116,7 +116,6 @@ All nodes are equal peers. There are no special roles:
 
 - Any node can seed files and earn payments
 - Any node can download files and pay seeders
-- Any node can enable relay mode to help NAT'd peers
 - Any node can participate in mining
 
 ---
@@ -157,8 +156,6 @@ All nodes are equal peers. There are no special roles:
 | Technology           | Purpose                                 |
 | -------------------- | --------------------------------------- |
 | **AutoNAT v2**       | Reachability detection                  |
-| **Circuit Relay v2** | Traffic forwarding for NAT'd peers      |
-| **DCUtR**            | Direct Connection Upgrade through Relay |
 | **mDNS**             | Local peer discovery                    |
 | **UPnP**             | Automatic port forwarding               |
 
@@ -188,11 +185,11 @@ All nodes are equal peers. There are no special roles:
                               │
         ┌─────────────────────┴─────────────────────┐
         │                                           │
-┌───────▼──────────────┐              ┌────────────▼────────┐
+┌───────[v]──────────────┐              ┌────────────[v]────────┐
 │  Payment Layer       │              │ Data Transfer Layer │
 │  (Blockchain)        │              │  (Protocols)        │
 │                      │              │                     │
-│  • ETH-compatible    │◄─────────────┤  • HTTP             │
+│  • ETH-compatible    │[<]─────────────┤  • HTTP             │
 │  • Payment contracts │  Settlement  │  • WebRTC           │
 │  • Mining rewards    │              │  • BitTorrent       │
 │  • Gas fees          │              │  • ed2k             │
@@ -235,7 +232,6 @@ Tier 3: Network Layer
 ├─ Kademlia DHT (file discovery)
 ├─ Gossipsub (seeder & file information)
 ├─ Noise Protocol (encryption)
-├─ Circuit Relay v2 (NAT traversal)
 ├─ AutoNAT v2 (reachability detection)
 ├─ WebRTC (P2P data channels)
 └─ Bootstrap Nodes (peer discovery)
@@ -317,12 +313,12 @@ The ProtocolManager orchestrates protocol interactions and delegates to register
 ### 6.3 Default Protocol Selection
 
 ```
-Network Capability              → Default Seeding Protocol
+Network Capability              -> Default Seeding Protocol
 ───────────────────────────────────────────────────────────
-Public IP                       → HTTP
-Behind NAT + UPnP Available     → HTTP (auto port forward)
-Behind NAT + UPnP Failed        → WebTorrent
-Browser Only                    → WebTorrent (only option)
+Public IP                       -> HTTP
+Behind NAT + UPnP Available     -> HTTP (auto port forward)
+Behind NAT + UPnP Failed        -> WebTorrent
+Browser Only                    -> WebTorrent (only option)
 ```
 
 ---
@@ -420,25 +416,20 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 
 ## Chapter 8: NAT Traversal
 
-### 8.1 Three-Layer Approach
+### 8.1 Two-Layer Approach
 
 **Layer 1: Direct Connection (Fastest)**
 
 - For publicly reachable peers
 - No NAT, no firewall restrictions
 - Lowest latency, highest bandwidth
+- UPnP automatic port forwarding when available
 
-**Layer 2: Hole Punching (DCUtR)**
+**Layer 2: SOCKS5 Proxy (Fallback)**
 
-- Direct Connection Upgrade through Relay
-- For symmetric NAT traversal
-- Uses UPnP when available
-
-**Layer 3: Circuit Relay v2 (Fallback)**
-
-- For restrictive NATs
-- End-to-end encrypted (relay cannot read data)
-- Trusted relay nodes only
+- For restrictive NATs where UPnP fails
+- Route P2P traffic through configured proxy
+- Compatible with Tor and other SOCKS5 proxies
 
 ### 8.2 AutoNAT v2
 
@@ -456,25 +447,7 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 - Confidence scoring (High/Medium/Low)
 - Reachability history tracking
 
-### 8.3 Circuit Relay v2 with AutoRelay
-
-**Purpose**: Forward traffic between NAT'd peers who cannot connect directly
-
-**How It Works**:
-
-1. NAT'd peer (A) requests reservation with relay (R)
-2. Relay R listens for incoming connections on A's behalf
-3. When peer B wants to connect to A, B connects to relay R
-4. Relay forwards traffic between A and B
-
-**Features**:
-
-- Decentralized: Any public node can opt-in to relay mode
-- End-to-end encrypted (relay cannot tamper)
-- Automatic relay candidate detection from bootstrap nodes
-- Dynamic relay reservation
-
-### 8.4 UPnP (Automatic Port Forwarding)
+### 8.3 UPnP (Automatic Port Forwarding)
 
 **How It Works**:
 
@@ -485,43 +458,9 @@ export type ProtocolDetails = Partial<ProtocolDetailsByProtocol>;
 **Connection Priority**:
 
 ```
-1. Try UPnP → Direct connection if successful
-2. If failed → Hole Punching (DCUtR)
-3. If failed → Circuit Relay
+1. Try UPnP -> Direct connection if successful
+2. If failed -> SOCKS5 proxy (if configured)
 ```
-
-### 8.5 DHT Peer Cache Warm-Start
-
-**Purpose**: Reduce time-to-first-peer after restart without introducing reputation logic.
-
-**Design Invariants**:
-
-- Cache is **namespaced per DHT network identity** (bootstrap set + DHT port + chain-id when available).
-- Cache is persisted as `peer_cache.<namespace>.json` to prevent cross-network warm-dials.
-- Startup warm-dials use **operational recency only**:
-  - `last_successful_connect_at`
-  - `last_seen`
-  - deterministic peer-id tie-break
-- Dials are bounded (candidate cap, attempt cap, concurrency cap, timeout, total budget).
-- Warm-start runs in background and does not block DHT startup completion.
-
-**Safety Policy**:
-
-- Default mode is WAN-safe: reject private, loopback, link-local, multicast, and unspecified IP ranges.
-- DNS multiaddrs are resolved and filtered by resolved IPs with bounded lookup.
-- LAN override is explicit (`CHIRAL_LAN_WARMSTART=1`) for development/local testing.
-
-**Lifecycle Guarantees**:
-
-- Single-flight `start`/`stop` lifecycle with run-id guard to prevent stale task writes.
-- Concurrent `start` attempts fail deterministically with lifecycle-state errors (no implicit status-only success path).
-- Snapshot is taken **before DHT teardown** on stop/shutdown to avoid empty-cache writes.
-- Warm-start tasks are cancellable on stop/reset/shutdown.
-
-**Operational Guardrails**:
-
-- Manual `connect_to_peer` dials are disabled by default and require `CHIRAL_ENABLE_PEER_DIAL=1`.
-- Manual dials use the same warm-start address safety policy (`/tcp` + `/p2p/<peer_id>` + WAN/LAN filtering).
 
 ---
 
@@ -626,15 +565,15 @@ Example Multi-Protocol Transfer:
 
 ```
 1. File Input
-   ↓
+   v
 2. Generate SHA-256 Hash (CID)
-   ↓
+   v
 3. Optional: Encrypt with AES-256-GCM
-   ↓
+   v
 4. Publish minimal DHT record and announce seeder info via GossipSub
-   ↓
+   v
 5. Start serving via configured protocols
-   ↓
+   v
 6. Continuous seeding (while online)
 ```
 
@@ -642,19 +581,19 @@ Example Multi-Protocol Transfer:
 
 ```
 1. Input Hash (CID)
-   ↓
+   v
 2. Query DHT for metadata and seeders
-   ↓
+   v
 3. Subscribe to GossipSub for seeder general + file info
-   ↓
+   v
 4. Auto or Manually Select protocol(s) & Peers based on availability and pricing 
-   ↓
+   v
 5. Download chunks (possibly multi-source)
-   ↓
+   v
 6. Optional: Decrypt chunks
-   ↓
+   v
 7. Reassemble file
-   ↓
+   v
 8. Settlement: Pay seeders on blockchain
 ```
 
@@ -929,9 +868,9 @@ sequenceDiagram
 **Incremental Payments**:
 
 - Serve first 10 MB as initial handshake segment
-- If no payment after 10 MB → stop serving
-- If payment received → continue serving
-- Exponential scaling: 1→2→4→8 MB payment intervals
+- If no payment after 10 MB -> stop serving
+- If payment received -> continue serving
+- Exponential scaling: 1->2->4->8 MB payment intervals
 
 **Payment Options**:
 | Mode | Description | Recommended For |
@@ -1010,11 +949,11 @@ value(bad) = 0.0
 
 ### 17.3 Key Properties
 
-- ✅ **Unforgeable**: Requires downloader's private key
-- ✅ **Non-repudiable**: Signature proves authenticity
-- ✅ **Verifiable**: Any peer can validate signature
-- ✅ **Unique**: Nonce + file_hash prevent reuse
-- ✅ **Off-chain**: No blockchain delay during transfer
+- [OK] **Unforgeable**: Requires downloader's private key
+- [OK] **Non-repudiable**: Signature proves authenticity
+- [OK] **Verifiable**: Any peer can validate signature
+- [OK] **Unique**: Nonce + file_hash prevent reuse
+- [OK] **Off-chain**: No blockchain delay during transfer
 
 ### 17.4 Complete Transaction Flow
 
@@ -1070,7 +1009,7 @@ When honest downloader is falsely accused:
 3. Any peer can verify on blockchain
 4. False complaint dismissed
 5. Seeder receives severe reputation penalty
-6. Repeated false complaints → automatic blacklist
+6. Repeated false complaints -> automatic blacklist
 
 ### 18.3 Trust Hierarchy
 
@@ -1141,18 +1080,18 @@ When honest downloader is falsely accused:
 
 ```
 1. File Input
-   ↓
+   v
 2. Generate Random AES-256 Key
-   ↓
+   v
 3. Chunk File (256KB pieces)
-   ↓
+   v
 4. For Each Chunk:
    a. Hash original chunk (for Merkle tree)
    b. Encrypt with AES-256-GCM + unique nonce
    c. Hash encrypted chunk (for retrieval)
-   ↓
+   v
 5. Encrypt AES Key with Recipient's Public Key
-   ↓
+   v
 6. Store encrypted chunks across network
 ```
 
@@ -1165,7 +1104,7 @@ Verification Steps:
 3. Decrypt each chunk
 4. Hash decrypted chunk
 5. Verify against Merkle proof
-6. If pass → chunk valid; if fail → corrupt/tampered
+6. If pass -> chunk valid; if fail -> corrupt/tampered
 ```
 
 ### 20.3 Access Control
@@ -1187,8 +1126,8 @@ Verification Steps:
 **Onion Routing**:
 
 ```
-Client → Proxy 1 → Proxy 2 → Proxy 3 → Destination
-  ↓         ↓         ↓         ↓
+Client -> Proxy 1 -> Proxy 2 -> Proxy 3 -> Destination
+  v         v         v         v
 Encrypted Encrypted Encrypted Plain
   (3x)      (2x)      (1x)     text
 ```
@@ -1220,7 +1159,7 @@ Encrypted Encrypted Encrypted Plain
 
 When enabled:
 
-- All traffic routed through relay/proxy
+- All traffic routed through proxy
 - IP address masked
 - Reputation persists per peer key
 - Rotating keys resets reputation
@@ -1244,11 +1183,10 @@ When enabled:
 | **Download**   | File download management        | Hash search, seeder selection, progress tracking   |
 | **Upload**     | Shared Files (instant seeding)  | Drag & drop, file versioning, bandwidth control    |
 | **Network**    | Peer discovery & DHT status     | Connected peers, bootstrap nodes, addresses        |
-| **Relay**      | Circuit Relay v2 configuration  | Server mode, AutoRelay, preferred relays           |
 | **Mining**     | CPU mining for network security | Hash rate, blocks found, rewards, power monitoring |
 | **Proxy**      | SOCKS5 proxy configuration      | Privacy routing, latency optimization              |
 | **Analytics**  | Usage statistics                | Bandwidth, storage, performance metrics            |
-| **Reputation** | Peer reputation system          | Trust levels, analytics, relay leaderboard         |
+| **Reputation** | Peer reputation system          | Trust levels, analytics                            |
 | **Account**    | Wallet management               | Balance, transactions, HD wallet, QR codes         |
 | **Settings**   | Comprehensive configuration     | Storage, network, privacy, i18n, diagnostics       |
 
@@ -1256,8 +1194,8 @@ When enabled:
 
 The sidebar contains navigation to all pages. Status indicators show:
 
-- 🟢 **Connected** - DHT network active
-- 🔴 **Disconnected** - No network connection
+- [GREEN] **Connected** - DHT network active
+- [!] **Disconnected** - No network connection
 
 ### 22.3 Internationalization
 
@@ -1355,7 +1293,6 @@ src/lib/components/
 ├─ reputation/        # Reputation system
 │  ├─ ReputationCard.svelte
 │  ├─ ReputationAnalytics.svelte
-│  └─ RelayReputationLeaderboard.svelte
 └─ ui/                # UI primitives
    ├─ button.svelte
    ├─ card.svelte
@@ -1460,14 +1397,12 @@ On first launch, the application will:
 ### 26.4 Privacy Settings
 
 - **Proxy**: SOCKS5 proxy address
-- **Anonymous Mode**: Route all traffic through relay/proxy
+- **Anonymous Mode**: Route all traffic through proxy
 - **Encryption**: Force encryption for all transfers
 
 ### 26.5 NAT Traversal Settings
 
 - **AutoNAT**: Enable/disable, probe interval (10-300s)
-- **AutoRelay**: Enable/disable, preferred relay nodes
-- **Relay Server**: Enable to help NAT'd peers
 
 ### 26.6 Configuration Defaults
 
@@ -1486,22 +1421,22 @@ On first launch, the application will:
 
 ### 27.1 Built-in Diagnostics
 
-**Location**: Settings → Diagnostics
+**Location**: Settings -> Diagnostics
 
 **Categories**:
 
 1. **Environment**: Tauri vs web build, platform detection
 2. **Network**: DHT connectivity, peer count, bootstrap nodes
-3. **NAT Traversal**: AutoNAT v2, Circuit Relay v2 status
+3. **NAT Traversal**: AutoNAT v2 status
 4. **Storage**: Path validation, permissions, disk space
 5. **Security**: Proxy config, encryption capability
 
 **Status Indicators**:
 
-- ✓ Green - Test passed
-- ⚠ Yellow - Needs attention
-- ✗ Red - Test failed
-- ℹ Blue - Informational
+- [OK] Green - Test passed
+- [WARN] Yellow - Needs attention
+- [X] Red - Test failed
+- [INFO] Blue - Informational
 
 ### 27.2 Common Issues
 
@@ -1511,7 +1446,7 @@ On first launch, the application will:
 | Files not downloading    | Verify hash, check seeders online        |
 | Mining not starting      | Ensure Geth initialized, check resources |
 | Wallet issues            | Verify mnemonic, check Geth sync         |
-| NAT/Relay issues         | Check diagnostics for AutoNAT status     |
+| NAT issues               | Check diagnostics for AutoNAT status     |
 
 ### 27.3 Debug Commands
 
@@ -1664,9 +1599,7 @@ npm run build
 | **AutoNAT**        | Protocol for detecting NAT reachability status                   |
 | **Bitswap**        | IPFS-inspired block exchange protocol                            |
 | **CID**            | Content Identifier - SHA-256 hash of file content                |
-| **Circuit Relay**  | Protocol for forwarding traffic through intermediate nodes       |
 | **Clef**           | Ethereum external signer for secure key management               |
-| **DCUtR**          | Direct Connection Upgrade through Relay - hole punching protocol |
 | **DHT**            | Distributed Hash Table - decentralized key-value store           |
 | **Geth**           | Go-Ethereum client for blockchain operations                     |
 | **HD Wallet**      | Hierarchical Deterministic wallet (BIP32/BIP39)                  |
@@ -1701,3 +1634,4 @@ npm run build
 ---
 
 _This document consolidates all design and technical documentation for the Chiral Network project into a single comprehensive reference._
+
