@@ -1457,7 +1457,6 @@ mod tests {
                 total_bytes_transferred: 100,
                 average_latency_ms: 0,
                 is_bootstrap: true,
-                supports_relay: true,
                 reliability_score: 0.0,
             },
             PeerCacheEntry {
@@ -1476,7 +1475,6 @@ mod tests {
 
         let stats = extract_cache_stats(&cache);
         assert_eq!(stats.total_peers, 2);
-        assert_eq!(stats.relay_capable_peers, 1);
         assert_eq!(stats.bootstrap_peers, 1);
         assert_eq!(stats.total_transfers, 2);
         assert_eq!(stats.total_bytes_transferred, 150);
