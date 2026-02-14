@@ -31,6 +31,7 @@ pub mod ftp_downloader;
 pub mod ftp_server;
 pub mod peer_selection;
 pub mod peer_cache;
+pub mod peer_cache_runtime;
 pub mod webrtc_service;
 
 // Required modules for encryption and keystore functionality

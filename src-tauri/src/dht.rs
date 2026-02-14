@@ -322,6 +322,7 @@ pub enum DhtCommand {
     },
     DownloadFile(FileMetadata, String),
     ConnectPeer(String),
+    ConnectPeerMultiaddr(Multiaddr),
     ConnectToPeerById(PeerId),
     DisconnectPeer(PeerId),
     SetPrivacyProxies {
@@ -1901,10 +1902,45 @@ async fn run_dht_node(
                                                         info!("  Waiting for ConnectionEstablished event...");
                                                     }
                                                     Err(e) => {
-                                                        error!("Failed to dial {}: {}", addr, e);
-                                                        let _ = event_tx
-                                                            .send(DhtEvent::Error(format!("Failed to connect: {}", e)))
-                                                            .await;
+                                                        if let Some(fallback_addr) =
+                                                            fallback_dial_addr_without_terminal_peer(
+                                                                &multiaddr,
+                                                            )
+                                                        {
+                                                            warn!(
+                                                                "Dial with terminal /p2p failed, retrying stripped dial addr={} fallback={} err={}",
+                                                                multiaddr, fallback_addr, e
+                                                            );
+                                                            match swarm.dial(fallback_addr.clone()) {
+                                                                Ok(_) => {
+                                                                    info!(
+                                                                        "Requested direct connection using stripped dial addr: {}",
+                                                                        fallback_addr
+                                                                    );
+                                                                    info!("  Waiting for ConnectionEstablished event...");
+                                                                }
+                                                                Err(retry_err) => {
+                                                                    error!(
+                                                                        "Failed to dial {} (fallback {}): {}",
+                                                                        addr, fallback_addr, retry_err
+                                                                    );
+                                                                    let _ = event_tx
+                                                                        .send(DhtEvent::Error(format!(
+                                                                            "Failed to connect: {}",
+                                                                            retry_err
+                                                                        )))
+                                                                        .await;
+                                                                }
+                                                            }
+                                                        } else {
+                                                            error!("Failed to dial {}: {}", addr, e);
+                                                            let _ = event_tx
+                                                                .send(DhtEvent::Error(format!(
+                                                                    "Failed to connect: {}",
+                                                                    e
+                                                                )))
+                                                                .await;
+                                                        }
                                                     }
                                                 }
                                             } else {
@@ -1917,6 +1953,96 @@ async fn run_dht_node(
                                             error!("Invalid multiaddr format: {}", addr);
                                             let _ = event_tx
                                                 .send(DhtEvent::Error(format!("Invalid address: {}", addr)))
+                                                .await;
+                                        }
+                                    }
+                                    Some(DhtCommand::ConnectPeerMultiaddr(multiaddr)) => {
+                                        info!("Attempting to connect to: {}", multiaddr);
+                                        let maybe_peer_id = multiaddr.iter().find_map(|p| {
+                                            if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
+                                                Some(peer_id.clone())
+                                            } else {
+                                                None
+                                            }
+                                        });
+
+                                        if let Some(peer_id) = maybe_peer_id.clone() {
+                                            // Check if the address contains a private IP
+                                            let has_private_ip = multiaddr.iter().any(|p| {
+                                                if let Protocol::Ip4(ipv4) = p {
+                                                    is_private_or_loopback_v4(ipv4)
+                                                } else {
+                                                    false
+                                                }
+                                            });
+
+                                            {
+                                                let mut mgr = proxy_mgr.lock().await;
+                                                mgr.set_target(peer_id.clone());
+                                            }
+
+                                            match swarm.dial(multiaddr.clone()) {
+                                                Ok(_) => {
+                                                    info!("Requested direct connection to: {}", multiaddr);
+                                                    info!("  Waiting for ConnectionEstablished event...");
+                                                }
+                                                Err(e) => {
+                                                    if let Some(fallback_addr) =
+                                                        fallback_dial_addr_without_terminal_peer(
+                                                            &multiaddr,
+                                                        )
+                                                    {
+                                                        warn!(
+                                                            "Dial with terminal /p2p failed, retrying stripped dial addr={} fallback={} err={}",
+                                                            multiaddr, fallback_addr, e
+                                                        );
+                                                        match swarm.dial(fallback_addr.clone()) {
+                                                            Ok(_) => {
+                                                                info!(
+                                                                    "Requested direct connection using stripped dial addr: {}",
+                                                                    fallback_addr
+                                                                );
+                                                                info!(
+                                                                    "  Waiting for ConnectionEstablished event..."
+                                                                );
+                                                            }
+                                                            Err(retry_err) => {
+                                                                error!(
+                                                                    "Failed to dial {} (fallback {}): {}",
+                                                                    multiaddr, fallback_addr, retry_err
+                                                                );
+                                                                let _ = event_tx
+                                                                    .send(DhtEvent::Error(format!(
+                                                                        "Failed to connect: {}",
+                                                                        retry_err
+                                                                    )))
+                                                                    .await;
+                                                            }
+                                                        }
+                                                    } else {
+                                                        error!("Failed to dial {}: {}", multiaddr, e);
+                                                        let _ = event_tx
+                                                            .send(DhtEvent::Error(format!(
+                                                                "Failed to connect: {}",
+                                                                e
+                                                            )))
+                                                            .await;
+                                                    }
+
+                                                    if has_private_ip {
+                                                        warn!(
+                                                            "⚠️ Failed to dial private IP address - this may indicate NAT/firewall issues"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            error!("No peer ID found in multiaddr: {}", multiaddr);
+                                            let _ = event_tx
+                                                .send(DhtEvent::Error(format!(
+                                                    "Invalid address format: {}",
+                                                    multiaddr
+                                                )))
                                                 .await;
                                         }
                                     }
@@ -5528,6 +5654,13 @@ impl DhtService {
             .map_err(|e| e.to_string())
     }
 
+    pub async fn connect_peer_multiaddr(&self, addr: Multiaddr) -> Result<(), String> {
+        self.cmd_tx
+            .send(DhtCommand::ConnectPeerMultiaddr(addr))
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     pub async fn connect_to_peer_by_id(&self, peer_id: String) -> Result<(), String> {
         let peer_id: PeerId = peer_id
             .parse()
@@ -6853,6 +6986,19 @@ fn is_private_or_loopback_v4(ip: Ipv4Addr) -> bool {
         || o[0] == 127
 }
 
+fn fallback_dial_addr_without_terminal_peer(addr: &Multiaddr) -> Option<Multiaddr> {
+    let has_relay_circuit = addr.iter().any(|p| matches!(p, Protocol::P2pCircuit));
+    if has_relay_circuit {
+        return None;
+    }
+    let mut stripped = addr.clone();
+    if matches!(stripped.iter().last(), Some(Protocol::P2p(_))) {
+        stripped.pop();
+        return Some(stripped);
+    }
+    None
+}
+
 async fn record_identify_push_metrics(metrics: &Arc<Mutex<DhtMetrics>>, info: &identify::Info) {
     if let Ok(mut metrics_guard) = metrics.try_lock() {
         for addr in &info.listen_addrs {
@@ -6999,6 +7145,29 @@ mod tests {
     use tokio::time::timeout;
     fn init() {
         let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    #[test]
+    fn fallback_dial_addr_strips_terminal_peer_id_for_direct_addr() {
+        let peer = PeerId::random();
+        let addr: Multiaddr = format!("/ip4/8.8.8.8/tcp/4001/p2p/{}", peer)
+            .parse()
+            .unwrap();
+        let fallback = fallback_dial_addr_without_terminal_peer(&addr).unwrap();
+        assert_eq!(fallback.to_string(), "/ip4/8.8.8.8/tcp/4001");
+    }
+
+    #[test]
+    fn fallback_dial_addr_disabled_for_relay_addr() {
+        let relay = PeerId::random();
+        let target = PeerId::random();
+        let addr: Multiaddr = format!(
+            "/ip4/8.8.8.8/tcp/4001/p2p/{}/p2p-circuit/p2p/{}",
+            relay, target
+        )
+        .parse()
+        .unwrap();
+        assert!(fallback_dial_addr_without_terminal_peer(&addr).is_none());
     }
 
     // needed because metrics is used to retrieve listenining addresses
