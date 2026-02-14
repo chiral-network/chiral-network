@@ -152,6 +152,24 @@
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   }
 
+  // Classify a multiaddr as IPv4, IPv6, or other
+  function addrType(addr: string): 'IPv4' | 'IPv6' | 'other' {
+    if (addr.startsWith('/ip4/')) return 'IPv4';
+    if (addr.startsWith('/ip6/')) return 'IPv6';
+    return 'other';
+  }
+
+  // Extract the IP address and port from a multiaddr like /ip4/1.2.3.4/tcp/4001/...
+  function extractIpPort(addr: string): string {
+    const parts = addr.split('/').filter(Boolean);
+    const ipIdx = parts.findIndex(p => p === 'ip4' || p === 'ip6');
+    if (ipIdx === -1 || ipIdx + 1 >= parts.length) return addr;
+    const ip = parts[ipIdx + 1];
+    const tcpIdx = parts.indexOf('tcp', ipIdx);
+    const port = tcpIdx !== -1 && tcpIdx + 1 < parts.length ? parts[tcpIdx + 1] : null;
+    return port ? `${ip}:${port}` : ip;
+  }
+
   onMount(async () => {
     loadTrafficStats();
 
@@ -780,10 +798,15 @@
 
             {#if dhtHealth.listeningAddresses.length > 0}
               <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
-                <div class="space-y-1">
+                <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
+                <div class="space-y-1.5">
                   {#each dhtHealth.listeningAddresses as addr}
-                    <p class="font-mono text-xs break-all dark:text-gray-300">{addr}</p>
+                    <div class="flex items-start gap-2 text-xs">
+                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(addr) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}">
+                        {addrType(addr)}
+                      </span>
+                      <span class="font-mono break-all dark:text-gray-300">{extractIpPort(addr)}</span>
+                    </div>
                   {/each}
                 </div>
               </div>
@@ -794,9 +817,12 @@
                 <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">DHT Bootstrap Nodes</p>
                 <div class="space-y-1.5">
                   {#each dhtHealth.bootstrapNodes as node}
-                    <div class="flex items-center gap-2 text-xs">
-                      <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                      <span class="font-mono break-all dark:text-gray-300">{node.address}</span>
+                    <div class="flex items-start gap-2 text-xs">
+                      <div class="w-2 h-2 rounded-full mt-1 {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(node.address) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}">
+                        {addrType(node.address)}
+                      </span>
+                      <span class="font-mono break-all dark:text-gray-300">{extractIpPort(node.address)}</span>
                       <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} shrink-0">
                         {node.reachable ? 'Reachable' : 'Unreachable'}
                       </span>
