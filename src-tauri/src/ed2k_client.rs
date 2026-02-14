@@ -1696,7 +1696,7 @@ mod tests {
 
     #[test]
     fn test_packet_header_invalid_protocol() {
-        let mut bytes = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x47]; // Wrong protocol byte
+        let bytes = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x47]; // Wrong protocol byte
         let result = Ed2kPacketHeader::from_bytes(&bytes);
         
         assert!(result.is_err());
@@ -1779,13 +1779,13 @@ mod tests {
         let source_count = payload[16] as usize;
         assert_eq!(source_count, 1);
         
-        let mut offset = 17;
+        let offset = 17;
         let ip = format!(
             "{}.{}.{}.{}",
             payload[offset], payload[offset + 1], payload[offset + 2], payload[offset + 3]
         );
         let port = u16::from_le_bytes([payload[offset + 4], payload[offset + 5]]);
-        
+
         assert_eq!(ip, "192.168.1.100");
         assert_eq!(port, 4662);
     }
