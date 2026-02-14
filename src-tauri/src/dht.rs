@@ -7284,14 +7284,13 @@ mod tests {
 
         let mut both_seeders_found = false;
         for _ in 0..10 {
-            if let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await {
-                println!("The array pretty print:\n{:#?}", found);
-                if found.len() >= 2 {
-                    assert!(found.contains(&seeder_a.get_peer_id().await));
-                    assert!(found.contains(&seeder_b.get_peer_id().await));
-                    both_seeders_found = true;
-                    break;
-                }
+            let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await;
+            println!("The array pretty print:\n{:#?}", found);
+            if found.len() >= 2 {
+                assert!(found.contains(&seeder_a.get_peer_id().await));
+                assert!(found.contains(&seeder_b.get_peer_id().await));
+                both_seeders_found = true;
+                break;
             }
             sleep(Duration::from_millis(1000)).await;
         }
@@ -7308,16 +7307,15 @@ mod tests {
         // We wait for the DHT maintenance/pruning logic to kick in.
         let mut only_seeder_b_remains = false;
         for _ in 0..6 {
-            if let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await {
-                println!("The array pretty print:\n{:#?}", found);
+            let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await;
+            println!("The array pretty print:\n{:#?}", found);
 
-                let has_a = found.contains(&seeder_a.get_peer_id().await);
-                let has_b = found.contains(&seeder_b.get_peer_id().await);
+            let has_a = found.contains(&seeder_a.get_peer_id().await);
+            let has_b = found.contains(&seeder_b.get_peer_id().await);
 
-                if !has_a && has_b {
-                    only_seeder_b_remains = true;
-                    break;
-                }
+            if !has_a && has_b {
+                only_seeder_b_remains = true;
+                break;
             }
             sleep(Duration::from_millis(1000)).await;
         }
