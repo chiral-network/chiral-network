@@ -877,8 +877,9 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
         .build();
 
-    // Listen on all interfaces
+    // Listen on all interfaces (dual-stack: IPv4 + IPv6)
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+    swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
     // Dial bootstrap nodes to establish connections
     for addr_str in get_bootstrap_nodes() {
@@ -2135,6 +2136,34 @@ mod tests {
         let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
         let transport = remove_peer_id_from_multiaddr(&addr);
         assert_eq!(transport.to_string(), "/ip4/127.0.0.1/tcp/4001");
+    }
+
+    #[test]
+    fn test_ipv6_listen_multiaddr_parses() {
+        let addr: Multiaddr = "/ip6/::/tcp/0".parse().unwrap();
+        assert_eq!(addr.to_string(), "/ip6/::/tcp/0");
+    }
+
+    #[test]
+    fn test_extract_peer_id_from_ipv6_multiaddr() {
+        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+            .parse()
+            .unwrap();
+        let peer_id = extract_peer_id_from_multiaddr(&addr);
+        assert!(peer_id.is_some());
+        assert_eq!(
+            peer_id.unwrap().to_string(),
+            "12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+        );
+    }
+
+    #[test]
+    fn test_remove_peer_id_from_ipv6_multiaddr() {
+        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+            .parse()
+            .unwrap();
+        let transport = remove_peer_id_from_multiaddr(&addr);
+        assert_eq!(transport.to_string(), "/ip6/::1/tcp/4001");
     }
 
     #[test]
