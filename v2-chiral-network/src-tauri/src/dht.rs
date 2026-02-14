@@ -141,7 +141,7 @@ mod cbor_codec {
 /// These are the same bootstrap nodes used in v1
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
-        "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C".to_string(),
     ]
 }
 
@@ -812,8 +812,10 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     println!("Local peer ID: {}", local_peer_id);
 
     let kad_store = kad::store::MemoryStore::new(local_peer_id);
-    let mut kad = kad::Behaviour::new(local_peer_id, kad_store);
-    // Set to server mode to help propagate records
+    // Use custom Kademlia protocol name to match v1 bootstrap nodes
+    let mut kad_config = kad::Config::default();
+    kad_config.set_protocol_names(vec![StreamProtocol::new("/chiral/kad/1.0.0")]);
+    let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
     kad.set_mode(Some(kad::Mode::Server));
 
     // Add bootstrap nodes to Kademlia routing table
@@ -1066,7 +1068,7 @@ async fn event_loop(
                             "/chiral/ping/1.0.0".to_string(),
                             "/chiral/file-transfer/1.0.0".to_string(),
                             "/chiral/file-request/3.0.0".to_string(),
-                            "/ipfs/kad/1.0.0".to_string(),
+                            "/chiral/kad/1.0.0".to_string(),
                         ];
 
                         let _ = response_tx.send(DhtHealthInfo {
@@ -2104,14 +2106,14 @@ mod tests {
 
     #[test]
     fn test_extract_peer_id_from_valid_multiaddr() {
-        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
             .parse()
             .unwrap();
         let peer_id = extract_peer_id_from_multiaddr(&addr);
         assert!(peer_id.is_some());
         assert_eq!(
             peer_id.unwrap().to_string(),
-            "12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+            "12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
         );
     }
 
@@ -2124,7 +2126,7 @@ mod tests {
 
     #[test]
     fn test_remove_peer_id_from_multiaddr() {
-        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
             .parse()
             .unwrap();
         let transport = remove_peer_id_from_multiaddr(&addr);
@@ -2146,20 +2148,20 @@ mod tests {
 
     #[test]
     fn test_extract_peer_id_from_ipv6_multiaddr() {
-        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
             .parse()
             .unwrap();
         let peer_id = extract_peer_id_from_multiaddr(&addr);
         assert!(peer_id.is_some());
         assert_eq!(
             peer_id.unwrap().to_string(),
-            "12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+            "12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
         );
     }
 
     #[test]
     fn test_remove_peer_id_from_ipv6_multiaddr() {
-        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
             .parse()
             .unwrap();
         let transport = remove_peer_id_from_multiaddr(&addr);
