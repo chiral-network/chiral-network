@@ -24,7 +24,9 @@
     Download,
     ChevronDown,
     ChevronUp,
-    File as FileIcon
+    File as FileIcon,
+    UserPlus,
+    X
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Account');
@@ -49,6 +51,77 @@
     recipientLabel?: string;
     balanceBefore?: string;
     balanceAfter?: string;
+  }
+
+  interface SavedRecipient {
+    id: string;
+    label: string;
+    address: string;
+    lastUsed: number;
+  }
+
+  // Saved recipients state
+  const SAVED_RECIPIENTS_KEY = 'chiral_saved_recipients';
+  let savedRecipients = $state<SavedRecipient[]>([]);
+  let showAddRecipient = $state(false);
+  let newRecipientLabel = $state('');
+
+  function loadSavedRecipients() {
+    try {
+      const stored = localStorage.getItem(SAVED_RECIPIENTS_KEY);
+      if (stored) {
+        savedRecipients = JSON.parse(stored);
+      }
+    } catch (e) {
+      log.error('Failed to load saved recipients:', e);
+    }
+  }
+
+  function saveSavedRecipients() {
+    try {
+      localStorage.setItem(SAVED_RECIPIENTS_KEY, JSON.stringify(savedRecipients));
+    } catch (e) {
+      log.error('Failed to save recipients:', e);
+    }
+  }
+
+  function addRecipient() {
+    if (!newRecipientLabel.trim() || !recipientAddress) return;
+    if (!recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
+      toasts.show('Enter a valid 0x address before saving', 'error');
+      return;
+    }
+    // Don't add duplicates
+    if (savedRecipients.some(r => r.address.toLowerCase() === recipientAddress.toLowerCase())) {
+      toasts.show('This address is already saved', 'info');
+      showAddRecipient = false;
+      newRecipientLabel = '';
+      return;
+    }
+    savedRecipients = [...savedRecipients, {
+      id: `r-${Date.now()}`,
+      label: newRecipientLabel.trim(),
+      address: recipientAddress,
+      lastUsed: Date.now(),
+    }];
+    saveSavedRecipients();
+    showAddRecipient = false;
+    newRecipientLabel = '';
+    toasts.show('Recipient saved', 'success');
+  }
+
+  function deleteRecipient(id: string) {
+    savedRecipients = savedRecipients.filter(r => r.id !== id);
+    saveSavedRecipients();
+  }
+
+  function selectRecipient(r: SavedRecipient) {
+    recipientAddress = r.address;
+  }
+
+  function getRecipientLabel(address: string): string | null {
+    const r = savedRecipients.find(r => r.address.toLowerCase() === address.toLowerCase());
+    return r ? r.label : null;
   }
 
   // Geth connection state
@@ -120,6 +193,7 @@
   onMount(() => {
     checkGethStatus();
     gethCheckInterval = setInterval(checkGethStatus, 5000);
+    loadSavedRecipients();
     if ($walletAccount?.address) {
       loadBalance();
       loadTransactionHistory();
@@ -218,12 +292,20 @@
           txHash: result.hash,
           txType: 'send',
           description: `💸 Sent ${sendAmount} CHR to ${recipientAddress.slice(0, 10)}...`,
-          recipientLabel: null,
+          recipientLabel: getRecipientLabel(recipientAddress),
           balanceBefore: result.balanceBefore,
           balanceAfter: result.balanceAfter,
         });
       } catch (e) {
         log.warn('Failed to record tx metadata:', e);
+      }
+
+      // Update lastUsed for saved recipient
+      const idx = savedRecipients.findIndex(r => r.address.toLowerCase() === recipientAddress.toLowerCase());
+      if (idx !== -1) {
+        savedRecipients[idx] = { ...savedRecipients[idx], lastUsed: Date.now() };
+        savedRecipients = [...savedRecipients];
+        saveSavedRecipients();
       }
 
       // Reset form
@@ -490,17 +572,79 @@
 
       {#if !showConfirmSend}
         <div class="space-y-4">
-          <!-- Available Balance -->
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-            <p class="text-sm text-gray-500 dark:text-gray-400">Available Balance</p>
-            <p class="text-xl font-bold dark:text-white">{formatBalance(balance)} CHR</p>
-          </div>
+          <!-- Saved Recipients -->
+          {#if savedRecipients.length > 0}
+            <div>
+              <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Saved Recipients</span>
+              <div class="flex flex-wrap gap-2">
+                {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
+                  <button
+                    onclick={() => selectRecipient(r)}
+                    class="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm transition-all {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+                  >
+                    <span class="font-medium">{r.label}</span>
+                    <span class="text-xs text-gray-400 dark:text-gray-500 font-mono">{r.address.slice(0, 6)}...{r.address.slice(-4)}</span>
+                    <span
+                      role="button"
+                      tabindex="0"
+                      onclick={(e) => { e.stopPropagation(); deleteRecipient(r.id); }}
+                      onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); deleteRecipient(r.id); } }}
+                      class="ml-1 p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X class="w-3 h-3 text-gray-400 hover:text-red-500" />
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
 
           <!-- Recipient Address -->
           <div>
-            <label for="recipient" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Recipient Address
-            </label>
+            <div class="flex items-center justify-between mb-1">
+              <label for="recipient" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Recipient Address
+              </label>
+              {#if !showAddRecipient}
+                <button
+                  onclick={() => {
+                    if (!recipientAddress || !recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
+                      toasts.show('Enter a valid address first', 'error');
+                      return;
+                    }
+                    showAddRecipient = true;
+                  }}
+                  class="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
+                >
+                  <UserPlus class="w-3.5 h-3.5" />
+                  Save
+                </button>
+              {/if}
+            </div>
+            {#if showAddRecipient}
+              <div class="flex items-center gap-2 mb-2">
+                <input
+                  type="text"
+                  bind:value={newRecipientLabel}
+                  placeholder="Label (e.g. Alice)"
+                  class="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  onkeydown={(e) => { if (e.key === 'Enter') addRecipient(); }}
+                />
+                <button
+                  onclick={addRecipient}
+                  disabled={!newRecipientLabel.trim()}
+                  class="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  onclick={() => { showAddRecipient = false; newRecipientLabel = ''; }}
+                  class="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <X class="w-4 h-4" />
+                </button>
+              </div>
+            {/if}
             <input
               id="recipient"
               type="text"
@@ -558,7 +702,14 @@
             </div>
             <div class="flex justify-between">
               <span class="text-sm text-gray-500 dark:text-gray-400">To</span>
-              <span class="text-sm font-mono dark:text-gray-300">{formatAddress(recipientAddress)}</span>
+              <span class="text-sm dark:text-gray-300">
+                {#if getRecipientLabel(recipientAddress)}
+                  <span class="font-medium">{getRecipientLabel(recipientAddress)}</span>
+                  <span class="font-mono text-gray-400 dark:text-gray-500 ml-1">({formatAddress(recipientAddress)})</span>
+                {:else}
+                  <span class="font-mono">{formatAddress(recipientAddress)}</span>
+                {/if}
+              </span>
             </div>
             <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
               <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
