@@ -8,7 +8,6 @@
     Moon,
     Monitor,
     Palette,
-    Zap,
     LayoutGrid,
     RotateCcw,
     Check,
@@ -82,10 +81,6 @@
 
   function setColorTheme(color: ColorTheme) {
     settings.update((s) => ({ ...s, colorTheme: color }));
-  }
-
-  function toggleReducedMotion() {
-    settings.update((s) => ({ ...s, reducedMotion: !s.reducedMotion }));
   }
 
   function toggleCompactMode() {
@@ -195,30 +190,6 @@
           </button>
         {/each}
       </div>
-    </div>
-
-    <!-- Reduced Motion -->
-    <div class="flex items-center justify-between py-4 border-t border-gray-200 dark:border-gray-700">
-      <div class="flex items-center gap-3">
-        <Zap class="w-5 h-5 text-gray-500 dark:text-gray-400" />
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">Reduced Motion</p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Minimize animations throughout the app</p>
-        </div>
-      </div>
-      <button
-        onclick={toggleReducedMotion}
-        class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.reducedMotion ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
-        role="switch"
-        aria-checked={$settings.reducedMotion}
-        aria-label="Toggle reduced motion"
-      >
-        <span
-          class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-            {$settings.reducedMotion ? 'translate-x-6' : 'translate-x-0'}"
-        ></span>
-      </button>
     </div>
 
     <!-- Compact Mode -->
