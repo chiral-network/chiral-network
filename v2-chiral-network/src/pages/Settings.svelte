@@ -244,6 +244,30 @@
         ></span>
       </button>
     </div>
+
+    <!-- Preview -->
+    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Preview</span>
+      <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-10 h-10 rounded-full bg-primary-500"></div>
+          <div>
+            <p class="font-medium text-gray-900 dark:text-white">Sample User</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">0x1234...5678</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
+            <p class="text-lg font-bold text-gray-900 dark:text-white">100.00 CHR</p>
+          </div>
+          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>
+            <p class="text-lg font-bold text-gray-900 dark:text-white">12</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Storage Section -->
@@ -330,30 +354,6 @@
           </button>
         </div>
       {/each}
-    </div>
-  </div>
-
-  <!-- Preview Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-    <h3 class="font-semibold text-lg dark:text-white mb-4">Preview</h3>
-    <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
-      <div class="flex items-center gap-3 mb-3">
-        <div class="w-10 h-10 rounded-full bg-primary-500"></div>
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">Sample User</p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">0x1234...5678</p>
-        </div>
-      </div>
-      <div class="grid grid-cols-2 gap-3">
-        <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
-          <p class="text-lg font-bold text-gray-900 dark:text-white">100.00 CHR</p>
-        </div>
-        <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>
-          <p class="text-lg font-bold text-gray-900 dark:text-white">12</p>
-        </div>
-      </div>
     </div>
   </div>
 
