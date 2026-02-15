@@ -293,37 +293,34 @@
 
   <!-- Notification Settings Section -->
   <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-    <div class="flex items-center gap-3 mb-6">
+    <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-amber-100 dark:bg-amber-900 rounded-lg">
         <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
       </div>
       <div>
         <h2 class="font-semibold text-lg dark:text-white">Notifications</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Choose which notifications and toast popups to show</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Toggle which toast notifications to show</p>
       </div>
     </div>
 
-    <div class="space-y-0">
-      {#each notificationOptions as option, i}
-        <div class="flex items-center justify-between py-4 {i > 0 ? 'border-t border-gray-200 dark:border-gray-700' : ''}">
-          <div>
-            <p class="font-medium text-gray-900 dark:text-white">{option.label}</p>
-            <p class="text-sm text-gray-500 dark:text-gray-400">{option.description}</p>
-          </div>
-          <button
-            onclick={() => toggleNotification(option.key)}
-            class="relative w-12 h-6 rounded-full transition-colors
-              {$settings.notifications?.[option.key] ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
-            role="switch"
-            aria-checked={$settings.notifications?.[option.key] ?? true}
-            aria-label="Toggle {option.label}"
-          >
+    <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+      {#each notificationOptions as option}
+        <button
+          onclick={() => toggleNotification(option.key)}
+          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
+          role="switch"
+          aria-checked={$settings.notifications?.[option.key] ?? true}
+          title={option.description}
+        >
+          <span class="text-sm text-gray-700 dark:text-gray-300 text-left">{option.label}</span>
+          <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
+            {$settings.notifications?.[option.key] ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}">
             <span
-              class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-                {$settings.notifications?.[option.key] ? 'translate-x-6' : 'translate-x-0'}"
+              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform
+                {$settings.notifications?.[option.key] ? 'translate-x-4' : 'translate-x-0'}"
             ></span>
-          </button>
-        </div>
+          </div>
+        </button>
       {/each}
     </div>
   </div>
