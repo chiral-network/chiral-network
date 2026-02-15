@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { settings, isDarkMode, type ThemeMode, type NotificationSettings } from '$lib/stores';
+  import { settings, isDarkMode, type ThemeMode, type NotificationSettings, type ColorTheme } from '$lib/stores';
+  import { availableThemes } from '$lib/services/colorThemeService';
   import { toasts } from '$lib/toastStore';
   import {
     Sun,
@@ -79,6 +80,10 @@
     toasts.show(`Theme set to ${theme}`, 'success');
   }
 
+  function setColorTheme(color: ColorTheme) {
+    settings.update((s) => ({ ...s, colorTheme: color }));
+  }
+
   function toggleReducedMotion() {
     settings.update((s) => ({ ...s, reducedMotion: !s.reducedMotion }));
   }
@@ -145,16 +150,16 @@
             onclick={() => setTheme(option.value)}
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.theme === option.value
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30'
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
                 : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
           >
             {#if $settings.theme === option.value}
               <div class="absolute top-2 right-2">
-                <Check class="w-4 h-4 text-blue-500" />
+                <Check class="w-4 h-4 text-primary-500" />
               </div>
             {/if}
-            <Icon class="w-6 h-6 {$settings.theme === option.value ? 'text-blue-500' : 'text-gray-500 dark:text-gray-400'}" />
-            <span class="text-sm font-medium {$settings.theme === option.value ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'}">
+            <Icon class="w-6 h-6 {$settings.theme === option.value ? 'text-primary-500' : 'text-gray-500 dark:text-gray-400'}" />
+            <span class="text-sm font-medium {$settings.theme === option.value ? 'text-primary-700 dark:text-primary-300' : 'text-gray-700 dark:text-gray-300'}">
               {option.label}
             </span>
           </button>
@@ -169,6 +174,29 @@
       </p>
     </div>
 
+    <!-- Accent Color -->
+    <div class="mb-6">
+      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Accent Color</span>
+      <div class="flex gap-3">
+        {#each availableThemes as ct}
+          <button
+            onclick={() => setColorTheme(ct.value)}
+            class="relative w-10 h-10 rounded-full transition-all
+              {$settings.colorTheme === ct.value
+                ? 'scale-110 ring-2 ring-offset-2 ring-gray-400 dark:ring-gray-500 dark:ring-offset-gray-800'
+                : 'hover:scale-105'}"
+            style="background-color: {ct.previewHex}"
+            title={ct.label}
+            aria-label="Set accent color to {ct.label}"
+          >
+            {#if $settings.colorTheme === ct.value}
+              <Check class="w-5 h-5 text-white absolute inset-0 m-auto drop-shadow" />
+            {/if}
+          </button>
+        {/each}
+      </div>
+    </div>
+
     <!-- Reduced Motion -->
     <div class="flex items-center justify-between py-4 border-t border-gray-200 dark:border-gray-700">
       <div class="flex items-center gap-3">
@@ -181,7 +209,7 @@
       <button
         onclick={toggleReducedMotion}
         class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.reducedMotion ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}"
+          {$settings.reducedMotion ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
         role="switch"
         aria-checked={$settings.reducedMotion}
         aria-label="Toggle reduced motion"
@@ -205,7 +233,7 @@
       <button
         onclick={toggleCompactMode}
         class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.compactMode ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}"
+          {$settings.compactMode ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
         role="switch"
         aria-checked={$settings.compactMode}
         aria-label="Toggle compact mode"
@@ -222,8 +250,8 @@
   {#if isTauri}
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
       <div class="flex items-center gap-3 mb-6">
-        <div class="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
-          <HardDrive class="w-5 h-5 text-blue-600 dark:text-blue-400" />
+        <div class="p-2 bg-primary-100 dark:bg-primary-900 rounded-lg">
+          <HardDrive class="w-5 h-5 text-primary-600 dark:text-primary-400" />
         </div>
         <div>
           <h2 class="font-semibold text-lg dark:text-white">Storage</h2>
@@ -243,7 +271,7 @@
           </div>
           <button
             onclick={browseDownloadDirectory}
-            class="px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors flex-shrink-0"
+            class="px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors flex-shrink-0"
           >
             Browse
           </button>
@@ -290,7 +318,7 @@
           <button
             onclick={() => toggleNotification(option.key)}
             class="relative w-12 h-6 rounded-full transition-colors
-              {$settings.notifications?.[option.key] ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}"
+              {$settings.notifications?.[option.key] ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
             role="switch"
             aria-checked={$settings.notifications?.[option.key] ?? true}
             aria-label="Toggle {option.label}"
@@ -310,7 +338,7 @@
     <h3 class="font-semibold text-lg dark:text-white mb-4">Preview</h3>
     <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
       <div class="flex items-center gap-3 mb-3">
-        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600"></div>
+        <div class="w-10 h-10 rounded-full bg-primary-500"></div>
         <div>
           <p class="font-medium text-gray-900 dark:text-white">Sample User</p>
           <p class="text-sm text-gray-500 dark:text-gray-400">0x1234...5678</p>

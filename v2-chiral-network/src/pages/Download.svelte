@@ -992,7 +992,7 @@
     <div class="flex gap-2 mb-4">
       <button
         onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <Search class="w-4 h-4" />
         Merkle Hash
@@ -1034,7 +1034,7 @@
               type="text"
               bind:value={searchQuery}
               placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
+              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1044,7 +1044,7 @@
           <button
             onclick={searchFile}
             disabled={isSearching || !$networkConnected}
-            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+            class="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
           >
             {#if isSearching}
               <Loader2 class="w-5 h-5 animate-spin" />
@@ -1124,15 +1124,15 @@
                 disabled={isDisabled}
                 class="relative p-3 rounded-lg border-2 text-left transition-all
                   {isSelected
-                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 ring-1 ring-blue-500'
+                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 ring-1 ring-primary-500'
                     : isDisabled
                       ? 'border-gray-200 dark:border-gray-600 opacity-50 cursor-not-allowed'
                       : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
                   }"
               >
                 <div class="flex items-center gap-2 mb-1">
-                  <TierIcon class="w-4 h-4 {isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}" />
-                  <span class="text-sm font-semibold {isSelected ? 'text-blue-700 dark:text-blue-300' : 'dark:text-white'}">{tier.name}</span>
+                  <TierIcon class="w-4 h-4 {isSelected ? 'text-primary-600 dark:text-primary-400' : 'text-gray-500 dark:text-gray-400'}" />
+                  <span class="text-sm font-semibold {isSelected ? 'text-primary-700 dark:text-primary-300' : 'dark:text-white'}">{tier.name}</span>
                 </div>
                 <p class="text-xs text-gray-500 dark:text-gray-400">{tier.speedLabel}</p>
                 <p class="text-xs font-medium mt-1 {isPaid ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}">
@@ -1218,13 +1218,13 @@
           onclick={() => downloadsTab = 'active'}
           class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
             {downloadsTab === 'active'
-              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
               : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
         >
           <Download class="w-4 h-4" />
           Active
           {#if getActiveDownloads().length > 0}
-            <span class="px-1.5 py-0.5 text-xs font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 rounded-full">
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400 rounded-full">
               {getActiveDownloads().length}
             </span>
           {/if}
@@ -1233,7 +1233,7 @@
           onclick={() => downloadsTab = 'history'}
           class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
             {downloadsTab === 'history'
-              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
               : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
         >
           <History class="w-4 h-4" />
@@ -1300,7 +1300,7 @@
                       </span>
                     {/if}
                     {#if isActive}
-                      <span class="text-blue-600 dark:text-blue-400 font-medium">{download.speed}</span>
+                      <span class="text-primary-600 dark:text-primary-400 font-medium">{download.speed}</span>
                       <span>{download.eta}</span>
                     {/if}
                     {#if download.status === 'completed' && download.startedAt && download.completedAt}
@@ -1356,10 +1356,10 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(download.filePath!)}
-                        class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-primary-50 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
                         title="Open file"
                       >
-                        <ExternalLink class="w-4 h-4 text-blue-500" />
+                        <ExternalLink class="w-4 h-4 text-primary-500" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(download.filePath!)}
@@ -1386,7 +1386,7 @@
                   <div class="flex items-center gap-3">
                     <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
                       <div
-                        class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}"
+                        class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-primary-500'}"
                         style="width: {download.progress}%"
                       ></div>
                     </div>
@@ -1487,10 +1487,10 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(entry.filePath!)}
-                        class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-primary-50 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
                         title="Open file"
                       >
-                        <ExternalLink class="w-4 h-4 text-blue-500" />
+                        <ExternalLink class="w-4 h-4 text-primary-500" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(entry.filePath!)}

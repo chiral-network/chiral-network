@@ -42,7 +42,7 @@
 
         <button
           on:click={handleCreateWallet}
-          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition-all shadow-sm"
+          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-sm"
         >
           <div class="flex-shrink-0 mt-0.5 p-2 bg-white/20 rounded-lg">
             <Plus class="w-5 h-5" />

@@ -558,7 +558,7 @@
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-      <div class="inline-flex items-center rounded-full border border-blue-200/70 bg-blue-50/80 px-3 py-1 text-xs font-medium text-blue-700 dark:border-blue-800/60 dark:bg-blue-900/30 dark:text-blue-300">
+      <div class="inline-flex items-center rounded-full border border-primary-200/70 bg-primary-50/80 px-3 py-1 text-xs font-medium text-primary-700 dark:border-primary-800/60 dark:bg-primary-900/30 dark:text-primary-300">
         {$nearbyPeers.length} peers online
       </div>
       {#if $incomingPendingTransfers.length > 0}
@@ -585,8 +585,8 @@
       class="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800 min-h-[22rem] xl:min-h-0"
       style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` : ''}
     >
-      <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-blue-50/70 to-cyan-50/60 dark:from-slate-900 dark:via-gray-900 dark:to-blue-950/50"></div>
-      <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-blue-300/25 blur-3xl dark:bg-blue-500/20"></div>
+      <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-primary-50/70 to-cyan-50/60 dark:from-slate-900 dark:via-gray-900 dark:to-primary-950/50"></div>
+      <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-primary-300/25 blur-3xl dark:bg-primary-500/20"></div>
       <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20"></div>
       <div class="network-dot-grid absolute inset-0 opacity-45 dark:opacity-30"></div>
 
@@ -604,9 +604,9 @@
           <span class="user-wave user-wave-2"></span>
           <span class="user-wave user-wave-3"></span>
         </div>
-        <span class="absolute -inset-4 rounded-full bg-blue-400/25 blur-xl dark:bg-blue-500/20"></span>
+        <span class="absolute -inset-4 rounded-full bg-primary-400/25 blur-xl dark:bg-primary-500/20"></span>
         <div
-          class="relative h-16 w-16 rounded-full border-4 border-white shadow-xl ring-4 ring-blue-200/60 dark:border-gray-700 dark:ring-blue-900/60 flex items-center justify-center"
+          class="relative h-16 w-16 rounded-full border-4 border-white shadow-xl ring-4 ring-primary-200/60 dark:border-gray-700 dark:ring-primary-900/60 flex items-center justify-center"
           style="background-color: {$userAlias.colorHex}"
         >
           <User class="h-8 w-8 text-white" />
@@ -620,13 +620,13 @@
       {#each $nearbyPeers as peer (peer.peerId)}
         <button
           onclick={() => handlePeerClick(peer)}
-          class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+          class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2"
           style="left: {peer.position.x}%; top: {peer.position.y}%; transform: translate(-50%, -50%);"
         >
-          <span class="peer-glow absolute inset-0 rounded-full bg-blue-400/20 blur-md dark:bg-blue-500/20"></span>
+          <span class="peer-glow absolute inset-0 rounded-full bg-primary-400/20 blur-md dark:bg-primary-500/20"></span>
           <div class="relative z-10 flex flex-col items-center">
             <div
-              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-md transition-transform duration-200 group-hover:scale-110 dark:border-gray-700 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-blue-300/60 dark:ring-blue-900/70' : ''}"
+              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-md transition-transform duration-200 group-hover:scale-110 dark:border-gray-700 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-primary-300/60 dark:ring-primary-900/70' : ''}"
               style="background-color: {peer.alias.colorHex}"
             >
               <User class="h-6 w-6 text-white" />
@@ -660,7 +660,7 @@
       title="Drag to resize panels"
     >
       <span class="h-full w-px bg-gray-300 dark:bg-gray-600"></span>
-      <span class="absolute h-20 w-1.5 rounded-full bg-gray-300/80 transition group-hover:bg-blue-400 dark:bg-gray-600 dark:group-hover:bg-blue-500"></span>
+      <span class="absolute h-20 w-1.5 rounded-full bg-gray-300/80 transition group-hover:bg-primary-400 dark:bg-gray-600 dark:group-hover:bg-primary-500"></span>
     </button>
 
     <!-- Side Panel -->
@@ -757,7 +757,7 @@
                 min="0"
                 placeholder="0 (free)"
                 bind:value={sendPrice}
-                class="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:focus:border-blue-500 dark:focus:ring-blue-900/50"
+                class="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:focus:border-primary-500 dark:focus:ring-primary-900/50"
               />
             </div>
             {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -766,7 +766,7 @@
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full rounded-xl bg-blue-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-600"
+            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600"
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />

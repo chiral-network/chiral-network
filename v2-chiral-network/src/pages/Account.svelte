@@ -429,7 +429,7 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <!-- Wallet Overview Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-      <div class="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white">
+      <div class="bg-gradient-to-r from-primary-600 to-primary-700 p-6 text-white">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="p-3 bg-white/20 rounded-full">
@@ -437,7 +437,7 @@
             </div>
             <div>
               <h2 class="text-xl font-semibold">Chiral Wallet</h2>
-              <p class="text-blue-100 text-sm">Your decentralized identity</p>
+              <p class="text-primary-100 text-sm">Your decentralized identity</p>
             </div>
           </div>
           <span class="px-3 py-1 bg-white/20 rounded-full text-sm">
@@ -449,16 +449,16 @@
         <div class="bg-white/10 rounded-xl p-4 mt-4">
           <div class="flex items-center justify-between">
             <div>
-              <p class="text-blue-100 text-sm mb-1">Balance</p>
+              <p class="text-primary-100 text-sm mb-1">Balance</p>
               <div class="flex items-baseline gap-2">
                 {#if isLoadingBalance}
                   <RefreshCw class="w-6 h-6 animate-spin" />
                 {:else if balance === '--'}
-                  <span class="text-xl font-bold text-blue-200/60">--</span>
-                  <span class="text-blue-200/60 text-sm">Connecting to network...</span>
+                  <span class="text-xl font-bold text-primary-200/60">--</span>
+                  <span class="text-primary-200/60 text-sm">Connecting to network...</span>
                 {:else}
                   <span class="text-3xl font-bold">{formatBalance(balance)}</span>
-                  <span class="text-blue-100">CHR</span>
+                  <span class="text-primary-100">CHR</span>
                 {/if}
               </div>
             </div>
@@ -562,8 +562,8 @@
     <!-- Send CHR Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-          <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
+        <div class="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
+          <Send class="w-6 h-6 text-primary-600 dark:text-primary-400" />
         </div>
         <div>
           <h3 class="font-semibold dark:text-white">Send CHR</h3>
@@ -588,7 +588,7 @@
                     }
                     showAddRecipient = true;
                   }}
-                  class="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
+                  class="flex items-center gap-1 text-xs text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300"
                 >
                   <UserPlus class="w-3.5 h-3.5" />
                   Save
@@ -601,13 +601,13 @@
                   type="text"
                   bind:value={newRecipientLabel}
                   placeholder="Label (e.g. Alice)"
-                  class="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                  class="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
                   onkeydown={(e) => { if (e.key === 'Enter') addRecipient(); }}
                 />
                 <button
                   onclick={addRecipient}
                   disabled={!newRecipientLabel.trim()}
-                  class="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  class="px-3 py-2 bg-primary-600 text-white text-sm rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors"
                 >
                   Save
                 </button>
@@ -624,7 +624,7 @@
               type="text"
               bind:value={recipientAddress}
               placeholder="0x..."
-              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
             />
           </div>
 
@@ -641,11 +641,11 @@
                 pattern="[0-9]*\.?[0-9]*"
                 bind:value={sendAmount}
                 placeholder="0.00"
-                class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+                class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
               />
               <button
                 onclick={() => sendAmount = balance}
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 font-medium"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-primary-600 dark:text-primary-400 hover:text-primary-700 font-medium"
               >
                 MAX
               </button>
@@ -655,7 +655,7 @@
           <button
             onclick={handleSend}
             disabled={!recipientAddress || !sendAmount}
-            class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send class="w-4 h-4" />
             Send CHR
@@ -667,14 +667,14 @@
               <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Saved Recipients</span>
               <div class="space-y-1 max-h-48 overflow-y-auto">
                 {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
-                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-blue-50 dark:bg-blue-900/20 border-l-2 border-blue-500' : ''}"
+                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-primary-500' : ''}"
                     role="button"
                     tabindex="0"
                     onclick={() => selectRecipient(r)}
                     onkeydown={(e) => { if (e.key === 'Enter') selectRecipient(r); }}
                   >
-                    <div class="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
-                      <span class="text-sm font-semibold text-blue-600 dark:text-blue-400">{r.label.charAt(0).toUpperCase()}</span>
+                    <div class="w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center flex-shrink-0">
+                      <span class="text-sm font-semibold text-primary-600 dark:text-primary-400">{r.label.charAt(0).toUpperCase()}</span>
                     </div>
                     <div class="flex-1 min-w-0">
                       <p class="text-sm font-medium dark:text-white truncate">{r.label}</p>
@@ -719,7 +719,7 @@
             </div>
             <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
               <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
-              <span class="text-lg font-bold text-blue-600 dark:text-blue-400">{sendAmount} CHR</span>
+              <span class="text-lg font-bold text-primary-600 dark:text-primary-400">{sendAmount} CHR</span>
             </div>
           </div>
 
@@ -740,7 +740,7 @@
             <button
               onclick={confirmSend}
               disabled={isSending}
-              class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              class="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {#if isSending}
                 <Loader2 class="w-4 h-4 animate-spin" />

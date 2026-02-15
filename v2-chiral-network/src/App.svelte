@@ -4,6 +4,7 @@
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
   import { gethService } from '$lib/services/gethService';
+  import { applyColorTheme } from '$lib/services/colorThemeService';
   import Navbar from '$lib/components/Navbar.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import WalletPage from './pages/Wallet.svelte';
@@ -26,6 +27,13 @@
       } else {
         document.documentElement.classList.remove('dark');
       }
+    }
+  });
+
+  // Apply color theme
+  $effect(() => {
+    if (typeof document !== 'undefined') {
+      applyColorTheme($settings.colorTheme);
     }
   });
   

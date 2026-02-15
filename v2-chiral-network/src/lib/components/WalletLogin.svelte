@@ -70,7 +70,7 @@
     <div class="flex gap-3 mb-6">
       <button
         on:click={() => method = 'privateKey'}
-        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'privateKey' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
+        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'privateKey' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
       >
         <KeyRound class="w-5 h-5" />
         <span>Private Key</span>
@@ -78,7 +78,7 @@
 
       <button
         on:click={() => method = 'mnemonic'}
-        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'mnemonic' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
+        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'mnemonic' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
       >
         <FileText class="w-5 h-5" />
         <span>Recovery Phrase</span>
@@ -95,7 +95,7 @@
           type="password"
           bind:value={privateKeyInput}
           on:keydown={(e) => e.key === 'Enter' && handleLogin()}
-          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 dark:text-white"
+          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 dark:text-white"
           placeholder="Enter your private key (with or without 0x prefix)"
         />
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
@@ -111,7 +111,7 @@
           id="mnemonic-input"
           bind:value={mnemonicInput}
           rows="3"
-          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-white"
+          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-white"
           placeholder="Enter your 12-word recovery phrase"
         ></textarea>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
@@ -135,7 +135,7 @@
       </button>
       <button
         on:click={handleLogin}
-        class="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+        class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
       >
         Login
       </button>
