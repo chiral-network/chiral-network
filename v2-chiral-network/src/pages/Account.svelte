@@ -59,7 +59,6 @@
   let privateKeyVisible = $state(false);
   let copied = $state<'address' | 'privateKey' | null>(null);
   let showLogoutModal = $state(false);
-  let showSendModal = $state(false);
   let balance = $state<string>('--');
   let isLoadingBalance = $state(false);
 
@@ -231,7 +230,6 @@
       recipientAddress = '';
       sendAmount = '';
       showConfirmSend = false;
-      showSendModal = false;
 
       // Wait for transaction to be mined, then refresh
       pollForConfirmation(result.hash);
@@ -479,24 +477,124 @@
 
     <!-- Send CHR Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+          <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
+        </div>
+        <div>
+          <h3 class="font-semibold dark:text-white">Send CHR</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHR to another address</p>
+        </div>
+      </div>
+
+      {#if !showConfirmSend}
+        <div class="space-y-4">
+          <!-- Available Balance -->
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <p class="text-sm text-gray-500 dark:text-gray-400">Available Balance</p>
+            <p class="text-xl font-bold dark:text-white">{formatBalance(balance)} CHR</p>
           </div>
+
+          <!-- Recipient Address -->
           <div>
-            <h3 class="font-semibold dark:text-white">Send CHR</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHR to another address</p>
+            <label for="recipient" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Recipient Address
+            </label>
+            <input
+              id="recipient"
+              type="text"
+              bind:value={recipientAddress}
+              placeholder="0x..."
+              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+            />
+          </div>
+
+          <!-- Amount -->
+          <div>
+            <label for="amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Amount (CHR)
+            </label>
+            <div class="relative">
+              <input
+                id="amount"
+                type="text"
+                inputmode="decimal"
+                pattern="[0-9]*\.?[0-9]*"
+                bind:value={sendAmount}
+                placeholder="0.00"
+                class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
+              />
+              <button
+                onclick={() => sendAmount = balance}
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 font-medium"
+              >
+                MAX
+              </button>
+            </div>
+          </div>
+
+          <button
+            onclick={handleSend}
+            disabled={!recipientAddress || !sendAmount}
+            class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send class="w-4 h-4" />
+            Send CHR
+          </button>
+        </div>
+      {:else}
+        <!-- Confirmation -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-2">
+            <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
+            <span class="font-semibold dark:text-white">Confirm Transaction</span>
+          </div>
+
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-3">
+            <div class="flex justify-between">
+              <span class="text-sm text-gray-500 dark:text-gray-400">From</span>
+              <span class="text-sm font-mono dark:text-gray-300">{formatAddress($walletAccount?.address || '')}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-sm text-gray-500 dark:text-gray-400">To</span>
+              <span class="text-sm font-mono dark:text-gray-300">{formatAddress(recipientAddress)}</span>
+            </div>
+            <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
+              <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
+              <span class="text-lg font-bold text-blue-600 dark:text-blue-400">{sendAmount} CHR</span>
+            </div>
+          </div>
+
+          <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+            <p class="text-sm text-yellow-800 dark:text-yellow-300">
+              <strong>Warning:</strong> This transaction cannot be reversed.
+            </p>
+          </div>
+
+          <div class="flex gap-3">
+            <button
+              onclick={() => showConfirmSend = false}
+              disabled={isSending}
+              class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 dark:text-gray-300"
+            >
+              Back
+            </button>
+            <button
+              onclick={confirmSend}
+              disabled={isSending}
+              class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {#if isSending}
+                <Loader2 class="w-4 h-4 animate-spin" />
+                Sending...
+              {:else}
+                <Check class="w-4 h-4" />
+                Confirm Send
+              {/if}
+            </button>
           </div>
         </div>
-        <button
-          onclick={() => showSendModal = true}
-          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-        >
-          <Send class="w-4 h-4" />
-          Send
-        </button>
-      </div>
+      {/if}
     </div>
 
     <!-- Transaction History Card -->
@@ -704,136 +802,3 @@
   </div>
 {/if}
 
-<!-- Send CHR Modal -->
-{#if showSendModal}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => { showSendModal = false; showConfirmSend = false; }} onkeydown={(e) => e.key === 'Escape' && (showSendModal = false)}>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-      {#if !showConfirmSend}
-        <!-- Send Form -->
-        <div class="flex items-center gap-3 mb-6">
-          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
-          </div>
-          <h3 class="text-lg font-semibold dark:text-white">Send CHR</h3>
-        </div>
-
-        <div class="space-y-4">
-          <!-- Available Balance -->
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-            <p class="text-sm text-gray-500 dark:text-gray-400">Available Balance</p>
-            <p class="text-xl font-bold dark:text-white">{formatBalance(balance)} CHR</p>
-          </div>
-
-          <!-- Recipient Address -->
-          <div>
-            <label for="recipient" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Recipient Address
-            </label>
-            <input
-              id="recipient"
-              type="text"
-              bind:value={recipientAddress}
-              placeholder="0x..."
-              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
-            />
-          </div>
-
-          <!-- Amount -->
-          <div>
-            <label for="amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Amount (CHR)
-            </label>
-            <div class="relative">
-              <input
-                id="amount"
-                type="text"
-                inputmode="decimal"
-                pattern="[0-9]*\.?[0-9]*"
-                bind:value={sendAmount}
-                placeholder="0.00"
-                class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
-              />
-              <button
-                onclick={() => sendAmount = balance}
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 font-medium"
-              >
-                MAX
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex gap-3 mt-6">
-          <button
-            onclick={() => showSendModal = false}
-            class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
-          >
-            Cancel
-          </button>
-          <button
-            onclick={handleSend}
-            disabled={!recipientAddress || !sendAmount}
-            class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send class="w-4 h-4" />
-            Continue
-          </button>
-        </div>
-      {:else}
-        <!-- Confirmation Screen -->
-        <div class="flex items-center gap-3 mb-6">
-          <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
-            <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
-          </div>
-          <h3 class="text-lg font-semibold dark:text-white">Confirm Transaction</h3>
-        </div>
-
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-3 mb-6">
-          <div class="flex justify-between">
-            <span class="text-sm text-gray-500 dark:text-gray-400">From</span>
-            <span class="text-sm font-mono dark:text-gray-300">{formatAddress($walletAccount?.address || '')}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-sm text-gray-500 dark:text-gray-400">To</span>
-            <span class="text-sm font-mono dark:text-gray-300">{formatAddress(recipientAddress)}</span>
-          </div>
-          <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
-            <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
-            <span class="text-lg font-bold text-blue-600 dark:text-blue-400">{sendAmount} CHR</span>
-          </div>
-        </div>
-
-        <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 mb-6">
-          <p class="text-sm text-yellow-800 dark:text-yellow-300">
-            <strong>Warning:</strong> This transaction cannot be reversed. Please verify the recipient address and amount before confirming.
-          </p>
-        </div>
-
-        <div class="flex gap-3">
-          <button
-            onclick={() => showConfirmSend = false}
-            disabled={isSending}
-            class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 dark:text-gray-300"
-          >
-            Back
-          </button>
-          <button
-            onclick={confirmSend}
-            disabled={isSending}
-            class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {#if isSending}
-              <Loader2 class="w-4 h-4 animate-spin" />
-              Sending...
-            {:else}
-              <Check class="w-4 h-4" />
-              Confirm Send
-            {/if}
-          </button>
-        </div>
-      {/if}
-    </div>
-  </div>
-{/if}
