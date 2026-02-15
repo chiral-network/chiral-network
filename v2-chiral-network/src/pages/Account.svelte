@@ -343,6 +343,7 @@
   </div>
 
   {#if $walletAccount}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <!-- Wallet Overview Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
       <div class="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white">
@@ -595,6 +596,7 @@
           </div>
         </div>
       {/if}
+    </div>
     </div>
 
     <!-- Transaction History Card -->
