@@ -481,7 +481,7 @@
           </div>
           <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
             <div
-              class="bg-blue-600 h-2 rounded-full transition-all"
+              class="bg-primary-600 h-2 rounded-full transition-all"
               style="width: {downloadProgress.percentage}%"
             ></div>
           </div>
@@ -495,7 +495,7 @@
         <button
           onclick={handleDownloadGeth}
           disabled={isDownloading}
-          class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <Download class="w-5 h-5" />
           Download Geth
@@ -551,8 +551,8 @@
 
       <!-- Connecting Info -->
       {#if showGethConnectingMsg}
-        <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <p class="text-sm text-blue-800 dark:text-blue-300">
+        <div class="mt-4 p-3 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 rounded-lg">
+          <p class="text-sm text-primary-800 dark:text-primary-300">
             <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
             This may take a moment. Peer count will update automatically.
           </p>
@@ -718,7 +718,7 @@
         <button
           onclick={connectToNetwork}
           disabled={isConnecting}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50"
         >
           {#if isConnecting}
             <Loader2 class="w-4 h-4 animate-spin" />
@@ -837,7 +837,7 @@
                 <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
                 <div class="flex flex-wrap gap-1.5">
                   {#each dhtHealth.protocols as protocol}
-                    <span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded-full font-mono">
+                    <span class="px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 text-xs rounded-full font-mono">
                       {protocol}
                     </span>
                   {/each}
@@ -922,7 +922,7 @@
                 </div>
                 <button
                   onclick={() => pingPeer(peer.id)}
-                  class="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition shrink-0"
+                  class="flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white text-sm rounded hover:bg-primary-700 transition shrink-0"
                   title="Ping this peer"
                 >
                   <Radio class="w-3 h-3" />

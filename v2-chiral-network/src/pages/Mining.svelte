@@ -298,7 +298,7 @@
       </div>
       <button
         onclick={() => goto('/network')}
-        class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+        class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2"
       >
         <Globe class="w-5 h-5" />
         Go to Network Page

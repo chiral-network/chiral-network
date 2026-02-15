@@ -48,7 +48,7 @@
               onclick={() => navigate(item.path)}
               class="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded-lg transition text-sm
                 {currentPage === item.path
-                  ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                  ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
                   : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
               title={item.label}
             >
@@ -107,7 +107,7 @@
             onclick={() => navigate(item.path)}
             class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm
               {currentPage === item.path
-                ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
                 : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
           >
             <svelte:component this={item.icon} class="w-4 h-4" />

@@ -132,8 +132,8 @@
   {#if !isInstalled}
     <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-blue-100 rounded-lg">
-          <Download class="w-6 h-6 text-blue-600" />
+        <div class="p-2 bg-primary-100 rounded-lg">
+          <Download class="w-6 h-6 text-primary-600" />
         </div>
         <div>
           <h3 class="font-semibold">Install Geth</h3>
@@ -149,7 +149,7 @@
           </div>
           <div class="w-full bg-gray-200 rounded-full h-2">
             <div
-              class="bg-blue-600 h-2 rounded-full transition-all"
+              class="bg-primary-600 h-2 rounded-full transition-all"
               style="width: {$downloadProgress?.percentage || 0}%"
             ></div>
           </div>
@@ -157,7 +157,7 @@
       {:else}
         <button
           onclick={handleDownload}
-          class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+          class="w-full px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2"
         >
           <Download class="w-4 h-4" />
           Download Geth
