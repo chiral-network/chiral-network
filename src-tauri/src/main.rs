@@ -406,6 +406,12 @@ struct AppState {
 
     // FTP server for serving uploaded files
     ftp_server: Arc<chiral_network::ftp_server::FtpServer>,
+
+    // Proxy latency tracking service
+    proxy_latency: Mutex<chiral_network::proxy_latency::ProxyLatencyService>,
+
+    // Epoch counter for cancelling stale proxy self-test runs
+    proxy_self_test_epoch: std::sync::atomic::AtomicU64,
 }
 
 /// Tauri command to create a new Chiral account
@@ -9344,6 +9350,12 @@ fn main() {
 
             // FTP server for serving uploaded files (created earlier for protocol manager)
             ftp_server: ftp_server_arc,
+
+            // Proxy latency tracking service
+            proxy_latency: Mutex::new(chiral_network::proxy_latency::ProxyLatencyService::new()),
+
+            // Epoch counter for cancelling stale proxy self-test runs
+            proxy_self_test_epoch: std::sync::atomic::AtomicU64::new(0),
         })
         .invoke_handler(tauri::generate_handler![
             create_chiral_account,

@@ -4,6 +4,7 @@ pub use self::models::*;
 use bon::Builder;
 // use self::protocol::*;
 use crate::config::CHAIN_ID;
+use std::time::Instant;
 use crate::download_source::HttpSourceInfo;
 use crate::encryption::EncryptedAesKeyBundle;
 use serde_bytes;
@@ -472,6 +473,9 @@ pub enum DhtEvent {
 }
 
 // ------------ Proxy Manager Structs and Enums ------------
+const PROXY_PING_RTT_TTL: Duration = Duration::from_secs(60);
+const PROXY_PING_RTT_MAX: usize = 512;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyMode {
     Off,
@@ -490,10 +494,19 @@ impl PrivacyMode {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ProxyPingRtt {
+    ping_rtt_ms: u64,
+    updated_at: Instant,
+}
+
 struct ProxyManager {
     targets: std::collections::HashSet<PeerId>,
     capable: std::collections::HashSet<PeerId>,
     online: std::collections::HashSet<PeerId>,
+    ping_rtt: std::collections::HashMap<PeerId, ProxyPingRtt>,
+    relay_pending: std::collections::HashSet<PeerId>,
+    relay_ready: std::collections::HashSet<PeerId>,
     // Privacy routing state
     privacy_routing_enabled: bool,
     trusted_proxy_nodes: std::collections::HashSet<PeerId>,
@@ -514,13 +527,57 @@ impl ProxyManager {
     fn set_online(&mut self, id: PeerId) {
         self.online.insert(id);
     }
+    fn ping_rtt_ttl() -> Duration {
+        PROXY_PING_RTT_TTL.max(Duration::from_secs(30))
+    }
+    fn ping_rtt_ms(&self, id: &PeerId) -> Option<u64> {
+        let row = self.ping_rtt.get(id)?;
+        if row.updated_at.elapsed() > Self::ping_rtt_ttl() {
+            return None;
+        }
+        Some(row.ping_rtt_ms)
+    }
+    fn prune_ping_rtt(&mut self) {
+        let ttl = Self::ping_rtt_ttl();
+        let online = self.online.clone();
+        self.ping_rtt
+            .retain(|peer, row| online.contains(peer) && row.updated_at.elapsed() <= ttl);
+        if self.ping_rtt.len() <= PROXY_PING_RTT_MAX {
+            return;
+        }
+
+        let mut by_age: Vec<(PeerId, Instant)> = self
+            .ping_rtt
+            .iter()
+            .map(|(id, row)| (id.clone(), row.updated_at))
+            .collect();
+        by_age.sort_by_key(|(_, ts)| *ts);
+        let extra = self.ping_rtt.len().saturating_sub(PROXY_PING_RTT_MAX);
+        for (peer, _) in by_age.into_iter().take(extra) {
+            self.ping_rtt.remove(&peer);
+        }
+    }
+    fn set_ping_rtt(&mut self, id: PeerId, ping_rtt_ms: u64) {
+        self.ping_rtt.insert(
+            id,
+            ProxyPingRtt {
+                ping_rtt_ms,
+                updated_at: Instant::now(),
+            },
+        );
+        self.prune_ping_rtt();
+    }
     fn set_offline(&mut self, id: &PeerId) {
         self.online.remove(id);
+        self.ping_rtt.remove(id);
     }
     fn remove_all(&mut self, id: &PeerId) {
         self.targets.remove(id);
         self.capable.remove(id);
         self.online.remove(id);
+        self.ping_rtt.remove(id);
+        self.relay_pending.remove(id);
+        self.relay_ready.remove(id);
         self.trusted_proxy_nodes.remove(id);
         self.manual_trusted.remove(id);
     }
@@ -584,15 +641,34 @@ impl ProxyManager {
             return None;
         }
 
-        // Select a trusted proxy node that's online and not the target itself
+        // Select a trusted proxy that's online/capable and prefer the one with
+        // lowest fresh ping RTT. Unknown/stale ping RTT sorts last.
         self.trusted_proxy_nodes
             .iter()
-            .find(|&&proxy_id| {
+            .filter(|&&proxy_id| {
                 proxy_id != *target_peer
                     && self.online.contains(&proxy_id)
                     && self.capable.contains(&proxy_id)
             })
+            .min_by(|a, b| {
+                let rtt_a = self.ping_rtt_ms(a).unwrap_or(u64::MAX);
+                let rtt_b = self.ping_rtt_ms(b).unwrap_or(u64::MAX);
+                rtt_a
+                    .cmp(&rtt_b)
+                    .then_with(|| a.to_string().cmp(&b.to_string()))
+            })
             .cloned()
+    }
+
+    #[cfg(test)]
+    fn set_ping_rtt_at(&mut self, id: PeerId, ping_rtt_ms: u64, updated_at: Instant) {
+        self.ping_rtt.insert(
+            id,
+            ProxyPingRtt {
+                ping_rtt_ms,
+                updated_at,
+            },
+        );
     }
 }
 
@@ -602,6 +678,9 @@ impl Default for ProxyManager {
             targets: std::collections::HashSet::new(),
             capable: std::collections::HashSet::new(),
             online: std::collections::HashSet::new(),
+            ping_rtt: std::collections::HashMap::new(),
+            relay_pending: std::collections::HashSet::new(),
+            relay_ready: std::collections::HashSet::new(),
             privacy_routing_enabled: false,
             trusted_proxy_nodes: std::collections::HashSet::new(),
             privacy_mode: PrivacyMode::Off,
@@ -2495,7 +2574,11 @@ async fn run_dht_node(
                                                     selection.update_peer_latency(&peer.to_string(), rtt_ms);
                                                 }
 
-                                                let show = proxy_mgr.lock().await.is_proxy(&peer);
+                                                let show = {
+                                                    let mut mgr = proxy_mgr.lock().await;
+                                                    mgr.set_ping_rtt(peer.clone(), rtt_ms);
+                                                    mgr.is_proxy(&peer)
+                                                };
 
                                                 if show {
                                                     let _ = event_tx
@@ -7201,14 +7284,13 @@ mod tests {
 
         let mut both_seeders_found = false;
         for _ in 0..10 {
-            if let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await {
-                println!("The array pretty print:\n{:#?}", found);
-                if found.len() >= 2 {
-                    assert!(found.contains(&seeder_a.get_peer_id().await));
-                    assert!(found.contains(&seeder_b.get_peer_id().await));
-                    both_seeders_found = true;
-                    break;
-                }
+            let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await;
+            println!("The array pretty print:\n{:#?}", found);
+            if found.len() >= 2 {
+                assert!(found.contains(&seeder_a.get_peer_id().await));
+                assert!(found.contains(&seeder_b.get_peer_id().await));
+                both_seeders_found = true;
+                break;
             }
             sleep(Duration::from_millis(1000)).await;
         }
@@ -7225,16 +7307,15 @@ mod tests {
         // We wait for the DHT maintenance/pruning logic to kick in.
         let mut only_seeder_b_remains = false;
         for _ in 0..6 {
-            if let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await {
-                println!("The array pretty print:\n{:#?}", found);
+            let found = searcher_c.get_seeders_for_file(&file_hash.clone()).await;
+            println!("The array pretty print:\n{:#?}", found);
 
-                let has_a = found.contains(&seeder_a.get_peer_id().await);
-                let has_b = found.contains(&seeder_b.get_peer_id().await);
+            let has_a = found.contains(&seeder_a.get_peer_id().await);
+            let has_b = found.contains(&seeder_b.get_peer_id().await);
 
-                if !has_a && has_b {
-                    only_seeder_b_remains = true;
-                    break;
-                }
+            if !has_a && has_b {
+                only_seeder_b_remains = true;
+                break;
             }
             sleep(Duration::from_millis(1000)).await;
         }
@@ -7364,6 +7445,40 @@ mod tests {
             .contains(&"/ip4/0.0.0.0/tcp/4001".to_string()));
         assert!(snapshot.observed_addrs.is_empty());
         assert!(snapshot.reachability_history.is_empty());
+    }
+
+    #[test]
+    fn proxy_manager_ignores_stale_ping_rtt() {
+        let mut mgr = ProxyManager::default();
+        mgr.enable_privacy_routing(PrivacyMode::Prefer);
+
+        let target = PeerId::random();
+        let stale = PeerId::random();
+        let fresh = PeerId::random();
+
+        for peer in [stale.clone(), fresh.clone()] {
+            mgr.set_capable(peer);
+            mgr.set_online(peer);
+            mgr.add_trusted_proxy_node(peer);
+        }
+
+        let stale_at = Instant::now() - ProxyManager::ping_rtt_ttl() - Duration::from_secs(1);
+        mgr.set_ping_rtt_at(stale, 1, stale_at);
+        mgr.set_ping_rtt(fresh, 150);
+
+        assert_eq!(mgr.ping_rtt_ms(&stale), None);
+        assert_eq!(mgr.select_proxy_for_routing(&target), Some(fresh));
+    }
+
+    #[test]
+    fn proxy_manager_ping_rtt_map_is_capped() {
+        let mut mgr = ProxyManager::default();
+        for _ in 0..(PROXY_PING_RTT_MAX + 64) {
+            let peer = PeerId::random();
+            mgr.set_online(peer);
+            mgr.set_ping_rtt(peer, 42);
+        }
+        assert!(mgr.ping_rtt.len() <= PROXY_PING_RTT_MAX);
     }
 
     #[tokio::test]

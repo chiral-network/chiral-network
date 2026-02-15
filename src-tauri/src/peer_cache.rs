@@ -103,7 +103,7 @@ impl PeerCacheEntry {
 }
 
 /// The peer cache containing all cached peers
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerCache {
     /// Schema version for forward compatibility
     pub version: u32,
@@ -265,7 +265,7 @@ impl PeerCache {
 }
 
 /// Statistics about the peer cache
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerCacheStats {
     pub total_peers: usize,
     pub bootstrap_peers: usize,
