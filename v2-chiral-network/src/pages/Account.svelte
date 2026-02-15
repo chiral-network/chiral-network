@@ -26,7 +26,8 @@
     ChevronUp,
     File as FileIcon,
     UserPlus,
-    X
+    X,
+    Trash2
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Account');
@@ -572,33 +573,6 @@
 
       {#if !showConfirmSend}
         <div class="space-y-4">
-          <!-- Saved Recipients -->
-          {#if savedRecipients.length > 0}
-            <div>
-              <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Saved Recipients</span>
-              <div class="flex flex-wrap gap-2">
-                {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
-                  <button
-                    onclick={() => selectRecipient(r)}
-                    class="group flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm transition-all {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
-                  >
-                    <span class="font-medium">{r.label}</span>
-                    <span class="text-xs text-gray-400 dark:text-gray-500 font-mono">{r.address.slice(0, 6)}...{r.address.slice(-4)}</span>
-                    <span
-                      role="button"
-                      tabindex="0"
-                      onclick={(e) => { e.stopPropagation(); deleteRecipient(r.id); }}
-                      onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); deleteRecipient(r.id); } }}
-                      class="ml-1 p-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <X class="w-3 h-3 text-gray-400 hover:text-red-500" />
-                    </span>
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/if}
-
           <!-- Recipient Address -->
           <div>
             <div class="flex items-center justify-between mb-1">
@@ -686,6 +660,38 @@
             <Send class="w-4 h-4" />
             Send CHR
           </button>
+
+          <!-- Saved Recipients List -->
+          {#if savedRecipients.length > 0}
+            <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+              <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Saved Recipients</span>
+              <div class="space-y-1 max-h-48 overflow-y-auto">
+                {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
+                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-blue-50 dark:bg-blue-900/20 ring-1 ring-blue-300 dark:ring-blue-700' : ''}"
+                    role="button"
+                    tabindex="0"
+                    onclick={() => selectRecipient(r)}
+                    onkeydown={(e) => { if (e.key === 'Enter') selectRecipient(r); }}
+                  >
+                    <div class="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
+                      <span class="text-sm font-semibold text-blue-600 dark:text-blue-400">{r.label.charAt(0).toUpperCase()}</span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium dark:text-white truncate">{r.label}</p>
+                      <p class="text-xs font-mono text-gray-400 dark:text-gray-500 truncate">{r.address}</p>
+                    </div>
+                    <button
+                      onclick={(e) => { e.stopPropagation(); deleteRecipient(r.id); }}
+                      class="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                      title="Remove recipient"
+                    >
+                      <Trash2 class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
         </div>
       {:else}
         <!-- Confirmation -->

@@ -55,6 +55,9 @@ pub mod payment_checkpoint;
 // Logger module for file-based logging
 pub mod logger;
 
+// Chunk scheduler for multi-peer downloads
+pub mod chunk_scheduler;
+
 // Ethereum/Geth integration
 pub mod ethereum;
 pub mod geth_downloader;
