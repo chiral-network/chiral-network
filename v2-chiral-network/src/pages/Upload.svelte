@@ -307,7 +307,6 @@
   // Drag and drop handlers
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
-    if (!$networkConnected) return;
     isDragging = true;
   }
 
@@ -322,7 +321,6 @@
 
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
-      // For web browsers, use FileList from DataTransfer
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
         toasts.show('File upload requires the desktop app', 'error');
@@ -337,8 +335,25 @@
 
     if (isUploading) return;
 
-    // For Tauri, the drag-drop files are handled via onDragDropEvent listener
-    // which calls processFiles directly
+    // DOM fallback: try to extract file paths from DataTransfer
+    // This works in Tauri when the internal drag-drop listener doesn't fire
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const paths: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        // In Tauri webview, File objects may have a path property
+        const file = files[i] as File & { path?: string };
+        if (file.path) {
+          paths.push(file.path);
+        }
+      }
+      if (paths.length > 0) {
+        isUploading = true;
+        processFiles(paths).finally(() => {
+          isUploading = false;
+        });
+      }
+    }
   }
 
   // Get protocol badge color

@@ -42,14 +42,14 @@
 
         <button
           on:click={handleCreateWallet}
-          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-gray-900 hover:bg-black dark:bg-white dark:hover:bg-gray-100 text-white dark:text-gray-900 rounded-xl transition-all shadow-sm"
+          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition-all shadow-sm"
         >
-          <div class="flex-shrink-0 mt-0.5 p-2 bg-white/20 dark:bg-gray-900/20 rounded-lg">
+          <div class="flex-shrink-0 mt-0.5 p-2 bg-white/20 rounded-lg">
             <Plus class="w-5 h-5" />
           </div>
           <div class="text-left">
             <span class="block font-semibold text-base">Create New Wallet</span>
-            <span class="block text-sm text-white/70 dark:text-gray-900/60 mt-0.5">Generate a new wallet with a secure recovery phrase</span>
+            <span class="block text-sm text-white/70 mt-0.5">Generate a new wallet with a secure recovery phrase</span>
           </div>
         </button>
 
