@@ -27,7 +27,8 @@
     Eye
   } from 'lucide-svelte';
   import { Zap, Gauge, Rocket } from 'lucide-svelte';
-  import { networkConnected, walletAccount } from '$lib/stores';
+  import { networkConnected, walletAccount, blacklist } from '$lib/stores';
+  import { get } from 'svelte/store';
   import { walletService } from '$lib/services/walletService';
   import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
@@ -533,6 +534,23 @@
     if (result.seeders.length === 0) {
       toasts.show('No seeders available. The file owner may be offline or the file was not found in DHT.', 'error');
       return;
+    }
+
+    // Check blacklist
+    const bl = get(blacklist);
+    const blacklistedMatch = bl.find(entry =>
+      [result.walletAddress, ...result.seeders].some(
+        addr => addr.toLowerCase() === entry.address.toLowerCase()
+      )
+    );
+    if (blacklistedMatch) {
+      const short = blacklistedMatch.address.length > 16
+        ? `${blacklistedMatch.address.slice(0, 8)}...${blacklistedMatch.address.slice(-6)}`
+        : blacklistedMatch.address;
+      const proceed = confirm(
+        `Warning: The file owner or a seeder (${short}) is on your blacklist.\n\nReason: ${blacklistedMatch.reason}\n\nDo you still want to proceed with the download?`
+      );
+      if (!proceed) return;
     }
 
     // Calculate total cost: speed tier + seeder file price
