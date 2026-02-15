@@ -667,7 +667,7 @@
               <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Saved Recipients</span>
               <div class="space-y-1 max-h-48 overflow-y-auto">
                 {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
-                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-blue-50 dark:bg-blue-900/20 ring-1 ring-blue-300 dark:ring-blue-700' : ''}"
+                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-blue-50 dark:bg-blue-900/20 border-l-2 border-blue-500' : ''}"
                     role="button"
                     tabindex="0"
                     onclick={() => selectRecipient(r)}
