@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { KeyRound, Plus, Globe, Shield, Coins } from 'lucide-svelte';
+  import { KeyRound, Plus } from 'lucide-svelte';
   import WalletCreation from '$lib/components/WalletCreation.svelte';
   import WalletLogin from '$lib/components/WalletLogin.svelte';
 
@@ -65,22 +65,6 @@
             <span class="block text-sm text-gray-500 dark:text-gray-400 mt-0.5">Use your private key or recovery phrase</span>
           </div>
         </button>
-      </div>
-
-      <!-- Feature pills -->
-      <div class="flex items-center justify-center gap-3 mt-8">
-        <div class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full text-xs text-gray-500 dark:text-gray-400">
-          <Globe class="w-3.5 h-3.5" />
-          <span>Decentralized</span>
-        </div>
-        <div class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full text-xs text-gray-500 dark:text-gray-400">
-          <Shield class="w-3.5 h-3.5" />
-          <span>Encrypted</span>
-        </div>
-        <div class="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full text-xs text-gray-500 dark:text-gray-400">
-          <Coins class="w-3.5 h-3.5" />
-          <span>Token Economy</span>
-        </div>
       </div>
     </div>
   </div>
