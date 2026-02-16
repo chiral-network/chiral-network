@@ -5,7 +5,11 @@ use tauri::command;
 
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWGe8FBgS18tSKdB4W33WduSccmvbJqMsTRgF2Z6TwMiPG"
+        // Primary bootstrap node (IPv4)
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWRNWj5Knx1yV6mqBt6Wf7buVMh3g4vpsHRxKtTr9ynXPu"
+            .to_string(),
+        // Primary bootstrap node (IPv6 via 6to4 tunnel)
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWRNWj5Knx1yV6mqBt6Wf7buVMh3g4vpsHRxKtTr9ynXPu"
             .to_string(),
         "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
             .to_string(),

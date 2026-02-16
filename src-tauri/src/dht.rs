@@ -2698,25 +2698,19 @@ async fn run_dht_node(
                                             .await;
                                     }
                                     SwarmEvent::NewListenAddr { address, .. } => {
-                                        // Attempt to find an IPv4 protocol within the Multiaddr
-                                        if let Some(Protocol::Ip4(v4)) = address.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
+                                        let is_reachable = if cfg!(test) {
+                                            true
+                                        } else {
+                                            ma_plausibly_reachable(&address)
+                                        };
 
-                                            // Determine reachability: allow all in tests, otherwise reject loopback/private
-                                            let is_reachable = if cfg!(test) {
-                                                true
-                                            } else {
-                                                !v4.is_loopback() && !v4.is_private()
-                                            };
-
-                                            if is_reachable {
-                                                // Record in metrics for monitoring
-                                                if let Ok(mut m) = metrics.try_lock() {
-                                                    m.record_listen_addr(&address);
-                                                }
-
-                                                swarm.add_external_address(address.clone());
-                                                info!("✅ Advertising reachable address: {}", address);
+                                        if is_reachable {
+                                            if let Ok(mut m) = metrics.try_lock() {
+                                                m.record_listen_addr(&address);
                                             }
+
+                                            swarm.add_external_address(address.clone());
+                                            info!("✅ Advertising reachable address: {}", address);
                                         }
                                     }
                                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
@@ -4002,7 +3996,7 @@ async fn handle_identify_event(
                     if let Some(fallback) = info
                         .listen_addrs
                         .iter()
-                        .find(|addr| ma_non_loopback_ipv4(addr))
+                        .find(|addr| ma_non_loopback(addr))
                         .cloned()
                     {
                         debug!(
@@ -4883,9 +4877,11 @@ impl DhtService {
             )
             .build();
 
-        // Always listen on the specified port
+        // Listen on IPv4 and IPv6
         let tcp_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(tcp_addr)?;
+        let tcp6_addr: Multiaddr = format!("/ip6/::/tcp/{}", port).parse()?;
+        swarm.listen_on(tcp6_addr)?;
 
         // QUIC also bound to the same port (udp), seems to destablize peer connect/download, disabled for now until solution
         // let quic_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", port).parse()?;
@@ -6790,27 +6786,39 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 }
 
 /// If multiaddr can be plausibly reached from this machine
-/// - IPv4 loopback (127.0.0.1) is REJECTED (not reachable from remote peers)
-/// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
+/// - IPv4 loopback (127.0.0.1) and IPv6 loopback (::1) are REJECTED
+/// - For WAN intent, only public IPv4/IPv6 addresses are allowed (not private/link-local)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
-    // Only consider IPv4 (IPv6 can be added if needed)
-    if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        // Reject loopback addresses - they're not reachable from remote peers
-        if v4.is_loopback() {
-            return false;
+    for proto in ma.iter() {
+        match proto {
+            Protocol::Ip4(v4) => {
+                if v4.is_loopback() { return false; }
+                return !v4.is_private();
+            }
+            Protocol::Ip6(v6) => {
+                if v6.is_loopback() { return false; }
+                // Reject link-local (fe80::) and unique-local (fc00::/7)
+                let segs = v6.segments();
+                if (segs[0] & 0xffc0) == 0xfe80 { return false; }
+                if (segs[0] & 0xfe00) == 0xfc00 { return false; }
+                return true;
+            }
+            _ => {}
         }
-        // Allow public addresses, reject private
-        return !v4.is_private();
     }
     false
 }
 
-/// A softer check that accepts any non-loopback IPv4 address (used as a fallback
+/// A softer check that accepts any non-loopback IPv4/IPv6 address (used as a fallback
 /// to avoid publishing with an empty address set). This will allow private LAN
 /// addresses but still reject loopback.
-fn ma_non_loopback_ipv4(ma: &Multiaddr) -> bool {
-    if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        return !v4.is_loopback();
+fn ma_non_loopback(ma: &Multiaddr) -> bool {
+    for proto in ma.iter() {
+        match proto {
+            Protocol::Ip4(v4) => return !v4.is_loopback(),
+            Protocol::Ip6(v6) => return !v6.is_loopback(),
+            _ => {}
+        }
     }
     false
 }

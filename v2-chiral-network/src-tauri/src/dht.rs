@@ -138,10 +138,12 @@ mod cbor_codec {
 }
 
 /// Get bootstrap nodes for the Chiral Network DHT
-/// These are the same bootstrap nodes used in v1
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C".to_string(),
+        // IPv4
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWRNWj5Knx1yV6mqBt6Wf7buVMh3g4vpsHRxKtTr9ynXPu".to_string(),
+        // IPv6 (6to4 tunnel)
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWRNWj5Knx1yV6mqBt6Wf7buVMh3g4vpsHRxKtTr9ynXPu".to_string(),
     ]
 }
 
