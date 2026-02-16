@@ -27,8 +27,9 @@
     Eye
   } from 'lucide-svelte';
   import { Zap, Gauge, Rocket } from 'lucide-svelte';
-  import { networkConnected, walletAccount, blacklist } from '$lib/stores';
+  import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
+  import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { walletService } from '$lib/services/walletService';
   import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
@@ -204,6 +205,9 @@
   let selectedTier = $state<SpeedTier>('free');
   let walletBalance = $state<string>('0');
   let isProcessingPayment = $state(false);
+
+  // Blacklist warning modal
+  let blacklistWarning = $state<{ match: BlacklistEntry; result: SearchResult } | null>(null);
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -517,7 +521,7 @@
   }
 
   // Start download
-  async function startDownload(result: SearchResult) {
+  async function startDownload(result: SearchResult, skipBlacklistCheck = false) {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
       toasts.show('Download requires the desktop app', 'error');
@@ -538,7 +542,7 @@
 
     // Check blacklist - compare against wallet address AND peer IDs (seeders)
     const bl = get(blacklist);
-    if (bl.length > 0) {
+    if (!skipBlacklistCheck && bl.length > 0) {
       const candidates = [result.walletAddress, ...result.seeders]
         .filter(Boolean)
         .map(a => a.trim().toLowerCase());
@@ -547,13 +551,8 @@
         return candidates.some(addr => addr === entryAddr || addr.includes(entryAddr) || entryAddr.includes(addr));
       });
       if (blacklistedMatch) {
-        const short = blacklistedMatch.address.length > 16
-          ? `${blacklistedMatch.address.slice(0, 8)}...${blacklistedMatch.address.slice(-6)}`
-          : blacklistedMatch.address;
-        const proceed = confirm(
-          `Warning: The file owner or a seeder (${short}) is on your blacklist.\n\nReason: ${blacklistedMatch.reason}\n\nDo you still want to proceed with the download?`
-        );
-        if (!proceed) return;
+        blacklistWarning = { match: blacklistedMatch, result };
+        return;
       }
     }
 
@@ -1608,4 +1607,18 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if blacklistWarning}
+  <BlacklistWarningModal
+    address={blacklistWarning.match.address}
+    reason={blacklistWarning.match.reason}
+    action="download this file"
+    onconfirm={() => {
+      const result = blacklistWarning!.result;
+      blacklistWarning = null;
+      startDownload(result, true);
+    }}
+    oncancel={() => { blacklistWarning = null; }}
+  />
 {/if}
