@@ -214,7 +214,7 @@
           fileName,
           protocol: selectedProtocol,
           priceChr: priceChr || null,
-          walletAddress: priceChr ? walletAddr : null,
+          walletAddress: walletAddr || null,
         });
 
         const newFile: SharedFile = {
