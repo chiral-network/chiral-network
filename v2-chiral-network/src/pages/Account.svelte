@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { walletAccount, isAuthenticated, networkConnected, blacklist } from '$lib/stores';
+  import { walletAccount, isAuthenticated, networkConnected, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
+  import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { toasts } from '$lib/toastStore';
   import { walletService } from '$lib/services/walletService';
   import { dhtService } from '$lib/dhtService';
@@ -142,6 +143,7 @@
   let sendAmount = $state('');
   let isSending = $state(false);
   let showConfirmSend = $state(false);
+  let blacklistWarningMatch = $state<BlacklistEntry | null>(null);
 
   // Transaction history state
   let transactions = $state<Transaction[]>([]);
@@ -276,10 +278,8 @@
       || recipientAddress.trim().toLowerCase().includes(e.address.trim().toLowerCase())
       || e.address.trim().toLowerCase().includes(recipientAddress.trim().toLowerCase()));
     if (match) {
-      const proceed = confirm(
-        `Warning: The recipient (${recipientAddress.slice(0, 8)}...${recipientAddress.slice(-6)}) is on your blacklist.\n\nReason: ${match.reason}\n\nAre you sure you want to send ${sendAmount} CHR to this address?`
-      );
-      if (!proceed) return;
+      blacklistWarningMatch = match;
+      return;
     }
 
     showConfirmSend = true;
@@ -939,6 +939,16 @@
 </div>
 
 <!-- Logout Modal -->
+{#if blacklistWarningMatch}
+  <BlacklistWarningModal
+    address={blacklistWarningMatch.address}
+    reason={blacklistWarningMatch.reason}
+    action={`send ${sendAmount} CHR`}
+    onconfirm={() => { blacklistWarningMatch = null; showConfirmSend = true; }}
+    oncancel={() => { blacklistWarningMatch = null; }}
+  />
+{/if}
+
 {#if showLogoutModal}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showLogoutModal = false} onkeydown={(e) => e.key === 'Escape' && (showLogoutModal = false)}>
