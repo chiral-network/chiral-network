@@ -16,6 +16,7 @@
     X,
     CheckCircle,
     AlertCircle,
+    AlertTriangle,
     History,
     Loader2,
     Link,
@@ -208,6 +209,9 @@
 
   // Blacklist warning modal
   let blacklistWarning = $state<{ match: BlacklistEntry; result: SearchResult } | null>(null);
+
+  // Download confirmation modal
+  let pendingDownload = $state<{ result: SearchResult; tierCost: number; seederPriceChr: number; totalCost: number } | null>(null);
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -520,8 +524,8 @@
     }
   }
 
-  // Start download
-  async function startDownload(result: SearchResult, skipBlacklistCheck = false) {
+  // Start download (validates, shows confirmation if paid, then proceeds)
+  async function startDownload(result: SearchResult, skipBlacklistCheck = false, skipCostConfirm = false) {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
       toasts.show('Download requires the desktop app', 'error');
@@ -571,6 +575,11 @@
       }
       if (parseFloat(walletBalance) < totalCost) {
         toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHR, have ${walletBalance} CHR`, 'error');
+        return;
+      }
+      // Show confirmation modal before spending CHR
+      if (!skipCostConfirm) {
+        pendingDownload = { result, tierCost, seederPriceChr, totalCost };
         return;
       }
     }
@@ -1621,4 +1630,77 @@
     }}
     oncancel={() => { blacklistWarning = null; }}
   />
+{/if}
+
+{#if pendingDownload}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') pendingDownload = null; }}
+    onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
+  >
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 p-6 max-w-md w-full mx-4">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2.5 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+          <AlertTriangle class="w-6 h-6 text-amber-600 dark:text-amber-400" />
+        </div>
+        <h3 class="text-lg font-semibold dark:text-white">Confirm Download</h3>
+      </div>
+
+      <div class="space-y-3 mb-5">
+        <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+          <p class="text-sm text-gray-500 dark:text-gray-400">File</p>
+          <p class="font-medium dark:text-white truncate">{pendingDownload.result.fileName}</p>
+          {#if pendingDownload.result.fileSize > 0}
+            <p class="text-xs text-gray-400 mt-0.5">{formatFileSize(pendingDownload.result.fileSize)}</p>
+          {/if}
+        </div>
+
+        <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-2">
+          <p class="text-sm text-gray-500 dark:text-gray-400">Cost Breakdown</p>
+          {#if pendingDownload.seederPriceChr > 0}
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-600 dark:text-gray-300">File price</span>
+              <span class="font-medium text-amber-600 dark:text-amber-400">{pendingDownload.seederPriceChr.toFixed(6)} CHR</span>
+            </div>
+          {/if}
+          {#if pendingDownload.tierCost > 0}
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-600 dark:text-gray-300">Speed tier ({selectedTier})</span>
+              <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
+            </div>
+          {/if}
+          <div class="flex justify-between text-sm pt-2 border-t border-gray-200 dark:border-gray-600">
+            <span class="font-semibold dark:text-white">Total</span>
+            <span class="font-semibold text-amber-600 dark:text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHR</span>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-sm text-gray-500 dark:text-gray-400 px-1">
+          <span>Your balance</span>
+          <span>{parseFloat(walletBalance).toFixed(4)} CHR</span>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <button
+          onclick={() => { pendingDownload = null; }}
+          class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300 font-medium"
+        >
+          Cancel
+        </button>
+        <button
+          onclick={() => {
+            const result = pendingDownload!.result;
+            pendingDownload = null;
+            startDownload(result, true, true);
+          }}
+          class="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 font-medium"
+        >
+          <Download class="w-4 h-4" />
+          Confirm & Pay
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
