@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { walletAccount, isAuthenticated, networkConnected } from '$lib/stores';
+  import { walletAccount, isAuthenticated, networkConnected, blacklist } from '$lib/stores';
+  import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
   import { walletService } from '$lib/services/walletService';
   import { dhtService } from '$lib/dhtService';
@@ -267,6 +268,18 @@
     if (!recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
       toasts.show('Invalid recipient address', 'error');
       return;
+    }
+
+    // Check blacklist
+    const bl = get(blacklist);
+    const match = bl.find(e => e.address.trim().toLowerCase() === recipientAddress.trim().toLowerCase()
+      || recipientAddress.trim().toLowerCase().includes(e.address.trim().toLowerCase())
+      || e.address.trim().toLowerCase().includes(recipientAddress.trim().toLowerCase()));
+    if (match) {
+      const proceed = confirm(
+        `Warning: The recipient (${recipientAddress.slice(0, 8)}...${recipientAddress.slice(-6)}) is on your blacklist.\n\nReason: ${match.reason}\n\nAre you sure you want to send ${sendAmount} CHR to this address?`
+      );
+      if (!proceed) return;
     }
 
     showConfirmSend = true;
