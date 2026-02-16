@@ -536,21 +536,25 @@
       return;
     }
 
-    // Check blacklist
+    // Check blacklist - compare against wallet address AND peer IDs (seeders)
     const bl = get(blacklist);
-    const blacklistedMatch = bl.find(entry =>
-      [result.walletAddress, ...result.seeders].some(
-        addr => addr.toLowerCase() === entry.address.toLowerCase()
-      )
-    );
-    if (blacklistedMatch) {
-      const short = blacklistedMatch.address.length > 16
-        ? `${blacklistedMatch.address.slice(0, 8)}...${blacklistedMatch.address.slice(-6)}`
-        : blacklistedMatch.address;
-      const proceed = confirm(
-        `Warning: The file owner or a seeder (${short}) is on your blacklist.\n\nReason: ${blacklistedMatch.reason}\n\nDo you still want to proceed with the download?`
-      );
-      if (!proceed) return;
+    if (bl.length > 0) {
+      const candidates = [result.walletAddress, ...result.seeders]
+        .filter(Boolean)
+        .map(a => a.trim().toLowerCase());
+      const blacklistedMatch = bl.find(entry => {
+        const entryAddr = entry.address.trim().toLowerCase();
+        return candidates.some(addr => addr === entryAddr || addr.includes(entryAddr) || entryAddr.includes(addr));
+      });
+      if (blacklistedMatch) {
+        const short = blacklistedMatch.address.length > 16
+          ? `${blacklistedMatch.address.slice(0, 8)}...${blacklistedMatch.address.slice(-6)}`
+          : blacklistedMatch.address;
+        const proceed = confirm(
+          `Warning: The file owner or a seeder (${short}) is on your blacklist.\n\nReason: ${blacklistedMatch.reason}\n\nDo you still want to proceed with the download?`
+        );
+        if (!proceed) return;
+      }
     }
 
     // Calculate total cost: speed tier + seeder file price
