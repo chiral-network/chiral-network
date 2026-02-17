@@ -140,10 +140,13 @@ mod cbor_codec {
 /// Get bootstrap nodes for the Chiral Network DHT
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
-        // IPv4
+        // Primary bootstrap node (IPv4 + IPv6)
         "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWRNWj5Knx1yV6mqBt6Wf7buVMh3g4vpsHRxKtTr9ynXPu".to_string(),
-        // IPv6 (6to4 tunnel)
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWRNWj5Knx1yV6mqBt6Wf7buVMh3g4vpsHRxKtTr9ynXPu".to_string(),
+        // Additional bootstrap nodes
+        "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
+        "/ip4/34.44.149.113/tcp/4001/p2p/12D3KooWETLNJUVLbkAbenbSPPdwN9ZLkBU3TLfyAeEUW2dsVptr".to_string(),
+        "/ip4/130.245.173.105/tcp/4001/p2p/12D3KooWSDDA2jyo6Cynr7SHPfhdQoQazu1jdUEAp7rLKKKLqqTr".to_string(),
     ]
 }
 
@@ -2091,7 +2094,7 @@ mod tests {
     fn test_bootstrap_nodes_not_empty() {
         let nodes = get_bootstrap_nodes();
         assert!(!nodes.is_empty());
-        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes.len(), 5);
     }
 
     #[test]
@@ -2113,13 +2116,14 @@ mod tests {
 
     #[test]
     fn test_bootstrap_nodes_have_unique_peer_ids() {
-        let mut peer_ids = Vec::new();
-        for addr_str in get_bootstrap_nodes() {
-            let addr: Multiaddr = addr_str.parse().unwrap();
-            let peer_id = extract_peer_id_from_multiaddr(&addr).unwrap();
-            assert!(!peer_ids.contains(&peer_id), "Duplicate peer ID: {}", peer_id);
-            peer_ids.push(peer_id);
+        let peer_ids = get_bootstrap_peer_ids();
+        let mut seen = Vec::new();
+        for id in &peer_ids {
+            assert!(!seen.contains(id), "Duplicate peer ID: {}", id);
+            seen.push(id.clone());
         }
+        // Should have 4 unique nodes (one has both IPv4 and IPv6)
+        assert_eq!(peer_ids.len(), 4);
     }
 
     #[test]
