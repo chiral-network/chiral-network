@@ -147,6 +147,22 @@ pub fn get_bootstrap_nodes() -> Vec<String> {
     ]
 }
 
+/// Get unique peer IDs of all bootstrap nodes
+pub fn get_bootstrap_peer_ids() -> Vec<String> {
+    let mut ids = Vec::new();
+    for addr_str in get_bootstrap_nodes() {
+        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                let id_str = peer_id.to_string();
+                if !ids.contains(&id_str) {
+                    ids.push(id_str);
+                }
+            }
+        }
+    }
+    ids
+}
+
 /// Extract peer ID from a multiaddr like /ip4/.../tcp/.../p2p/<peer_id>
 fn extract_peer_id_from_multiaddr(addr: &Multiaddr) -> Option<PeerId> {
     use libp2p::multiaddr::Protocol;

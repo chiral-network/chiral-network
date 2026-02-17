@@ -41,6 +41,9 @@
     return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
   }
 
+  // Bootstrap peer IDs (to filter from peer map)
+  let bootstrapPeerIds = $state<Set<string>>(new Set());
+
   let showHistory = $state(false);
   let sendPrice = $state('');
   let mapPaneRatio = $state(72);
@@ -282,10 +285,21 @@
       }
     }
 
-    // Sync with existing peers from the network
+    // Load bootstrap peer IDs to filter them from peer map
+    if (checkTauriAvailability()) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const ids: string[] = await invoke('get_bootstrap_peer_ids');
+        bootstrapPeerIds = new Set(ids);
+      } catch {}
+    }
+
+    // Sync with existing peers from the network (excluding bootstrap nodes)
     const currentPeers = $peers;
     currentPeers.forEach((peer) => {
-      addNearbyPeer(peer.id);
+      if (!bootstrapPeerIds.has(peer.id)) {
+        addNearbyPeer(peer.id);
+      }
     });
   });
 
@@ -335,11 +349,13 @@
   // Subscribe to peers store updates — sync adds AND removals
   // Use get() for nearbyPeers to avoid creating a reactive dependency
   // (writing to nearbyPeers inside an effect that reads it would cause an infinite loop)
+  // Bootstrap nodes are filtered out so they don't appear on the peer map
   $effect(() => {
-    const currentPeerIds = new Set($peers.map((p) => p.id));
+    const nonBootstrapPeers = $peers.filter(p => !bootstrapPeerIds.has(p.id));
+    const currentPeerIds = new Set(nonBootstrapPeers.map((p) => p.id));
 
-    // Add any new peers
-    $peers.forEach((peer) => {
+    // Add any new peers (excluding bootstrap nodes)
+    nonBootstrapPeers.forEach((peer) => {
       addNearbyPeer(peer.id);
     });
 
