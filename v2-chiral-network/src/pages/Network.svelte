@@ -96,6 +96,10 @@
   let isCheckingDhtHealth = $state(false);
   let showDhtHealthDetails = $state(false);
 
+  // Bootstrap peer IDs (to filter from Connected Peers)
+  let bootstrapPeerIds = $state<Set<string>>(new Set());
+  let filteredPeers = $derived($peers.filter(p => !bootstrapPeerIds.has(p.id)));
+
   // Traffic Statistics State
   let trafficStats = $state({
     totalDownloaded: 0,
@@ -177,6 +181,12 @@
     loadTrafficStats();
 
     if (isTauri()) {
+      // Load bootstrap peer IDs to filter them from Connected Peers
+      try {
+        const ids: string[] = await invoke('get_bootstrap_peer_ids');
+        bootstrapPeerIds = new Set(ids);
+      } catch {}
+
       await loadGethStatus();
       await loadBootstrapHealth();
 
@@ -931,18 +941,18 @@
         <Radio class="w-4 h-4 text-gray-500 dark:text-gray-400" />
         <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Connected Peers</span>
         <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
-          {$peers.length}
+          {filteredPeers.length}
         </span>
       </div>
 
-      {#if $peers.length === 0}
+      {#if filteredPeers.length === 0}
         <div class="text-center py-4 text-gray-500 dark:text-gray-400">
           <p class="text-sm">No peers connected</p>
           <p class="text-xs">Connect to the P2P network to discover peers</p>
         </div>
       {:else}
         <div class="space-y-2">
-          {#each $peers as peer}
+          {#each filteredPeers as peer}
             <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">

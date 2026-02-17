@@ -107,6 +107,11 @@ async fn get_dht_health(state: tauri::State<'_, AppState>) -> Result<dht::DhtHea
 }
 
 #[tauri::command]
+fn get_bootstrap_peer_ids() -> Vec<String> {
+    dht::get_bootstrap_peer_ids()
+}
+
+#[tauri::command]
 async fn get_peer_id(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     let dht_guard = state.dht.lock().await;
 
@@ -2520,6 +2525,7 @@ pub fn run() {
             get_network_stats,
             get_peer_id,
             get_dht_health,
+            get_bootstrap_peer_ids,
             ping_peer,
             send_file,
             send_file_by_path,
