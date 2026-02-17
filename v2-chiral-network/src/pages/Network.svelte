@@ -960,9 +960,6 @@
                   {#if peer.address}
                     <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Address: {peer.address}</div>
                   {/if}
-                  <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Last seen: {formatDate(peer.lastSeen)}
-                  </div>
                 </div>
                 <button
                   onclick={() => pingPeer(peer.id)}
