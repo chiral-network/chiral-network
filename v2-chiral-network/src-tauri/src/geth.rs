@@ -1600,4 +1600,98 @@ mod tests {
         let parent = path.parent().unwrap();
         assert_eq!(parent.file_name().unwrap().to_str().unwrap(), "bin");
     }
+
+    #[test]
+    fn test_mining_status_zero_hash_rate() {
+        let status = MiningStatus {
+            mining: false,
+            hash_rate: 0,
+            miner_address: Some("0xtest".to_string()),
+            total_mined_wei: "0".to_string(),
+            total_mined_chi: 0.0,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"hashRate\":0"));
+        let deser: MiningStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.hash_rate, 0);
+    }
+
+    #[test]
+    fn test_mining_status_large_total_mined() {
+        let status = MiningStatus {
+            mining: true,
+            hash_rate: 5000,
+            miner_address: Some("0xrich".to_string()),
+            total_mined_wei: "1000000000000000000000000".to_string(),
+            total_mined_chi: 1_000_000.0,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deser: MiningStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.total_mined_chi, 1_000_000.0);
+    }
+
+    #[test]
+    fn test_mined_block_zero_difficulty() {
+        let block = MinedBlock {
+            block_number: 1,
+            timestamp: 1700000000,
+            reward_wei: "5000000000000000000".to_string(),
+            reward_chi: 5.0,
+            difficulty: 0,
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(json.contains("\"difficulty\":0"));
+        let deser: MinedBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.difficulty, 0);
+    }
+
+    #[test]
+    fn test_mined_block_max_block_number() {
+        let block = MinedBlock {
+            block_number: u64::MAX,
+            timestamp: 0,
+            reward_wei: "0".to_string(),
+            reward_chi: 0.0,
+            difficulty: 0,
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        let deser: MinedBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.block_number, u64::MAX);
+    }
+
+    #[test]
+    fn test_mining_status_full_round_trip() {
+        let original = MiningStatus {
+            mining: true,
+            hash_rate: 42000,
+            miner_address: Some("0xabcdef1234567890".to_string()),
+            total_mined_wei: "25000000000000000000".to_string(),
+            total_mined_chi: 25.0,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: MiningStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.mining, original.mining);
+        assert_eq!(restored.hash_rate, original.hash_rate);
+        assert_eq!(restored.miner_address, original.miner_address);
+        assert_eq!(restored.total_mined_wei, original.total_mined_wei);
+        assert_eq!(restored.total_mined_chi, original.total_mined_chi);
+    }
+
+    #[test]
+    fn test_mined_block_full_round_trip() {
+        let original = MinedBlock {
+            block_number: 999,
+            timestamp: 1700123456,
+            reward_wei: "5000000000000000000".to_string(),
+            reward_chi: 5.0,
+            difficulty: 131072,
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: MinedBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.block_number, original.block_number);
+        assert_eq!(restored.timestamp, original.timestamp);
+        assert_eq!(restored.reward_wei, original.reward_wei);
+        assert_eq!(restored.reward_chi, original.reward_chi);
+        assert_eq!(restored.difficulty, original.difficulty);
+    }
 }

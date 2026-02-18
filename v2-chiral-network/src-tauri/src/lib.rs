@@ -1254,6 +1254,109 @@ fn parse_hex_u64(hex: &str) -> u64 {
     u64::from_str_radix(hex, 16).unwrap_or(0)
 }
 
+#[cfg(test)]
+mod chi_to_wei_tests {
+    use super::parse_chi_to_wei;
+
+    #[test]
+    fn test_whole_number() {
+        assert_eq!(parse_chi_to_wei("1").unwrap(), 1_000_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_zero() {
+        assert_eq!(parse_chi_to_wei("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_standard_tier_cost() {
+        // 0.001 CHI = 10^15 wei
+        assert_eq!(parse_chi_to_wei("0.001").unwrap(), 1_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_premium_tier_cost() {
+        // 0.005 CHI = 5 * 10^15 wei
+        assert_eq!(parse_chi_to_wei("0.005").unwrap(), 5_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_leading_dot() {
+        // .5 CHI = 0.5 CHI = 5 * 10^17 wei
+        assert_eq!(parse_chi_to_wei(".5").unwrap(), 500_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_exact_18_decimals() {
+        assert_eq!(
+            parse_chi_to_wei("1.123456789012345678").unwrap(),
+            1_123_456_789_012_345_678
+        );
+    }
+
+    #[test]
+    fn test_more_than_18_decimals_truncates() {
+        // 19 digits after dot: truncated to 18
+        let result = parse_chi_to_wei("1.1234567890123456789").unwrap();
+        assert_eq!(result, 1_123_456_789_012_345_678);
+    }
+
+    #[test]
+    fn test_large_whole_number() {
+        assert_eq!(
+            parse_chi_to_wei("100").unwrap(),
+            100_000_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn test_trims_whitespace() {
+        assert_eq!(
+            parse_chi_to_wei(" 1.5 ").unwrap(),
+            1_500_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn test_empty_string_is_zero() {
+        // Empty string trims to "", which parses whole part as 0
+        assert_eq!(parse_chi_to_wei("").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_non_numeric_errors() {
+        assert!(parse_chi_to_wei("abc").is_err());
+    }
+
+    #[test]
+    fn test_multiple_dots_errors() {
+        assert!(parse_chi_to_wei("1.2.3").is_err());
+    }
+
+    #[test]
+    fn test_smallest_wei_unit() {
+        // 0.000000000000000001 CHI = 1 wei
+        assert_eq!(
+            parse_chi_to_wei("0.000000000000000001").unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_fractional_only() {
+        assert_eq!(
+            parse_chi_to_wei("0.5").unwrap(),
+            500_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn test_very_large_overflows() {
+        // u128 max is ~3.4 * 10^38, so 10^21 CHI = 10^39 wei would overflow
+        assert!(parse_chi_to_wei("1000000000000000000000").is_err());
+    }
+}
+
 /// Convert CHI amount string to wei using string math (avoids f64 precision loss)
 fn parse_chi_to_wei(amount: &str) -> Result<u128, String> {
     let amount = amount.trim();
