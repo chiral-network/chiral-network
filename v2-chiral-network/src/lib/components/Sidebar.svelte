@@ -103,11 +103,37 @@
   class="hidden md:flex fixed top-0 left-0 z-40 h-screen flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-sm transition-[width] duration-200
     {collapsed ? 'w-16' : 'w-60'}"
 >
-  <!-- Logo -->
-  <div class="flex items-center gap-2 h-14 px-3 border-b border-gray-200 dark:border-gray-700 shrink-0 overflow-hidden">
-    <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg shrink-0" />
+  <!-- Logo + collapse toggle -->
+  <div class="flex items-center h-14 px-3 border-b border-gray-200 dark:border-gray-700 shrink-0 overflow-hidden
+    {collapsed ? 'justify-center' : 'justify-between'}">
+    <div class="flex items-center gap-2 overflow-hidden">
+      <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg shrink-0" />
+      {#if !collapsed}
+        <span class="text-lg font-bold dark:text-white whitespace-nowrap">Chiral Network</span>
+      {/if}
+    </div>
     {#if !collapsed}
-      <span class="text-lg font-bold dark:text-white whitespace-nowrap">Chiral Network</span>
+      <button
+        onclick={toggleCollapse}
+        class="p-1 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition shrink-0"
+        title="Collapse sidebar"
+      >
+        <ChevronLeft class="w-4 h-4" />
+      </button>
+    {/if}
+  </div>
+
+  <!-- Network status -->
+  <div class="flex items-center gap-3 px-3 py-2 border-b border-gray-200 dark:border-gray-700 shrink-0
+    {collapsed ? 'justify-center' : ''}">
+    <div class="w-2 h-2 rounded-full shrink-0 {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
+    {#if !collapsed}
+      <span class="text-xs font-medium whitespace-nowrap
+        {$networkConnected
+          ? 'text-green-700 dark:text-green-400'
+          : 'text-red-700 dark:text-red-400'}">
+        {$networkConnected ? 'Connected' : 'Offline'}
+      </span>
     {/if}
   </div>
 
@@ -116,7 +142,8 @@
     {#each navItems as item}
       <button
         onclick={() => navigate(item.path)}
-        class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm
+        class="flex items-center gap-3 w-full py-2.5 rounded-lg transition text-sm
+          {collapsed ? 'justify-center px-0' : 'px-3'}
           {currentPage === item.path
             ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
             : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
@@ -132,42 +159,27 @@
 
   <!-- Bottom section -->
   <div class="px-2 pb-3 space-y-1 border-t border-gray-200 dark:border-gray-700 pt-3 shrink-0">
-    <!-- Network status -->
-    <div class="flex items-center gap-3 px-3 py-2">
-      <div class="w-2 h-2 rounded-full shrink-0 {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
-      {#if !collapsed}
-        <span class="text-xs font-medium whitespace-nowrap
-          {$networkConnected
-            ? 'text-green-700 dark:text-green-400'
-            : 'text-red-700 dark:text-red-400'}">
-          {$networkConnected ? 'Connected' : 'Offline'}
-        </span>
-      {/if}
-    </div>
+    <!-- Expand toggle (only when collapsed) -->
+    {#if collapsed}
+      <button
+        onclick={toggleCollapse}
+        class="flex items-center justify-center w-full py-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
+        title="Expand sidebar"
+      >
+        <ChevronRight class="w-4 h-4 shrink-0" />
+      </button>
+    {/if}
 
     <!-- Logout -->
     <button
       onclick={handleLogout}
-      class="flex items-center gap-3 w-full px-3 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
+      class="flex items-center gap-3 w-full py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm
+        {collapsed ? 'justify-center px-0' : 'px-3'}"
       title={collapsed ? 'Logout' : ''}
     >
       <LogOut class="w-4 h-4 shrink-0" />
       {#if !collapsed}
         <span class="font-medium whitespace-nowrap">Logout</span>
-      {/if}
-    </button>
-
-    <!-- Collapse toggle -->
-    <button
-      onclick={toggleCollapse}
-      class="flex items-center gap-3 w-full px-3 py-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
-      title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-    >
-      {#if collapsed}
-        <ChevronRight class="w-4 h-4 shrink-0" />
-      {:else}
-        <ChevronLeft class="w-4 h-4 shrink-0" />
-        <span class="font-medium whitespace-nowrap">Collapse</span>
       {/if}
     </button>
   </div>
