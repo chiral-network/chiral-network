@@ -101,7 +101,7 @@
 <!-- Desktop sidebar -->
 <aside
   class="hidden md:flex fixed top-0 left-0 z-40 h-screen flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-sm transition-[width] duration-200
-    {collapsed ? 'w-16' : 'w-60'}"
+    {collapsed ? 'w-16' : 'w-48'}"
 >
   <!-- Logo + collapse toggle -->
   <div class="flex items-center h-14 px-3 border-b border-gray-200 dark:border-gray-700 shrink-0 overflow-hidden

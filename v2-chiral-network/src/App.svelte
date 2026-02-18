@@ -173,7 +173,7 @@
   {#if $settings.navStyle === 'sidebar'}
     <div class="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
       <Sidebar currentPage={currentPath} bind:collapsed={sidebarCollapsed} />
-      <div class="transition-[margin] duration-200 hidden md:block {sidebarCollapsed ? 'md:ml-16' : 'md:ml-60'}">
+      <div class="transition-[margin] duration-200 hidden md:block {sidebarCollapsed ? 'md:ml-16' : 'md:ml-48'}">
         <Router routes={authenticatedRoutes} />
       </div>
       <div class="md:hidden">
