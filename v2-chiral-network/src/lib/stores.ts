@@ -31,6 +31,7 @@ export const networkStats = writable({
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ColorTheme = 'blue' | 'purple' | 'green' | 'red' | 'orange';
+export type NavStyle = 'navbar' | 'sidebar';
 
 export interface NotificationSettings {
   downloadComplete: boolean;
@@ -46,6 +47,7 @@ export interface NotificationSettings {
 export interface AppSettings {
   theme: ThemeMode;
   colorTheme: ColorTheme;
+  navStyle: NavStyle;
   reducedMotion: boolean;
   compactMode: boolean;
   downloadDirectory: string; // empty string = system default Downloads folder
@@ -66,6 +68,7 @@ const defaultNotifications: NotificationSettings = {
 const defaultSettings: AppSettings = {
   theme: 'system',
   colorTheme: 'blue',
+  navStyle: 'navbar',
   reducedMotion: false,
   compactMode: false,
   downloadDirectory: '',
