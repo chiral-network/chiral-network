@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { settings, isDarkMode, type ThemeMode, type NotificationSettings, type ColorTheme } from '$lib/stores';
+  import { settings, isDarkMode, type ThemeMode, type NotificationSettings, type ColorTheme, type NavStyle } from '$lib/stores';
   import { availableThemes } from '$lib/services/colorThemeService';
   import { toasts } from '$lib/toastStore';
   import {
@@ -9,6 +9,8 @@
     Monitor,
     Palette,
     LayoutGrid,
+    PanelTop,
+    PanelLeft,
     RotateCcw,
     Check,
     FolderOpen,
@@ -86,6 +88,15 @@
   function toggleCompactMode() {
     settings.update((s) => ({ ...s, compactMode: !s.compactMode }));
   }
+
+  function setNavStyle(style: NavStyle) {
+    settings.update((s) => ({ ...s, navStyle: style }));
+  }
+
+  const navStyleOptions: { value: NavStyle; label: string; icon: typeof PanelTop }[] = [
+    { value: 'navbar', label: 'Top Bar', icon: PanelTop },
+    { value: 'sidebar', label: 'Sidebar', icon: PanelLeft }
+  ];
 
   function toggleNotification(key: keyof NotificationSettings) {
     settings.update((s) => ({
@@ -214,6 +225,33 @@
             {$settings.compactMode ? 'translate-x-6' : 'translate-x-0'}"
         ></span>
       </button>
+    </div>
+
+    <!-- Navigation Style -->
+    <div class="py-4 border-t border-gray-200 dark:border-gray-700">
+      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Navigation Style</span>
+      <div class="grid grid-cols-2 gap-3">
+        {#each navStyleOptions as option}
+          {@const Icon = option.icon}
+          <button
+            onclick={() => setNavStyle(option.value)}
+            class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
+              {$settings.navStyle === option.value
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
+          >
+            {#if $settings.navStyle === option.value}
+              <div class="absolute top-2 right-2">
+                <Check class="w-4 h-4 text-primary-500" />
+              </div>
+            {/if}
+            <Icon class="w-6 h-6 {$settings.navStyle === option.value ? 'text-primary-500' : 'text-gray-500 dark:text-gray-400'}" />
+            <span class="text-sm font-medium {$settings.navStyle === option.value ? 'text-primary-700 dark:text-primary-300' : 'text-gray-700 dark:text-gray-300'}">
+              {option.label}
+            </span>
+          </button>
+        {/each}
+      </div>
     </div>
 
     <!-- Preview -->
