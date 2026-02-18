@@ -5,7 +5,7 @@ export interface TierConfig {
   name: string;
   speedLimit: number; // bytes per second, 0 = unlimited
   speedLabel: string;
-  costPerMb: number; // in CHR
+  costPerMb: number; // in CHI
   description: string;
 }
 
@@ -40,7 +40,7 @@ export function getTierConfig(tier: SpeedTier): TierConfig {
   return TIERS.find((t) => t.id === tier)!;
 }
 
-/** Calculate total download cost in CHR for a given tier and file size */
+/** Calculate total download cost in CHI for a given tier and file size */
 export function calculateCost(tier: SpeedTier, fileSizeBytes: number): number {
   const config = getTierConfig(tier);
   if (config.costPerMb === 0) return 0;
@@ -48,11 +48,11 @@ export function calculateCost(tier: SpeedTier, fileSizeBytes: number): number {
   return sizeMb * config.costPerMb;
 }
 
-/** Format a CHR cost for display */
-export function formatCost(costChr: number): string {
-  if (costChr === 0) return 'Free';
-  if (costChr < 0.000001) return '< 0.000001 CHR';
-  return `${costChr.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} CHR`;
+/** Format a CHI cost for display */
+export function formatCost(costChi: number): string {
+  if (costChi === 0) return 'Free';
+  if (costChi < 0.000001) return '< 0.000001 CHI';
+  return `${costChi.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} CHI`;
 }
 
 /** Format bytes per second as a human-readable speed */

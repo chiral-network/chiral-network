@@ -310,7 +310,7 @@
         {:else if !$walletAccount}
           <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 mt-4">
             <p class="text-sm text-gray-600">
-              Connect your wallet on the Account page to start mining and earn CHR.
+              Connect your wallet on the Account page to start mining and earn CHI.
             </p>
           </div>
         {/if}

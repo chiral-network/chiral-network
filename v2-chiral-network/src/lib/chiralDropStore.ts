@@ -263,16 +263,16 @@ export function pruneHistory() {
   transferHistory.update((history) => history.slice(0, 100));
 }
 
-// Format wei price as CHR for display
+// Format wei price as CHI for display
 export function formatPriceWei(wei: string): string {
   if (!wei || wei === '0') return 'Free';
   try {
     const weiNum = BigInt(wei);
     const whole = weiNum / BigInt(1e18);
     const frac = weiNum % BigInt(1e18);
-    if (frac === BigInt(0)) return `${whole} CHR`;
+    if (frac === BigInt(0)) return `${whole} CHI`;
     const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
-    return `${whole}.${fracStr} CHR`;
+    return `${whole}.${fracStr} CHI`;
   } catch {
     return `${wei} wei`;
   }

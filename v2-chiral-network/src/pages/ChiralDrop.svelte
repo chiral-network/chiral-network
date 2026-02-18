@@ -433,7 +433,7 @@
         // 1. Publish file from path (hashes, stores in memory, registers for chunked serving)
         // 2. Send metadata-only request via file_transfer protocol with pricing info
 
-        // Convert CHR to wei
+        // Convert CHI to wei
         const priceParts = price.split('.');
         const whole = BigInt(priceParts[0] || '0');
         const fracStr = (priceParts[1] || '').padEnd(18, '0').slice(0, 18);
@@ -444,7 +444,7 @@
         const publishResult = await invoke<{ merkleRoot: string }>('publish_file', {
           filePath,
           fileName,
-          priceChr: price,
+          priceChi: price,
           walletAddress: $walletAccount!.address
         });
 
@@ -462,7 +462,7 @@
         });
 
         updateTransferStatus(transferId, 'completed');
-        toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHR)`, 'success');
+        toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHI)`, 'success');
       } else {
         // Free transfer: read file from disk and send directly
         await invoke('send_file_by_path', {
@@ -762,7 +762,7 @@
           </div>
           <div class="mb-3">
             <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
-              Price (CHR) — leave empty for free
+              Price (CHI) — leave empty for free
             </label>
             <div class="flex items-center gap-2">
               <Coins class="h-4 w-4 flex-shrink-0 text-amber-500" />
@@ -786,7 +786,7 @@
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />
-              {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHR` : 'Select File to Send'}
+              {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHI` : 'Select File to Send'}
             </span>
           </button>
         </div>
@@ -828,7 +828,7 @@
                       {/if}
                       {#if transfer.balanceBefore && transfer.balanceAfter}
                         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                          {transfer.balanceBefore} → {transfer.balanceAfter} CHR
+                          {transfer.balanceBefore} → {transfer.balanceAfter} CHI
                         </p>
                       {/if}
                       <p class="mt-1 text-xs text-gray-400">{formatTimestamp(transfer.timestamp)}</p>

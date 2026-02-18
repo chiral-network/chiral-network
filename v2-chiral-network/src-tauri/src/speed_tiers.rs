@@ -31,12 +31,12 @@ impl SpeedTier {
         }
     }
 
-    /// Cost per MB in wei (1 CHR = 10^18 wei)
+    /// Cost per MB in wei (1 CHI = 10^18 wei)
     pub fn cost_per_mb_wei(&self) -> u128 {
         match self {
             SpeedTier::Free => 0,
-            SpeedTier::Standard => 1_000_000_000_000_000,   // 0.001 CHR = 10^15 wei
-            SpeedTier::Premium => 5_000_000_000_000_000,    // 0.005 CHR = 5*10^15 wei
+            SpeedTier::Standard => 1_000_000_000_000_000,   // 0.001 CHI = 10^15 wei
+            SpeedTier::Premium => 5_000_000_000_000_000,    // 0.005 CHI = 5*10^15 wei
         }
     }
 }
@@ -53,8 +53,8 @@ pub fn calculate_cost(tier: &SpeedTier, file_size_bytes: u64) -> u128 {
     (size * cost_per_mb + 999_999) / 1_000_000 // Round up to nearest wei
 }
 
-/// Format wei amount as CHR string for display
-pub fn format_wei_as_chr(wei: u128) -> String {
+/// Format wei amount as CHI string for display
+pub fn format_wei_as_chi(wei: u128) -> String {
     let whole = wei / 1_000_000_000_000_000_000;
     let frac = wei % 1_000_000_000_000_000_000;
     if frac == 0 {
@@ -189,10 +189,10 @@ mod tests {
         // Free tier: always 0
         assert_eq!(calculate_cost(&SpeedTier::Free, 10_000_000), 0);
 
-        // Standard: 10 MB * 0.001 CHR/MB = 0.01 CHR = 10^16 wei
+        // Standard: 10 MB * 0.001 CHI/MB = 0.01 CHI = 10^16 wei
         assert_eq!(calculate_cost(&SpeedTier::Standard, 10_000_000), 10_000_000_000_000_000);
 
-        // Premium: 10 MB * 0.005 CHR/MB = 0.05 CHR = 5*10^16 wei
+        // Premium: 10 MB * 0.005 CHI/MB = 0.05 CHI = 5*10^16 wei
         assert_eq!(calculate_cost(&SpeedTier::Premium, 10_000_000), 50_000_000_000_000_000);
 
         // Small file: 1 byte should still have non-zero cost for paid tiers (rounds up)
@@ -200,10 +200,10 @@ mod tests {
     }
 
     #[test]
-    fn test_format_wei_as_chr() {
-        assert_eq!(format_wei_as_chr(0), "0");
-        assert_eq!(format_wei_as_chr(1_000_000_000_000_000_000), "1");
-        assert_eq!(format_wei_as_chr(1_500_000_000_000_000_000), "1.5");
-        assert_eq!(format_wei_as_chr(10_000_000_000_000_000), "0.01");
+    fn test_format_wei_as_chi() {
+        assert_eq!(format_wei_as_chi(0), "0");
+        assert_eq!(format_wei_as_chi(1_000_000_000_000_000_000), "1");
+        assert_eq!(format_wei_as_chi(1_500_000_000_000_000_000), "1.5");
+        assert_eq!(format_wei_as_chi(10_000_000_000_000_000), "0.01");
     }
 }

@@ -114,7 +114,7 @@
     { key: 'peerConnected', label: 'Peer Connected', description: 'When a new peer connects to you' },
     { key: 'peerDisconnected', label: 'Peer Disconnected', description: 'When a peer disconnects from you' },
     { key: 'miningBlock', label: 'Mining Block Found', description: 'When you mine a new block' },
-    { key: 'paymentReceived', label: 'Payment Received', description: 'When you receive a CHR payment for a file' },
+    { key: 'paymentReceived', label: 'Payment Received', description: 'When you receive a CHI payment for a file' },
     { key: 'networkStatus', label: 'Network Status', description: 'Connection and disconnection events' },
     { key: 'fileShared', label: 'File Shared', description: 'When someone starts downloading your shared file' }
   ];
@@ -268,7 +268,7 @@
         <div class="grid grid-cols-2 gap-3">
           <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
             <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
-            <p class="text-lg font-bold text-gray-900 dark:text-white">100.00 CHR</p>
+            <p class="text-lg font-bold text-gray-900 dark:text-white">100.00 CHI</p>
           </div>
           <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
             <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>

@@ -4,7 +4,7 @@
   interface Props {
     address: string;
     reason: string;
-    action: string; // e.g. "download this file" or "send 5.0 CHR"
+    action: string; // e.g. "download this file" or "send 5.0 CHI"
     onconfirm: () => void;
     oncancel: () => void;
   }
