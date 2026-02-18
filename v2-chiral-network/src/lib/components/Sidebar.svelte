@@ -109,7 +109,7 @@
     <div class="flex items-center gap-2 overflow-hidden">
       <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg shrink-0" />
       {#if !collapsed}
-        <span class="text-lg font-bold dark:text-white whitespace-nowrap">Chiral Network</span>
+        <span class="text-base font-bold dark:text-white whitespace-nowrap">Chiral Network</span>
       {/if}
     </div>
     {#if !collapsed}
