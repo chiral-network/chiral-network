@@ -169,7 +169,7 @@
     }).format(date);
   }
 
-  // Format wei price as CHR string
+  // Format wei price as CHI string
   function formatPriceWei(weiStr: string): string {
     if (!weiStr || weiStr === '0') return 'Free';
     try {
@@ -177,10 +177,10 @@
       if (wei === 0n) return 'Free';
       const whole = wei / 1_000_000_000_000_000_000n;
       const frac = wei % 1_000_000_000_000_000_000n;
-      if (frac === 0n) return `${whole} CHR`;
+      if (frac === 0n) return `${whole} CHI`;
       const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
       const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) : fracStr;
-      return `${whole}.${decimals} CHR`;
+      return `${whole}.${decimals} CHI`;
     } catch {
       return 'Free';
     }
@@ -211,7 +211,7 @@
   let blacklistWarning = $state<{ match: BlacklistEntry; result: SearchResult } | null>(null);
 
   // Download confirmation modal
-  let pendingDownload = $state<{ result: SearchResult; tierCost: number; seederPriceChr: number; totalCost: number } | null>(null);
+  let pendingDownload = $state<{ result: SearchResult; tierCost: number; seederPriceChi: number; totalCost: number } | null>(null);
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -563,10 +563,10 @@
     // Calculate total cost: speed tier + seeder file price
     const tierCost = calculateCost(selectedTier, result.fileSize);
     const seederPriceWei = result.priceWei || '0';
-    const seederPriceChr = seederPriceWei !== '0'
+    const seederPriceChi = seederPriceWei !== '0'
       ? Number(BigInt(seederPriceWei)) / 1e18
       : 0;
-    const totalCost = tierCost + seederPriceChr;
+    const totalCost = tierCost + seederPriceChi;
 
     if (totalCost > 0) {
       if (!$walletAccount) {
@@ -574,12 +574,12 @@
         return;
       }
       if (parseFloat(walletBalance) < totalCost) {
-        toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHR, have ${walletBalance} CHR`, 'error');
+        toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHI, have ${walletBalance} CHI`, 'error');
         return;
       }
-      // Show confirmation modal before spending CHR
+      // Show confirmation modal before spending CHI
       if (!skipCostConfirm) {
-        pendingDownload = { result, tierCost, seederPriceChr, totalCost };
+        pendingDownload = { result, tierCost, seederPriceChi, totalCost };
         return;
       }
     }
@@ -631,7 +631,7 @@
       if (tierCost > 0) {
         toasts.show(`Speed tier payment processed! Requesting file from seeder...`, 'success');
         refreshWalletBalance();
-      } else if (seederPriceChr > 0) {
+      } else if (seederPriceChi > 0) {
         toasts.show(`Requesting file from seeder (payment will be sent automatically)...`, 'info');
       } else {
         toasts.show(`Requesting file from seeder...`, 'info');
@@ -1171,7 +1171,7 @@
                   {:else if fileSizeKnown}
                     {formatCost(cost)}
                   {:else}
-                    {tier.costPerMb} CHR/MB
+                    {tier.costPerMb} CHI/MB
                   {/if}
                 </p>
                 {#if needsWallet}
@@ -1205,7 +1205,7 @@
                   {/if}
                   {#if $walletAccount}
                     <span class="text-gray-400 mx-1">•</span>
-                    Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHR</span>
+                    Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHI</span>
                   {/if}
                 {/if}
               </div>
@@ -1496,7 +1496,7 @@
 
                   {#if entry.balanceBefore && entry.balanceAfter}
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Balance: {entry.balanceBefore} → {entry.balanceAfter} CHR
+                      Balance: {entry.balanceBefore} → {entry.balanceAfter} CHI
                     </p>
                   {/if}
                   <p class="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1 truncate">{entry.hash}</p>
@@ -1658,10 +1658,10 @@
 
         <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-2">
           <p class="text-sm text-gray-500 dark:text-gray-400">Cost Breakdown</p>
-          {#if pendingDownload.seederPriceChr > 0}
+          {#if pendingDownload.seederPriceChi > 0}
             <div class="flex justify-between text-sm">
               <span class="text-gray-600 dark:text-gray-300">File price</span>
-              <span class="font-medium text-amber-600 dark:text-amber-400">{pendingDownload.seederPriceChr.toFixed(6)} CHR</span>
+              <span class="font-medium text-amber-600 dark:text-amber-400">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
             </div>
           {/if}
           {#if pendingDownload.tierCost > 0}
@@ -1672,13 +1672,13 @@
           {/if}
           <div class="flex justify-between text-sm pt-2 border-t border-gray-200 dark:border-gray-600">
             <span class="font-semibold dark:text-white">Total</span>
-            <span class="font-semibold text-amber-600 dark:text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHR</span>
+            <span class="font-semibold text-amber-600 dark:text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
           </div>
         </div>
 
         <div class="flex justify-between text-sm text-gray-500 dark:text-gray-400 px-1">
           <span>Your balance</span>
-          <span>{parseFloat(walletBalance).toFixed(4)} CHR</span>
+          <span>{parseFloat(walletBalance).toFixed(4)} CHI</span>
         </div>
       </div>
 

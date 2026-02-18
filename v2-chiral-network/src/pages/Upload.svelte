@@ -111,7 +111,7 @@
     seeders: number;
     uploadDate: Date;
     filePath: string;
-    priceChr: string;
+    priceChi: string;
   }
 
   // State
@@ -201,10 +201,10 @@
         }
 
         // Publish to DHT with selected protocol and pricing
-        const priceChr = filePrice && parseFloat(String(filePrice)) > 0 ? String(filePrice) : undefined;
+        const priceChi = filePrice && parseFloat(String(filePrice)) > 0 ? String(filePrice) : undefined;
         const walletAddr = $walletAccount?.address;
 
-        if (priceChr && !walletAddr) {
+        if (priceChi && !walletAddr) {
           toasts.show('Connect your wallet to set a file price', 'error');
           continue;
         }
@@ -213,7 +213,7 @@
           filePath,
           fileName,
           protocol: selectedProtocol,
-          priceChr: priceChr || null,
+          priceChi: priceChi || null,
           walletAddress: walletAddr || null,
         });
 
@@ -227,7 +227,7 @@
           seeders: 1,
           uploadDate: new Date(),
           filePath,
-          priceChr: priceChr || '0',
+          priceChi: priceChi || '0',
         };
 
         sharedFiles = [...sharedFiles, newFile];
@@ -344,8 +344,8 @@
             filePath: file.filePath,
             fileName: file.name,
             fileSize: file.size,
-            priceChr: file.priceChr && file.priceChr !== '0' ? file.priceChr : null,
-            walletAddress: file.priceChr && file.priceChr !== '0' ? $walletAccount?.address : null,
+            priceChi: file.priceChi && file.priceChi !== '0' ? file.priceChi : null,
+            walletAddress: file.priceChi && file.priceChi !== '0' ? $walletAccount?.address : null,
           });
           log.info(`Re-registered shared file: ${file.name}`);
         } catch (e) {
@@ -480,7 +480,7 @@
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm font-semibold text-gray-900 dark:text-white">File Price</p>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Set a price in CHR tokens (leave empty for free)</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Set a price in CHI tokens (leave empty for free)</p>
       </div>
       <div class="flex items-center gap-2">
         <input
@@ -491,7 +491,7 @@
           bind:value={filePrice}
           class="w-40 px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
         />
-        <span class="text-sm text-gray-500 dark:text-gray-400">CHR</span>
+        <span class="text-sm text-gray-500 dark:text-gray-400">CHI</span>
       </div>
     </div>
     {#if filePrice && parseFloat(filePrice) > 0 && !$walletAccount}
@@ -614,9 +614,9 @@
                     <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(file.protocol)}">
                       {file.protocol}
                     </span>
-                    {#if file.priceChr && file.priceChr !== '0'}
+                    {#if file.priceChi && file.priceChi !== '0'}
                       <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-                        {file.priceChr} CHR
+                        {file.priceChi} CHI
                       </span>
                     {:else}
                       <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">

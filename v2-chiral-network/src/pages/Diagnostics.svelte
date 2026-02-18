@@ -89,7 +89,7 @@
     hashRate: number;
     minerAddress: string | null;
     totalMinedWei: string;
-    totalMinedChr: number;
+    totalMinedChi: number;
   }
 
   let miningStatus = $state<MiningStatus | null>(null);
@@ -273,7 +273,7 @@
     isLoadingMining = true;
     try {
       miningStatus = await invoke<MiningStatus>('get_mining_status');
-      addLog('debug', 'mining', `Mining: ${miningStatus.mining ? 'Active' : 'Inactive'}, hashrate: ${miningStatus.hashRate} H/s, mined: ${miningStatus.totalMinedChr.toFixed(4)} CHR`);
+      addLog('debug', 'mining', `Mining: ${miningStatus.mining ? 'Active' : 'Inactive'}, hashrate: ${miningStatus.hashRate} H/s, mined: ${miningStatus.totalMinedChi.toFixed(4)} CHI`);
     } catch (err) {
       addLog('error', 'mining', `Failed to get mining status: ${err}`);
       miningStatus = null;
@@ -778,7 +778,7 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined</p>
-              <p class="text-sm font-bold text-amber-600 dark:text-amber-400">{miningStatus.totalMinedChr.toFixed(4)} CHR</p>
+              <p class="text-sm font-bold text-amber-600 dark:text-amber-400">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined (Wei)</p>

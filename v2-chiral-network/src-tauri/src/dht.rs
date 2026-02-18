@@ -1700,14 +1700,14 @@ async fn handle_behaviour_event(
                                         };
 
                                         if let Some(creds) = creds {
-                                            // Convert wei to CHR for send_transaction
-                                            let cost_chr = crate::speed_tiers::format_wei_as_chr(price);
+                                            // Convert wei to CHI for send_transaction
+                                            let cost_chi = crate::speed_tiers::format_wei_as_chi(price);
 
                                             // Send payment transaction
                                             match crate::send_payment_transaction(
                                                 &creds.wallet_address,
                                                 &wallet_address,
-                                                &cost_chr,
+                                                &cost_chi,
                                                 &creds.private_key,
                                             ).await {
                                                 Ok(payment) => {

@@ -406,7 +406,7 @@ async fn publish_file(
     file_path: String,
     file_name: String,
     protocol: Option<String>,
-    price_chr: Option<String>,
+    price_chi: Option<String>,
     wallet_address: Option<String>,
 ) -> Result<PublishResult, String> {
     // Read file and compute hash
@@ -433,12 +433,12 @@ async fn publish_file(
     if let Some(dht) = dht_guard.as_ref() {
         let peer_id = dht.get_peer_id().await.unwrap_or_default();
 
-        // Parse price from CHR to wei
-        let price_wei_val = if let Some(ref price) = price_chr {
+        // Parse price from CHI to wei
+        let price_wei_val = if let Some(ref price) = price_chi {
             if price.is_empty() || price == "0" {
                 0u128
             } else {
-                parse_chr_to_wei(price)?
+                parse_chi_to_wei(price)?
             }
         } else {
             0u128
@@ -498,7 +498,7 @@ async fn publish_file_data(
     state: tauri::State<'_, AppState>,
     file_name: String,
     file_data: Vec<u8>,
-    price_chr: Option<String>,
+    price_chi: Option<String>,
     wallet_address: Option<String>,
 ) -> Result<PublishResult, String> {
     let file_size = file_data.len() as u64;
@@ -523,12 +523,12 @@ async fn publish_file_data(
     if let Some(dht) = dht_guard.as_ref() {
         let peer_id = dht.get_peer_id().await.unwrap_or_default();
 
-        // Parse price from CHR to wei
-        let price_wei_val = if let Some(ref price) = price_chr {
+        // Parse price from CHI to wei
+        let price_wei_val = if let Some(ref price) = price_chi {
             if price.is_empty() || price == "0" {
                 0u128
             } else {
-                parse_chr_to_wei(price)?
+                parse_chi_to_wei(price)?
             }
         } else {
             0u128
@@ -680,15 +680,15 @@ async fn start_download(
         let priv_key = private_key.as_deref()
             .ok_or("Private key required for paid speed tier")?;
 
-        // Convert wei to CHR string for send_transaction
-        let cost_chr = speed_tiers::format_wei_as_chr(cost_wei);
-        println!("💰 Speed tier payment: {} CHR ({} wei) to burn address", cost_chr, cost_wei);
+        // Convert wei to CHI string for send_transaction
+        let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
+        println!("💰 Speed tier payment: {} CHI ({} wei) to burn address", cost_chi, cost_wei);
 
         // Process payment to burn address
         let payment_result = send_transaction(
             wallet_addr.to_string(),
             BURN_ADDRESS.to_string(),
-            cost_chr.clone(),
+            cost_chi.clone(),
             priv_key.to_string(),
         ).await;
 
@@ -910,7 +910,7 @@ async fn start_download(
 #[serde(rename_all = "camelCase")]
 struct DownloadCostResult {
     cost_wei: String,
-    cost_chr: String,
+    cost_chi: String,
     tier: String,
     speed_label: String,
 }
@@ -923,7 +923,7 @@ async fn calculate_download_cost(
 ) -> Result<DownloadCostResult, String> {
     let tier = SpeedTier::from_str(&speed_tier)?;
     let cost_wei = speed_tiers::calculate_cost(&tier, file_size);
-    let cost_chr = speed_tiers::format_wei_as_chr(cost_wei);
+    let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
     let speed_label = match tier.bytes_per_second() {
         Some(bps) if bps < 1024 * 1024 => format!("{} KB/s", bps / 1024),
         Some(bps) => format!("{} MB/s", bps / (1024 * 1024)),
@@ -932,7 +932,7 @@ async fn calculate_download_cost(
 
     Ok(DownloadCostResult {
         cost_wei: cost_wei.to_string(),
-        cost_chr,
+        cost_chi,
         tier: speed_tier,
         speed_label,
     })
@@ -946,7 +946,7 @@ async fn register_shared_file(
     file_path: String,
     file_name: String,
     file_size: u64,
-    price_chr: Option<String>,
+    price_chi: Option<String>,
     wallet_address: Option<String>,
 ) -> Result<(), String> {
     println!("Re-registering shared file: {} (hash: {})", file_name, file_hash);
@@ -956,12 +956,12 @@ async fn register_shared_file(
         return Err(format!("File no longer exists: {}", file_path));
     }
 
-    // Parse price from CHR to wei
-    let price_wei = if let Some(ref price) = price_chr {
+    // Parse price from CHI to wei
+    let price_wei = if let Some(ref price) = price_chi {
         if price.is_empty() || price == "0" {
             0u128
         } else {
-            parse_chr_to_wei(price)?
+            parse_chi_to_wei(price)?
         }
     } else {
         0u128
@@ -1128,8 +1128,8 @@ pub struct TransactionMeta {
     file_hash: Option<String>,    // For download payments
     speed_tier: Option<String>,   // For speed tier payments
     recipient_label: Option<String>, // User-provided label for recipient
-    balance_before: Option<String>,  // Balance before tx (CHR)
-    balance_after: Option<String>,   // Balance after tx (CHR)
+    balance_before: Option<String>,  // Balance before tx (CHI)
+    balance_after: Option<String>,   // Balance after tx (CHI)
 }
 
 // Transaction types
@@ -1228,13 +1228,13 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
             .map_err(|e| format!("Failed to parse balance hex '{}': {}", balance_hex, e))?
     };
 
-    // Convert wei to CHR (1 CHR = 10^18 wei)
-    let balance_chr = balance_wei as f64 / 1e18;
+    // Convert wei to CHI (1 CHI = 10^18 wei)
+    let balance_chi = balance_wei as f64 / 1e18;
 
-    println!("[get_wallet_balance] Balance for {}: {} CHR (hex: {}, wei: {})", address, balance_chr, balance_hex, balance_wei);
+    println!("[get_wallet_balance] Balance for {}: {} CHI (hex: {}, wei: {})", address, balance_chi, balance_hex, balance_wei);
 
     Ok(WalletBalanceResult {
-        balance: format!("{:.6}", balance_chr),
+        balance: format!("{:.6}", balance_chi),
         balance_wei: balance_wei.to_string(),
     })
 }
@@ -1254,8 +1254,8 @@ fn parse_hex_u64(hex: &str) -> u64 {
     u64::from_str_radix(hex, 16).unwrap_or(0)
 }
 
-/// Convert CHR amount string to wei using string math (avoids f64 precision loss)
-fn parse_chr_to_wei(amount: &str) -> Result<u128, String> {
+/// Convert CHI amount string to wei using string math (avoids f64 precision loss)
+fn parse_chi_to_wei(amount: &str) -> Result<u128, String> {
     let amount = amount.trim();
     let parts: Vec<&str> = amount.split('.').collect();
     if parts.len() > 2 {
@@ -1371,9 +1371,9 @@ async fn send_transaction(
     let secret_key = SecretKey::from_slice(&pk_bytes)
         .map_err(|e| format!("Invalid private key: {}", e))?;
 
-    // Convert amount from CHR to wei (1 CHR = 10^18 wei)
+    // Convert amount from CHI to wei (1 CHI = 10^18 wei)
     // Use string-based conversion to avoid f64 precision loss
-    let amount_wei = parse_chr_to_wei(&amount)?;
+    let amount_wei = parse_chi_to_wei(&amount)?;
 
     // Get the nonce for the sender address
     // Use "pending" to account for transactions still in the mempool
@@ -1422,7 +1422,7 @@ async fn send_transaction(
     let balance_hex = balance_json["result"].as_str().unwrap_or("0x0");
     let balance_wei = u128::from_str_radix(balance_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
-    println!("💰 Sender balance: {} wei ({} CHR)", balance_wei, balance_wei as f64 / 1e18);
+    println!("💰 Sender balance: {} wei ({} CHI)", balance_wei, balance_wei as f64 / 1e18);
 
     // Get gas price
     let gas_price_payload = serde_json::json!({
@@ -1455,13 +1455,13 @@ async fn send_transaction(
     let total_cost = amount_wei.checked_add(gas_cost).ok_or("Amount overflow".to_string())?;
 
     // Capture balance before/after for transaction history
-    let balance_before_chr = format!("{:.6}", balance_wei as f64 / 1e18);
+    let balance_before_chi = format!("{:.6}", balance_wei as f64 / 1e18);
     let balance_after_wei = balance_wei.saturating_sub(total_cost);
-    let balance_after_chr = format!("{:.6}", balance_after_wei as f64 / 1e18);
+    let balance_after_chi = format!("{:.6}", balance_after_wei as f64 / 1e18);
 
     if balance_wei < total_cost {
         return Err(format!(
-            "Insufficient balance: have {:.6} CHR, need {:.6} CHR (amount) + {:.6} CHR (gas)",
+            "Insufficient balance: have {:.6} CHI, need {:.6} CHI (amount) + {:.6} CHI (gas)",
             balance_wei as f64 / 1e18,
             amount_wei as f64 / 1e18,
             gas_cost as f64 / 1e18
@@ -1519,7 +1519,7 @@ async fn send_transaction(
     println!("📤 Sending transaction:");
     println!("   From: {}", from_address);
     println!("   To: {}", to_address);
-    println!("   Amount: {} CHR ({} wei)", amount, amount_wei);
+    println!("   Amount: {} CHI ({} wei)", amount, amount_wei);
     println!("   Nonce: {}", nonce);
     println!("   Gas Price: {}", gas_price);
     println!("   Chain ID: {}", chain_id);
@@ -1579,8 +1579,8 @@ async fn send_transaction(
                     return Ok(SendTransactionResult {
                         hash: tx_hash,
                         status: "pending".to_string(),
-                        balance_before: balance_before_chr.clone(),
-                        balance_after: balance_after_chr.clone(),
+                        balance_before: balance_before_chi.clone(),
+                        balance_after: balance_after_chi.clone(),
                     });
                 }
 
@@ -1647,8 +1647,8 @@ async fn send_transaction(
     Ok(SendTransactionResult {
         hash: tx_hash,
         status: "pending".to_string(),
-        balance_before: balance_before_chr,
-        balance_after: balance_after_chr,
+        balance_before: balance_before_chi,
+        balance_after: balance_after_chi,
     })
 }
 
@@ -1660,17 +1660,17 @@ pub struct PaymentResult {
 }
 
 /// Public wrapper for sending payment transactions from dht.rs event loop.
-/// Takes CHR amount string, returns tx hash and balance info on success.
+/// Takes CHI amount string, returns tx hash and balance info on success.
 pub async fn send_payment_transaction(
     from_address: &str,
     to_address: &str,
-    amount_chr: &str,
+    amount_chi: &str,
     private_key: &str,
 ) -> Result<PaymentResult, String> {
     let result = send_transaction(
         from_address.to_string(),
         to_address.to_string(),
-        amount_chr.to_string(),
+        amount_chi.to_string(),
         private_key.to_string(),
     ).await?;
     Ok(PaymentResult {
@@ -1714,8 +1714,8 @@ async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::V
     }
 }
 
-/// Dev faucet - gives 1 CHR to an address for testing
-/// Only works if there's CHR in the faucet address
+/// Dev faucet - gives 1 CHI to an address for testing
+/// Only works if there's CHI in the faucet address
 #[tauri::command]
 async fn request_faucet(address: String) -> Result<SendTransactionResult, String> {
     let client = reqwest::Client::new();
@@ -1723,7 +1723,7 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
     // Faucet address - this is a known test address with pre-allocated balance
     let faucet_address = "0x0000000000000000000000000000000000001337";
 
-    // Amount: 1 CHR = 1e18 wei = 0xde0b6b3a7640000
+    // Amount: 1 CHI = 1e18 wei = 0xde0b6b3a7640000
     let amount_hex = "0xde0b6b3a7640000";
 
     // Get the nonce for the faucet address
@@ -1792,7 +1792,7 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
 
     if let Some(error) = send_json.get("error") {
         // If faucet fails, suggest mining instead
-        return Err(format!("Faucet unavailable. Please mine some blocks to get CHR. Error: {}", error));
+        return Err(format!("Faucet unavailable. Please mine some blocks to get CHI. Error: {}", error));
     }
 
     let tx_hash = send_json["result"]
@@ -1960,7 +1960,7 @@ async fn get_transaction_history(
                                 if from == address_lower || to == address_lower {
                                     let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
                                     let value_wei = u128::from_str_radix(value_hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                                    let value_chr = value_wei as f64 / 1e18;
+                                    let value_chi = value_wei as f64 / 1e18;
 
                                     let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
                                     let gas_used = u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).unwrap_or(0);
@@ -1976,7 +1976,7 @@ async fn get_transaction_history(
                                         hash: tx_hash.to_string(),
                                         from: tx_from.to_string(),
                                         to: tx_to.to_string(),
-                                        value: format!("{:.6}", value_chr),
+                                        value: format!("{:.6}", value_chi),
                                         value_wei: value_wei.to_string(),
                                         block_number: block_num,
                                         timestamp: block_timestamp,

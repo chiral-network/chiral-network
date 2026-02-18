@@ -252,7 +252,7 @@
     }
   }
 
-  // Send CHR
+  // Send CHI
   async function handleSend() {
     if (!$walletAccount || !recipientAddress || !sendAmount) return;
 
@@ -305,7 +305,7 @@
         await invoke('record_transaction_meta', {
           txHash: result.hash,
           txType: 'send',
-          description: `💸 Sent ${sendAmount} CHR to ${recipientAddress.slice(0, 10)}...`,
+          description: `💸 Sent ${sendAmount} CHI to ${recipientAddress.slice(0, 10)}...`,
           recipientLabel: getRecipientLabel(recipientAddress),
           balanceBefore: result.balanceBefore,
           balanceAfter: result.balanceAfter,
@@ -471,7 +471,7 @@
                   <span class="text-primary-200/60 text-sm">Connecting to network...</span>
                 {:else}
                   <span class="text-3xl font-bold">{formatBalance(balance)}</span>
-                  <span class="text-primary-100">CHR</span>
+                  <span class="text-primary-100">CHI</span>
                 {/if}
               </div>
             </div>
@@ -572,15 +572,15 @@
       </div>
     </div>
 
-    <!-- Send CHR Card -->
+    <!-- Send CHI Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
           <Send class="w-6 h-6 text-primary-600 dark:text-primary-400" />
         </div>
         <div>
-          <h3 class="font-semibold dark:text-white">Send CHR</h3>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHR to another address</p>
+          <h3 class="font-semibold dark:text-white">Send CHI</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHI to another address</p>
         </div>
       </div>
 
@@ -644,7 +644,7 @@
           <!-- Amount -->
           <div>
             <label for="amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Amount (CHR)
+              Amount (CHI)
             </label>
             <div class="relative">
               <input
@@ -671,7 +671,7 @@
             class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Send class="w-4 h-4" />
-            Send CHR
+            Send CHI
           </button>
 
           <!-- Saved Recipients List -->
@@ -732,7 +732,7 @@
             </div>
             <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
               <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
-              <span class="text-lg font-bold text-primary-600 dark:text-primary-400">{sendAmount} CHR</span>
+              <span class="text-lg font-bold text-primary-600 dark:text-primary-400">{sendAmount} CHI</span>
             </div>
           </div>
 
@@ -826,7 +826,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-medium {style.iconColor}">
-                      {isIncoming(tx) ? '+' : '-'}{tx.value} CHR
+                      {isIncoming(tx) ? '+' : '-'}{tx.value} CHI
                     </span>
                     <span class="text-xs px-2 py-0.5 rounded-full {
                       tx.txType === 'speed_tier_payment'
@@ -894,11 +894,11 @@
                     {#if tx.balanceBefore && tx.balanceAfter}
                       <div>
                         <span class="text-gray-400">Balance Before</span>
-                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceBefore} CHR</p>
+                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceBefore} CHI</p>
                       </div>
                       <div>
                         <span class="text-gray-400">Balance After</span>
-                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceAfter} CHR</p>
+                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceAfter} CHI</p>
                       </div>
                     {/if}
                     {#if tx.fileHash}
@@ -943,7 +943,7 @@
   <BlacklistWarningModal
     address={blacklistWarningMatch.address}
     reason={blacklistWarningMatch.reason}
-    action={`send ${sendAmount} CHR`}
+    action={`send ${sendAmount} CHI`}
     onconfirm={() => { blacklistWarningMatch = null; showConfirmSend = true; }}
     oncancel={() => { blacklistWarningMatch = null; }}
   />
