@@ -206,4 +206,66 @@ mod tests {
         assert_eq!(format_wei_as_chi(1_500_000_000_000_000_000), "1.5");
         assert_eq!(format_wei_as_chi(10_000_000_000_000_000), "0.01");
     }
+
+    #[test]
+    fn test_format_wei_as_chi_large_amount() {
+        // 1000 CHI
+        assert_eq!(format_wei_as_chi(1_000_000_000_000_000_000_000), "1000");
+    }
+
+    #[test]
+    fn test_format_wei_as_chi_one_wei() {
+        // 1 wei = smallest unit
+        let result = format_wei_as_chi(1);
+        assert!(result.starts_with("0."));
+        assert!(result.len() > 2);
+    }
+
+    #[test]
+    fn test_chunk_request_delay_free_tier() {
+        // Free: 100 KB/s, 256 KB chunk → ~2.56 seconds
+        let delay = chunk_request_delay(262_144, &SpeedTier::Free);
+        assert!(delay.is_some());
+        let dur = delay.unwrap();
+        // 262144 bytes / 102400 bytes/s = 2.56 seconds = 2_560_000 microseconds
+        assert_eq!(dur.as_micros(), 2_560_000);
+    }
+
+    #[test]
+    fn test_chunk_request_delay_standard_tier() {
+        // Standard: 1 MB/s, 256 KB chunk → 0.25 seconds
+        let delay = chunk_request_delay(262_144, &SpeedTier::Standard);
+        assert!(delay.is_some());
+        let dur = delay.unwrap();
+        // 262144 / 1048576 = 0.25s = 250000 microseconds
+        assert_eq!(dur.as_micros(), 250_000);
+    }
+
+    #[test]
+    fn test_chunk_request_delay_premium_unlimited() {
+        let delay = chunk_request_delay(262_144, &SpeedTier::Premium);
+        assert!(delay.is_none());
+    }
+
+    #[test]
+    fn test_cost_calculation_rounds_up() {
+        // 1 byte at Standard: should round up, not be zero
+        // (1 * 10^15 + 999999) / 10^6 = 1_000_000_000 wei
+        let cost = calculate_cost(&SpeedTier::Standard, 1);
+        assert!(cost > 0);
+        assert_eq!(cost, 1_000_000_000);
+    }
+
+    #[test]
+    fn test_cost_calculation_zero_bytes() {
+        assert_eq!(calculate_cost(&SpeedTier::Standard, 0), 0);
+        assert_eq!(calculate_cost(&SpeedTier::Premium, 0), 0);
+    }
+
+    #[test]
+    fn test_tier_from_str_case_insensitive() {
+        assert_eq!(SpeedTier::from_str("FREE").unwrap(), SpeedTier::Free);
+        assert_eq!(SpeedTier::from_str("Standard").unwrap(), SpeedTier::Standard);
+        assert_eq!(SpeedTier::from_str("PREMIUM").unwrap(), SpeedTier::Premium);
+    }
 }
