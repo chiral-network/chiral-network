@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use crate::speed_tiers::SpeedTier;
 use libp2p::{
-    kad, mdns, noise, ping,
+    kad, mdns, noise, ping, relay, dcutr,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Swarm, PeerId, StreamProtocol, Multiaddr,
     identify, request_response,
@@ -355,6 +355,8 @@ pub struct NetworkStats {
 
 #[derive(NetworkBehaviour)]
 struct DhtBehaviour {
+    relay_client: relay::client::Behaviour,
+    dcutr: dcutr::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
     mdns: mdns::tokio::Behaviour,
     ping: ping::Behaviour,
@@ -879,24 +881,31 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         request_response::Config::default(),
     );
 
-    let behaviour = DhtBehaviour {
-        kad,
-        mdns,
-        ping,
-        identify,
-        ping_protocol,
-        file_transfer,
-        file_request,
-    };
-
-    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
             noise::Config::new,
             yamux::Config::default,
         )?
-        .with_behaviour(|_| behaviour)?
+        .with_relay_client(
+            noise::Config::new,
+            yamux::Config::default,
+        )?
+        .with_behaviour(|_key, relay_client| {
+            let dcutr = dcutr::Behaviour::new(local_peer_id);
+            DhtBehaviour {
+                relay_client,
+                dcutr,
+                kad,
+                mdns,
+                ping,
+                identify,
+                ping_protocol,
+                file_transfer,
+                file_request,
+            }
+        })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
         .build();
 
@@ -904,12 +913,20 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Dial bootstrap nodes to establish connections
+    // Dial bootstrap nodes and listen via relay for NAT traversal
     for addr_str in get_bootstrap_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
             match swarm.dial(addr.clone()) {
                 Ok(_) => println!("Dialing bootstrap node: {}", addr),
                 Err(e) => println!("Failed to dial bootstrap node {}: {:?}", addr, e),
+            }
+
+            // Listen on relay circuit through this bootstrap node
+            // This allows NATted peers to reach us via the relay
+            let relay_addr = addr.clone().with(libp2p::multiaddr::Protocol::P2pCircuit);
+            match swarm.listen_on(relay_addr.clone()) {
+                Ok(_) => println!("Listening on relay: {}", relay_addr),
+                Err(e) => println!("Failed to listen on relay {}: {:?}", relay_addr, e),
             }
         }
     }
@@ -2080,6 +2097,51 @@ async fn handle_behaviour_event(
                     println!("Inbound file request failed from {:?}: {:?}", peer, error);
                 }
                 _ => {}
+            }
+        }
+        DhtBehaviourEvent::RelayClient(event) => {
+            match event {
+                relay::client::Event::ReservationReqAccepted { relay_peer_id, renewal, .. } => {
+                    let action = if renewal { "renewed" } else { "accepted" };
+                    println!("🔄 Relay reservation {} by {}", action, relay_peer_id);
+                    let _ = app.emit("relay-reservation", serde_json::json!({
+                        "relayPeerId": relay_peer_id.to_string(),
+                        "renewal": renewal,
+                    }));
+                }
+                relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                    println!("✅ Outbound relay circuit established via {}", relay_peer_id);
+                    let _ = app.emit("relay-circuit-established", serde_json::json!({
+                        "relayPeerId": relay_peer_id.to_string(),
+                        "direction": "outbound",
+                    }));
+                }
+                relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+                    println!("✅ Inbound relay circuit from {}", src_peer_id);
+                    let _ = app.emit("relay-circuit-established", serde_json::json!({
+                        "srcPeerId": src_peer_id.to_string(),
+                        "direction": "inbound",
+                    }));
+                }
+            }
+        }
+        DhtBehaviourEvent::Dcutr(event) => {
+            match &event.result {
+                Ok(connection_id) => {
+                    println!("🕳️ DCUtR hole-punch succeeded with {} (conn {:?})", event.remote_peer_id, connection_id);
+                    let _ = app.emit("dcutr-event", serde_json::json!({
+                        "remotePeerId": event.remote_peer_id.to_string(),
+                        "success": true,
+                    }));
+                }
+                Err(e) => {
+                    println!("🕳️ DCUtR hole-punch failed with {}: {}", event.remote_peer_id, e);
+                    let _ = app.emit("dcutr-event", serde_json::json!({
+                        "remotePeerId": event.remote_peer_id.to_string(),
+                        "success": false,
+                        "error": format!("{}", e),
+                    }));
+                }
             }
         }
         _ => {}

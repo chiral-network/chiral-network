@@ -1912,6 +1912,28 @@ async fn start_dht_node(
                             println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
                     }
+                    DhtEvent::RelayReservation { relay_peer_id, renewal } => {
+                        let payload = serde_json::json!({
+                            "relayPeerId": relay_peer_id,
+                            "renewal": renewal,
+                        });
+                        let _ = app_handle.emit("relay-reservation", payload);
+                    }
+                    DhtEvent::RelayCircuitEstablished { peer_id, direction } => {
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "direction": direction,
+                        });
+                        let _ = app_handle.emit("relay-circuit-established", payload);
+                    }
+                    DhtEvent::DcutrEvent { remote_peer_id, success, error } => {
+                        let payload = serde_json::json!({
+                            "remotePeerId": remote_peer_id,
+                            "success": success,
+                            "error": error,
+                        });
+                        let _ = app_handle.emit("dcutr-event", payload);
+                    }
                     _ => {}
                 }
             }
@@ -2379,6 +2401,15 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     }))
                     .unwrap_or_else(|_| "{}".to_string());
                     format!("reputation_event:{}", json)
+                }
+                DhtEvent::RelayReservation { relay_peer_id, renewal } => {
+                    format!("relay_reservation:{}:{}", relay_peer_id, renewal)
+                }
+                DhtEvent::RelayCircuitEstablished { peer_id, direction } => {
+                    format!("relay_circuit_established:{}:{}", peer_id, direction)
+                }
+                DhtEvent::DcutrEvent { remote_peer_id, success, error } => {
+                    format!("dcutr_event:{}:{}:{}", remote_peer_id, success, error.unwrap_or_default())
                 }
             })
             .collect();

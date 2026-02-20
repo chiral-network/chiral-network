@@ -18,7 +18,7 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-libp2p = { version = "0.53", features = ["kad", "tcp", "noise", "yamux", "ping", "identify", "mdns", "macros", "tokio", "request-response", "cbor"] }
+libp2p = { version = "0.53", features = ["kad", "tcp", "noise", "yamux", "ping", "identify", "mdns", "macros", "tokio", "request-response", "cbor", "relay", "dcutr"] }
 futures = "0.3"
 dirs = "5.0"
 sha2 = "0.10"
