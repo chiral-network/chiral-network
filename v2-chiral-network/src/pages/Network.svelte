@@ -100,6 +100,25 @@
   let bootstrapPeerIds = $state<Set<string>>(new Set());
   let filteredPeers = $derived($peers.filter(p => !bootstrapPeerIds.has(p.id)));
 
+  // Relay / NAT Traversal State
+  interface RelayStatus {
+    relayPeerId: string;
+    active: boolean;
+    timestamp: number;
+  }
+  interface HolePunchEvent {
+    remotePeerId: string;
+    success: boolean;
+    error?: string;
+    timestamp: number;
+  }
+  let relayReservations = $state<RelayStatus[]>([]);
+  let holePunchEvents = $state<HolePunchEvent[]>([]);
+  let unlistenRelay: (() => void) | null = null;
+  let unlistenRelayFailed: (() => void) | null = null;
+  let unlistenRelayCircuit: (() => void) | null = null;
+  let unlistenDcutr: (() => void) | null = null;
+
   // Traffic Statistics State
   let trafficStats = $state({
     totalDownloaded: 0,
@@ -199,6 +218,44 @@
         }
       });
 
+      // Listen for relay/hole-punch events
+      unlistenRelay = await listen<{ relayPeerId: string; renewal: boolean }>('relay-reservation', (event) => {
+        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
+        if (existing) {
+          existing.active = true;
+          existing.timestamp = Date.now();
+          relayReservations = [...relayReservations];
+        } else {
+          relayReservations = [...relayReservations, {
+            relayPeerId: event.payload.relayPeerId,
+            active: true,
+            timestamp: Date.now(),
+          }];
+        }
+      });
+
+      unlistenRelayFailed = await listen<{ relayPeerId: string }>('relay-reservation-failed', (event) => {
+        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
+        if (existing) {
+          existing.active = false;
+          existing.timestamp = Date.now();
+          relayReservations = [...relayReservations];
+        }
+      });
+
+      unlistenRelayCircuit = await listen<{ direction: string }>('relay-circuit-established', () => {
+        log.info('Relay circuit established');
+      });
+
+      unlistenDcutr = await listen<{ remotePeerId: string; success: boolean; error?: string }>('dcutr-event', (event) => {
+        holePunchEvents = [{
+          remotePeerId: event.payload.remotePeerId,
+          success: event.payload.success,
+          error: event.payload.error,
+          timestamp: Date.now(),
+        }, ...holePunchEvents.slice(0, 9)]; // keep last 10
+      });
+
       // Refresh status every 10 seconds
       refreshInterval = setInterval(loadGethStatus, 10000);
     }
@@ -218,6 +275,10 @@
     if (trafficInterval) {
       clearInterval(trafficInterval);
     }
+    unlistenRelay?.();
+    unlistenRelayFailed?.();
+    unlistenRelayCircuit?.();
+    unlistenDcutr?.();
     saveTrafficStats();
   });
 
@@ -933,6 +994,58 @@
           <p class="text-lg font-bold dark:text-white">{formatBytes(trafficStats.totalUploaded)}</p>
         </div>
       </div>
+    </div>
+
+    <!-- NAT Traversal / Relay Status -->
+    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+      <div class="flex items-center gap-2 mb-3">
+        <Globe class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">NAT Traversal</span>
+        {#if relayReservations.some(r => r.active)}
+          <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 font-medium">
+            Relay Active
+          </span>
+        {:else if $networkConnected}
+          <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 font-medium">
+            Connecting to Relays
+          </span>
+        {/if}
+      </div>
+
+      {#if relayReservations.length > 0}
+        <div class="space-y-1.5 mb-3">
+          {#each relayReservations as relay}
+            <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full {relay.active ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+                <span class="font-mono dark:text-gray-300">{relay.relayPeerId.slice(0, 16)}...</span>
+              </div>
+              <span class="{relay.active ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+                {relay.active ? 'Reserved' : 'Failed'}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {:else if $networkConnected}
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Relay reservations will appear here when connected to relay nodes.
+          Relays enable connections between peers behind NAT.
+        </p>
+      {/if}
+
+      {#if holePunchEvents.length > 0}
+        <div class="mb-2">
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Hole-Punch Events (DCUtR)</p>
+          <div class="space-y-1">
+            {#each holePunchEvents.slice(0, 5) as event}
+              <div class="flex items-center justify-between p-1.5 text-xs {event.success ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}">
+                <span class="font-mono">{event.remotePeerId.slice(0, 16)}...</span>
+                <span>{event.success ? 'Direct connection established' : `Failed: ${event.error || 'unknown'}`}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </div>
 
     <!-- Connected Peers -->

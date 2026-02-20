@@ -116,6 +116,25 @@
   let isConnecting = false  // Prevent multiple simultaneous connection attempts
   const formatHealthMessage = (value: string | null | undefined) => value ?? $t('network.dht.health.none')
 
+  // Relay / DCUtR state
+  interface RelayStatus {
+    relayPeerId: string;
+    renewal: boolean;
+    timestamp: number;
+  }
+  interface HolePunchEvent {
+    remotePeerId: string;
+    success: boolean;
+    error?: string;
+    timestamp: number;
+  }
+  let relayStatus: RelayStatus | null = null;
+  let holePunchEvents: HolePunchEvent[] = [];
+  let relayCircuits: { peerId: string; direction: string; timestamp: number }[] = [];
+  let relayUnlisten: (() => void) | null = null;
+  let relayCircuitUnlisten: (() => void) | null = null;
+  let dcutrUnlisten: (() => void) | null = null;
+
   // Always preserve connections - no unreliable time-based detection
   
   // WebRTC and Signaling variables
@@ -1391,6 +1410,19 @@
         await registerNatListener()
         await registerLowPeerCountListener()
 
+        // Listen for relay/dcutr events
+        listen<{ relayPeerId: string; renewal: boolean }>('relay-reservation', (event) => {
+          relayStatus = { ...event.payload, timestamp: Date.now() };
+        }).then(fn => { relayUnlisten = fn; });
+
+        listen<{ peerId: string; direction: string }>('relay-circuit-established', (event) => {
+          relayCircuits = [...relayCircuits.slice(-9), { ...event.payload, timestamp: Date.now() }];
+        }).then(fn => { relayCircuitUnlisten = fn; });
+
+        listen<{ remotePeerId: string; success: boolean; error?: string }>('dcutr-event', (event) => {
+          holePunchEvents = [...holePunchEvents.slice(-9), { ...event.payload, timestamp: Date.now() }];
+        }).then(fn => { dcutrUnlisten = fn; });
+
         // Listen for download progress updates
         unlistenProgress = await listen('geth-download-progress', (event) => {
           downloadProgress = event.payload as typeof downloadProgress
@@ -1424,6 +1456,9 @@
         peerDiscoveryUnsub()
         peerDiscoveryUnsub = null
       }
+      if (relayUnlisten) { relayUnlisten(); relayUnlisten = null; }
+      if (relayCircuitUnlisten) { relayCircuitUnlisten(); relayCircuitUnlisten = null; }
+      if (dcutrUnlisten) { dcutrUnlisten(); dcutrUnlisten = null; }
       // Note: We do NOT disconnect the signaling service here
       // It should persist across page navigations to maintain peer connections
     }
@@ -2110,6 +2145,66 @@
                  </div>
               </div>
            {/if}
+        </Card>
+
+        <!-- NAT Traversal: Relay & Hole Punching -->
+        <Card class="p-5">
+          <h3 class="font-semibold mb-4">NAT Traversal (Relay & Hole Punching)</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+            <!-- Relay Status -->
+            <div class="space-y-2">
+              <p class="text-xs uppercase text-muted-foreground mb-1">Relay Reservation</p>
+              {#if relayStatus}
+                <div class="flex items-center gap-2">
+                  <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span class="font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  Relay: <span class="font-mono">{relayStatus.relayPeerId.slice(0, 16)}...</span>
+                </p>
+                <p class="text-xs text-muted-foreground">
+                  {relayStatus.renewal ? 'Renewal' : 'Initial'} &middot; {new Date(relayStatus.timestamp).toLocaleTimeString()}
+                </p>
+              {:else}
+                <div class="flex items-center gap-2">
+                  <span class="inline-block w-2 h-2 rounded-full bg-gray-400"></span>
+                  <span class="text-muted-foreground">No relay reservation</span>
+                </div>
+              {/if}
+
+              {#if relayCircuits.length > 0}
+                <p class="text-xs uppercase text-muted-foreground mt-3 mb-1">Relay Circuits</p>
+                <div class="space-y-1">
+                  {#each relayCircuits.slice(-5) as circuit}
+                    <div class="text-xs flex gap-2">
+                      <span class="text-muted-foreground">{new Date(circuit.timestamp).toLocaleTimeString()}</span>
+                      <Badge class="text-xs">{circuit.direction}</Badge>
+                      <span class="font-mono">{circuit.peerId.slice(0, 12)}...</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            <!-- Hole Punch Events -->
+            <div class="space-y-2">
+              <p class="text-xs uppercase text-muted-foreground mb-1">Hole Punch (DCUtR)</p>
+              {#if holePunchEvents.length > 0}
+                <div class="space-y-1">
+                  {#each holePunchEvents.slice(-5) as hp}
+                    <div class="text-xs flex items-center gap-2">
+                      <span class="inline-block w-2 h-2 rounded-full {hp.success ? 'bg-emerald-500' : 'bg-red-500'}"></span>
+                      <span class="font-mono">{hp.remotePeerId.slice(0, 12)}...</span>
+                      <span class="text-muted-foreground">{hp.success ? 'Direct connection' : hp.error || 'Failed'}</span>
+                      <span class="text-muted-foreground ml-auto">{new Date(hp.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <p class="text-muted-foreground italic">No hole-punch attempts yet.</p>
+              {/if}
+            </div>
+          </div>
         </Card>
 
         <!-- DHT Events -->

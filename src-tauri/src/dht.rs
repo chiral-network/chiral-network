@@ -289,6 +289,8 @@ pub const RAW_CODEC: u64 = 0x55;
 
 #[derive(NetworkBehaviour)]
 struct DhtBehaviour {
+    relay_client: libp2p::relay::client::Behaviour,
+    dcutr: libp2p::dcutr::Behaviour,
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
     mdns: toggle::Toggle<Mdns>,
@@ -469,6 +471,19 @@ pub enum DhtEvent {
     PaymentNotificationReceived {
         from_peer: String,
         payload: serde_json::Value,
+    },
+    RelayReservation {
+        relay_peer_id: String,
+        renewal: bool,
+    },
+    RelayCircuitEstablished {
+        peer_id: String,
+        direction: String,
+    },
+    DcutrEvent {
+        remote_peer_id: String,
+        success: bool,
+        error: Option<String>,
     },
 }
 
@@ -2629,6 +2644,51 @@ async fn run_dht_node(
                                     }
                                     SwarmEvent::Behaviour(DhtBehaviourEvent::Upnp(upnp_event)) => {
                                         handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
+                                    }
+                                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(event)) => {
+                                        match event {
+                                            libp2p::relay::client::Event::ReservationReqAccepted { relay_peer_id, renewal, .. } => {
+                                                info!("Relay reservation accepted by {} (renewal: {})", relay_peer_id, renewal);
+                                                let _ = event_tx.send(DhtEvent::RelayReservation {
+                                                    relay_peer_id: relay_peer_id.to_string(),
+                                                    renewal,
+                                                }).await;
+                                            }
+                                            libp2p::relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                                                info!("Outbound relay circuit established via {}", relay_peer_id);
+                                                let _ = event_tx.send(DhtEvent::RelayCircuitEstablished {
+                                                    peer_id: relay_peer_id.to_string(),
+                                                    direction: "outbound".to_string(),
+                                                }).await;
+                                            }
+                                            libp2p::relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+                                                info!("Inbound relay circuit established from {}", src_peer_id);
+                                                let _ = event_tx.send(DhtEvent::RelayCircuitEstablished {
+                                                    peer_id: src_peer_id.to_string(),
+                                                    direction: "inbound".to_string(),
+                                                }).await;
+                                            }
+                                        }
+                                    }
+                                    SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(event)) => {
+                                        match &event.result {
+                                            Ok(connection_id) => {
+                                                info!("DCUtR hole-punch succeeded with {} (conn: {:?})", event.remote_peer_id, connection_id);
+                                                let _ = event_tx.send(DhtEvent::DcutrEvent {
+                                                    remote_peer_id: event.remote_peer_id.to_string(),
+                                                    success: true,
+                                                    error: None,
+                                                }).await;
+                                            }
+                                            Err(e) => {
+                                                warn!("DCUtR hole-punch failed with {}: {:?}", event.remote_peer_id, e);
+                                                let _ = event_tx.send(DhtEvent::DcutrEvent {
+                                                    remote_peer_id: event.remote_peer_id.to_string(),
+                                                    success: false,
+                                                    error: Some(format!("{:?}", e)),
+                                                }).await;
+                                            }
+                                        }
                                     }
                                     SwarmEvent::ExternalAddrConfirmed { address, .. } if !is_bootstrap => {
                                         handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr, &pending_provider_registrations, pure_client_mode, force_server_mode)
@@ -4843,7 +4903,7 @@ impl DhtService {
             autonat_targets.extend(bootstrap_set.iter().cloned());
         }
 
-        // Create the swarm
+        // Create the swarm with relay client for NAT traversal
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
             .with_tcp(
@@ -4851,14 +4911,20 @@ impl DhtService {
                 noise::Config::new,
                 yamux::Config::default,
             )?
+            .with_relay_client(
+                noise::Config::new,
+                yamux::Config::default,
+            )?
             // .with_quic() seems to destablize peer connect/download, disabled for now until solution
-            .with_behaviour(move |_| {
+            .with_behaviour(move |_key, relay_client| {
                 // Configure ping with more aggressive keep-alive to prevent connection drops
                 let ping_config = ping::Config::new()
                     .with_interval(Duration::from_secs(15)) // Ping every 15 seconds (default is 15s)
                     .with_timeout(Duration::from_secs(20)); // Timeout after 20 seconds (default is 20s)
 
                 DhtBehaviour {
+                    relay_client,
+                    dcutr: libp2p::dcutr::Behaviour::new(local_peer_id),
                     kademlia,
                     identify,
                     mdns: mdns_toggle,
@@ -4965,6 +5031,14 @@ impl DhtService {
                                 .behaviour_mut()
                                 .kademlia
                                 .add_address(&peer_id, addr.clone());
+                        }
+
+                        // Listen on relay circuit through this bootstrap node
+                        // This allows NATted peers to be reached via the relay
+                        let relay_addr = addr.clone().with(Protocol::P2pCircuit);
+                        match swarm.listen_on(relay_addr.clone()) {
+                            Ok(_) => info!("Listening on relay: {}", relay_addr),
+                            Err(e) => warn!("Failed to listen on relay {}: {:?}", relay_addr, e),
                         }
                     }
                     Err(e) => warn!("❌ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
