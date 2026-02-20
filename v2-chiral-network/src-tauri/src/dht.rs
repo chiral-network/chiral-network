@@ -916,20 +916,12 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Dial bootstrap nodes and listen via relay for NAT traversal
+    // Dial bootstrap nodes (relay listen happens in ConnectionEstablished handler)
     for addr_str in get_bootstrap_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
             match swarm.dial(addr.clone()) {
                 Ok(_) => println!("Dialing bootstrap node: {}", addr),
                 Err(e) => println!("Failed to dial bootstrap node {}: {:?}", addr, e),
-            }
-
-            // Listen on relay circuit through this bootstrap node
-            // This allows NATted peers to reach us via the relay
-            let relay_addr = addr.clone().with(libp2p::multiaddr::Protocol::P2pCircuit);
-            match swarm.listen_on(relay_addr.clone()) {
-                Ok(_) => println!("Listening on relay: {}", relay_addr),
-                Err(e) => println!("Failed to listen on relay {}: {:?}", relay_addr, e),
             }
         }
     }
@@ -977,6 +969,17 @@ async fn event_loop(
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
+
+                        // If this is a bootstrap node, listen via relay circuit for NAT traversal
+                        let bootstrap_peer_ids = get_bootstrap_peer_ids();
+                        if bootstrap_peer_ids.contains(&peer_id.to_string()) {
+                            let relay_addr = endpoint.get_remote_address().clone()
+                                .with(libp2p::multiaddr::Protocol::P2pCircuit);
+                            match swarm.listen_on(relay_addr.clone()) {
+                                Ok(_) => println!("Listening on relay via bootstrap: {}", relay_addr),
+                                Err(e) => println!("Failed to listen on relay {}: {:?}", relay_addr, e),
+                            }
+                        }
 
                         // Add to peers list so ChiralDrop and Network page can see them
                         let peer_id_str = peer_id.to_string();
