@@ -356,6 +356,7 @@ pub struct NetworkStats {
 #[derive(NetworkBehaviour)]
 struct DhtBehaviour {
     relay_client: relay::client::Behaviour,
+    relay_server: relay::Behaviour,
     dcutr: dcutr::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
     mdns: mdns::tokio::Behaviour,
@@ -894,8 +895,10 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         )?
         .with_behaviour(|_key, relay_client| {
             let dcutr = dcutr::Behaviour::new(local_peer_id);
+            let relay_server = relay::Behaviour::new(local_peer_id, Default::default());
             DhtBehaviour {
                 relay_client,
+                relay_server,
                 dcutr,
                 kad,
                 mdns,
@@ -2143,6 +2146,9 @@ async fn handle_behaviour_event(
                     }));
                 }
             }
+        }
+        DhtBehaviourEvent::RelayServer(event) => {
+            println!("Relay server: {:?}", event);
         }
         _ => {}
     }
