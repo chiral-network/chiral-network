@@ -149,11 +149,15 @@
       "run": "অনুসন্ধান চালান",
       "directConnect": "ডাইরেক্ট কানেক্ট",
       "placeholder": "পিয়ার মাল্টি-অ্যাড্রেস লিখুন (যেমন, /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "কানেক্ট করুন",
       "foundPeers": "খুঁজে পাওয়া পিয়ার: {count}",
       "discoveryStarted": "অনুসন্ধান শুরু হয়েছে। পাওয়া পিয়ার: {count}",
       "peerAddedToInput": "পিয়ার ইনপুটে যুক্ত হয়েছে",
-      "add": "যোগ করুন"
+      "add": "যোগ করুন",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "সংযুক্ত পিয়ার ({count})",
@@ -1622,6 +1626,8 @@
       "connectionSuccess": "সংযোগ সফল!",
       "connectionFailed": "সংযোগ ব্যর্থ। পিয়ার অনুপলব্ধ হতে পারে বা ঠিকানা অবৈধ।",
       "connectError": "পিয়ারের সাথে সংযোগ ব্যর্থ: {error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "সিগন্যালিং সার্ভার সংযুক্ত নয়। প্রথমে DHT চালু করুন।",
       "peerNotFound": "আবিষ্কৃত পিয়ারদের মধ্যে {peer} পাওয়া যায়নি",
       "messageReceived": "পিয়ার থেকে প্রাপ্ত: {message}",

@@ -152,11 +152,15 @@
       "run": "검색 실행",
       "directConnect": "직접 연결",
       "placeholder": "피어 주소 입력 (IP:Port 또는 피어 ID)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "연결",
       "foundPeers": "발견된 피어: {count}",
       "discoveryStarted": "검색이 시작되었습니다. 발견된 피어: {count}",
       "peerAddedToInput": "피어가 입력창에 추가되었습니다",
-      "add": "추가"
+      "add": "추가",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "연결된 피어 ({count})",
@@ -1509,6 +1513,8 @@
       "connectionSuccess": "연결 성공!",
       "connectionFailed": "연결에 실패했습니다. 피어가 응답하지 않거나 주소가 잘못되었을 수 있습니다.",
       "connectError": "피어에 연결하지 못했습니다: {error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "시그널링 서버가 연결되어 있지 않습니다. 먼저 DHT를 시작하세요.",
       "peerNotFound": "발견된 피어 중 {peer}를 찾을 수 없습니다",
       "messageReceived": "피어로부터 수신됨: {message}",

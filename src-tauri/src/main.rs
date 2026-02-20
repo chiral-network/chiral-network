@@ -2044,6 +2044,44 @@ async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Re
 }
 
 #[tauri::command]
+async fn ping_peer(state: State<'_, AppState>, peer_address: String) -> Result<u64, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT node is not running".to_string())?
+    };
+
+    // First ensure we're connected to the peer
+    dht.connect_peer(peer_address.clone()).await?;
+
+    // Extract peer ID from the multiaddr string
+    let peer_id_str = peer_address
+        .split("/p2p/")
+        .nth(1)
+        .ok_or_else(|| {
+            "Invalid address format: expected /ip4/.../tcp/.../p2p/<peer_id>".to_string()
+        })?
+        .to_string();
+
+    // Small delay to let the connection establish
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Send echo and measure round-trip time
+    let payload = b"ping".to_vec();
+    let start = std::time::Instant::now();
+    let response = dht.echo(peer_id_str, payload.clone()).await?;
+    let rtt_ms = start.elapsed().as_millis() as u64;
+
+    if response != payload {
+        return Err("Ping failed: echo response did not match".to_string());
+    }
+
+    Ok(rtt_ms)
+}
+
+#[tauri::command]
 async fn is_dht_running(state: State<'_, AppState>) -> Result<bool, String> {
     let dht_guard = state.dht.lock().await;
     Ok(dht_guard.is_some())
@@ -9449,6 +9487,7 @@ fn main() {
             search_by_infohash,
             get_file_seeders,
             connect_to_peer,
+            ping_peer,
             get_dht_events,
             detect_locale,
             get_download_directory,

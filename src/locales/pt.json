@@ -149,11 +149,15 @@
       "run": "Executar Descoberta",
       "directConnect": "Conexão Direta",
       "placeholder": "Digite multiendereço do par (ex: /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "Conectar",
       "foundPeers": "Pares encontrados: {count}",
       "discoveryStarted": "Descoberta iniciada. Pares encontrados: {count}",
       "peerAddedToInput": "Par adicionado à entrada",
-      "add": "Adicionar"
+      "add": "Adicionar",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "Pares Conectados ({count})",
@@ -1623,6 +1627,8 @@
       "connectionSuccess": "Conexão bem-sucedida!",
       "connectionFailed": "Falha na conexão. O par pode estar indisponível ou o endereço é inválido.",
       "connectError": "Falha ao conectar ao par: {error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "Servidor de sinalização não conectado. Inicie o DHT primeiro.",
       "peerNotFound": "Par {peer} não encontrado entre os pares descobertos",
       "messageReceived": "Recebido do par: {message}",
