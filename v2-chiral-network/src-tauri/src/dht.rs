@@ -1302,9 +1302,14 @@ async fn handle_behaviour_event(
                 _ => {}
             }
         }
-        DhtBehaviourEvent::Identify(event) => {
-            println!("Identify event: {:?}", event);
+        DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
+            println!("Identified peer {}: protocol={}, addrs={:?}", peer_id, info.protocol_version, info.listen_addrs);
+            // Add all listen addresses to Kademlia so peers can discover each other
+            for addr in &info.listen_addrs {
+                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+            }
         }
+        DhtBehaviourEvent::Identify(_) => {}
         DhtBehaviourEvent::FileTransfer(event) => {
             use request_response::Event;
             match event {
