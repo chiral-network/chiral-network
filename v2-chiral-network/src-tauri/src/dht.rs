@@ -1136,19 +1136,48 @@ async fn event_loop(
                         // Check if peer is actually connected before sending request
                         if !swarm.is_connected(&peer_id) {
                             println!("⚠️ Peer {} is not connected, attempting to dial...", peer_id);
+                            let mut dialed = false;
+
+                            // First try direct dial (works if we have the peer's address)
                             match swarm.dial(peer_id) {
                                 Ok(_) => {
-                                    println!("📡 Dialing peer {}...", peer_id);
+                                    println!("📡 Dialing peer {} directly...", peer_id);
+                                    dialed = true;
                                 }
                                 Err(e) => {
-                                    println!("❌ Cannot reach peer {}: {:?}", peer_id, e);
-                                    let _ = app.emit("file-download-failed", serde_json::json!({
-                                        "requestId": request_id,
-                                        "fileHash": file_hash,
-                                        "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
-                                    }));
-                                    continue;
+                                    println!("Direct dial failed for {}: {:?}, trying relay...", peer_id, e);
                                 }
+                            }
+
+                            // If direct dial failed, try via relay through each bootstrap node
+                            if !dialed {
+                                for bootstrap_addr_str in get_bootstrap_nodes() {
+                                    if let Ok(bootstrap_addr) = bootstrap_addr_str.parse::<Multiaddr>() {
+                                        let relay_addr = bootstrap_addr
+                                            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+                                            .with(libp2p::multiaddr::Protocol::P2p(peer_id));
+                                        match swarm.dial(relay_addr.clone()) {
+                                            Ok(_) => {
+                                                println!("📡 Dialing peer {} via relay: {}", peer_id, relay_addr);
+                                                dialed = true;
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                println!("Relay dial via {} failed: {:?}", bootstrap_addr_str, e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !dialed {
+                                println!("❌ Cannot reach peer {}: all dial attempts failed", peer_id);
+                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                    "requestId": request_id,
+                                    "fileHash": file_hash,
+                                    "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
+                                }));
+                                continue;
                             }
                         }
 
