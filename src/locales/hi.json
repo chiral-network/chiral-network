@@ -149,11 +149,15 @@
       "run": "खोज चलाएं",
       "directConnect": "प्रत्यक्ष कनेक्शन",
       "placeholder": "पियर का मल्टीएड्रेस दर्ज करें (उदा: /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "कनेक्ट करें",
       "foundPeers": "पाए गए पियर: {count}",
       "discoveryStarted": "खोज शुरू हुई। पाए गए पियर: {count}",
       "peerAddedToInput": "इनपुट में पियर जोड़ा गया",
-      "add": "जोड़ें"
+      "add": "जोड़ें",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "कनेक्टेड पियर ({count})",
@@ -1623,6 +1627,8 @@
       "connectionSuccess": "कनेक्शन सफल!",
       "connectionFailed": "कनेक्शन विफल। पीयर अनुपलब्ध हो सकता है या पता अमान्य है।",
       "connectError": "पीयर से कनेक्ट करने में विफल: {error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "सिग्नलिंग सर्वर कनेक्टेड नहीं है। पहले DHT शुरू करें।",
       "peerNotFound": "खोजे गए पीयर्स में {peer} नहीं मिला",
       "messageReceived": "पीयर से प्राप्त: {message}",

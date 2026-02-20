@@ -145,11 +145,15 @@
       "run": "Запустить обнаружение",
       "directConnect": "Прямое подключение",
       "placeholder": "Введите мультиадрес узла (например, /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "Подключиться",
       "foundPeers": "Найдено узлов: {count}",
       "discoveryStarted": "Обнаружение начато. Найдено узлов: {count}",
       "peerAddedToInput": "Узел добавлен в поле ввода",
-      "add": "Добавить"
+      "add": "Добавить",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "Подключенные узлы ({count})",
@@ -1518,6 +1522,8 @@
       "connectionSuccess": "Подключение выполнено!",
       "connectionFailed": "Не удалось подключиться. Пир может быть недоступен или адрес неверен.",
       "connectError": "Не удалось подключиться к пиру: {error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "Сигналинговый сервер не подключён. Сначала запустите DHT.",
       "peerNotFound": "Пир {peer} не найден среди обнаруженных",
       "messageReceived": "Получено от пира: {message}",
