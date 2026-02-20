@@ -140,13 +140,11 @@ mod cbor_codec {
 /// Get bootstrap nodes for the Chiral Network DHT
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
-        // Primary bootstrap node (IPv4 + IPv6)
+        // Primary bootstrap node with relay server (IPv4 + IPv6)
         "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWJXUCzYr2T8inC8SzZ71B7sjH16zvWuR7Jfyv3cbBkH8p".to_string(),
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWJXUCzYr2T8inC8SzZ71B7sjH16zvWuR7Jfyv3cbBkH8p".to_string(),
-        // Additional bootstrap nodes
+        // Additional bootstrap node
         "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
-        "/ip4/34.44.149.113/tcp/4001/p2p/12D3KooWETLNJUVLbkAbenbSPPdwN9ZLkBU3TLfyAeEUW2dsVptr".to_string(),
-        "/ip4/130.245.173.105/tcp/4001/p2p/12D3KooWSDDA2jyo6Cynr7SHPfhdQoQazu1jdUEAp7rLKKKLqqTr".to_string(),
     ]
 }
 
@@ -356,7 +354,6 @@ pub struct NetworkStats {
 #[derive(NetworkBehaviour)]
 struct DhtBehaviour {
     relay_client: relay::client::Behaviour,
-    relay_server: relay::Behaviour,
     dcutr: dcutr::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
     mdns: mdns::tokio::Behaviour,
@@ -895,10 +892,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         )?
         .with_behaviour(|_key, relay_client| {
             let dcutr = dcutr::Behaviour::new(local_peer_id);
-            let relay_server = relay::Behaviour::new(local_peer_id, Default::default());
             DhtBehaviour {
                 relay_client,
-                relay_server,
                 dcutr,
                 kad,
                 mdns,
@@ -965,19 +960,46 @@ async fn event_loop(
                         handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        println!("Listening on {:?}", address);
+                        // Check if this is a relay circuit address
+                        let is_relay = address.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit));
+                        if is_relay {
+                            println!("✅ Relay reservation confirmed! Listening on relay: {}", address);
+                            // Add as external address so Identify advertises it to other peers
+                            swarm.add_external_address(address.clone());
+                        } else {
+                            println!("Listening on {:?}", address);
+                        }
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
 
-                        // If this is a bootstrap node, listen via relay circuit for NAT traversal
+                        // If this is a bootstrap node, request relay reservation for NAT traversal.
+                        // Use the known bootstrap address (guaranteed to include /p2p/PEER_ID)
+                        // instead of endpoint.get_remote_address() which may strip the peer ID.
                         let bootstrap_peer_ids = get_bootstrap_peer_ids();
                         if bootstrap_peer_ids.contains(&peer_id.to_string()) {
-                            let relay_addr = endpoint.get_remote_address().clone()
-                                .with(libp2p::multiaddr::Protocol::P2pCircuit);
-                            match swarm.listen_on(relay_addr.clone()) {
-                                Ok(_) => println!("Listening on relay via bootstrap: {}", relay_addr),
-                                Err(e) => println!("Failed to listen on relay {}: {:?}", relay_addr, e),
+                            let mut relay_requested = false;
+                            for addr_str in get_bootstrap_nodes() {
+                                if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                                    if let Some(pid) = extract_peer_id_from_multiaddr(&addr) {
+                                        if pid == peer_id {
+                                            let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
+                                            match swarm.listen_on(relay_addr.clone()) {
+                                                Ok(listener_id) => {
+                                                    println!("✅ Relay reservation requested via bootstrap {} (listener {:?}): {}", peer_id, listener_id, relay_addr);
+                                                    relay_requested = true;
+                                                }
+                                                Err(e) => {
+                                                    println!("❌ Failed to listen on relay {}: {:?}", relay_addr, e);
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if !relay_requested {
+                                println!("⚠️ Connected to bootstrap {} but could not find matching address for relay", peer_id);
                             }
                         }
 
@@ -1029,6 +1051,21 @@ async fn event_loop(
                         if let Some(peer) = peer_id {
                             println!("Failed to connect to {:?}: {:?}", peer, error);
                         }
+                    }
+                    SwarmEvent::IncomingConnection { local_addr, send_back_addr, .. } => {
+                        println!("📥 Incoming connection: local={}, remote={}", local_addr, send_back_addr);
+                    }
+                    SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
+                        println!("❌ Incoming connection error: local={}, remote={}, error={:?}", local_addr, send_back_addr, error);
+                    }
+                    SwarmEvent::ListenerClosed { listener_id, reason, addresses, .. } => {
+                        println!("⚠️ Listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
+                    }
+                    SwarmEvent::ListenerError { listener_id, error, .. } => {
+                        println!("❌ Listener {:?} error: {:?}", listener_id, error);
+                    }
+                    SwarmEvent::ExternalAddrConfirmed { address, .. } => {
+                        println!("✅ External address confirmed: {}", address);
                     }
                     _ => {}
                 }
@@ -2184,9 +2221,6 @@ async fn handle_behaviour_event(
                 }
             }
         }
-        DhtBehaviourEvent::RelayServer(event) => {
-            println!("Relay server: {:?}", event);
-        }
         _ => {}
     }
 }
@@ -2199,7 +2233,7 @@ mod tests {
     fn test_bootstrap_nodes_not_empty() {
         let nodes = get_bootstrap_nodes();
         assert!(!nodes.is_empty());
-        assert_eq!(nodes.len(), 5);
+        assert_eq!(nodes.len(), 3);
     }
 
     #[test]
@@ -2227,8 +2261,8 @@ mod tests {
             assert!(!seen.contains(id), "Duplicate peer ID: {}", id);
             seen.push(id.clone());
         }
-        // Should have 4 unique nodes (one has both IPv4 and IPv6)
-        assert_eq!(peer_ids.len(), 4);
+        // Should have 2 unique nodes (one has both IPv4 and IPv6)
+        assert_eq!(peer_ids.len(), 2);
     }
 
     #[test]
