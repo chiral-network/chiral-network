@@ -129,7 +129,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
     swarm.listen_on(listen_addr_v6)?;
     println!("Listening on /ip6/::/tcp/{}", port);
 
-    println!("Relay server ready. Waiting for connections...\n");
+    // CRITICAL: Add external addresses explicitly so relay RESERVE_OK responses
+    // include the server's public addresses. Without this, the first RESERVE_OK
+    // would contain EMPTY addresses (because Identify hasn't discovered external
+    // addresses yet), causing clients to fail with NoAddressesInReservation.
+    // The relay client then resets Reservation to None, denying all STOP requests
+    // with NO_RESERVATION.
+    //
+    // We also add listen addresses as external since 0.0.0.0 is not routable.
+    // On a server, the actual IPs will be discovered by Identify, but we need
+    // at least one address available before the first Identify exchange.
+    println!("Adding external addresses from listen interfaces...");
+
+    // Collect all listen addresses, then add routable ones as external.
+    // Skip unspecified (0.0.0.0, ::), loopback (127.x, ::1), and link-local (fe80::).
+    let mut external_addrs: Vec<Multiaddr> = Vec::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        tokio::select! {
+            event = swarm.select_next_some() => {
+                match event {
+                    SwarmEvent::NewListenAddr { address, .. } => {
+                        println!("[LISTEN] New listen address: {}", address);
+                        let addr_str = address.to_string();
+                        // Skip non-routable addresses
+                        let is_routable = !addr_str.contains("0.0.0.0")
+                            && !addr_str.contains("127.0.0.1")
+                            && !addr_str.contains("/0/")
+                            && !addr_str.contains("/::1/")
+                            && !addr_str.contains("fe80::");
+                        if is_routable {
+                            external_addrs.push(address);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                // If we already have addresses and no new ones are coming, stop waiting
+                if !external_addrs.is_empty() {
+                    break;
+                }
+            }
+        }
+    }
+    if external_addrs.is_empty() {
+        // Fallback: add the explicit listen address
+        let fallback_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}/p2p/{}", port, local_peer_id).parse()?;
+        println!("[EXTERNAL] Fallback: {}", fallback_addr);
+        swarm.add_external_address(fallback_addr);
+    } else {
+        for addr in external_addrs {
+            let external_addr = addr.with(libp2p::multiaddr::Protocol::P2p(local_peer_id));
+            println!("[EXTERNAL] Adding: {}", external_addr);
+            swarm.add_external_address(external_addr);
+        }
+    }
+
+    println!("\nRelay server ready. Waiting for connections...\n");
 
     // Print the multiaddr that peers should use
     println!("Peers should connect to:");
