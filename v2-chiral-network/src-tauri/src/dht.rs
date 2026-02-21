@@ -911,7 +911,23 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Dial bootstrap nodes (relay listen happens in ConnectionEstablished handler)
+    // Request relay reservations BEFORE dialing bootstrap nodes.
+    // This is critical: listen_on with a relay address tells the relay client transport
+    // to establish the connection itself, ensuring the connection handler is created
+    // WITH STOP protocol support. If we wait until ConnectionEstablished to call
+    // listen_on, the handler is created without STOP support and the relay server
+    // gets NO_RESERVATION when trying to open a circuit to us.
+    for addr_str in get_bootstrap_nodes() {
+        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+            let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
+            match swarm.listen_on(relay_addr.clone()) {
+                Ok(id) => println!("✅ Relay listen requested: {} (listener {:?})", relay_addr, id),
+                Err(e) => println!("❌ Relay listen failed for {}: {:?}", relay_addr, e),
+            }
+        }
+    }
+
+    // Also dial bootstrap nodes directly for Kademlia routing table population
     for addr_str in get_bootstrap_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
             match swarm.dial(addr.clone()) {
@@ -973,34 +989,12 @@ async fn event_loop(
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
 
-                        // If this is a bootstrap node, request relay reservation for NAT traversal.
-                        // Use the known bootstrap address (guaranteed to include /p2p/PEER_ID)
-                        // instead of endpoint.get_remote_address() which may strip the peer ID.
+                        // Relay reservations are requested at startup (before dialing bootstrap)
+                        // so the relay client transport creates handlers with STOP protocol support.
+                        // No need to call listen_on here - just log bootstrap connections.
                         let bootstrap_peer_ids = get_bootstrap_peer_ids();
                         if bootstrap_peer_ids.contains(&peer_id.to_string()) {
-                            let mut relay_requested = false;
-                            for addr_str in get_bootstrap_nodes() {
-                                if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                                    if let Some(pid) = extract_peer_id_from_multiaddr(&addr) {
-                                        if pid == peer_id {
-                                            let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
-                                            match swarm.listen_on(relay_addr.clone()) {
-                                                Ok(listener_id) => {
-                                                    println!("✅ Relay reservation requested via bootstrap {} (listener {:?}): {}", peer_id, listener_id, relay_addr);
-                                                    relay_requested = true;
-                                                }
-                                                Err(e) => {
-                                                    println!("❌ Failed to listen on relay {}: {:?}", relay_addr, e);
-                                                }
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if !relay_requested {
-                                println!("⚠️ Connected to bootstrap {} but could not find matching address for relay", peer_id);
-                            }
+                            println!("✅ Connected to bootstrap/relay node: {}", peer_id);
                         }
 
                         // Add to peers list so ChiralDrop and Network page can see them
