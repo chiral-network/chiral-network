@@ -1243,47 +1243,28 @@ async fn event_loop(
                     SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
 
-                        // Check if peer is actually connected before sending request
+                        // If peer is not connected, add relay circuit addresses to
+                        // Kademlia so that send_request()'s internal dial uses the
+                        // relay route. We do NOT call swarm.dial() separately because
+                        // that creates a pending dial; when send_request() then tries
+                        // its own dial, the swarm returns DialPending which libp2p
+                        // surfaces as DialFailure to request-response — failing the
+                        // request before the relay circuit finishes establishing.
                         if !swarm.is_connected(&peer_id) {
-                            println!("⚠️ Peer {} is not connected, attempting to dial via relay...", peer_id);
-                            let mut dialed = false;
-
-                            // Always dial via relay for non-connected peers. Direct dial using
-                            // Kademlia addresses almost never works (peers are behind NAT with
-                            // private/stale addresses). The relay circuit is the reliable path.
-                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
-                            for bootstrap_addr_str in get_bootstrap_nodes() {
-                                if let Ok(bootstrap_addr) = bootstrap_addr_str.parse::<Multiaddr>() {
-                                    // Deduplicate by relay peer ID (same relay may have IPv4+IPv6)
-                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&bootstrap_addr) {
-                                        if !relay_peer_ids_tried.insert(relay_pid) {
+                            println!("⚠️ Peer {} is not connected, adding relay circuit routes...", peer_id);
+                            let mut relay_peer_ids_seen = std::collections::HashSet::new();
+                            for relay_addr_str in get_relay_nodes() {
+                                if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
+                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
+                                        if !relay_peer_ids_seen.insert(relay_pid) {
                                             continue;
                                         }
                                     }
-                                    let relay_addr = bootstrap_addr
-                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
-                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id));
-                                    match swarm.dial(relay_addr.clone()) {
-                                        Ok(_) => {
-                                            println!("📡 Dialing peer {} via relay: {}", peer_id, relay_addr);
-                                            dialed = true;
-                                            break;
-                                        }
-                                        Err(e) => {
-                                            println!("Relay dial via {} failed: {:?}", bootstrap_addr_str, e);
-                                        }
-                                    }
+                                    let relay_circuit_addr = relay_addr
+                                        .with(libp2p::multiaddr::Protocol::P2pCircuit);
+                                    println!("📡 Adding relay route for {}: {}", peer_id, relay_circuit_addr);
+                                    swarm.behaviour_mut().kad.add_address(&peer_id, relay_circuit_addr);
                                 }
-                            }
-
-                            if !dialed {
-                                println!("❌ Cannot reach peer {}: all relay dial attempts failed", peer_id);
-                                let _ = app.emit("file-download-failed", serde_json::json!({
-                                    "requestId": request_id,
-                                    "fileHash": file_hash,
-                                    "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
-                                }));
-                                continue;
                             }
                         }
 
