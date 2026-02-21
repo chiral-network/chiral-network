@@ -974,6 +974,12 @@ async fn event_loop(
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
+    // File requests deferred until relay circuit is established.
+    // send_request() triggers its own dial via DialOpts::peer_id(), but the relay
+    // transport needs the full /p2p-circuit/p2p/<target> address which only our
+    // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
+    // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
+    let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
     // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
     // to prevent Kademlia from racing the relay client for the bootstrap connection.
     // A timer fallback ensures bootstrap happens even if relay reservation never completes.
@@ -1044,9 +1050,19 @@ async fn event_loop(
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
 
-                        // Relay reservations are requested at startup (before dialing bootstrap)
-                        // so the relay client transport creates handlers with STOP protocol support.
-                        // No need to call listen_on here - just log bootstrap connections.
+                        // Send any file requests that were waiting for this connection
+                        if let Some(pending) = pending_file_requests.remove(&peer_id) {
+                            println!("📤 Sending {} deferred file request(s) to {}", pending.len(), peer_id);
+                            for (req_id, fhash) in pending {
+                                let request = ChunkRequest::FileInfo {
+                                    request_id: req_id.clone(),
+                                    file_hash: fhash,
+                                };
+                                let outbound_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                outbound_request_map.insert(outbound_id, req_id);
+                            }
+                        }
+
                         let bootstrap_peer_ids = get_bootstrap_peer_ids();
                         if bootstrap_peer_ids.contains(&peer_id.to_string()) {
                             println!("✅ Connected to bootstrap/relay node: {}", peer_id);
@@ -1099,6 +1115,19 @@ async fn event_loop(
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                         if let Some(peer) = peer_id {
                             println!("Failed to connect to {:?}: {:?}", peer, error);
+
+                            // Fail any deferred file requests for this peer
+                            if let Some(pending) = pending_file_requests.remove(&peer) {
+                                let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
+                                for (req_id, fhash) in pending {
+                                    println!("❌ Deferred file request {} failed: peer unreachable", req_id);
+                                    let _ = app.emit("file-download-failed", serde_json::json!({
+                                        "requestId": req_id,
+                                        "fileHash": fhash,
+                                        "error": format!("Seeder ({}...) is offline or unreachable via relay.", peer_short)
+                                    }));
+                                }
+                            }
                         }
                     }
                     SwarmEvent::IncomingConnection { local_addr, send_back_addr, .. } => {
@@ -1243,38 +1272,62 @@ async fn event_loop(
                     SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
 
-                        // If peer is not connected, add relay circuit addresses to
-                        // Kademlia so that send_request()'s internal dial uses the
-                        // relay route. We do NOT call swarm.dial() separately because
-                        // that creates a pending dial; when send_request() then tries
-                        // its own dial, the swarm returns DialPending which libp2p
-                        // surfaces as DialFailure to request-response — failing the
-                        // request before the relay circuit finishes establishing.
-                        if !swarm.is_connected(&peer_id) {
-                            println!("⚠️ Peer {} is not connected, adding relay circuit routes...", peer_id);
-                            let mut relay_peer_ids_seen = std::collections::HashSet::new();
+                        if swarm.is_connected(&peer_id) {
+                            // Peer already connected — send immediately
+                            let request = ChunkRequest::FileInfo {
+                                request_id: request_id.clone(),
+                                file_hash: file_hash.clone(),
+                            };
+                            let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                            outbound_request_map.insert(req_id, request_id.clone());
+                            println!("File info request sent with ID: {:?}", req_id);
+                        } else {
+                            // Peer not connected — dial via relay, defer send_request()
+                            // until ConnectionEstablished. We CANNOT call send_request()
+                            // now because it triggers DialOpts::peer_id() internally,
+                            // which races with our relay dial (DialPending→DialFailure).
+                            println!("⚠️ Peer {} is not connected, dialing via relay...", peer_id);
+                            let mut dialed = false;
+                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
                             for relay_addr_str in get_relay_nodes() {
                                 if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
                                     if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
-                                        if !relay_peer_ids_seen.insert(relay_pid) {
+                                        if !relay_peer_ids_tried.insert(relay_pid) {
                                             continue;
                                         }
                                     }
-                                    let relay_circuit_addr = relay_addr
-                                        .with(libp2p::multiaddr::Protocol::P2pCircuit);
-                                    println!("📡 Adding relay route for {}: {}", peer_id, relay_circuit_addr);
-                                    swarm.behaviour_mut().kad.add_address(&peer_id, relay_circuit_addr);
+                                    let circuit_addr = relay_addr
+                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
+                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id));
+                                    match swarm.dial(circuit_addr.clone()) {
+                                        Ok(_) => {
+                                            println!("📡 Dialing peer {} via relay: {}", peer_id, circuit_addr);
+                                            dialed = true;
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            println!("Relay dial failed: {:?}", e);
+                                        }
+                                    }
                                 }
                             }
-                        }
 
-                        let request = ChunkRequest::FileInfo {
-                            request_id: request_id.clone(),
-                            file_hash: file_hash.clone(),
-                        };
-                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                        outbound_request_map.insert(req_id, request_id.clone());
-                        println!("File info request sent with ID: {:?}", req_id);
+                            if dialed {
+                                // Queue the request — will be sent on ConnectionEstablished
+                                pending_file_requests.entry(peer_id)
+                                    .or_default()
+                                    .push((request_id.clone(), file_hash.clone()));
+                                println!("📋 File request queued, waiting for relay circuit...");
+                            } else {
+                                println!("❌ Cannot reach peer {}: all relay dial attempts failed", peer_id);
+                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                    "requestId": request_id,
+                                    "fileHash": file_hash,
+                                    "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
+                                }));
+                                continue;
+                            }
+                        }
                         let _ = app.emit("file-request-sent", serde_json::json!({
                             "requestId": request_id,
                             "fileHash": file_hash,
