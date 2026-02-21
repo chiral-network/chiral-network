@@ -911,19 +911,30 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Request relay reservations via listen_on. Do NOT call swarm.dial() or
-    // kad.bootstrap() here — the swarm polls behaviours BEFORE the transport,
-    // so Kademlia's bootstrap query would race and dial the relay server before
-    // the relay client transport has delivered the ListenReq to the behaviour.
-    // Kademlia's connection_id wouldn't match the relay's pending_handler_commands,
-    // so the RESERVE command would be lost. Instead, kad.bootstrap() is deferred
-    // to the event loop and called after the first relay reservation is confirmed.
+    // Request relay reservations via listen_on. Only one listen_on per unique relay
+    // peer ID — multiple listen_on calls for the same relay (e.g., IPv4 + IPv6) cause
+    // multiple RESERVE requests on the same handler. If the second RESERVE fails,
+    // Reservation::failed() resets the state to None, destroying the first successful
+    // reservation. The handler then denies incoming STOP connections with NO_RESERVATION.
+    //
+    // Also do NOT call swarm.dial() or kad.bootstrap() here — the swarm polls behaviours
+    // BEFORE the transport, so Kademlia's bootstrap query would race and dial the relay
+    // server before the relay client transport has delivered the ListenReq. kad.bootstrap()
+    // is deferred to the event loop after the first relay reservation is confirmed.
+    let mut relay_peer_ids_seen = std::collections::HashSet::new();
     for addr_str in get_bootstrap_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-            let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
-            match swarm.listen_on(relay_addr.clone()) {
-                Ok(id) => println!("✅ Relay listen requested: {} (listener {:?})", relay_addr, id),
-                Err(e) => println!("❌ Relay listen failed for {}: {:?}", relay_addr, e),
+            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                // Only one listen_on per unique relay peer
+                if !relay_peer_ids_seen.insert(peer_id) {
+                    println!("⏭️ Skipping duplicate relay listen for peer {}", peer_id);
+                    continue;
+                }
+                let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
+                match swarm.listen_on(relay_addr.clone()) {
+                    Ok(id) => println!("✅ Relay listen requested: {} (listener {:?})", relay_addr, id),
+                    Err(e) => println!("❌ Relay listen failed for {}: {:?}", relay_addr, e),
+                }
             }
         }
     }
