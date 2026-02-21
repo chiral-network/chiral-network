@@ -148,6 +148,17 @@ pub fn get_bootstrap_nodes() -> Vec<String> {
     ]
 }
 
+/// Get relay server nodes — only bootstrap nodes that run a relay server.
+/// Do NOT listen_on non-relay bootstrap nodes; the failed RESERVE creates a closed
+/// listener whose dropped receiver poisons the handler's to_listener channel on the
+/// SAME handler if libp2p reuses connections.
+pub fn get_relay_nodes() -> Vec<String> {
+    vec![
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWKuwDRp7DWzPYNNgqihvcSy9C7yECFH3HVnERdFtrVfzE".to_string(),
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWKuwDRp7DWzPYNNgqihvcSy9C7yECFH3HVnERdFtrVfzE".to_string(),
+    ]
+}
+
 /// Get unique peer IDs of all bootstrap nodes
 pub fn get_bootstrap_peer_ids() -> Vec<String> {
     let mut ids = Vec::new();
@@ -911,18 +922,22 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Request relay reservations via listen_on. Only one listen_on per unique relay
-    // peer ID — multiple listen_on calls for the same relay (e.g., IPv4 + IPv6) cause
-    // multiple RESERVE requests on the same handler. If the second RESERVE fails,
-    // Reservation::failed() resets the state to None, destroying the first successful
-    // reservation. The handler then denies incoming STOP connections with NO_RESERVATION.
+    // Request relay reservations ONLY on nodes that run a relay server.
+    // Using get_relay_nodes() (not get_bootstrap_nodes()) to avoid sending RESERVE to
+    // non-relay nodes — a failed RESERVE closes the transport listener, which drops the
+    // receiver end of the to_listener channel. On the handler side, the next
+    // forward_messages_to_transport_listener poll sees the closed channel and resets
+    // Reservation to None, causing STOP requests to be denied with NO_RESERVATION.
     //
-    // Also do NOT call swarm.dial() or kad.bootstrap() here — the swarm polls behaviours
+    // Only one listen_on per unique relay peer ID — multiple listen_on calls for the same
+    // relay (e.g., IPv4 + IPv6) cause multiple RESERVE requests on the same handler.
+    //
+    // Do NOT call swarm.dial() or kad.bootstrap() here — the swarm polls behaviours
     // BEFORE the transport, so Kademlia's bootstrap query would race and dial the relay
     // server before the relay client transport has delivered the ListenReq. kad.bootstrap()
-    // is deferred to the event loop after the first relay reservation is confirmed.
+    // is deferred to the event loop (with a timer fallback).
     let mut relay_peer_ids_seen = std::collections::HashSet::new();
-    for addr_str in get_bootstrap_nodes() {
+    for addr_str in get_relay_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
             if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
                 // Only one listen_on per unique relay peer
@@ -961,15 +976,38 @@ async fn event_loop(
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
     // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
     // to prevent Kademlia from racing the relay client for the bootstrap connection.
+    // A timer fallback ensures bootstrap happens even if relay reservation never completes.
     let mut kad_bootstrapped = false;
-    
+    let kad_bootstrap_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    let kad_bootstrap_timer = tokio::time::sleep_until(kad_bootstrap_deadline);
+    let mut kad_bootstrap_timer = std::pin::pin!(kad_bootstrap_timer);
+
     loop {
         let running = *is_running.lock().await;
         if !running {
             break;
         }
-        
+
         tokio::select! {
+            // Fallback: bootstrap Kademlia after 10s even if relay hasn't confirmed
+            _ = &mut kad_bootstrap_timer, if !kad_bootstrapped => {
+                kad_bootstrapped = true;
+                println!("⏰ Kademlia bootstrap timer fired (relay reservation may not have completed)");
+                // Manually dial bootstrap nodes so Kademlia has peers to query
+                for addr_str in get_bootstrap_nodes() {
+                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                        if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                            swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                            let _ = swarm.dial(addr);
+                        }
+                    }
+                }
+                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+                    println!("Kademlia bootstrap error: {:?}", e);
+                } else {
+                    println!("✅ Kademlia bootstrap triggered via timer fallback");
+                }
+            }
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
@@ -1064,7 +1102,31 @@ async fn event_loop(
                         println!("❌ Incoming connection error: local={}, remote={}, error={:?}", local_addr, send_back_addr, error);
                     }
                     SwarmEvent::ListenerClosed { listener_id, reason, addresses, .. } => {
-                        println!("⚠️ Listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
+                        let was_relay = addresses.iter().any(|a| {
+                            a.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+                        });
+                        if was_relay {
+                            println!("⚠️ Relay listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
+                            println!("🔄 Re-requesting relay reservation...");
+                            // Re-request relay reservation on all relay nodes
+                            let mut relay_peer_ids_seen = std::collections::HashSet::new();
+                            for addr_str in get_relay_nodes() {
+                                if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                                    if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                                        if !relay_peer_ids_seen.insert(peer_id) {
+                                            continue;
+                                        }
+                                        let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
+                                        match swarm.listen_on(relay_addr.clone()) {
+                                            Ok(id) => println!("✅ Relay re-listen requested: {} (listener {:?})", relay_addr, id),
+                                            Err(e) => println!("❌ Relay re-listen failed for {}: {:?}", relay_addr, e),
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            println!("⚠️ Listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
+                        }
                     }
                     SwarmEvent::ListenerError { listener_id, error, .. } => {
                         println!("❌ Listener {:?} error: {:?}", listener_id, error);
