@@ -911,18 +911,13 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Request relay reservations via listen_on ONLY — do NOT also call swarm.dial()
-    // for the same bootstrap nodes. The relay client behaviour stores a pending RESERVE
-    // command keyed by the connection_id from its own ToSwarm::Dial. If we also call
-    // swarm.dial(), that creates a DIFFERENT connection with a DIFFERENT connection_id.
-    // When the explicit dial wins the race, handle_established_outbound_connection
-    // looks up the connection_id, finds nothing in pending_handler_commands, and creates
-    // a handler WITHOUT the RESERVE command. The relay behaviour's own dial then gets
-    // rejected (DialPeerConditionFalse) and the reservation never happens.
-    //
-    // By only using listen_on, the relay behaviour's own dial is the sole connection
-    // attempt, so the connection_id matches and RESERVE is properly attached.
-    // Kademlia bootstrap() will use these connections once established.
+    // Request relay reservations via listen_on. Do NOT call swarm.dial() or
+    // kad.bootstrap() here — the swarm polls behaviours BEFORE the transport,
+    // so Kademlia's bootstrap query would race and dial the relay server before
+    // the relay client transport has delivered the ListenReq to the behaviour.
+    // Kademlia's connection_id wouldn't match the relay's pending_handler_commands,
+    // so the RESERVE command would be lost. Instead, kad.bootstrap() is deferred
+    // to the event loop and called after the first relay reservation is confirmed.
     for addr_str in get_bootstrap_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
             let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
@@ -931,12 +926,6 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
                 Err(e) => println!("❌ Relay listen failed for {}: {:?}", relay_addr, e),
             }
         }
-    }
-
-    // Trigger Kademlia bootstrap — this will use connections established by the relay
-    // transport above, and will also dial any non-relay bootstrap peers as needed.
-    if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-        println!("Kademlia bootstrap error (expected if no peers yet): {:?}", e);
     }
 
     Ok((swarm, local_peer_id.to_string()))
@@ -959,6 +948,9 @@ async fn event_loop(
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
+    // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
+    // to prevent Kademlia from racing the relay client for the bootstrap connection.
+    let mut kad_bootstrapped = false;
     
     loop {
         let running = *is_running.lock().await;
@@ -979,6 +971,17 @@ async fn event_loop(
                             println!("✅ Relay reservation confirmed! Listening on relay: {}", address);
                             // Add as external address so Identify advertises it to other peers
                             swarm.add_external_address(address.clone());
+
+                            // Now that relay is established, bootstrap Kademlia (deferred from startup
+                            // to prevent Kademlia from racing the relay client for the bootstrap connection)
+                            if !kad_bootstrapped {
+                                kad_bootstrapped = true;
+                                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+                                    println!("Kademlia bootstrap error: {:?}", e);
+                                } else {
+                                    println!("✅ Kademlia bootstrap triggered after relay reservation");
+                                }
+                            }
                         } else {
                             println!("Listening on {:?}", address);
                         }
