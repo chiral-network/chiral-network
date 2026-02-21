@@ -911,12 +911,18 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Request relay reservations BEFORE dialing bootstrap nodes.
-    // This is critical: listen_on with a relay address tells the relay client transport
-    // to establish the connection itself, ensuring the connection handler is created
-    // WITH STOP protocol support. If we wait until ConnectionEstablished to call
-    // listen_on, the handler is created without STOP support and the relay server
-    // gets NO_RESERVATION when trying to open a circuit to us.
+    // Request relay reservations via listen_on ONLY — do NOT also call swarm.dial()
+    // for the same bootstrap nodes. The relay client behaviour stores a pending RESERVE
+    // command keyed by the connection_id from its own ToSwarm::Dial. If we also call
+    // swarm.dial(), that creates a DIFFERENT connection with a DIFFERENT connection_id.
+    // When the explicit dial wins the race, handle_established_outbound_connection
+    // looks up the connection_id, finds nothing in pending_handler_commands, and creates
+    // a handler WITHOUT the RESERVE command. The relay behaviour's own dial then gets
+    // rejected (DialPeerConditionFalse) and the reservation never happens.
+    //
+    // By only using listen_on, the relay behaviour's own dial is the sole connection
+    // attempt, so the connection_id matches and RESERVE is properly attached.
+    // Kademlia bootstrap() will use these connections once established.
     for addr_str in get_bootstrap_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
             let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
@@ -927,17 +933,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         }
     }
 
-    // Also dial bootstrap nodes directly for Kademlia routing table population
-    for addr_str in get_bootstrap_nodes() {
-        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-            match swarm.dial(addr.clone()) {
-                Ok(_) => println!("Dialing bootstrap node: {}", addr),
-                Err(e) => println!("Failed to dial bootstrap node {}: {:?}", addr, e),
-            }
-        }
-    }
-
-    // Trigger Kademlia bootstrap
+    // Trigger Kademlia bootstrap — this will use connections established by the relay
+    // transport above, and will also dial any non-relay bootstrap peers as needed.
     if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
         println!("Kademlia bootstrap error (expected if no peers yet): {:?}", e);
     }
