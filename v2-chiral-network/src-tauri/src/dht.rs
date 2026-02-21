@@ -141,8 +141,8 @@ mod cbor_codec {
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
         // Primary bootstrap node with relay server (IPv4 + IPv6)
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWKuwDRp7DWzPYNNgqihvcSy9C7yECFH3HVnERdFtrVfzE".to_string(),
-        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWKuwDRp7DWzPYNNgqihvcSy9C7yECFH3HVnERdFtrVfzE".to_string(),
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
         // Additional bootstrap node
         "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
     ]
@@ -154,8 +154,8 @@ pub fn get_bootstrap_nodes() -> Vec<String> {
 /// SAME handler if libp2p reuses connections.
 pub fn get_relay_nodes() -> Vec<String> {
     vec![
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWKuwDRp7DWzPYNNgqihvcSy9C7yECFH3HVnERdFtrVfzE".to_string(),
-        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWKuwDRp7DWzPYNNgqihvcSy9C7yECFH3HVnERdFtrVfzE".to_string(),
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
     ]
 }
 
@@ -993,12 +993,18 @@ async fn event_loop(
             _ = &mut kad_bootstrap_timer, if !kad_bootstrapped => {
                 kad_bootstrapped = true;
                 println!("⏰ Kademlia bootstrap timer fired (relay reservation may not have completed)");
-                // Manually dial bootstrap nodes so Kademlia has peers to query
+                // Manually dial bootstrap nodes so Kademlia has peers to query.
+                // Use DialOpts with PeerCondition::Disconnected to avoid duplicate
+                // connections (relay client may already be connected to relay nodes).
                 for addr_str in get_bootstrap_nodes() {
                     if let Ok(addr) = addr_str.parse::<Multiaddr>() {
                         if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
                             swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
-                            let _ = swarm.dial(addr);
+                            let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
+                                .addresses(vec![addr])
+                                .condition(libp2p::swarm::dial_opts::PeerCondition::Disconnected)
+                                .build();
+                            let _ = swarm.dial(opts);
                         }
                     }
                 }
