@@ -9,6 +9,10 @@ edition = "2021"
 name = "chiral_network_v2_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "relay_server"
+path = "src/bin/relay_server.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
