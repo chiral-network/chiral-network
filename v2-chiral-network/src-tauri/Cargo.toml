@@ -4,6 +4,7 @@ version = "2.0.0"
 description = "Chiral Network V2"
 authors = ["you"]
 edition = "2021"
+default-run = "chiral-network-v2"
 
 [lib]
 name = "chiral_network_v2_lib"
