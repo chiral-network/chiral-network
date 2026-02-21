@@ -97,8 +97,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ping::Config::new().with_interval(std::time::Duration::from_secs(15)),
     );
 
-    // Configure relay server with generous limits for bootstrap node
-    let relay_config = relay::Config::default();
+    // Configure relay server with limits sized for file transfers.
+    // Default max_circuit_bytes is 128 KiB — far too small for chunked file
+    // transfers (each chunk is 256 KB). Increase to allow full downloads.
+    let mut relay_config = relay::Config::default();
+    relay_config.max_circuit_bytes = 1 << 27; // 128 MiB per circuit
+    relay_config.max_circuit_duration = std::time::Duration::from_secs(30 * 60); // 30 min
+    relay_config.max_circuits = 256;
+    relay_config.max_circuits_per_peer = 16;
     let relay_server = relay::Behaviour::new(local_peer_id, relay_config);
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
