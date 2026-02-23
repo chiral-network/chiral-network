@@ -28,7 +28,41 @@ pub mod download_paths;
 pub mod dht;
 pub mod file_transfer;
 pub mod ftp_downloader;
+#[cfg(feature = "ftp-server")]
 pub mod ftp_server;
+
+/// No-op FTP server stub used when the `ftp-server` feature is disabled.
+/// Provides the same public API so all callers compile unchanged.
+#[cfg(not(feature = "ftp-server"))]
+pub mod ftp_server {
+    use std::path::PathBuf;
+
+    pub struct FtpServer {
+        root_dir: PathBuf,
+        port: u16,
+    }
+
+    impl FtpServer {
+        pub fn new(root_dir: PathBuf, port: u16) -> Self {
+            Self { root_dir, port }
+        }
+        pub fn port(&self) -> u16 { self.port }
+        pub fn root_dir(&self) -> &PathBuf { &self.root_dir }
+        pub async fn is_running(&self) -> bool { false }
+        pub async fn start(&self) -> Result<(), String> { Ok(()) }
+        pub async fn stop(&self) -> Result<(), String> { Ok(()) }
+        pub fn get_file_url(&self, file_name: &str) -> String {
+            format!("ftp://localhost:{}/{}", self.port, file_name)
+        }
+        pub async fn add_file(&self, _src: &PathBuf, file_name: &str) -> Result<String, String> {
+            Ok(self.get_file_url(file_name))
+        }
+        pub async fn add_file_data(&self, _data: &[u8], file_name: &str) -> Result<String, String> {
+            Ok(self.get_file_url(file_name))
+        }
+        pub async fn remove_file(&self, _file_name: &str) -> Result<(), String> { Ok(()) }
+    }
+}
 pub mod peer_selection;
 pub mod peer_cache;
 pub mod peer_cache_runtime;
