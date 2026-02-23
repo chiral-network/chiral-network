@@ -33,6 +33,8 @@ pub struct AppState {
     pub download_credentials: dht::DownloadCredentialsMap, // request_id -> wallet credentials for file payment
     /// Ed25519 key for signing reputation verdicts (separate from libp2p identity)
     pub reputation_key: Arc<reputation::ReputationKeyStore>,
+    /// Cache of DHT-fetched issuer public keys to avoid repeated lookups
+    pub reputation_pubkey_cache: Arc<Mutex<HashMap<String, Option<ed25519_dalek::VerifyingKey>>>>,
 }
 
 #[tauri::command]
@@ -2631,13 +2633,16 @@ async fn get_reputation_verdicts(
 
 /// Compute a verified reputation score for a peer from DHT verdicts.
 /// Attempts signature verification for each verdict using the issuer's DHT-published public key.
+/// Caches issuer public keys to avoid repeated DHT lookups across verdicts and calls.
 #[tauri::command]
 async fn get_reputation_score(
     state: tauri::State<'_, AppState>,
     peer_id: String,
 ) -> Result<reputation::VerifiedReputation, String> {
-    let dht_guard = state.dht.lock().await;
-    let dht = dht_guard.as_ref().ok_or("DHT not running")?;
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        Arc::clone(dht_guard.as_ref().ok_or("DHT not running")?)
+    };
 
     let key = reputation::TransactionVerdict::dht_key_for_target(&peer_id);
     let verdicts = match dht.get_dht_value(key).await? {
@@ -2649,20 +2654,40 @@ async fn get_reputation_score(
         return Ok(reputation::VerifiedReputation::unknown());
     }
 
-    // Try to verify each verdict's signature against the issuer's published key.
+    // Collect unique issuer IDs to avoid redundant DHT lookups
+    let unique_issuers: std::collections::HashSet<&str> = verdicts
+        .iter()
+        .map(|v| v.issuer_id.as_str())
+        .collect();
+
+    // Fetch missing public keys (check cache first, then DHT)
+    let mut cache = state.reputation_pubkey_cache.lock().await;
+    for issuer_id in &unique_issuers {
+        if cache.contains_key(*issuer_id) {
+            continue;
+        }
+        let pubkey_dht_key = reputation::PeerKeyRecord::dht_key(issuer_id);
+        let vk = match dht.get_dht_value(pubkey_dht_key).await {
+            Ok(Some(key_json)) => {
+                serde_json::from_str::<reputation::PeerKeyRecord>(&key_json)
+                    .ok()
+                    .and_then(|r| r.to_verifying_key())
+            }
+            _ => None,
+        };
+        cache.insert(issuer_id.to_string(), vk);
+    }
+
+    // Verify signatures using cached keys
     let mut sig_verified = 0usize;
     for verdict in &verdicts {
-        let pubkey_dht_key = reputation::PeerKeyRecord::dht_key(&verdict.issuer_id);
-        if let Ok(Some(key_json)) = dht.get_dht_value(pubkey_dht_key).await {
-            if let Ok(key_record) = serde_json::from_str::<reputation::PeerKeyRecord>(&key_json) {
-                if let Some(vk) = key_record.to_verifying_key() {
-                    if verdict.verify_signature(&vk) {
-                        sig_verified += 1;
-                    }
-                }
+        if let Some(Some(vk)) = cache.get(&verdict.issuer_id) {
+            if verdict.verify_signature(vk) {
+                sig_verified += 1;
             }
         }
     }
+    drop(cache);
 
     Ok(reputation::VerifiedReputation::compute(&verdicts, sig_verified))
 }
@@ -2803,6 +2828,7 @@ pub fn run() {
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
             reputation_key: Arc::new(reputation::ReputationKeyStore::generate_or_load()),
+            reputation_pubkey_cache: Arc::new(Mutex::new(HashMap::new())),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
