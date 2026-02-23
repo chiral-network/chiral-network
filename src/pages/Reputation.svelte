@@ -15,6 +15,7 @@
   } from "$lib/services/peerSelectionService";
   import { invoke } from "@tauri-apps/api/core";
   import { debounce } from "$lib/utils/debounce";
+  import { showToast } from "$lib/toast";
 
   // LocalStorage keys for persisted UI state
   const STORAGE_KEY_SHOW_ANALYTICS = "chiral.reputation.showAnalytics";
@@ -96,6 +97,59 @@
   let prevMinUptime = 0;
   let prevSortBy: "score" | "interactions" | "lastSeen" = "score";
   let prevDebouncedSearchQuery = "";
+
+  // My Reputation panel state
+  let myPeerId = "";
+  let myPeerIdCopied = false;
+
+  // Report Peer modal state
+  let reportModalOpen = false;
+  let reportTargetPeerId = "";
+  let reportOutcome: "good" | "disputed" | "bad" = "bad";
+  let reportDetails = "";
+  let reportSubmitting = false;
+
+  async function loadMyPeerId() {
+    try {
+      myPeerId = await invoke<string>("get_peer_id");
+    } catch (e) {
+      console.debug("Could not fetch own peer ID:", e);
+    }
+  }
+
+  function openReportModal(peerId: string) {
+    reportTargetPeerId = peerId;
+    reportOutcome = "bad";
+    reportDetails = "";
+    reportModalOpen = true;
+  }
+
+  async function submitReport() {
+    if (!reportTargetPeerId) return;
+    reportSubmitting = true;
+    try {
+      await invoke("file_reputation_verdict", {
+        targetPeerId: reportTargetPeerId,
+        outcome: reportOutcome,
+        details: reportDetails.trim() || null,
+      });
+      showToast($t("reputation.report.success"), "success");
+      reportModalOpen = false;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast($t("reputation.report.error", { values: { error: msg } }), "error");
+    } finally {
+      reportSubmitting = false;
+    }
+  }
+
+  function copyPeerId() {
+    if (!myPeerId) return;
+    navigator.clipboard.writeText(myPeerId).then(() => {
+      myPeerIdCopied = true;
+      setTimeout(() => { myPeerIdCopied = false; }, 2000);
+    });
+  }
 
   // Debounced search handler
   const updateDebouncedSearch = debounce((query: string) => {
@@ -472,6 +526,7 @@
   }
 
   onMount(() => {
+    loadMyPeerId();
     loadPeersFromBackend();
     // Best-effort latency probe and follow-up refresh
     probePeerLatencies();
@@ -538,6 +593,102 @@
       </div>
     </div>
   </div>
+
+  <!-- My Node Identity Panel -->
+  {#if myPeerId}
+    <Card class="p-4 mb-6 border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800">
+      <div class="flex flex-col gap-2">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <h3 class="text-sm font-semibold text-blue-800 dark:text-blue-200">
+            {$t("reputation.myReputation.title")}
+          </h3>
+          <span class="text-xs text-blue-600 dark:text-blue-400 font-mono bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded">
+            {$t("reputation.myReputation.peerId")}
+          </span>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <code class="text-xs font-mono break-all text-blue-900 dark:text-blue-100 flex-1">{myPeerId}</code>
+          <Button variant="outline" size="sm" on:click={copyPeerId} class="shrink-0 text-xs">
+            {myPeerIdCopied ? "✓ Copied" : $t("reputation.myReputation.copy")}
+          </Button>
+        </div>
+        <p class="text-xs text-blue-600 dark:text-blue-400 mt-1">
+          🔒 {$t("reputation.myReputation.signedVerdicts")}
+        </p>
+      </div>
+    </Card>
+  {/if}
+
+  <!-- Report Peer Modal -->
+  {#if reportModalOpen}
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      on:click|self={() => { if (!reportSubmitting) reportModalOpen = false; }}
+      on:keydown={(e) => { if (e.key === 'Escape' && !reportSubmitting) reportModalOpen = false; }}
+    >
+      <Card class="w-full max-w-lg p-6 space-y-4">
+        <h2 class="text-lg font-bold">{$t("reputation.report.title")}</h2>
+        <p class="text-sm text-muted-foreground">{$t("reputation.report.description")}</p>
+
+        <div class="space-y-1">
+          <p class="text-xs text-muted-foreground font-mono break-all">
+            {$t("reputation.report.outcome")}: <span class="font-semibold">{reportTargetPeerId.substring(0, 30)}...</span>
+          </p>
+        </div>
+
+        <!-- Outcome selection -->
+        <div class="space-y-2">
+          <p class="text-sm font-medium">{$t("reputation.report.outcome")}</p>
+          <div class="space-y-2" role="radiogroup" aria-label={$t("reputation.report.outcome")}>
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="radio" bind:group={reportOutcome} value="good" class="text-green-600" />
+              <span class="text-sm text-green-700 dark:text-green-400">✅ {$t("reputation.report.good")}</span>
+            </label>
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="radio" bind:group={reportOutcome} value="disputed" />
+              <span class="text-sm text-yellow-700 dark:text-yellow-400">⚠️ {$t("reputation.report.disputed")}</span>
+            </label>
+            <label class="flex items-center gap-3 cursor-pointer">
+              <input type="radio" bind:group={reportOutcome} value="bad" class="text-red-600" />
+              <span class="text-sm text-red-700 dark:text-red-400">❌ {$t("reputation.report.bad")}</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Details field -->
+        <div class="space-y-1">
+          <label for="report-details" class="text-sm font-medium">{$t("reputation.report.details")}</label>
+          <textarea
+            id="report-details"
+            bind:value={reportDetails}
+            placeholder={$t("reputation.report.detailsPlaceholder")}
+            rows="3"
+            class="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-800"
+          ></textarea>
+        </div>
+
+        <div class="flex justify-end gap-3 pt-2">
+          <Button
+            variant="outline"
+            on:click={() => { reportModalOpen = false; }}
+            disabled={reportSubmitting}
+          >
+            {$t("reputation.report.cancel")}
+          </Button>
+          <Button
+            on:click={submitReport}
+            disabled={reportSubmitting}
+            class={reportOutcome === "good" ? "bg-green-600 hover:bg-green-700" : reportOutcome === "bad" ? "bg-red-600 hover:bg-red-700" : ""}
+          >
+            {reportSubmitting ? $t("reputation.report.submitting") : $t("reputation.report.submit")}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  {/if}
 
   {#if isLoading}
     <!-- Loading State -->
@@ -717,7 +868,19 @@
         class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
       >
         {#each paginatedPeers as peer (peer.peerId)}
-          <ReputationCard {peer} />
+          <div class="flex flex-col gap-1">
+            <ReputationCard {peer} />
+            {#if peer.peerId !== myPeerId}
+              <Button
+                variant="outline"
+                size="sm"
+                class="text-xs w-full text-muted-foreground hover:text-red-600 hover:border-red-300"
+                on:click={() => openReportModal(peer.peerId)}
+              >
+                {$t("reputation.report.button")}
+              </Button>
+            {/if}
+          </div>
         {/each}
       </div>
 

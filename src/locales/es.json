@@ -1080,6 +1080,39 @@
       "encryption": "Cifrado",
       "supported": "Soportado",
       "notSupported": "No soportado"
+    },
+    "myReputation": {
+      "title": "My Node Identity",
+      "peerId": "Peer ID",
+      "signedVerdicts": "All reputation verdicts are cryptographically signed with Ed25519 and stored on the distributed DHT — they cannot be silently modified.",
+      "copy": "Copy"
+    },
+    "report": {
+      "button": "Report",
+      "title": "File Reputation Verdict",
+      "description": "Your verdict will be signed with your node's Ed25519 key and published to the DHT. Once submitted, it is tamper-evident and publicly verifiable.",
+      "outcome": "Outcome",
+      "good": "Positive — peer behaved well",
+      "disputed": "Disputed — uncertain outcome",
+      "bad": "Negative — peer misbehaved",
+      "details": "Details (optional)",
+      "detailsPlaceholder": "Describe what happened...",
+      "submit": "Sign & Submit",
+      "submitting": "Submitting...",
+      "cancel": "Cancel",
+      "success": "Verdict submitted to DHT",
+      "error": "Failed to submit verdict: {error}",
+      "selfError": "You cannot file a verdict about yourself"
+    },
+    "verdicts": {
+      "title": "DHT Verdicts",
+      "none": "No verdicts found in DHT",
+      "good": "Positive",
+      "disputed": "Disputed",
+      "bad": "Negative",
+      "signedBadge": "Signed",
+      "issuedAt": "Issued",
+      "issuedBy": "By"
     }
   },
   "download": {

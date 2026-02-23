@@ -9338,6 +9338,147 @@ fn main() {
         Ok(verdicts)
     }
 
+    /// Compute a reputation score for a peer from DHT-stored verdicts.
+    /// Returns a JSON object with score (0.0-1.0), trust_level, and verdict counts.
+    #[tauri::command]
+    async fn get_reputation_score(
+        peer_id: String,
+        state: State<'_, AppState>,
+    ) -> Result<serde_json::Value, String> {
+        let dht_guard = state.dht.lock().await;
+        let dht = dht_guard
+            .as_ref()
+            .ok_or_else(|| "DHT service not initialized".to_string())?;
+
+        let mut reputation_dht = reputation::ReputationDhtService::new();
+        reputation_dht.set_dht_service(Arc::clone(dht));
+        let verdicts = reputation_dht
+            .retrieve_transaction_verdicts(&peer_id)
+            .await?;
+
+        let good = verdicts
+            .iter()
+            .filter(|v| v.outcome == reputation::VerdictOutcome::Good)
+            .count();
+        let bad = verdicts
+            .iter()
+            .filter(|v| v.outcome == reputation::VerdictOutcome::Bad)
+            .count();
+        let disputed = verdicts
+            .iter()
+            .filter(|v| v.outcome == reputation::VerdictOutcome::Disputed)
+            .count();
+        let total = verdicts.len();
+
+        let score = if total == 0 {
+            // No verdicts: neutral score
+            0.5_f64
+        } else {
+            let weighted: f64 = verdicts
+                .iter()
+                .map(|v| match v.outcome {
+                    reputation::VerdictOutcome::Good => 1.0_f64,
+                    reputation::VerdictOutcome::Disputed => 0.5_f64,
+                    reputation::VerdictOutcome::Bad => 0.0_f64,
+                })
+                .sum();
+            weighted / total as f64
+        };
+
+        let trust_level = if total == 0 {
+            "unknown"
+        } else if score >= 0.8 {
+            "trusted"
+        } else if score >= 0.6 {
+            "high"
+        } else if score >= 0.4 {
+            "medium"
+        } else if score >= 0.2 {
+            "low"
+        } else {
+            "unknown"
+        };
+
+        Ok(serde_json::json!({
+            "score": score,
+            "trust_level": trust_level,
+            "good_count": good,
+            "bad_count": bad,
+            "disputed_count": disputed,
+            "total_verdicts": total,
+        }))
+    }
+
+    /// Retrieve detailed verdict list for a peer with signature metadata.
+    #[tauri::command]
+    async fn get_reputation_details(
+        peer_id: String,
+        state: State<'_, AppState>,
+    ) -> Result<serde_json::Value, String> {
+        let dht_guard = state.dht.lock().await;
+        let dht = dht_guard
+            .as_ref()
+            .ok_or_else(|| "DHT service not initialized".to_string())?;
+
+        let mut reputation_dht = reputation::ReputationDhtService::new();
+        reputation_dht.set_dht_service(Arc::clone(dht));
+        let verdicts = reputation_dht
+            .retrieve_transaction_verdicts(&peer_id)
+            .await?;
+
+        let verdicts_json: Vec<serde_json::Value> = verdicts
+            .iter()
+            .map(|v| {
+                serde_json::json!({
+                    "issuer_id": v.issuer_id,
+                    "target_id": v.target_id,
+                    "outcome": v.outcome,
+                    "details": v.details,
+                    "issued_at": v.issued_at,
+                    "tx_hash": v.tx_hash,
+                    "metric": v.metric,
+                    // Include whether a signature is present (tamper-evident)
+                    "signature_present": !v.issuer_sig.is_empty(),
+                    "issuer_sig_prefix": if v.issuer_sig.len() >= 16 {
+                        v.issuer_sig[..16].to_string()
+                    } else {
+                        v.issuer_sig.clone()
+                    },
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "peer_id": peer_id,
+            "verdicts": verdicts_json,
+        }))
+    }
+
+    /// File a manual reputation verdict about a peer (praise or complaint).
+    /// The verdict is signed with our Ed25519 key and published to the DHT.
+    #[tauri::command]
+    async fn file_reputation_verdict(
+        target_peer_id: String,
+        outcome: String,
+        details: Option<String>,
+        state: State<'_, AppState>,
+    ) -> Result<(), String> {
+        let outcome = match outcome.to_lowercase().as_str() {
+            "good" => reputation::VerdictOutcome::Good,
+            "disputed" => reputation::VerdictOutcome::Disputed,
+            "bad" => reputation::VerdictOutcome::Bad,
+            other => return Err(format!("Invalid outcome '{}': must be good, disputed, or bad", other)),
+        };
+
+        let dht_guard = state.dht.lock().await;
+        let dht = dht_guard
+            .as_ref()
+            .ok_or_else(|| "DHT service not initialized".to_string())?;
+
+        dht.publish_manual_verdict(&target_peer_id, outcome, details)
+            .await
+    }
+
     // Clone the FTP event bus holder so it can be moved into setup()
     let ftp_event_bus_holder_for_setup = ftp_event_bus_holder.clone();
 
@@ -9630,6 +9771,9 @@ fn main() {
             // Reputation system commands
             publish_reputation_verdict,
             get_reputation_verdicts,
+            get_reputation_score,
+            get_reputation_details,
+            file_reputation_verdict,
             download_file_http,
             download_ed2k,
             download_ftp,

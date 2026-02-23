@@ -6139,6 +6139,68 @@ impl DhtService {
         Ok(())
     }
 
+    /// Publish a manually-initiated verdict about a peer (user complaint or endorsement).
+    pub async fn publish_manual_verdict(
+        &self,
+        target_peer_id: &str,
+        outcome: VerdictOutcome,
+        details: Option<String>,
+    ) -> Result<(), String> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        if target_peer_id == self.peer_id {
+            return Err("Cannot file a reputation verdict about yourself".to_string());
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut verdict = TransactionVerdict {
+            target_id: target_peer_id.to_string(),
+            tx_hash: None,
+            outcome,
+            details,
+            metric: Some("manual_report".to_string()),
+            issued_at: now,
+            issuer_id: String::new(), // set by sign_with
+            issuer_seq_no: 0,
+            issuer_sig: String::new(), // set by sign_with
+            tx_receipt: None,
+            evidence_blobs: None,
+        };
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&*self.ed25519_secret_key);
+        verdict
+            .sign_with(&signing_key, &self.peer_id, 0)
+            .map_err(|e| format!("Failed to sign verdict: {}", e))?;
+
+        let dht_key = TransactionVerdict::dht_key_for_target(target_peer_id);
+        let verdict_json = serde_json::to_vec(&verdict)
+            .map_err(|e| format!("Failed to serialize verdict: {}", e))?;
+
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(DhtCommand::PutDhtValue {
+                key: dht_key,
+                value: verdict_json,
+                sender: tx,
+            })
+            .await
+            .map_err(|e| format!("Failed to send DHT command: {}", e))?;
+
+        rx.await
+            .map_err(|e| format!("Failed to receive DHT response: {}", e))??;
+
+        tracing::info!(
+            "✅ Published manual verdict ({:?}) for peer {}",
+            verdict.outcome,
+            target_peer_id
+        );
+        Ok(())
+    }
+
     /// Record failed transfer for peer metrics
     pub async fn record_transfer_failure(&self, peer_id: &str, error: &str) {
         let mut peer_selection = self.peer_selection.lock().await;
