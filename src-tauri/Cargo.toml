@@ -83,8 +83,9 @@ rustls = { version = "0.21", features = ["dangerous_configuration"] }
 rustls-native-certs = "0.6"
 
 # FTP server for serving uploaded files
-unftp-sbe-fs = "0.2"
-libunftp = "0.20"
+# Optional: disabled on platforms without cmake/C++ build tools (aws-lc-sys requirement)
+unftp-sbe-fs = { version = "0.2", optional = true }
+libunftp = { version = "0.20", optional = true }
 
 # Bitswap and related dependencies
 beetswap = { git = "https://github.com/totoro-ming-lin/beetswap.git", branch = "new" }
@@ -127,8 +128,11 @@ unused_variables = "allow"
 dead_code = "allow"
 
 [features]
-default = ["custom-protocol"]
+default = ["custom-protocol", "ftp-server"]
 custom-protocol = ["tauri/custom-protocol"]
+# FTP server: requires cmake + C++ build tools (for aws-lc-sys via libunftp -> rustls 0.23)
+# Disable with --no-default-features on Windows if build tools are unavailable
+ftp-server = ["dep:libunftp", "dep:unftp-sbe-fs"]
 
 [profile.dev]
 incremental = true
