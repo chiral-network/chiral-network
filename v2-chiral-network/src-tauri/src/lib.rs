@@ -3,6 +3,7 @@ mod encryption;
 mod file_transfer;
 mod geth;
 mod geth_bootstrap;
+mod reputation;
 mod speed_tiers;
 
 use dht::DhtService;
@@ -30,6 +31,8 @@ pub struct AppState {
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
     pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
     pub download_credentials: dht::DownloadCredentialsMap, // request_id -> wallet credentials for file payment
+    /// Ed25519 key for signing reputation verdicts (separate from libp2p identity)
+    pub reputation_key: Arc<reputation::ReputationKeyStore>,
 }
 
 #[tauri::command]
@@ -45,7 +48,29 @@ async fn start_dht(
 
     let dht = Arc::new(DhtService::new(state.file_transfer.clone(), state.download_tiers.clone(), state.download_directory.clone(), state.download_credentials.clone()));
     let result = dht.start(app.clone()).await?;
-    *dht_guard = Some(dht);
+    *dht_guard = Some(Arc::clone(&dht));
+
+    // Register our reputation public key in DHT so peers can verify our verdicts.
+    let rep_key = Arc::clone(&state.reputation_key);
+    tokio::spawn(async move {
+        // Short delay to let the DHT settle before publishing
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+        if let Some(peer_id) = dht.get_peer_id().await {
+            match reputation::PeerKeyRecord::create(&peer_id, rep_key.signing_key()) {
+                Ok(record) => {
+                    let key = reputation::PeerKeyRecord::dht_key(&peer_id);
+                    if let Ok(value) = serde_json::to_string(&record) {
+                        if let Err(e) = dht.put_dht_value(key, value).await {
+                            tracing::warn!("Failed to register reputation key: {}", e);
+                        } else {
+                            tracing::info!("✅ Reputation key auto-registered for peer {}", peer_id);
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!("Failed to create reputation key record: {}", e),
+            }
+        }
+    });
 
     Ok(result)
 }
@@ -2556,6 +2581,164 @@ async fn lookup_encryption_key(
     }
 }
 
+// ============================================================================
+// REPUTATION COMMANDS
+// ============================================================================
+
+/// Publish (or update) our own ed25519 public key to DHT so peers can verify our verdicts.
+/// Called automatically on DHT start.
+#[tauri::command]
+async fn register_reputation_key(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard
+        .as_ref()
+        .ok_or("DHT not running")?;
+    let peer_id = dht
+        .get_peer_id()
+        .await
+        .ok_or("Could not get peer ID")?;
+
+    let record = reputation::PeerKeyRecord::create(&peer_id, state.reputation_key.signing_key())?;
+    let key = reputation::PeerKeyRecord::dht_key(&peer_id);
+    let value = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    dht.put_dht_value(key, value).await?;
+
+    tracing::info!("✅ Reputation key registered in DHT for peer {}", peer_id);
+    Ok(())
+}
+
+/// Return our own reputation public key hex (so the UI can display it).
+#[tauri::command]
+async fn get_reputation_public_key(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    Ok(state.reputation_key.public_key_hex())
+}
+
+/// Fetch all signed verdicts stored in DHT about a target peer.
+#[tauri::command]
+async fn get_reputation_verdicts(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+) -> Result<Vec<reputation::TransactionVerdict>, String> {
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not running")?;
+
+    let key = reputation::TransactionVerdict::dht_key_for_target(&peer_id);
+    match dht.get_dht_value(key).await? {
+        Some(json_str) => Ok(reputation::verdicts_from_dht(&json_str)),
+        None => Ok(vec![]),
+    }
+}
+
+/// Compute a verified reputation score for a peer from DHT verdicts.
+/// Attempts signature verification for each verdict using the issuer's DHT-published public key.
+#[tauri::command]
+async fn get_reputation_score(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+) -> Result<reputation::VerifiedReputation, String> {
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not running")?;
+
+    let key = reputation::TransactionVerdict::dht_key_for_target(&peer_id);
+    let verdicts = match dht.get_dht_value(key).await? {
+        Some(json_str) => reputation::verdicts_from_dht(&json_str),
+        None => return Ok(reputation::VerifiedReputation::unknown()),
+    };
+
+    if verdicts.is_empty() {
+        return Ok(reputation::VerifiedReputation::unknown());
+    }
+
+    // Try to verify each verdict's signature against the issuer's published key.
+    let mut sig_verified = 0usize;
+    for verdict in &verdicts {
+        let pubkey_dht_key = reputation::PeerKeyRecord::dht_key(&verdict.issuer_id);
+        if let Ok(Some(key_json)) = dht.get_dht_value(pubkey_dht_key).await {
+            if let Ok(key_record) = serde_json::from_str::<reputation::PeerKeyRecord>(&key_json) {
+                if let Some(vk) = key_record.to_verifying_key() {
+                    if verdict.verify_signature(&vk) {
+                        sig_verified += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(reputation::VerifiedReputation::compute(&verdicts, sig_verified))
+}
+
+/// File a signed reputation verdict about a peer and publish it to the DHT.
+/// The verdict is signed with our Ed25519 reputation key.
+#[tauri::command]
+async fn file_reputation_verdict(
+    state: tauri::State<'_, AppState>,
+    target_peer_id: String,
+    outcome: String,
+    details: Option<String>,
+) -> Result<(), String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let outcome = match outcome.to_lowercase().as_str() {
+        "good" => reputation::VerdictOutcome::Good,
+        "disputed" => reputation::VerdictOutcome::Disputed,
+        "bad" => reputation::VerdictOutcome::Bad,
+        other => {
+            return Err(format!(
+                "Invalid outcome '{}': must be good, disputed, or bad",
+                other
+            ))
+        }
+    };
+
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard.as_ref().ok_or("DHT not running")?;
+
+    let our_peer_id = dht
+        .get_peer_id()
+        .await
+        .ok_or("Could not get peer ID")?;
+
+    if our_peer_id == target_peer_id {
+        return Err("Cannot file a reputation verdict about yourself".to_string());
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut verdict = reputation::TransactionVerdict {
+        target_id: target_peer_id.clone(),
+        issuer_id: String::new(), // set by sign()
+        outcome,
+        details,
+        issued_at: now,
+        issuer_sig: String::new(), // set by sign()
+    };
+    verdict.sign(state.reputation_key.signing_key(), &our_peer_id)?;
+
+    // Fetch existing verdicts, replace our previous verdict (if any), then store.
+    let dht_key = reputation::TransactionVerdict::dht_key_for_target(&target_peer_id);
+    let mut verdicts = match dht.get_dht_value(dht_key.clone()).await? {
+        Some(json_str) => reputation::verdicts_from_dht(&json_str),
+        None => vec![],
+    };
+
+    // Remove any previous verdict we issued about this target
+    verdicts.retain(|v| v.issuer_id != our_peer_id);
+    verdicts.push(verdict);
+
+    let updated_json = reputation::verdicts_to_dht(&verdicts)?;
+    dht.put_dht_value(dht_key, updated_json).await?;
+
+    tracing::info!(
+        "✅ Filed reputation verdict about peer {} (total verdicts: {})",
+        target_peer_id,
+        verdicts.len()
+    );
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
@@ -2619,6 +2802,7 @@ pub fn run() {
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
+            reputation_key: Arc::new(reputation::ReputationKeyStore::generate_or_load()),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -2684,7 +2868,13 @@ pub fn run() {
             decrypt_file_data,
             send_encrypted_file,
             publish_encryption_key,
-            lookup_encryption_key
+            lookup_encryption_key,
+            // Reputation commands
+            register_reputation_key,
+            get_reputation_public_key,
+            get_reputation_verdicts,
+            get_reputation_score,
+            file_reputation_verdict
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
