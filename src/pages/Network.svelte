@@ -8,11 +8,9 @@
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { peers, networkStats, userLocation, settings, wallet } from '$lib/stores'
-  import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText, Wifi, WifiOff } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
-  import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, type DhtHealth as DhtHealthSnapshot, type NatConfidence, type NatReachabilityState } from '$lib/dht'
@@ -114,8 +112,6 @@
   let lastNatConfidence: NatConfidence | null = null
   let cancelConnection = false
   let isConnecting = false  // Prevent multiple simultaneous connection attempts
-  const formatHealthMessage = (value: string | null | undefined) => value ?? $t('network.dht.health.none')
-
   // Relay / DCUtR state
   interface RelayStatus {
     relayPeerId: string;
@@ -293,20 +289,6 @@
   function formatNatTimestamp(epoch?: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
     return new Date(epoch * 1000).toLocaleString()
-  }
-
-  function persistSettingsPatch(patch: Partial<AppSettings>): AppSettings {
-    let storedSettings: Partial<AppSettings> = {}
-    try {
-      storedSettings = JSON.parse(localStorage.getItem('chiralSettings') || '{}')
-    } catch (error) {
-      diagnosticLogger.debug('Network', 'Failed to parse stored settings', { error: error instanceof Error ? error.message : String(error) })
-    }
-
-    const merged = { ...get(settings), ...storedSettings, ...patch } as AppSettings
-    localStorage.setItem('chiralSettings', JSON.stringify(merged))
-    settings.set(merged)
-    return merged
   }
 
   async function copyObservedAddr(addr: string) {
