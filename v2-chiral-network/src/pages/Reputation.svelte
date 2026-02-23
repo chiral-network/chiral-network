@@ -76,21 +76,19 @@
       }));
       peers = rows;
 
-      // Fetch uncached scores in parallel batches of 5
-      const BATCH_SIZE = 5;
+      // Fetch all uncached scores in parallel
       const uncached = peers
         .map((p, i) => ({ idx: i, id: p.id }))
         .filter((p) => peers[p.idx].rep === null);
 
-      for (let b = 0; b < uncached.length; b += BATCH_SIZE) {
-        const batch = uncached.slice(b, b + BATCH_SIZE);
+      if (uncached.length > 0) {
         const results = await Promise.allSettled(
-          batch.map((p) =>
+          uncached.map((p) =>
             invoke<VerifiedReputation>('get_reputation_score', { peerId: p.id })
           )
         );
-        for (let j = 0; j < batch.length; j++) {
-          const { idx, id } = batch[j];
+        for (let j = 0; j < uncached.length; j++) {
+          const { idx, id } = uncached[j];
           const result = results[j];
           if (result.status === 'fulfilled') {
             setCached(id, result.value);
@@ -99,7 +97,7 @@
             peers[idx] = { ...peers[idx], rep: unknownReputation() };
           }
         }
-        peers = [...peers]; // trigger reactivity after each batch
+        peers = [...peers];
       }
     } catch (e) {
       console.error('Failed to load peers', e);

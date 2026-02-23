@@ -2645,9 +2645,12 @@ async fn get_reputation_score(
     };
 
     let key = reputation::TransactionVerdict::dht_key_for_target(&peer_id);
-    let verdicts = match dht.get_dht_value(key).await? {
-        Some(json_str) => reputation::verdicts_from_dht(&json_str),
-        None => return Ok(reputation::VerifiedReputation::unknown()),
+    let verdicts = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        dht.get_dht_value(key),
+    ).await {
+        Ok(Ok(Some(json_str))) => reputation::verdicts_from_dht(&json_str),
+        _ => return Ok(reputation::VerifiedReputation::unknown()),
     };
 
     if verdicts.is_empty() {
@@ -2677,8 +2680,11 @@ async fn get_reputation_score(
             let dht_clone = Arc::clone(&dht);
             let pubkey_dht_key = reputation::PeerKeyRecord::dht_key(issuer_id);
             handles.push(tokio::spawn(async move {
-                match dht_clone.get_dht_value(pubkey_dht_key).await {
-                    Ok(Some(key_json)) => {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    dht_clone.get_dht_value(pubkey_dht_key),
+                ).await {
+                    Ok(Ok(Some(key_json))) => {
                         serde_json::from_str::<reputation::PeerKeyRecord>(&key_json)
                             .ok()
                             .and_then(|r| r.to_verifying_key())
