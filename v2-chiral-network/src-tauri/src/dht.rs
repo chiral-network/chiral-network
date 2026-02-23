@@ -847,6 +847,12 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     // Use custom Kademlia protocol name to match v1 bootstrap nodes
     let mut kad_config = kad::Config::default();
     kad_config.set_protocol_names(vec![StreamProtocol::new("/chiral/kad/1.0.0")]);
+    // Republish records every 2 hours so new peers pick them up
+    kad_config.set_publication_interval(Some(std::time::Duration::from_secs(7200)));
+    // Re-replicate records every 1 hour to handle topology changes
+    kad_config.set_replication_interval(Some(std::time::Duration::from_secs(3600)));
+    // Accept incoming records from other peers (needed for cross-client visibility)
+    kad_config.set_record_filtering(kad::StoreInserts::Unfiltered);
     let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
     kad.set_mode(Some(kad::Mode::Server));
 
@@ -972,6 +978,8 @@ async fn event_loop(
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
+    // Track pending put queries — wait for Kademlia confirmation before responding
+    let mut pending_put_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<(), String>>> = HashMap::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
     // File requests deferred until relay circuit is established.
@@ -1023,7 +1031,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &mut pending_put_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         // Check if this is a relay circuit address
@@ -1209,9 +1217,10 @@ async fn event_loop(
                             expires: None,
                         };
                         match swarm.behaviour_mut().kad.put_record(record, kad::Quorum::One) {
-                            Ok(_) => {
-                                println!("DHT put initiated for key: {}", key);
-                                let _ = response_tx.send(Ok(()));
+                            Ok(query_id) => {
+                                println!("DHT put initiated for key: {}, query {:?}", key, query_id);
+                                // Wait for Kademlia to confirm replication before responding
+                                pending_put_queries.insert(query_id, response_tx);
                             }
                             Err(e) => {
                                 println!("Failed to initiate DHT put: {:?}", e);
@@ -1349,6 +1358,7 @@ async fn handle_behaviour_event(
     swarm: &mut Swarm<DhtBehaviour>,
     file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
+    pending_put_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<(), String>>>,
     shared_files: &SharedFilesMap,
     download_tiers: &DownloadTiersMap,
     download_directory: &DownloadDirectoryRef,
@@ -1450,6 +1460,12 @@ async fn handle_behaviour_event(
                 }
                 kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })) => {
                     println!("DHT get finished with no additional records for query {:?}", id);
+                    // If we still have a pending channel for this query, it means no
+                    // FoundRecord event was received — resolve with None so the caller
+                    // doesn't hang forever.
+                    if let Some(tx) = pending_get_queries.remove(&id) {
+                        let _ = tx.send(Ok(None));
+                    }
                 }
                 kad::QueryResult::GetRecord(Err(err)) => {
                     println!("DHT get failed for query {:?}: {:?}", id, err);
@@ -1461,9 +1477,15 @@ async fn handle_behaviour_event(
                     let key_bytes = ok.key.as_ref();
                     let key_str = String::from_utf8_lossy(key_bytes);
                     println!("DHT put successful for query {:?}, key: {}", id, key_str);
+                    if let Some(tx) = pending_put_queries.remove(&id) {
+                        let _ = tx.send(Ok(()));
+                    }
                 }
                 kad::QueryResult::PutRecord(Err(err)) => {
                     println!("DHT put failed for query {:?}: {:?}", id, err);
+                    if let Some(tx) = pending_put_queries.remove(&id) {
+                        let _ = tx.send(Err(format!("DHT put failed: {:?}", err)));
+                    }
                 }
                 kad::QueryResult::Bootstrap(Ok(result)) => {
                     println!("Kademlia bootstrap successful: {:?} peers", result.num_remaining);
