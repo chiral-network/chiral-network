@@ -853,6 +853,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     kad_config.set_replication_interval(Some(std::time::Duration::from_secs(3600)));
     // Accept incoming records from other peers (needed for cross-client visibility)
     kad_config.set_record_filtering(kad::StoreInserts::Unfiltered);
+    // Reduce query timeout from default 60s — most records are found within a few hops
+    kad_config.set_query_timeout(std::time::Duration::from_secs(5));
     let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
     kad.set_mode(Some(kad::Mode::Server));
 

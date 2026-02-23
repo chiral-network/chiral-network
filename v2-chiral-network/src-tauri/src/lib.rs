@@ -2655,30 +2655,48 @@ async fn get_reputation_score(
     }
 
     // Collect unique issuer IDs to avoid redundant DHT lookups
-    let unique_issuers: std::collections::HashSet<&str> = verdicts
+    let unique_issuers: std::collections::HashSet<String> = verdicts
         .iter()
-        .map(|v| v.issuer_id.as_str())
+        .map(|v| v.issuer_id.clone())
         .collect();
 
-    // Fetch missing public keys (check cache first, then DHT)
-    let mut cache = state.reputation_pubkey_cache.lock().await;
-    for issuer_id in &unique_issuers {
-        if cache.contains_key(*issuer_id) {
-            continue;
+    // Determine which issuers are missing from the cache
+    let missing: Vec<String> = {
+        let cache = state.reputation_pubkey_cache.lock().await;
+        unique_issuers
+            .iter()
+            .filter(|id| !cache.contains_key(id.as_str()))
+            .cloned()
+            .collect()
+    };
+
+    // Fetch all missing public keys in parallel
+    if !missing.is_empty() {
+        let mut handles = Vec::with_capacity(missing.len());
+        for issuer_id in &missing {
+            let dht_clone = Arc::clone(&dht);
+            let pubkey_dht_key = reputation::PeerKeyRecord::dht_key(issuer_id);
+            handles.push(tokio::spawn(async move {
+                match dht_clone.get_dht_value(pubkey_dht_key).await {
+                    Ok(Some(key_json)) => {
+                        serde_json::from_str::<reputation::PeerKeyRecord>(&key_json)
+                            .ok()
+                            .and_then(|r| r.to_verifying_key())
+                    }
+                    _ => None,
+                }
+            }));
         }
-        let pubkey_dht_key = reputation::PeerKeyRecord::dht_key(issuer_id);
-        let vk = match dht.get_dht_value(pubkey_dht_key).await {
-            Ok(Some(key_json)) => {
-                serde_json::from_str::<reputation::PeerKeyRecord>(&key_json)
-                    .ok()
-                    .and_then(|r| r.to_verifying_key())
-            }
-            _ => None,
-        };
-        cache.insert(issuer_id.to_string(), vk);
+        let results = futures::future::join_all(handles).await;
+        let mut cache = state.reputation_pubkey_cache.lock().await;
+        for (issuer_id, result) in missing.iter().zip(results) {
+            let vk = result.unwrap_or(None);
+            cache.insert(issuer_id.clone(), vk);
+        }
     }
 
     // Verify signatures using cached keys
+    let cache = state.reputation_pubkey_cache.lock().await;
     let mut sig_verified = 0usize;
     for verdict in &verdicts {
         if let Some(Some(vk)) = cache.get(&verdict.issuer_id) {
