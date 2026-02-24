@@ -34,6 +34,15 @@
   import { walletService } from '$lib/services/walletService';
   import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
+  import { Shield, Flag } from 'lucide-svelte';
+  import {
+    type VerifiedReputation,
+    unknownReputation,
+    trustLevelBg,
+    scoreToStars,
+    getCached,
+    setCached,
+  } from '$lib/reputationStore';
   import { logger } from '$lib/logger';
   const log = logger('Download');
 
@@ -206,6 +215,18 @@
   let selectedTier = $state<SpeedTier>('free');
   let walletBalance = $state<string>('0');
   let isProcessingPayment = $state(false);
+
+  // Seeder reputation
+  let seederReps = $state<Map<string, VerifiedReputation | null>>(new Map());
+
+  // Report modal
+  let reportOpen = $state(false);
+  let reportTarget = $state('');
+  let reportOutcome = $state<'good' | 'disputed' | 'bad'>('bad');
+  let reportDetails = $state('');
+  let reportSubmitting = $state(false);
+  let reportError = $state('');
+  let reportSuccess = $state('');
 
   // Blacklist warning modal
   let blacklistWarning = $state<{ match: BlacklistEntry; result: SearchResult } | null>(null);
@@ -503,6 +524,74 @@
       searchError = `Search failed: ${error}`;
     } finally {
       isSearching = false;
+    }
+  }
+
+  // Load reputation scores for seeders of the current search result
+  async function loadSeederReputations(seeders: string[]) {
+    if (seeders.length === 0) return;
+    // Initialize with cached values or null (loading)
+    const initial = new Map<string, VerifiedReputation | null>();
+    for (const id of seeders) {
+      initial.set(id, getCached(id));
+    }
+    seederReps = initial;
+
+    const uncached = seeders.filter((id) => !getCached(id));
+    if (uncached.length === 0) return;
+
+    const { invoke } = await import('@tauri-apps/api/core');
+    const results = await Promise.allSettled(
+      uncached.map((id) => invoke<VerifiedReputation>('get_reputation_score', { peerId: id }))
+    );
+    const updated = new Map(seederReps);
+    for (let i = 0; i < uncached.length; i++) {
+      const id = uncached[i];
+      const r = results[i];
+      if (r.status === 'fulfilled') {
+        setCached(id, r.value);
+        updated.set(id, r.value);
+      } else {
+        updated.set(id, unknownReputation());
+      }
+    }
+    seederReps = updated;
+  }
+
+  function openReport(peerId: string) {
+    reportTarget = peerId;
+    reportOutcome = 'bad';
+    reportDetails = '';
+    reportError = '';
+    reportSuccess = '';
+    reportOpen = true;
+  }
+
+  async function submitReport() {
+    reportSubmitting = true;
+    reportError = '';
+    reportSuccess = '';
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('file_reputation_verdict', {
+        targetPeerId: reportTarget,
+        outcome: reportOutcome,
+        details: reportDetails.trim() || null,
+      });
+      reportSuccess = 'Verdict signed and published to DHT.';
+      // Refresh this seeder's reputation
+      try {
+        const rep = await invoke<VerifiedReputation>('get_reputation_score', { peerId: reportTarget });
+        setCached(reportTarget, rep);
+        const updated = new Map(seederReps);
+        updated.set(reportTarget, rep);
+        seederReps = updated;
+      } catch { /* ignore */ }
+      setTimeout(() => { reportOpen = false; }, 1500);
+    } catch (e: unknown) {
+      reportError = e instanceof Error ? e.message : String(e);
+    } finally {
+      reportSubmitting = false;
     }
   }
 
@@ -890,6 +979,15 @@
     }
   });
 
+  // Load seeder reputations when search result changes
+  $effect(() => {
+    if (searchResult && searchResult.seeders.length > 0) {
+      loadSeederReputations(searchResult.seeders);
+    } else {
+      seederReps = new Map();
+    }
+  });
+
   onDestroy(() => {
     cleanupEventListeners();
   });
@@ -1128,13 +1226,62 @@
             <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
               {searchResult.hash}
             </p>
-            {#if searchResult.seeders.length > 0}
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                Seeder availability is verified when download starts
-              </p>
-            {/if}
           </div>
         </div>
+
+        <!-- Seeder Reputation List -->
+        {#if searchResult.seeders.length > 0}
+          <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+            <div class="flex items-center gap-2 mb-3">
+              <Shield class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Seeders ({searchResult.seeders.length})
+              </p>
+            </div>
+            <div class="space-y-2">
+              {#each searchResult.seeders as seederId}
+                {@const rep = seederReps.get(seederId)}
+                <div class="flex items-center gap-3 p-2.5 rounded-lg bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-600">
+                  <!-- Trust badge -->
+                  <div class="shrink-0">
+                    {#if rep === undefined || rep === null}
+                      <div class="w-16 h-5 bg-gray-200 dark:bg-gray-700 animate-pulse rounded-full"></div>
+                    {:else}
+                      <span class="px-2 py-0.5 rounded-full text-xs font-semibold {trustLevelBg(rep.trustLevel)} capitalize">
+                        {rep.trustLevel}
+                      </span>
+                    {/if}
+                  </div>
+
+                  <!-- Peer ID -->
+                  <code class="text-xs font-mono text-gray-500 dark:text-gray-400 flex-1 truncate min-w-0">
+                    {seederId}
+                  </code>
+
+                  <!-- Score -->
+                  {#if rep && rep.totalVerdicts > 0}
+                    <div class="text-right shrink-0 hidden sm:block">
+                      <span class="text-xs font-bold text-gray-900 dark:text-white">{scoreToStars(rep.score)}</span>
+                      <span class="text-xs text-gray-400 ml-1">({rep.totalVerdicts})</span>
+                    </div>
+                  {:else if rep}
+                    <span class="text-xs text-gray-400 shrink-0 hidden sm:block">No ratings</span>
+                  {/if}
+
+                  <!-- Report button -->
+                  <button
+                    onclick={() => openReport(seederId)}
+                    class="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium border border-gray-200 dark:border-gray-600
+                           text-gray-500 dark:text-gray-400 hover:border-red-300 hover:text-red-600 dark:hover:border-red-700 dark:hover:text-red-400 transition shrink-0"
+                    title="File a reputation verdict"
+                  >
+                    <Flag class="w-3 h-3" /> Report
+                  </button>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
 
         <!-- Speed Tier Selector -->
         <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
@@ -1699,6 +1846,112 @@
         >
           <Download class="w-4 h-4" />
           Confirm & Pay
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- ─── Report Modal ──────────────────────────────────────────────────────── -->
+
+{#if reportOpen}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    role="dialog"
+    tabindex="-1"
+    aria-modal="true"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+    onkeydown={(e) => { if (e.key === 'Escape' && !reportSubmitting) reportOpen = false; }}
+    onclick={(e) => { if (e.target === e.currentTarget && !reportSubmitting) reportOpen = false; }}
+  >
+    <div class="w-full max-w-lg bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 space-y-5">
+
+      <div>
+        <h2 class="text-lg font-bold dark:text-white flex items-center gap-2">
+          <Flag class="w-5 h-5 text-red-500" /> File Reputation Verdict
+        </h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Your verdict is signed with your node's Ed25519 key and published to the DHT.
+        </p>
+      </div>
+
+      <!-- Target peer ID -->
+      <div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium">Target Peer</p>
+        <code class="text-xs font-mono break-all text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded px-2 py-1 block">
+          {reportTarget}
+        </code>
+      </div>
+
+      <!-- Outcome -->
+      <div>
+        <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Outcome</p>
+        <div role="radiogroup" aria-label="Outcome" class="space-y-2">
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input type="radio" bind:group={reportOutcome} value="good" class="accent-green-600" />
+            <span class="text-sm text-green-700 dark:text-green-400">Positive — peer behaved well</span>
+          </label>
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input type="radio" bind:group={reportOutcome} value="disputed" />
+            <span class="text-sm text-yellow-700 dark:text-yellow-400">Disputed — uncertain outcome</span>
+          </label>
+          <label class="flex items-center gap-3 cursor-pointer">
+            <input type="radio" bind:group={reportOutcome} value="bad" class="accent-red-600" />
+            <span class="text-sm text-red-700 dark:text-red-400">Negative — peer misbehaved</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Details -->
+      <div>
+        <label for="report-details" class="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">
+          Details <span class="text-gray-400 font-normal">(optional)</span>
+        </label>
+        <textarea
+          id="report-details"
+          bind:value={reportDetails}
+          rows="3"
+          placeholder="Describe what happened (e.g. transfer completed, file was corrupt, no response)..."
+          class="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600
+                 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                 focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
+        ></textarea>
+      </div>
+
+      <!-- Feedback -->
+      {#if reportError}
+        <div class="flex items-start gap-2 text-sm text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/30 rounded-lg px-3 py-2">
+          <AlertTriangle class="w-4 h-4 shrink-0 mt-0.5" />
+          {reportError}
+        </div>
+      {/if}
+      {#if reportSuccess}
+        <div class="text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/30 rounded-lg px-3 py-2">
+          {reportSuccess}
+        </div>
+      {/if}
+
+      <!-- Actions -->
+      <div class="flex justify-end gap-3 pt-1">
+        <button
+          onclick={() => { reportOpen = false; }}
+          disabled={reportSubmitting}
+          class="px-4 py-2 rounded-lg text-sm font-medium border border-gray-300 dark:border-gray-600
+                 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 transition"
+        >
+          Cancel
+        </button>
+        <button
+          onclick={submitReport}
+          disabled={reportSubmitting}
+          class="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50 transition
+                 {reportOutcome === 'good'
+                   ? 'bg-green-600 hover:bg-green-700'
+                   : reportOutcome === 'bad'
+                     ? 'bg-red-600 hover:bg-red-700'
+                     : 'bg-yellow-600 hover:bg-yellow-700'}"
+        >
+          {reportSubmitting ? 'Submitting...' : 'Sign & Submit'}
         </button>
       </div>
     </div>
