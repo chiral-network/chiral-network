@@ -1127,6 +1127,20 @@ async fn event_loop(
                         if let Some(peer) = peer_id {
                             println!("Failed to connect to {:?}: {:?}", peer, error);
 
+                            // Evict unreachable peer from Kademlia routing table
+                            // so future DHT queries don't waste time trying to reach it
+                            swarm.behaviour_mut().kad.remove_peer(&peer);
+
+                            // Also remove from local peer list
+                            {
+                                let mut peers_guard = peers.lock().await;
+                                let before = peers_guard.len();
+                                peers_guard.retain(|p| p.id != peer.to_string());
+                                if peers_guard.len() < before {
+                                    let _ = app.emit("peer-discovered", peers_guard.clone());
+                                }
+                            }
+
                             // Fail any deferred file requests for this peer
                             if let Some(pending) = pending_file_requests.remove(&peer) {
                                 let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
@@ -1414,7 +1428,8 @@ async fn handle_behaviour_event(
             for (peer_id, _) in list {
                 let peer_id_str = peer_id.to_string();
                 peers_guard.retain(|p| p.id != peer_id_str);
-                println!("Peer expired: {}", peer_id_str);
+                swarm.behaviour_mut().kad.remove_peer(&peer_id);
+                println!("Peer expired and evicted from routing table: {}", peer_id_str);
             }
         }
         DhtBehaviourEvent::PingProtocol(event) => {
