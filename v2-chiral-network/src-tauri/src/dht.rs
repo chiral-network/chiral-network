@@ -18,6 +18,67 @@ use std::path::PathBuf;
 use sha2::{Sha256, Digest};
 use std::io::{Read as _, Seek as _, SeekFrom};
 
+// ============================================================================
+// FAILED-PEERS PERSISTENCE — skip known-bad peers across app restarts
+// ============================================================================
+
+const FAILED_PEERS_FILE: &str = "failed_peers.txt";
+/// Peers older than this are retried (they might have come back online).
+const FAILED_PEERS_EXPIRY_SECS: u64 = 24 * 3600; // 24 hours
+
+fn failed_peers_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("chiral-network")
+        .join(FAILED_PEERS_FILE)
+}
+
+/// Load persisted failed peers, discarding entries older than the expiry.
+fn load_failed_peers() -> std::collections::HashSet<PeerId> {
+    let path = failed_peers_path();
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return std::collections::HashSet::new();
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut set = std::collections::HashSet::new();
+    for line in contents.lines() {
+        let Some((peer_str, ts_str)) = line.split_once('\t') else {
+            continue;
+        };
+        let Ok(ts) = ts_str.parse::<u64>() else {
+            continue;
+        };
+        if now.saturating_sub(ts) > FAILED_PEERS_EXPIRY_SECS {
+            continue; // expired — give the peer another chance
+        }
+        if let Ok(peer_id) = PeerId::from_str(peer_str) {
+            set.insert(peer_id);
+        }
+    }
+    set
+}
+
+/// Persist the failed-peers set to disk.
+fn save_failed_peers(set: &std::collections::HashSet<PeerId>) {
+    let path = failed_peers_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let content: String = set
+        .iter()
+        .map(|p| format!("{}\t{}", p, now))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(&path, content);
+}
+
 /// Custom CBOR codec with appropriate size limits for chunked file transfers.
 /// Individual chunks are 256 KB, but FileInfo responses can be large for big files
 /// (chunk hashes array). 32 MB covers files up to ~100 GB.
@@ -991,8 +1052,12 @@ async fn event_loop(
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
-    // Peers that failed to connect — don't re-add them to Kademlia routing table
-    let mut failed_peers: std::collections::HashSet<libp2p::PeerId> = std::collections::HashSet::new();
+    // Peers that failed to connect — don't re-add them to Kademlia routing table.
+    // Persisted to disk so stale peers are skipped across app restarts (24h expiry).
+    let mut failed_peers = load_failed_peers();
+    if !failed_peers.is_empty() {
+        println!("Loaded {} previously failed peers from disk (24h expiry)", failed_peers.len());
+    }
     // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
     // to prevent Kademlia from racing the relay client for the bootstrap connection.
     // A timer fallback ensures bootstrap happens even if relay reservation never completes.
@@ -1064,7 +1129,9 @@ async fn event_loop(
                         println!("Connection established with {:?}", peer_id);
 
                         // Peer is reachable again — allow future re-addition to routing table
-                        failed_peers.remove(&peer_id);
+                        if failed_peers.remove(&peer_id) {
+                            save_failed_peers(&failed_peers);
+                        }
 
                         // Send any file requests that were waiting for this connection
                         if let Some(pending) = pending_file_requests.remove(&peer_id) {
@@ -1137,6 +1204,7 @@ async fn event_loop(
                             let is_new_failure = failed_peers.insert(peer);
                             if is_new_failure {
                                 println!("Evicted unreachable peer from routing table: {}", peer);
+                                save_failed_peers(&failed_peers);
                             }
 
                             // Also remove from local peer list
