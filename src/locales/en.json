@@ -179,11 +179,15 @@
       "run": "Run Discovery",
       "directConnect": "Direct Connect",
       "placeholder": "Enter peer multiaddress (e.g., /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "Connect",
       "foundPeers": "Found peers: {count}",
       "discoveryStarted": "Discovery started. Found peers: {count}",
       "peerAddedToInput": "Peer added to input",
-      "add": "Add"
+      "add": "Add",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "Connected Peers ({count})",
@@ -1686,6 +1690,8 @@
       "connectionSuccess": "Connection Success!",
       "connectionFailed": "Connection failed. Peer may be unreachable or address invalid.",
       "connectError": "Failed to connect to peer: {error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "Signaling server not connected. Please start DHT first.",
       "peerNotFound": "Peer {peer} not found in discovered peers",
       "messageReceived": "Received from peer: {message}",

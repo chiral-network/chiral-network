@@ -11,7 +11,7 @@ async function sha1Hex(bytes: Uint8Array): Promise<string> {
   if (!globalThis.crypto?.subtle) {
     throw new Error("WebCrypto (crypto.subtle) is not available for SHA-1 hashing");
   }
-  const digest = await globalThis.crypto.subtle.digest("SHA-1", bytes);
+  const digest = await globalThis.crypto.subtle.digest("SHA-1", bytes as BufferSource);
   return bytesToHex(new Uint8Array(digest));
 }
 

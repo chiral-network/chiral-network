@@ -111,7 +111,7 @@
     seeders: number;
     uploadDate: Date;
     filePath: string;
-    priceChr: string;
+    priceChi: string;
   }
 
   // State
@@ -201,10 +201,10 @@
         }
 
         // Publish to DHT with selected protocol and pricing
-        const priceChr = filePrice && parseFloat(String(filePrice)) > 0 ? String(filePrice) : undefined;
+        const priceChi = filePrice && parseFloat(String(filePrice)) > 0 ? String(filePrice) : undefined;
         const walletAddr = $walletAccount?.address;
 
-        if (priceChr && !walletAddr) {
+        if (priceChi && !walletAddr) {
           toasts.show('Connect your wallet to set a file price', 'error');
           continue;
         }
@@ -213,8 +213,8 @@
           filePath,
           fileName,
           protocol: selectedProtocol,
-          priceChr: priceChr || null,
-          walletAddress: priceChr ? walletAddr : null,
+          priceChi: priceChi || null,
+          walletAddress: walletAddr || null,
         });
 
         const newFile: SharedFile = {
@@ -227,7 +227,7 @@
           seeders: 1,
           uploadDate: new Date(),
           filePath,
-          priceChr: priceChr || '0',
+          priceChi: priceChi || '0',
         };
 
         sharedFiles = [...sharedFiles, newFile];
@@ -307,7 +307,6 @@
   // Drag and drop handlers
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
-    if (!$networkConnected) return;
     isDragging = true;
   }
 
@@ -316,29 +315,10 @@
     isDragging = false;
   }
 
-  async function handleDrop(e: DragEvent) {
+  function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
-
-    const tauriAvailable = checkTauriAvailability();
-    if (!tauriAvailable) {
-      // For web browsers, use FileList from DataTransfer
-      const files = e.dataTransfer?.files;
-      if (files && files.length > 0) {
-        toasts.show('File upload requires the desktop app', 'error');
-      }
-      return;
-    }
-
-    if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
-      return;
-    }
-
-    if (isUploading) return;
-
-    // For Tauri, the drag-drop files are handled via onDragDropEvent listener
-    // which calls processFiles directly
+    // Actual file processing is handled by Tauri's onDragDropEvent listener
   }
 
   // Get protocol badge color
@@ -364,8 +344,8 @@
             filePath: file.filePath,
             fileName: file.name,
             fileSize: file.size,
-            priceChr: file.priceChr && file.priceChr !== '0' ? file.priceChr : null,
-            walletAddress: file.priceChr && file.priceChr !== '0' ? $walletAccount?.address : null,
+            priceChi: file.priceChi && file.priceChi !== '0' ? file.priceChi : null,
+            walletAddress: file.priceChi && file.priceChi !== '0' ? $walletAccount?.address : null,
           });
           log.info(`Re-registered shared file: ${file.name}`);
         } catch (e) {
@@ -479,7 +459,7 @@
       <div class="flex gap-2">
         <button
           onclick={() => selectedProtocol = 'WebRTC'}
-          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'WebRTC' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+          class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {selectedProtocol === 'WebRTC' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
         >
           <Globe class="w-4 h-4" />
           WebRTC
@@ -500,7 +480,7 @@
     <div class="flex items-center justify-between">
       <div>
         <p class="text-sm font-semibold text-gray-900 dark:text-white">File Price</p>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Set a price in CHR tokens (leave empty for free)</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Set a price in CHI tokens (leave empty for free)</p>
       </div>
       <div class="flex items-center gap-2">
         <input
@@ -509,9 +489,9 @@
           step="0.001"
           placeholder="0 (free)"
           bind:value={filePrice}
-          class="w-40 px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          class="w-40 px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
         />
-        <span class="text-sm text-gray-500 dark:text-gray-400">CHR</span>
+        <span class="text-sm text-gray-500 dark:text-gray-400">CHI</span>
       </div>
     </div>
     {#if filePrice && parseFloat(filePrice) > 0 && !$walletAccount}
@@ -530,18 +510,18 @@
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
-    class="relative border-2 border-dashed rounded-xl p-8 transition-all duration-200 {isDragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'}"
+    class="relative border-2 border-dashed rounded-xl p-8 transition-all duration-200 {isDragging ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'}"
   >
     <div class="text-center py-8">
       <div class="mb-6">
         {#if isDragging}
-          <Upload class="h-16 w-16 mx-auto text-blue-500" />
+          <Upload class="h-16 w-16 mx-auto text-primary-500" />
         {:else}
           <FolderOpen class="h-16 w-16 mx-auto text-gray-400" />
         {/if}
       </div>
 
-      <h3 class="text-2xl font-bold mb-3 {isDragging ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-white'}">
+      <h3 class="text-2xl font-bold mb-3 {isDragging ? 'text-primary-600 dark:text-primary-400' : 'text-gray-900 dark:text-white'}">
         {isDragging ? 'Drop files here' : 'Share Files'}
       </h3>
 
@@ -554,7 +534,7 @@
       </p>
 
       <p class="text-sm text-gray-500 dark:text-gray-400 mb-8">
-        Using <span class="font-semibold {selectedProtocol === 'WebRTC' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'}">{selectedProtocol}</span> protocol
+        Using <span class="font-semibold {selectedProtocol === 'WebRTC' ? 'text-primary-600 dark:text-primary-400' : 'text-green-600 dark:text-green-400'}">{selectedProtocol}</span> protocol
       </p>
 
       <div class="flex justify-center gap-4 mb-8 opacity-60">
@@ -569,7 +549,7 @@
         <button
           onclick={openFileDialog}
           disabled={isUploading || !$networkConnected}
-          class="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium text-white bg-blue-600 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          class="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium text-white bg-primary-600 rounded-xl hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
         >
           <Plus class="w-5 h-5" />
           {isUploading ? 'Uploading...' : 'Add Files'}
@@ -634,9 +614,9 @@
                     <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(file.protocol)}">
                       {file.protocol}
                     </span>
-                    {#if file.priceChr && file.priceChr !== '0'}
+                    {#if file.priceChi && file.priceChi !== '0'}
                       <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-                        {file.priceChr} CHR
+                        {file.priceChi} CHI
                       </span>
                     {:else}
                       <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
@@ -671,7 +651,7 @@
                 <div class="flex items-center gap-2 flex-shrink-0">
                   <button
                     onclick={() => toggleShareOptions(file.id)}
-                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                    class="flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
                     title="Share options"
                   >
                     <ExternalLink class="w-4 h-4" />
@@ -727,7 +707,7 @@
                       />
                       <button
                         onclick={() => copyHash(file.hash)}
-                        class="flex items-center gap-1 px-3 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                        class="flex items-center gap-1 px-3 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg transition-colors"
                         title="Copy hash"
                       >
                         <Copy class="w-4 h-4" />

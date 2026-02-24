@@ -8,11 +8,9 @@
   import GeoDistributionCard from '$lib/components/GeoDistributionCard.svelte'
   import GethStatusCard from '$lib/components/GethStatusCard.svelte'
   import { peers, networkStats, userLocation, settings, wallet } from '$lib/stores'
-  import type { AppSettings } from '$lib/stores'
   import { normalizeRegion, UNKNOWN_REGION_ID } from '$lib/geo'
-  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText, Wifi, WifiOff } from 'lucide-svelte'
+  import { Users, HardDrive, Activity, RefreshCw, UserPlus, Signal, Server, Square, Play, Download, AlertCircle, LayoutDashboard, Network, FileText } from 'lucide-svelte'
   import { onMount, onDestroy } from 'svelte'
-  import { get } from 'svelte/store'
   import { invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
   import { dhtService, type DhtHealth as DhtHealthSnapshot, type NatConfidence, type NatReachabilityState } from '$lib/dht'
@@ -46,6 +44,9 @@
 
   let discoveryRunning = false
   let newPeerAddress = ''
+  let isPinging = false
+  let pingResult: { rttMs: number; address: string } | null = null
+  let pingError: string | null = null
   let sortBy: 'reputation' | 'sharedFiles' | 'totalSize' | 'nickname' | 'location' | 'joinDate' | 'lastSeen' | 'status' = 'reputation'
   let sortDirection: 'asc' | 'desc' = 'desc'
 
@@ -111,7 +112,24 @@
   let lastNatConfidence: NatConfidence | null = null
   let cancelConnection = false
   let isConnecting = false  // Prevent multiple simultaneous connection attempts
-  const formatHealthMessage = (value: string | null | undefined) => value ?? $t('network.dht.health.none')
+  // Relay / DCUtR state
+  interface RelayStatus {
+    relayPeerId: string;
+    renewal: boolean;
+    timestamp: number;
+  }
+  interface HolePunchEvent {
+    remotePeerId: string;
+    success: boolean;
+    error?: string;
+    timestamp: number;
+  }
+  let relayStatus: RelayStatus | null = null;
+  let holePunchEvents: HolePunchEvent[] = [];
+  let relayCircuits: { peerId: string; direction: string; timestamp: number }[] = [];
+  let relayUnlisten: (() => void) | null = null;
+  let relayCircuitUnlisten: (() => void) | null = null;
+  let dcutrUnlisten: (() => void) | null = null;
 
   // Always preserve connections - no unreliable time-based detection
   
@@ -271,20 +289,6 @@
   function formatNatTimestamp(epoch?: number | null): string {
     if (!epoch) return tr('network.dht.health.never')
     return new Date(epoch * 1000).toLocaleString()
-  }
-
-  function persistSettingsPatch(patch: Partial<AppSettings>): AppSettings {
-    let storedSettings: Partial<AppSettings> = {}
-    try {
-      storedSettings = JSON.parse(localStorage.getItem('chiralSettings') || '{}')
-    } catch (error) {
-      diagnosticLogger.debug('Network', 'Failed to parse stored settings', { error: error instanceof Error ? error.message : String(error) })
-    }
-
-    const merged = { ...get(settings), ...storedSettings, ...patch } as AppSettings
-    localStorage.setItem('chiralSettings', JSON.stringify(merged))
-    settings.set(merged)
-    return merged
   }
 
   async function copyObservedAddr(addr: string) {
@@ -1038,7 +1042,35 @@
       );
     }
   }
-  
+
+  async function pingPeerAddress() {
+    if (!newPeerAddress.trim()) {
+      showToast(tr('toasts.network.peerAddressRequired'), 'error');
+      return;
+    }
+    if (dhtStatus !== 'connected') {
+      showToast(tr('toasts.network.dhtRequired'), 'error');
+      return;
+    }
+
+    isPinging = true;
+    pingResult = null;
+    pingError = null;
+
+    try {
+      const rttMs = await dhtService.pingPeer(newPeerAddress.trim());
+      pingResult = { rttMs, address: newPeerAddress.trim() };
+      pingError = null;
+      showToast(tr('toasts.network.pingSuccess', { values: { rtt: rttMs } }), 'success');
+    } catch (error) {
+      pingError = String(error);
+      pingResult = null;
+      showToast(tr('toasts.network.pingFailed', { values: { error: String(error) } }), 'error');
+    } finally {
+      isPinging = false;
+    }
+  }
+
   async function refreshConnectedPeers() {
     if (!isTauri) {
       return;
@@ -1360,6 +1392,19 @@
         await registerNatListener()
         await registerLowPeerCountListener()
 
+        // Listen for relay/dcutr events
+        listen<{ relayPeerId: string; renewal: boolean }>('relay-reservation', (event) => {
+          relayStatus = { ...event.payload, timestamp: Date.now() };
+        }).then(fn => { relayUnlisten = fn; });
+
+        listen<{ peerId: string; direction: string }>('relay-circuit-established', (event) => {
+          relayCircuits = [...relayCircuits.slice(-9), { ...event.payload, timestamp: Date.now() }];
+        }).then(fn => { relayCircuitUnlisten = fn; });
+
+        listen<{ remotePeerId: string; success: boolean; error?: string }>('dcutr-event', (event) => {
+          holePunchEvents = [...holePunchEvents.slice(-9), { ...event.payload, timestamp: Date.now() }];
+        }).then(fn => { dcutrUnlisten = fn; });
+
         // Listen for download progress updates
         unlistenProgress = await listen('geth-download-progress', (event) => {
           downloadProgress = event.payload as typeof downloadProgress
@@ -1393,6 +1438,9 @@
         peerDiscoveryUnsub()
         peerDiscoveryUnsub = null
       }
+      if (relayUnlisten) { relayUnlisten(); relayUnlisten = null; }
+      if (relayCircuitUnlisten) { relayCircuitUnlisten(); relayCircuitUnlisten = null; }
+      if (dcutrUnlisten) { dcutrUnlisten(); dcutrUnlisten = null; }
       // Note: We do NOT disconnect the signaling service here
       // It should persist across page navigations to maintain peer connections
     }
@@ -1760,17 +1808,36 @@
             </div>
           </div>
           
-          <div class="mt-4">
-             <div class="flex items-center gap-2 max-w-md">
-                <Input 
-                  placeholder="Peer Address / ID" 
-                  class="h-9 text-sm" 
-                  bind:value={newPeerAddress} 
+          <div class="mt-4 space-y-2">
+             <div class="flex items-center gap-2 max-w-lg">
+                <Input
+                  placeholder={tr('network.peerDiscovery.addressPlaceholder')}
+                  class="h-9 text-sm"
+                  bind:value={newPeerAddress}
                 />
-                <Button size="sm" variant="secondary" disabled={!newPeerAddress} on:click={connectToPeer}>
+                <Button size="sm" variant="secondary" disabled={!newPeerAddress || isPinging} on:click={connectToPeer}>
                   <UserPlus class="h-4 w-4" />
                 </Button>
+                <Button size="sm" variant="outline" disabled={!newPeerAddress || isPinging} on:click={pingPeerAddress} title={tr('network.peerDiscovery.pingTooltip')}>
+                  {#if isPinging}
+                    <RefreshCw class="h-4 w-4 animate-spin" />
+                  {:else}
+                    <Signal class="h-4 w-4" />
+                  {/if}
+                </Button>
              </div>
+             {#if pingResult}
+               <div class="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400">
+                 <Signal class="h-3 w-3" />
+                 <span>{tr('network.peerDiscovery.pingResult', { values: { address: pingResult.address.split('/p2p/')[1]?.slice(0, 12) || pingResult.address.slice(0, 16), rtt: pingResult.rttMs } })}</span>
+               </div>
+             {/if}
+             {#if pingError}
+               <div class="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
+                 <AlertCircle class="h-3 w-3" />
+                 <span>{tr('network.peerDiscovery.pingFailed')}: {pingError}</span>
+               </div>
+             {/if}
           </div>
           
           {#if discoveredPeerEntries.length > 0}
@@ -2060,6 +2127,66 @@
                  </div>
               </div>
            {/if}
+        </Card>
+
+        <!-- NAT Traversal: Relay & Hole Punching -->
+        <Card class="p-5">
+          <h3 class="font-semibold mb-4">NAT Traversal (Relay & Hole Punching)</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+            <!-- Relay Status -->
+            <div class="space-y-2">
+              <p class="text-xs uppercase text-muted-foreground mb-1">Relay Reservation</p>
+              {#if relayStatus}
+                <div class="flex items-center gap-2">
+                  <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span class="font-medium text-emerald-600 dark:text-emerald-400">Active</span>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  Relay: <span class="font-mono">{relayStatus.relayPeerId.slice(0, 16)}...</span>
+                </p>
+                <p class="text-xs text-muted-foreground">
+                  {relayStatus.renewal ? 'Renewal' : 'Initial'} &middot; {new Date(relayStatus.timestamp).toLocaleTimeString()}
+                </p>
+              {:else}
+                <div class="flex items-center gap-2">
+                  <span class="inline-block w-2 h-2 rounded-full bg-gray-400"></span>
+                  <span class="text-muted-foreground">No relay reservation</span>
+                </div>
+              {/if}
+
+              {#if relayCircuits.length > 0}
+                <p class="text-xs uppercase text-muted-foreground mt-3 mb-1">Relay Circuits</p>
+                <div class="space-y-1">
+                  {#each relayCircuits.slice(-5) as circuit}
+                    <div class="text-xs flex gap-2">
+                      <span class="text-muted-foreground">{new Date(circuit.timestamp).toLocaleTimeString()}</span>
+                      <Badge class="text-xs">{circuit.direction}</Badge>
+                      <span class="font-mono">{circuit.peerId.slice(0, 12)}...</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            <!-- Hole Punch Events -->
+            <div class="space-y-2">
+              <p class="text-xs uppercase text-muted-foreground mb-1">Hole Punch (DCUtR)</p>
+              {#if holePunchEvents.length > 0}
+                <div class="space-y-1">
+                  {#each holePunchEvents.slice(-5) as hp}
+                    <div class="text-xs flex items-center gap-2">
+                      <span class="inline-block w-2 h-2 rounded-full {hp.success ? 'bg-emerald-500' : 'bg-red-500'}"></span>
+                      <span class="font-mono">{hp.remotePeerId.slice(0, 12)}...</span>
+                      <span class="text-muted-foreground">{hp.success ? 'Direct connection' : hp.error || 'Failed'}</span>
+                      <span class="text-muted-foreground ml-auto">{new Date(hp.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <p class="text-muted-foreground italic">No hole-punch attempts yet.</p>
+              {/if}
+            </div>
+          </div>
         </Card>
 
         <!-- DHT Events -->

@@ -4,7 +4,9 @@
   import { toasts } from '$lib/toastStore';
   import { dhtService } from '$lib/dhtService';
   import { gethService } from '$lib/services/gethService';
+  import { applyColorTheme } from '$lib/services/colorThemeService';
   import Navbar from '$lib/components/Navbar.svelte';
+  import Sidebar from '$lib/components/Sidebar.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
@@ -17,6 +19,7 @@
   import SettingsPage from './pages/Settings.svelte';
 
   let currentPath = $state('/wallet');
+  let sidebarCollapsed = $state(false);
 
   // Apply dark mode class to document
   $effect(() => {
@@ -26,6 +29,13 @@
       } else {
         document.documentElement.classList.remove('dark');
       }
+    }
+  });
+
+  // Apply color theme
+  $effect(() => {
+    if (typeof document !== 'undefined') {
+      applyColorTheme($settings.colorTheme);
     }
   });
   
@@ -160,10 +170,22 @@
 </script>
 
 {#if $isAuthenticated}
-  <div class="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
-    <Navbar currentPage={currentPath} />
-    <Router routes={authenticatedRoutes} />
-  </div>
+  {#if $settings.navStyle === 'sidebar'}
+    <div class="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
+      <Sidebar currentPage={currentPath} bind:collapsed={sidebarCollapsed} />
+      <div class="transition-[margin] duration-200 hidden md:block {sidebarCollapsed ? 'md:ml-16' : 'md:ml-48'}">
+        <Router routes={authenticatedRoutes} />
+      </div>
+      <div class="md:hidden">
+        <Router routes={authenticatedRoutes} />
+      </div>
+    </div>
+  {:else}
+    <div class="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
+      <Navbar currentPage={currentPath} />
+      <Router routes={authenticatedRoutes} />
+    </div>
+  {/if}
 {:else}
   <div class="dark:bg-gray-900 min-h-screen transition-colors">
     <Router routes={unauthenticatedRoutes} />

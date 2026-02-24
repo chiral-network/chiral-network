@@ -42,14 +42,14 @@
     hashRate: number;
     minerAddress: string | null;
     totalMinedWei: string;
-    totalMinedChr: number;
+    totalMinedChi: number;
   }
 
   interface MinedBlock {
     blockNumber: number;
     timestamp: number;
     rewardWei: string;
-    rewardChr: number;
+    rewardChi: number;
     difficulty: number;
   }
 
@@ -228,7 +228,7 @@
 
   // Derived: total rewards from history
   let totalHistoryReward = $derived(
-    minedBlocks.reduce((sum, b) => sum + b.rewardChr, 0)
+    minedBlocks.reduce((sum, b) => sum + b.rewardChi, 0)
   );
 
   // Format timestamp to readable date/time
@@ -250,7 +250,7 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-3xl font-bold dark:text-white">Mining</h1>
-      <p class="text-gray-600 dark:text-gray-400 mt-1">Mine CHR tokens on the Chiral Network</p>
+      <p class="text-gray-600 dark:text-gray-400 mt-1">Mine CHI tokens on the Chiral Network</p>
     </div>
     <button
       onclick={loadStatus}
@@ -287,7 +287,7 @@
       <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
         <p class="text-sm text-yellow-800 dark:text-yellow-300">
           {#if !gethStatus?.installed}
-            You need to download and start a local Geth node before you can mine CHR tokens.
+            You need to download and start a local Geth node before you can mine CHI tokens.
           {:else}
             Mining requires a local Geth node. Start the node from the Network page to begin mining.
           {/if}
@@ -298,7 +298,7 @@
       </div>
       <button
         onclick={() => goto('/network')}
-        class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+        class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2"
       >
         <Globe class="w-5 h-5" />
         Go to Network Page
@@ -314,7 +314,7 @@
           </div>
           <div>
             <h2 class="font-semibold dark:text-white">Mining</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Earn CHR by mining blocks</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Earn CHI by mining blocks</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -358,7 +358,7 @@
             <span class="text-sm text-gray-600 dark:text-gray-400">Total Mined</span>
           </div>
           <p class="text-2xl font-bold dark:text-white">
-            {(miningStatus?.totalMinedChr ?? 0).toFixed(4)} CHR
+            {(miningStatus?.totalMinedChi ?? 0).toFixed(4)} CHI
           </p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
@@ -455,7 +455,7 @@
             <p class="text-sm text-gray-500 dark:text-gray-400">
               {minedBlocks.length} block{minedBlocks.length !== 1 ? 's' : ''} mined
               {#if totalHistoryReward > 0}
-                — {totalHistoryReward.toFixed(2)} CHR earned
+                — {totalHistoryReward.toFixed(2)} CHI earned
               {/if}
             </p>
           </div>
@@ -492,7 +492,7 @@
             <div class="text-center py-8">
               <Pickaxe class="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
               <p class="text-sm text-gray-500 dark:text-gray-400">No blocks mined yet.</p>
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Start mining to earn CHR block rewards.</p>
+              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Start mining to earn CHI block rewards.</p>
             </div>
           {:else}
             <!-- Summary Stats -->
@@ -503,11 +503,11 @@
               </div>
               <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
                 <p class="text-xs text-gray-500 dark:text-gray-400">Total Earned</p>
-                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{totalHistoryReward.toFixed(2)} CHR</p>
+                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{totalHistoryReward.toFixed(2)} CHI</p>
               </div>
               <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
                 <p class="text-xs text-gray-500 dark:text-gray-400">Reward per Block</p>
-                <p class="text-lg font-bold dark:text-white">{minedBlocks[0]?.rewardChr ?? 0} CHR</p>
+                <p class="text-lg font-bold dark:text-white">{minedBlocks[0]?.rewardChi ?? 0} CHI</p>
               </div>
             </div>
 
@@ -532,7 +532,7 @@
                         {formatTimestamp(block.timestamp)}
                       </td>
                       <td class="py-2 px-3 text-right text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                        +{block.rewardChr} CHR
+                        +{block.rewardChi} CHI
                       </td>
                       <td class="py-2 px-3 text-right text-xs text-gray-500 dark:text-gray-400 font-mono">
                         {block.difficulty.toLocaleString()}

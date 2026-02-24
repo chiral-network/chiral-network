@@ -365,3 +365,374 @@ pub fn get_peers() -> Result<Vec<PeerInfo>, String> {
     let s = SCHEDULER.lock().map_err(|e| format!("lock error: {}", e))?;
     Ok(s.get_peers())
 }
+
+// =========================================================================
+// Tests
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_manifest(n: usize) -> ChunkManifest {
+        ChunkManifest {
+            chunks: (0..n)
+                .map(|i| ChunkMeta {
+                    index: i,
+                    size: 262144,
+                    checksum: Some(format!("hash-{}", i)),
+                })
+                .collect(),
+        }
+    }
+
+    fn make_scheduler(chunks: usize, peers: &[&str]) -> ChunkScheduler {
+        let mut s = ChunkScheduler::new(None);
+        s.init_scheduler(make_manifest(chunks));
+        for p in peers {
+            s.add_peer(p.to_string(), None);
+        }
+        s
+    }
+
+    // --- Initialization ---
+
+    #[test]
+    fn test_new_default_config() {
+        let s = ChunkScheduler::new(None);
+        assert_eq!(s.config.max_concurrent_per_peer, 3);
+        assert_eq!(s.config.chunk_timeout_ms, 30_000);
+        assert_eq!(s.config.max_retries, 3);
+        assert_eq!(s.config.peer_selection_strategy, "load-balanced");
+    }
+
+    #[test]
+    fn test_new_custom_config() {
+        let cfg = SchedulerConfig {
+            max_concurrent_per_peer: 5,
+            chunk_timeout_ms: 10_000,
+            max_retries: 1,
+            peer_selection_strategy: "fastest-first".to_string(),
+        };
+        let s = ChunkScheduler::new(Some(cfg));
+        assert_eq!(s.config.max_concurrent_per_peer, 5);
+        assert_eq!(s.config.max_retries, 1);
+    }
+
+    #[test]
+    fn test_init_scheduler_creates_chunk_states() {
+        let mut s = ChunkScheduler::new(None);
+        s.init_scheduler(make_manifest(5));
+        assert_eq!(s.chunk_states.len(), 5);
+        assert!(s.chunk_states.iter().all(|st| *st == ChunkState::UNREQUESTED));
+    }
+
+    #[test]
+    fn test_init_scheduler_resets_state() {
+        let mut s = make_scheduler(3, &["peer-1"]);
+        s.get_next_requests(1);
+        assert!(!s.active_requests.is_empty());
+
+        // Re-init should clear everything
+        s.init_scheduler(make_manifest(5));
+        assert!(s.active_requests.is_empty());
+        assert!(s.retry_count.is_empty());
+        assert_eq!(s.chunk_states.len(), 5);
+    }
+
+    // --- Peer management ---
+
+    #[test]
+    fn test_add_peer() {
+        let mut s = ChunkScheduler::new(None);
+        s.add_peer("peer-A".to_string(), None);
+        assert_eq!(s.peers.len(), 1);
+        let peer = s.peers.get("peer-A").unwrap();
+        assert!(peer.available);
+        assert_eq!(peer.pending_requests, 0);
+        assert_eq!(peer.max_concurrent, 3); // default
+    }
+
+    #[test]
+    fn test_add_peer_custom_max_concurrent() {
+        let mut s = ChunkScheduler::new(None);
+        s.add_peer("peer-A".to_string(), Some(10));
+        assert_eq!(s.peers.get("peer-A").unwrap().max_concurrent, 10);
+    }
+
+    #[test]
+    fn test_remove_peer_unrequests_active_chunks() {
+        let mut s = make_scheduler(5, &["peer-A"]);
+        s.get_next_requests(3);
+        assert_eq!(s.active_requests.len(), 3);
+
+        s.remove_peer("peer-A");
+        assert!(s.active_requests.is_empty());
+        assert!(s.peers.is_empty());
+        // Chunks should be back to UNREQUESTED
+        assert!(s.chunk_states[0..3].iter().all(|st| *st == ChunkState::UNREQUESTED));
+    }
+
+    #[test]
+    fn test_update_peer_health_available() {
+        let mut s = make_scheduler(3, &["peer-A"]);
+        s.update_peer_health("peer-A", false, None);
+        let p = s.peers.get("peer-A").unwrap();
+        assert!(!p.available);
+        assert_eq!(p.failure_count, 1);
+    }
+
+    #[test]
+    fn test_update_peer_health_response_time_ewma() {
+        let mut s = make_scheduler(3, &["peer-A"]);
+        // Initial avg_response_time is 1000
+        s.update_peer_health("peer-A", true, Some(200));
+        let p = s.peers.get("peer-A").unwrap();
+        // EWMA: 1000 * 0.8 + 200 * 0.2 = 840
+        assert_eq!(p.avg_response_time, 840);
+    }
+
+    // --- Chunk requests and scheduling ---
+
+    #[test]
+    fn test_get_next_requests_basic() {
+        let mut s = make_scheduler(5, &["peer-A"]);
+        let reqs = s.get_next_requests(3);
+        assert_eq!(reqs.len(), 3);
+        assert_eq!(reqs[0].chunk_index, 0);
+        assert_eq!(reqs[1].chunk_index, 1);
+        assert_eq!(reqs[2].chunk_index, 2);
+        assert!(reqs.iter().all(|r| r.peer_id == "peer-A"));
+    }
+
+    #[test]
+    fn test_get_next_requests_respects_max_concurrent() {
+        let mut s = ChunkScheduler::new(Some(SchedulerConfig {
+            max_concurrent_per_peer: 2,
+            chunk_timeout_ms: 30_000,
+            max_retries: 3,
+            peer_selection_strategy: "load-balanced".to_string(),
+        }));
+        s.init_scheduler(make_manifest(10));
+        s.add_peer("peer-A".to_string(), None);
+
+        let reqs = s.get_next_requests(10);
+        // Only 2 requests because max_concurrent_per_peer = 2
+        assert_eq!(reqs.len(), 2);
+    }
+
+    #[test]
+    fn test_get_next_requests_distributes_across_peers() {
+        let mut s = make_scheduler(6, &["peer-A", "peer-B"]);
+        let reqs = s.get_next_requests(6);
+        assert_eq!(reqs.len(), 6);
+
+        let a_count = reqs.iter().filter(|r| r.peer_id == "peer-A").count();
+        let b_count = reqs.iter().filter(|r| r.peer_id == "peer-B").count();
+        assert_eq!(a_count, 3);
+        assert_eq!(b_count, 3);
+    }
+
+    #[test]
+    fn test_get_next_requests_no_peers_returns_empty() {
+        let mut s = ChunkScheduler::new(None);
+        s.init_scheduler(make_manifest(5));
+        let reqs = s.get_next_requests(5);
+        assert!(reqs.is_empty());
+    }
+
+    #[test]
+    fn test_get_next_requests_skips_unavailable_peer() {
+        let mut s = make_scheduler(5, &["peer-A", "peer-B"]);
+        s.update_peer_health("peer-A", false, None);
+
+        let reqs = s.get_next_requests(5);
+        // Only peer-B should be used
+        assert!(reqs.iter().all(|r| r.peer_id == "peer-B"));
+        assert_eq!(reqs.len(), 3); // max_concurrent default = 3
+    }
+
+    #[test]
+    fn test_get_next_requests_skips_already_requested() {
+        let mut s = make_scheduler(5, &["peer-A"]);
+        let first = s.get_next_requests(2);
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].chunk_index, 0);
+        assert_eq!(first[1].chunk_index, 1);
+
+        // Next batch should start from chunk 2
+        let second = s.get_next_requests(2);
+        assert_eq!(second.len(), 1); // only 1 more because max_concurrent=3 and 2 pending
+        assert_eq!(second[0].chunk_index, 2);
+    }
+
+    // --- Chunk received / failed ---
+
+    #[test]
+    fn test_on_chunk_received() {
+        let mut s = make_scheduler(3, &["peer-A"]);
+        s.get_next_requests(1);
+
+        s.on_chunk_received(0);
+        assert_eq!(s.chunk_states[0], ChunkState::RECEIVED);
+        assert!(s.active_requests.is_empty());
+        assert_eq!(s.peers.get("peer-A").unwrap().pending_requests, 0);
+    }
+
+    #[test]
+    fn test_on_chunk_failed_marks_unrequested() {
+        let mut s = make_scheduler(3, &["peer-A"]);
+        s.get_next_requests(1);
+
+        s.on_chunk_failed(0, false);
+        assert_eq!(s.chunk_states[0], ChunkState::UNREQUESTED);
+        assert_eq!(*s.retry_count.get(&0).unwrap(), 1);
+        assert_eq!(s.peers.get("peer-A").unwrap().failure_count, 1);
+    }
+
+    #[test]
+    fn test_on_chunk_failed_marks_corrupted() {
+        let mut s = make_scheduler(3, &["peer-A"]);
+        s.get_next_requests(1);
+
+        s.on_chunk_failed(0, true);
+        assert_eq!(s.chunk_states[0], ChunkState::CORRUPTED);
+    }
+
+    #[test]
+    fn test_retry_limit_prevents_re_request() {
+        let mut s = ChunkScheduler::new(Some(SchedulerConfig {
+            max_concurrent_per_peer: 10,
+            chunk_timeout_ms: 30_000,
+            max_retries: 2,
+            peer_selection_strategy: "load-balanced".to_string(),
+        }));
+        s.init_scheduler(make_manifest(1));
+        s.add_peer("peer-A".to_string(), None);
+
+        // Request and fail max_retries times
+        for _ in 0..2 {
+            s.get_next_requests(1);
+            s.on_chunk_failed(0, false);
+        }
+
+        // Should not schedule again after max_retries
+        let reqs = s.get_next_requests(1);
+        assert!(reqs.is_empty());
+    }
+
+    // --- Completion ---
+
+    #[test]
+    fn test_is_complete() {
+        let mut s = make_scheduler(3, &["peer-A"]);
+        assert!(!s.is_complete());
+
+        s.get_next_requests(3);
+        s.on_chunk_received(0);
+        s.on_chunk_received(1);
+        s.on_chunk_received(2);
+        assert!(s.is_complete());
+    }
+
+    #[test]
+    fn test_is_complete_with_failures_false() {
+        let mut s = make_scheduler(3, &["peer-A"]);
+        s.get_next_requests(3);
+        s.on_chunk_received(0);
+        s.on_chunk_received(1);
+        s.on_chunk_failed(2, false);
+        assert!(!s.is_complete());
+    }
+
+    // --- Scheduler state reporting ---
+
+    #[test]
+    fn test_get_scheduler_state() {
+        let mut s = make_scheduler(5, &["peer-A", "peer-B"]);
+        s.get_next_requests(3);
+        s.on_chunk_received(0);
+
+        let state = s.get_scheduler_state();
+        assert_eq!(state["total_chunks"], 5);
+        assert_eq!(state["completed_chunks"], 1);
+        assert_eq!(state["active_request_count"], 2);
+        assert_eq!(state["total_peer_count"], 2);
+    }
+
+    #[test]
+    fn test_get_active_requests() {
+        let mut s = make_scheduler(5, &["peer-A"]);
+        s.get_next_requests(2);
+        let active = s.get_active_requests();
+        assert_eq!(active.len(), 2);
+    }
+
+    #[test]
+    fn test_get_peers() {
+        let s = make_scheduler(3, &["peer-A", "peer-B", "peer-C"]);
+        let peers = s.get_peers();
+        assert_eq!(peers.len(), 3);
+    }
+
+    // --- Multi-seeder scenarios ---
+
+    #[test]
+    fn test_three_seeders_round_robin() {
+        let mut s = make_scheduler(9, &["s1", "s2", "s3"]);
+        let reqs = s.get_next_requests(9);
+        assert_eq!(reqs.len(), 9);
+
+        let s1_count = reqs.iter().filter(|r| r.peer_id == "s1").count();
+        let s2_count = reqs.iter().filter(|r| r.peer_id == "s2").count();
+        let s3_count = reqs.iter().filter(|r| r.peer_id == "s3").count();
+        assert_eq!(s1_count, 3);
+        assert_eq!(s2_count, 3);
+        assert_eq!(s3_count, 3);
+    }
+
+    #[test]
+    fn test_seeder_failure_redistributes_chunks() {
+        let mut s = make_scheduler(6, &["fast", "slow"]);
+        let reqs = s.get_next_requests(6);
+        assert_eq!(reqs.len(), 6);
+
+        // "slow" seeder fails all its chunks
+        for r in &reqs {
+            if r.peer_id == "slow" {
+                s.on_chunk_failed(r.chunk_index, false);
+            } else {
+                s.on_chunk_received(r.chunk_index);
+            }
+        }
+
+        // Remove slow seeder
+        s.remove_peer("slow");
+
+        // Retry failed chunks — should go to "fast" only
+        let retries = s.get_next_requests(3);
+        assert!(retries.iter().all(|r| r.peer_id == "fast"));
+    }
+
+    #[test]
+    fn test_fastest_first_strategy() {
+        let mut s = ChunkScheduler::new(Some(SchedulerConfig {
+            max_concurrent_per_peer: 10,
+            chunk_timeout_ms: 30_000,
+            max_retries: 3,
+            peer_selection_strategy: "fastest-first".to_string(),
+        }));
+        s.init_scheduler(make_manifest(6));
+        s.add_peer("slow-peer".to_string(), None);
+        s.add_peer("fast-peer".to_string(), None);
+
+        // Make fast-peer actually fast
+        s.update_peer_health("fast-peer", true, Some(50));
+        // Make slow-peer slow
+        s.update_peer_health("slow-peer", true, Some(5000));
+
+        let reqs = s.get_next_requests(6);
+        // fast-peer should get first assignments
+        assert_eq!(reqs[0].peer_id, "fast-peer");
+    }
+}

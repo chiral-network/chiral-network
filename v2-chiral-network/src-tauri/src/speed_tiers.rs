@@ -31,12 +31,12 @@ impl SpeedTier {
         }
     }
 
-    /// Cost per MB in wei (1 CHR = 10^18 wei)
+    /// Cost per MB in wei (1 CHI = 10^18 wei)
     pub fn cost_per_mb_wei(&self) -> u128 {
         match self {
             SpeedTier::Free => 0,
-            SpeedTier::Standard => 1_000_000_000_000_000,   // 0.001 CHR = 10^15 wei
-            SpeedTier::Premium => 5_000_000_000_000_000,    // 0.005 CHR = 5*10^15 wei
+            SpeedTier::Standard => 1_000_000_000_000_000,   // 0.001 CHI = 10^15 wei
+            SpeedTier::Premium => 5_000_000_000_000_000,    // 0.005 CHI = 5*10^15 wei
         }
     }
 }
@@ -53,8 +53,8 @@ pub fn calculate_cost(tier: &SpeedTier, file_size_bytes: u64) -> u128 {
     (size * cost_per_mb + 999_999) / 1_000_000 // Round up to nearest wei
 }
 
-/// Format wei amount as CHR string for display
-pub fn format_wei_as_chr(wei: u128) -> String {
+/// Format wei amount as CHI string for display
+pub fn format_wei_as_chi(wei: u128) -> String {
     let whole = wei / 1_000_000_000_000_000_000;
     let frac = wei % 1_000_000_000_000_000_000;
     if frac == 0 {
@@ -189,10 +189,10 @@ mod tests {
         // Free tier: always 0
         assert_eq!(calculate_cost(&SpeedTier::Free, 10_000_000), 0);
 
-        // Standard: 10 MB * 0.001 CHR/MB = 0.01 CHR = 10^16 wei
+        // Standard: 10 MB * 0.001 CHI/MB = 0.01 CHI = 10^16 wei
         assert_eq!(calculate_cost(&SpeedTier::Standard, 10_000_000), 10_000_000_000_000_000);
 
-        // Premium: 10 MB * 0.005 CHR/MB = 0.05 CHR = 5*10^16 wei
+        // Premium: 10 MB * 0.005 CHI/MB = 0.05 CHI = 5*10^16 wei
         assert_eq!(calculate_cost(&SpeedTier::Premium, 10_000_000), 50_000_000_000_000_000);
 
         // Small file: 1 byte should still have non-zero cost for paid tiers (rounds up)
@@ -200,10 +200,72 @@ mod tests {
     }
 
     #[test]
-    fn test_format_wei_as_chr() {
-        assert_eq!(format_wei_as_chr(0), "0");
-        assert_eq!(format_wei_as_chr(1_000_000_000_000_000_000), "1");
-        assert_eq!(format_wei_as_chr(1_500_000_000_000_000_000), "1.5");
-        assert_eq!(format_wei_as_chr(10_000_000_000_000_000), "0.01");
+    fn test_format_wei_as_chi() {
+        assert_eq!(format_wei_as_chi(0), "0");
+        assert_eq!(format_wei_as_chi(1_000_000_000_000_000_000), "1");
+        assert_eq!(format_wei_as_chi(1_500_000_000_000_000_000), "1.5");
+        assert_eq!(format_wei_as_chi(10_000_000_000_000_000), "0.01");
+    }
+
+    #[test]
+    fn test_format_wei_as_chi_large_amount() {
+        // 1000 CHI
+        assert_eq!(format_wei_as_chi(1_000_000_000_000_000_000_000), "1000");
+    }
+
+    #[test]
+    fn test_format_wei_as_chi_one_wei() {
+        // 1 wei = smallest unit
+        let result = format_wei_as_chi(1);
+        assert!(result.starts_with("0."));
+        assert!(result.len() > 2);
+    }
+
+    #[test]
+    fn test_chunk_request_delay_free_tier() {
+        // Free: 100 KB/s, 256 KB chunk → ~2.56 seconds
+        let delay = chunk_request_delay(262_144, &SpeedTier::Free);
+        assert!(delay.is_some());
+        let dur = delay.unwrap();
+        // 262144 bytes / 102400 bytes/s = 2.56 seconds = 2_560_000 microseconds
+        assert_eq!(dur.as_micros(), 2_560_000);
+    }
+
+    #[test]
+    fn test_chunk_request_delay_standard_tier() {
+        // Standard: 1 MB/s, 256 KB chunk → 0.25 seconds
+        let delay = chunk_request_delay(262_144, &SpeedTier::Standard);
+        assert!(delay.is_some());
+        let dur = delay.unwrap();
+        // 262144 / 1048576 = 0.25s = 250000 microseconds
+        assert_eq!(dur.as_micros(), 250_000);
+    }
+
+    #[test]
+    fn test_chunk_request_delay_premium_unlimited() {
+        let delay = chunk_request_delay(262_144, &SpeedTier::Premium);
+        assert!(delay.is_none());
+    }
+
+    #[test]
+    fn test_cost_calculation_rounds_up() {
+        // 1 byte at Standard: should round up, not be zero
+        // (1 * 10^15 + 999999) / 10^6 = 1_000_000_000 wei
+        let cost = calculate_cost(&SpeedTier::Standard, 1);
+        assert!(cost > 0);
+        assert_eq!(cost, 1_000_000_000);
+    }
+
+    #[test]
+    fn test_cost_calculation_zero_bytes() {
+        assert_eq!(calculate_cost(&SpeedTier::Standard, 0), 0);
+        assert_eq!(calculate_cost(&SpeedTier::Premium, 0), 0);
+    }
+
+    #[test]
+    fn test_tier_from_str_case_insensitive() {
+        assert_eq!(SpeedTier::from_str("FREE").unwrap(), SpeedTier::Free);
+        assert_eq!(SpeedTier::from_str("Standard").unwrap(), SpeedTier::Standard);
+        assert_eq!(SpeedTier::from_str("PREMIUM").unwrap(), SpeedTier::Premium);
     }
 }

@@ -426,6 +426,19 @@ export class DhtService {
     }
   }
 
+  async pingPeer(peerAddress: string): Promise<number> {
+    if (!this.peerId) {
+      throw new Error("DHT service not initialized");
+    }
+    try {
+      const rttMs = await invoke<number>("ping_peer", { peerAddress });
+      return rttMs;
+    } catch (error) {
+      console.error("Ping failed:", error);
+      throw error;
+    }
+  }
+
   async searchFileMetadata(
     fileHash: string,
     timeoutMs = 10_000
