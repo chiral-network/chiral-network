@@ -991,6 +991,8 @@ async fn event_loop(
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    // Peers that failed to connect — don't re-add them to Kademlia routing table
+    let mut failed_peers: std::collections::HashSet<libp2p::PeerId> = std::collections::HashSet::new();
     // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
     // to prevent Kademlia from racing the relay client for the bootstrap connection.
     // A timer fallback ensures bootstrap happens even if relay reservation never completes.
@@ -1034,7 +1036,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &mut pending_put_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &mut pending_put_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         // Check if this is a relay circuit address
@@ -1060,6 +1062,9 @@ async fn event_loop(
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
+
+                        // Peer is reachable again — allow future re-addition to routing table
+                        failed_peers.remove(&peer_id);
 
                         // Send any file requests that were waiting for this connection
                         if let Some(pending) = pending_file_requests.remove(&peer_id) {
@@ -1128,8 +1133,9 @@ async fn event_loop(
                             println!("Failed to connect to {:?}: {:?}", peer, error);
 
                             // Evict unreachable peer from Kademlia routing table
-                            // so future DHT queries don't waste time trying to reach it
+                            // and remember it so we don't re-add it from identify/mDNS
                             swarm.behaviour_mut().kad.remove_peer(&peer);
+                            failed_peers.insert(peer);
 
                             // Also remove from local peer list
                             {
@@ -1382,6 +1388,7 @@ async fn handle_behaviour_event(
     active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
     download_credentials: &DownloadCredentialsMap,
+    failed_peers: &std::collections::HashSet<libp2p::PeerId>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -1394,10 +1401,16 @@ async fn handle_behaviour_event(
             for (peer_id, multiaddr) in list {
                 let peer_id_str = peer_id.to_string();
                 println!("Discovered peer: {}", peer_id_str);
-                
+
+                // Skip peers that previously failed to connect
+                if failed_peers.contains(&peer_id) {
+                    println!("Skipping failed peer rediscovered via mDNS: {}", peer_id_str);
+                    continue;
+                }
+
                 // Add peer to Kademlia routing table
                 swarm.behaviour_mut().kad.add_address(&peer_id, multiaddr.clone());
-                
+
                 // Check if peer already exists
                 if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
                     existing.last_seen = now;
@@ -1516,9 +1529,11 @@ async fn handle_behaviour_event(
         }
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
             println!("Identified peer {}: protocol={}, addrs={:?}", peer_id, info.protocol_version, info.listen_addrs);
-            // Add all listen addresses to Kademlia so peers can discover each other
-            for addr in &info.listen_addrs {
-                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+            // Don't re-add peers that previously failed to connect
+            if !failed_peers.contains(&peer_id) {
+                for addr in &info.listen_addrs {
+                    swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                }
             }
         }
         DhtBehaviourEvent::Identify(_) => {}
