@@ -39,7 +39,7 @@ export async function getChainId(): Promise<number> {
 export interface TransactionRequest {
   from: string;
   to: string;
-  value: string; // Amount in ETH/CHR as string
+  value: string; // Amount in ETH/CHI as string
   gasLimit: number;
   gasPrice: number; // in Wei
   nonce?: number;

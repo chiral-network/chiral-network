@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { walletAccount, isAuthenticated, networkConnected } from '$lib/stores';
+  import { walletAccount, isAuthenticated, networkConnected, blacklist, type BlacklistEntry } from '$lib/stores';
+  import { get } from 'svelte/store';
+  import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { toasts } from '$lib/toastStore';
   import { walletService } from '$lib/services/walletService';
   import { dhtService } from '$lib/dhtService';
@@ -24,7 +26,10 @@
     Download,
     ChevronDown,
     ChevronUp,
-    File as FileIcon
+    File as FileIcon,
+    UserPlus,
+    X,
+    Trash2
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Account');
@@ -51,6 +56,77 @@
     balanceAfter?: string;
   }
 
+  interface SavedRecipient {
+    id: string;
+    label: string;
+    address: string;
+    lastUsed: number;
+  }
+
+  // Saved recipients state
+  const SAVED_RECIPIENTS_KEY = 'chiral_saved_recipients';
+  let savedRecipients = $state<SavedRecipient[]>([]);
+  let showAddRecipient = $state(false);
+  let newRecipientLabel = $state('');
+
+  function loadSavedRecipients() {
+    try {
+      const stored = localStorage.getItem(SAVED_RECIPIENTS_KEY);
+      if (stored) {
+        savedRecipients = JSON.parse(stored);
+      }
+    } catch (e) {
+      log.error('Failed to load saved recipients:', e);
+    }
+  }
+
+  function saveSavedRecipients() {
+    try {
+      localStorage.setItem(SAVED_RECIPIENTS_KEY, JSON.stringify(savedRecipients));
+    } catch (e) {
+      log.error('Failed to save recipients:', e);
+    }
+  }
+
+  function addRecipient() {
+    if (!newRecipientLabel.trim() || !recipientAddress) return;
+    if (!recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
+      toasts.show('Enter a valid 0x address before saving', 'error');
+      return;
+    }
+    // Don't add duplicates
+    if (savedRecipients.some(r => r.address.toLowerCase() === recipientAddress.toLowerCase())) {
+      toasts.show('This address is already saved', 'info');
+      showAddRecipient = false;
+      newRecipientLabel = '';
+      return;
+    }
+    savedRecipients = [...savedRecipients, {
+      id: `r-${Date.now()}`,
+      label: newRecipientLabel.trim(),
+      address: recipientAddress,
+      lastUsed: Date.now(),
+    }];
+    saveSavedRecipients();
+    showAddRecipient = false;
+    newRecipientLabel = '';
+    toasts.show('Recipient saved', 'success');
+  }
+
+  function deleteRecipient(id: string) {
+    savedRecipients = savedRecipients.filter(r => r.id !== id);
+    saveSavedRecipients();
+  }
+
+  function selectRecipient(r: SavedRecipient) {
+    recipientAddress = r.address;
+  }
+
+  function getRecipientLabel(address: string): string | null {
+    const r = savedRecipients.find(r => r.address.toLowerCase() === address.toLowerCase());
+    return r ? r.label : null;
+  }
+
   // Geth connection state
   let gethConnected = $state(false);
   let gethCheckInterval: ReturnType<typeof setInterval> | null = null;
@@ -59,7 +135,6 @@
   let privateKeyVisible = $state(false);
   let copied = $state<'address' | 'privateKey' | null>(null);
   let showLogoutModal = $state(false);
-  let showSendModal = $state(false);
   let balance = $state<string>('--');
   let isLoadingBalance = $state(false);
 
@@ -68,6 +143,7 @@
   let sendAmount = $state('');
   let isSending = $state(false);
   let showConfirmSend = $state(false);
+  let blacklistWarningMatch = $state<BlacklistEntry | null>(null);
 
   // Transaction history state
   let transactions = $state<Transaction[]>([]);
@@ -121,6 +197,7 @@
   onMount(() => {
     checkGethStatus();
     gethCheckInterval = setInterval(checkGethStatus, 5000);
+    loadSavedRecipients();
     if ($walletAccount?.address) {
       loadBalance();
       loadTransactionHistory();
@@ -175,7 +252,7 @@
     }
   }
 
-  // Send CHR
+  // Send CHI
   async function handleSend() {
     if (!$walletAccount || !recipientAddress || !sendAmount) return;
 
@@ -192,6 +269,16 @@
 
     if (!recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
       toasts.show('Invalid recipient address', 'error');
+      return;
+    }
+
+    // Check blacklist
+    const bl = get(blacklist);
+    const match = bl.find(e => e.address.trim().toLowerCase() === recipientAddress.trim().toLowerCase()
+      || recipientAddress.trim().toLowerCase().includes(e.address.trim().toLowerCase())
+      || e.address.trim().toLowerCase().includes(recipientAddress.trim().toLowerCase()));
+    if (match) {
+      blacklistWarningMatch = match;
       return;
     }
 
@@ -218,8 +305,8 @@
         await invoke('record_transaction_meta', {
           txHash: result.hash,
           txType: 'send',
-          description: `💸 Sent ${sendAmount} CHR to ${recipientAddress.slice(0, 10)}...`,
-          recipientLabel: null,
+          description: `💸 Sent ${sendAmount} CHI to ${recipientAddress.slice(0, 10)}...`,
+          recipientLabel: getRecipientLabel(recipientAddress),
           balanceBefore: result.balanceBefore,
           balanceAfter: result.balanceAfter,
         });
@@ -227,11 +314,18 @@
         log.warn('Failed to record tx metadata:', e);
       }
 
+      // Update lastUsed for saved recipient
+      const idx = savedRecipients.findIndex(r => r.address.toLowerCase() === recipientAddress.toLowerCase());
+      if (idx !== -1) {
+        savedRecipients[idx] = { ...savedRecipients[idx], lastUsed: Date.now() };
+        savedRecipients = [...savedRecipients];
+        saveSavedRecipients();
+      }
+
       // Reset form
       recipientAddress = '';
       sendAmount = '';
       showConfirmSend = false;
-      showSendModal = false;
 
       // Wait for transaction to be mined, then refresh
       pollForConfirmation(result.hash);
@@ -345,9 +439,10 @@
   </div>
 
   {#if $walletAccount}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <!-- Wallet Overview Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-      <div class="bg-gradient-to-r from-blue-600 to-blue-700 p-6 text-white">
+      <div class="bg-gradient-to-r from-primary-600 to-primary-700 p-6 text-white">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="p-3 bg-white/20 rounded-full">
@@ -355,7 +450,7 @@
             </div>
             <div>
               <h2 class="text-xl font-semibold">Chiral Wallet</h2>
-              <p class="text-blue-100 text-sm">Your decentralized identity</p>
+              <p class="text-primary-100 text-sm">Your decentralized identity</p>
             </div>
           </div>
           <span class="px-3 py-1 bg-white/20 rounded-full text-sm">
@@ -367,16 +462,16 @@
         <div class="bg-white/10 rounded-xl p-4 mt-4">
           <div class="flex items-center justify-between">
             <div>
-              <p class="text-blue-100 text-sm mb-1">Balance</p>
+              <p class="text-primary-100 text-sm mb-1">Balance</p>
               <div class="flex items-baseline gap-2">
                 {#if isLoadingBalance}
                   <RefreshCw class="w-6 h-6 animate-spin" />
                 {:else if balance === '--'}
-                  <span class="text-xl font-bold text-blue-200/60">--</span>
-                  <span class="text-blue-200/60 text-sm">Connecting to network...</span>
+                  <span class="text-xl font-bold text-primary-200/60">--</span>
+                  <span class="text-primary-200/60 text-sm">Connecting to network...</span>
                 {:else}
                   <span class="text-3xl font-bold">{formatBalance(balance)}</span>
-                  <span class="text-blue-100">CHR</span>
+                  <span class="text-primary-100">CHI</span>
                 {/if}
               </div>
             </div>
@@ -477,26 +572,201 @@
       </div>
     </div>
 
-    <!-- Send CHR Card -->
+    <!-- Send CHI Card -->
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
-          </div>
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
+          <Send class="w-6 h-6 text-primary-600 dark:text-primary-400" />
+        </div>
+        <div>
+          <h3 class="font-semibold dark:text-white">Send CHI</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHI to another address</p>
+        </div>
+      </div>
+
+      {#if !showConfirmSend}
+        <div class="space-y-4">
+          <!-- Recipient Address -->
           <div>
-            <h3 class="font-semibold dark:text-white">Send CHR</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHR to another address</p>
+            <div class="flex items-center justify-between mb-1">
+              <label for="recipient" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Recipient Address
+              </label>
+              {#if !showAddRecipient}
+                <button
+                  onclick={() => {
+                    if (!recipientAddress || !recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
+                      toasts.show('Enter a valid address first', 'error');
+                      return;
+                    }
+                    showAddRecipient = true;
+                  }}
+                  class="flex items-center gap-1 text-xs text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300"
+                >
+                  <UserPlus class="w-3.5 h-3.5" />
+                  Save
+                </button>
+              {/if}
+            </div>
+            {#if showAddRecipient}
+              <div class="flex items-center gap-2 mb-2">
+                <input
+                  type="text"
+                  bind:value={newRecipientLabel}
+                  placeholder="Label (e.g. Alice)"
+                  class="flex-1 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
+                  onkeydown={(e) => { if (e.key === 'Enter') addRecipient(); }}
+                />
+                <button
+                  onclick={addRecipient}
+                  disabled={!newRecipientLabel.trim()}
+                  class="px-3 py-2 bg-primary-600 text-white text-sm rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  onclick={() => { showAddRecipient = false; newRecipientLabel = ''; }}
+                  class="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <X class="w-4 h-4" />
+                </button>
+              </div>
+            {/if}
+            <input
+              id="recipient"
+              type="text"
+              bind:value={recipientAddress}
+              placeholder="0x..."
+              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
+            />
+          </div>
+
+          <!-- Amount -->
+          <div>
+            <label for="amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Amount (CHI)
+            </label>
+            <div class="relative">
+              <input
+                id="amount"
+                type="text"
+                inputmode="decimal"
+                pattern="[0-9]*\.?[0-9]*"
+                bind:value={sendAmount}
+                placeholder="0.00"
+                class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
+              />
+              <button
+                onclick={() => sendAmount = balance}
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-primary-600 dark:text-primary-400 hover:text-primary-700 font-medium"
+              >
+                MAX
+              </button>
+            </div>
+          </div>
+
+          <button
+            onclick={handleSend}
+            disabled={!recipientAddress || !sendAmount}
+            class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send class="w-4 h-4" />
+            Send CHI
+          </button>
+
+          <!-- Saved Recipients List -->
+          {#if savedRecipients.length > 0}
+            <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+              <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Saved Recipients</span>
+              <div class="space-y-1 max-h-48 overflow-y-auto">
+                {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
+                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-primary-500' : ''}"
+                    role="button"
+                    tabindex="0"
+                    onclick={() => selectRecipient(r)}
+                    onkeydown={(e) => { if (e.key === 'Enter') selectRecipient(r); }}
+                  >
+                    <div class="w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center flex-shrink-0">
+                      <span class="text-sm font-semibold text-primary-600 dark:text-primary-400">{r.label.charAt(0).toUpperCase()}</span>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium dark:text-white truncate">{r.label}</p>
+                      <p class="text-xs font-mono text-gray-400 dark:text-gray-500 truncate">{r.address}</p>
+                    </div>
+                    <button
+                      onclick={(e) => { e.stopPropagation(); deleteRecipient(r.id); }}
+                      class="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                      title="Remove recipient"
+                    >
+                      <Trash2 class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </div>
+      {:else}
+        <!-- Confirmation -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-2">
+            <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
+            <span class="font-semibold dark:text-white">Confirm Transaction</span>
+          </div>
+
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-3">
+            <div class="flex justify-between">
+              <span class="text-sm text-gray-500 dark:text-gray-400">From</span>
+              <span class="text-sm font-mono dark:text-gray-300">{formatAddress($walletAccount?.address || '')}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-sm text-gray-500 dark:text-gray-400">To</span>
+              <span class="text-sm dark:text-gray-300">
+                {#if getRecipientLabel(recipientAddress)}
+                  <span class="font-medium">{getRecipientLabel(recipientAddress)}</span>
+                  <span class="font-mono text-gray-400 dark:text-gray-500 ml-1">({formatAddress(recipientAddress)})</span>
+                {:else}
+                  <span class="font-mono">{formatAddress(recipientAddress)}</span>
+                {/if}
+              </span>
+            </div>
+            <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
+              <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
+              <span class="text-lg font-bold text-primary-600 dark:text-primary-400">{sendAmount} CHI</span>
+            </div>
+          </div>
+
+          <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+            <p class="text-sm text-yellow-800 dark:text-yellow-300">
+              <strong>Warning:</strong> This transaction cannot be reversed.
+            </p>
+          </div>
+
+          <div class="flex gap-3">
+            <button
+              onclick={() => showConfirmSend = false}
+              disabled={isSending}
+              class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 dark:text-gray-300"
+            >
+              Back
+            </button>
+            <button
+              onclick={confirmSend}
+              disabled={isSending}
+              class="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {#if isSending}
+                <Loader2 class="w-4 h-4 animate-spin" />
+                Sending...
+              {:else}
+                <Check class="w-4 h-4" />
+                Confirm Send
+              {/if}
+            </button>
           </div>
         </div>
-        <button
-          onclick={() => showSendModal = true}
-          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-        >
-          <Send class="w-4 h-4" />
-          Send
-        </button>
-      </div>
+      {/if}
+    </div>
     </div>
 
     <!-- Transaction History Card -->
@@ -556,7 +826,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-medium {style.iconColor}">
-                      {isIncoming(tx) ? '+' : '-'}{tx.value} CHR
+                      {isIncoming(tx) ? '+' : '-'}{tx.value} CHI
                     </span>
                     <span class="text-xs px-2 py-0.5 rounded-full {
                       tx.txType === 'speed_tier_payment'
@@ -624,11 +894,11 @@
                     {#if tx.balanceBefore && tx.balanceAfter}
                       <div>
                         <span class="text-gray-400">Balance Before</span>
-                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceBefore} CHR</p>
+                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceBefore} CHI</p>
                       </div>
                       <div>
                         <span class="text-gray-400">Balance After</span>
-                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceAfter} CHR</p>
+                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceAfter} CHI</p>
                       </div>
                     {/if}
                     {#if tx.fileHash}
@@ -669,6 +939,16 @@
 </div>
 
 <!-- Logout Modal -->
+{#if blacklistWarningMatch}
+  <BlacklistWarningModal
+    address={blacklistWarningMatch.address}
+    reason={blacklistWarningMatch.reason}
+    action={`send ${sendAmount} CHI`}
+    onconfirm={() => { blacklistWarningMatch = null; showConfirmSend = true; }}
+    oncancel={() => { blacklistWarningMatch = null; }}
+  />
+{/if}
+
 {#if showLogoutModal}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showLogoutModal = false} onkeydown={(e) => e.key === 'Escape' && (showLogoutModal = false)}>
@@ -704,136 +984,3 @@
   </div>
 {/if}
 
-<!-- Send CHR Modal -->
-{#if showSendModal}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => { showSendModal = false; showConfirmSend = false; }} onkeydown={(e) => e.key === 'Escape' && (showSendModal = false)}>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md w-full mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-      {#if !showConfirmSend}
-        <!-- Send Form -->
-        <div class="flex items-center gap-3 mb-6">
-          <div class="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <Send class="w-6 h-6 text-blue-600 dark:text-blue-400" />
-          </div>
-          <h3 class="text-lg font-semibold dark:text-white">Send CHR</h3>
-        </div>
-
-        <div class="space-y-4">
-          <!-- Available Balance -->
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-            <p class="text-sm text-gray-500 dark:text-gray-400">Available Balance</p>
-            <p class="text-xl font-bold dark:text-white">{formatBalance(balance)} CHR</p>
-          </div>
-
-          <!-- Recipient Address -->
-          <div>
-            <label for="recipient" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Recipient Address
-            </label>
-            <input
-              id="recipient"
-              type="text"
-              bind:value={recipientAddress}
-              placeholder="0x..."
-              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
-            />
-          </div>
-
-          <!-- Amount -->
-          <div>
-            <label for="amount" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Amount (CHR)
-            </label>
-            <div class="relative">
-              <input
-                id="amount"
-                type="text"
-                inputmode="decimal"
-                pattern="[0-9]*\.?[0-9]*"
-                bind:value={sendAmount}
-                placeholder="0.00"
-                class="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-200"
-              />
-              <button
-                onclick={() => sendAmount = balance}
-                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 font-medium"
-              >
-                MAX
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="flex gap-3 mt-6">
-          <button
-            onclick={() => showSendModal = false}
-            class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
-          >
-            Cancel
-          </button>
-          <button
-            onclick={handleSend}
-            disabled={!recipientAddress || !sendAmount}
-            class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send class="w-4 h-4" />
-            Continue
-          </button>
-        </div>
-      {:else}
-        <!-- Confirmation Screen -->
-        <div class="flex items-center gap-3 mb-6">
-          <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
-            <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
-          </div>
-          <h3 class="text-lg font-semibold dark:text-white">Confirm Transaction</h3>
-        </div>
-
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-3 mb-6">
-          <div class="flex justify-between">
-            <span class="text-sm text-gray-500 dark:text-gray-400">From</span>
-            <span class="text-sm font-mono dark:text-gray-300">{formatAddress($walletAccount?.address || '')}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-sm text-gray-500 dark:text-gray-400">To</span>
-            <span class="text-sm font-mono dark:text-gray-300">{formatAddress(recipientAddress)}</span>
-          </div>
-          <div class="flex justify-between border-t border-gray-200 dark:border-gray-600 pt-3">
-            <span class="text-sm text-gray-500 dark:text-gray-400">Amount</span>
-            <span class="text-lg font-bold text-blue-600 dark:text-blue-400">{sendAmount} CHR</span>
-          </div>
-        </div>
-
-        <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 mb-6">
-          <p class="text-sm text-yellow-800 dark:text-yellow-300">
-            <strong>Warning:</strong> This transaction cannot be reversed. Please verify the recipient address and amount before confirming.
-          </p>
-        </div>
-
-        <div class="flex gap-3">
-          <button
-            onclick={() => showConfirmSend = false}
-            disabled={isSending}
-            class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 dark:text-gray-300"
-          >
-            Back
-          </button>
-          <button
-            onclick={confirmSend}
-            disabled={isSending}
-            class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {#if isSending}
-              <Loader2 class="w-4 h-4 animate-spin" />
-              Sending...
-            {:else}
-              <Check class="w-4 h-4" />
-              Confirm Send
-            {/if}
-          </button>
-        </div>
-      {/if}
-    </div>
-  </div>
-{/if}

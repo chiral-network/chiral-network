@@ -289,6 +289,8 @@ pub const RAW_CODEC: u64 = 0x55;
 
 #[derive(NetworkBehaviour)]
 struct DhtBehaviour {
+    relay_client: libp2p::relay::client::Behaviour,
+    dcutr: libp2p::dcutr::Behaviour,
     kademlia: Kademlia<MemoryStore>,
     identify: identify::Behaviour,
     mdns: toggle::Toggle<Mdns>,
@@ -469,6 +471,19 @@ pub enum DhtEvent {
     PaymentNotificationReceived {
         from_peer: String,
         payload: serde_json::Value,
+    },
+    RelayReservation {
+        relay_peer_id: String,
+        renewal: bool,
+    },
+    RelayCircuitEstablished {
+        peer_id: String,
+        direction: String,
+    },
+    DcutrEvent {
+        remote_peer_id: String,
+        success: bool,
+        error: Option<String>,
     },
 }
 
@@ -2630,6 +2645,51 @@ async fn run_dht_node(
                                     SwarmEvent::Behaviour(DhtBehaviourEvent::Upnp(upnp_event)) => {
                                         handle_upnp_event(upnp_event, &mut swarm, &event_tx).await;
                                     }
+                                    SwarmEvent::Behaviour(DhtBehaviourEvent::RelayClient(event)) => {
+                                        match event {
+                                            libp2p::relay::client::Event::ReservationReqAccepted { relay_peer_id, renewal, .. } => {
+                                                info!("Relay reservation accepted by {} (renewal: {})", relay_peer_id, renewal);
+                                                let _ = event_tx.send(DhtEvent::RelayReservation {
+                                                    relay_peer_id: relay_peer_id.to_string(),
+                                                    renewal,
+                                                }).await;
+                                            }
+                                            libp2p::relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                                                info!("Outbound relay circuit established via {}", relay_peer_id);
+                                                let _ = event_tx.send(DhtEvent::RelayCircuitEstablished {
+                                                    peer_id: relay_peer_id.to_string(),
+                                                    direction: "outbound".to_string(),
+                                                }).await;
+                                            }
+                                            libp2p::relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+                                                info!("Inbound relay circuit established from {}", src_peer_id);
+                                                let _ = event_tx.send(DhtEvent::RelayCircuitEstablished {
+                                                    peer_id: src_peer_id.to_string(),
+                                                    direction: "inbound".to_string(),
+                                                }).await;
+                                            }
+                                        }
+                                    }
+                                    SwarmEvent::Behaviour(DhtBehaviourEvent::Dcutr(event)) => {
+                                        match &event.result {
+                                            Ok(connection_id) => {
+                                                info!("DCUtR hole-punch succeeded with {} (conn: {:?})", event.remote_peer_id, connection_id);
+                                                let _ = event_tx.send(DhtEvent::DcutrEvent {
+                                                    remote_peer_id: event.remote_peer_id.to_string(),
+                                                    success: true,
+                                                    error: None,
+                                                }).await;
+                                            }
+                                            Err(e) => {
+                                                warn!("DCUtR hole-punch failed with {}: {:?}", event.remote_peer_id, e);
+                                                let _ = event_tx.send(DhtEvent::DcutrEvent {
+                                                    remote_peer_id: event.remote_peer_id.to_string(),
+                                                    success: false,
+                                                    error: Some(format!("{:?}", e)),
+                                                }).await;
+                                            }
+                                        }
+                                    }
                                     SwarmEvent::ExternalAddrConfirmed { address, .. } if !is_bootstrap => {
                                         handle_external_addr_confirmed(&mut swarm, &address, &metrics, &event_tx, &proxy_mgr, &pending_provider_registrations, pure_client_mode, force_server_mode)
                                             .await;
@@ -2698,25 +2758,19 @@ async fn run_dht_node(
                                             .await;
                                     }
                                     SwarmEvent::NewListenAddr { address, .. } => {
-                                        // Attempt to find an IPv4 protocol within the Multiaddr
-                                        if let Some(Protocol::Ip4(v4)) = address.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
+                                        let is_reachable = if cfg!(test) {
+                                            true
+                                        } else {
+                                            ma_plausibly_reachable(&address)
+                                        };
 
-                                            // Determine reachability: allow all in tests, otherwise reject loopback/private
-                                            let is_reachable = if cfg!(test) {
-                                                true
-                                            } else {
-                                                !v4.is_loopback() && !v4.is_private()
-                                            };
-
-                                            if is_reachable {
-                                                // Record in metrics for monitoring
-                                                if let Ok(mut m) = metrics.try_lock() {
-                                                    m.record_listen_addr(&address);
-                                                }
-
-                                                swarm.add_external_address(address.clone());
-                                                info!("✅ Advertising reachable address: {}", address);
+                                        if is_reachable {
+                                            if let Ok(mut m) = metrics.try_lock() {
+                                                m.record_listen_addr(&address);
                                             }
+
+                                            swarm.add_external_address(address.clone());
+                                            info!("✅ Advertising reachable address: {}", address);
                                         }
                                     }
                                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
@@ -4002,7 +4056,7 @@ async fn handle_identify_event(
                     if let Some(fallback) = info
                         .listen_addrs
                         .iter()
-                        .find(|addr| ma_non_loopback_ipv4(addr))
+                        .find(|addr| ma_non_loopback(addr))
                         .cloned()
                     {
                         debug!(
@@ -4849,7 +4903,7 @@ impl DhtService {
             autonat_targets.extend(bootstrap_set.iter().cloned());
         }
 
-        // Create the swarm
+        // Create the swarm with relay client for NAT traversal
         let mut swarm = SwarmBuilder::with_existing_identity(local_key)
             .with_tokio()
             .with_tcp(
@@ -4857,14 +4911,20 @@ impl DhtService {
                 noise::Config::new,
                 yamux::Config::default,
             )?
+            .with_relay_client(
+                noise::Config::new,
+                yamux::Config::default,
+            )?
             // .with_quic() seems to destablize peer connect/download, disabled for now until solution
-            .with_behaviour(move |_| {
+            .with_behaviour(move |_key, relay_client| {
                 // Configure ping with more aggressive keep-alive to prevent connection drops
                 let ping_config = ping::Config::new()
                     .with_interval(Duration::from_secs(15)) // Ping every 15 seconds (default is 15s)
                     .with_timeout(Duration::from_secs(20)); // Timeout after 20 seconds (default is 20s)
 
                 DhtBehaviour {
+                    relay_client,
+                    dcutr: libp2p::dcutr::Behaviour::new(local_peer_id),
                     kademlia,
                     identify,
                     mdns: mdns_toggle,
@@ -4883,9 +4943,11 @@ impl DhtService {
             )
             .build();
 
-        // Always listen on the specified port
+        // Listen on IPv4 and IPv6
         let tcp_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", port).parse()?;
         swarm.listen_on(tcp_addr)?;
+        let tcp6_addr: Multiaddr = format!("/ip6/::/tcp/{}", port).parse()?;
+        swarm.listen_on(tcp6_addr)?;
 
         // QUIC also bound to the same port (udp), seems to destablize peer connect/download, disabled for now until solution
         // let quic_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", port).parse()?;
@@ -4969,6 +5031,14 @@ impl DhtService {
                                 .behaviour_mut()
                                 .kademlia
                                 .add_address(&peer_id, addr.clone());
+                        }
+
+                        // Listen on relay circuit through this bootstrap node
+                        // This allows NATted peers to be reached via the relay
+                        let relay_addr = addr.clone().with(Protocol::P2pCircuit);
+                        match swarm.listen_on(relay_addr.clone()) {
+                            Ok(_) => info!("Listening on relay: {}", relay_addr),
+                            Err(e) => warn!("Failed to listen on relay {}: {:?}", relay_addr, e),
                         }
                     }
                     Err(e) => warn!("❌ Failed to dial bootstrap {}: {}", bootstrap_addr, e),
@@ -6790,27 +6860,39 @@ fn ipv4_in_same_subnet(target: Ipv4Addr, iface_ip: Ipv4Addr, iface_mask: Ipv4Add
 }
 
 /// If multiaddr can be plausibly reached from this machine
-/// - IPv4 loopback (127.0.0.1) is REJECTED (not reachable from remote peers)
-/// - For WAN intent, only public IPv4 addresses are allowed (not private ranges)
+/// - IPv4 loopback (127.0.0.1) and IPv6 loopback (::1) are REJECTED
+/// - For WAN intent, only public IPv4/IPv6 addresses are allowed (not private/link-local)
 fn ma_plausibly_reachable(ma: &Multiaddr) -> bool {
-    // Only consider IPv4 (IPv6 can be added if needed)
-    if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        // Reject loopback addresses - they're not reachable from remote peers
-        if v4.is_loopback() {
-            return false;
+    for proto in ma.iter() {
+        match proto {
+            Protocol::Ip4(v4) => {
+                if v4.is_loopback() { return false; }
+                return !v4.is_private();
+            }
+            Protocol::Ip6(v6) => {
+                if v6.is_loopback() { return false; }
+                // Reject link-local (fe80::) and unique-local (fc00::/7)
+                let segs = v6.segments();
+                if (segs[0] & 0xffc0) == 0xfe80 { return false; }
+                if (segs[0] & 0xfe00) == 0xfc00 { return false; }
+                return true;
+            }
+            _ => {}
         }
-        // Allow public addresses, reject private
-        return !v4.is_private();
     }
     false
 }
 
-/// A softer check that accepts any non-loopback IPv4 address (used as a fallback
+/// A softer check that accepts any non-loopback IPv4/IPv6 address (used as a fallback
 /// to avoid publishing with an empty address set). This will allow private LAN
 /// addresses but still reject loopback.
-fn ma_non_loopback_ipv4(ma: &Multiaddr) -> bool {
-    if let Some(Protocol::Ip4(v4)) = ma.iter().find(|p| matches!(p, Protocol::Ip4(_))) {
-        return !v4.is_loopback();
+fn ma_non_loopback(ma: &Multiaddr) -> bool {
+    for proto in ma.iter() {
+        match proto {
+            Protocol::Ip4(v4) => return !v4.is_loopback(),
+            Protocol::Ip6(v6) => return !v6.is_loopback(),
+            _ => {}
+        }
     }
     false
 }

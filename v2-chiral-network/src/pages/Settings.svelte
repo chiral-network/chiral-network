@@ -1,14 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { settings, isDarkMode, type ThemeMode, type NotificationSettings } from '$lib/stores';
+  import { settings, isDarkMode, type ThemeMode, type NotificationSettings, type ColorTheme, type NavStyle } from '$lib/stores';
+  import { availableThemes } from '$lib/services/colorThemeService';
   import { toasts } from '$lib/toastStore';
   import {
     Sun,
     Moon,
     Monitor,
     Palette,
-    Zap,
     LayoutGrid,
+    PanelTop,
+    PanelLeft,
     RotateCcw,
     Check,
     FolderOpen,
@@ -79,13 +81,22 @@
     toasts.show(`Theme set to ${theme}`, 'success');
   }
 
-  function toggleReducedMotion() {
-    settings.update((s) => ({ ...s, reducedMotion: !s.reducedMotion }));
+  function setColorTheme(color: ColorTheme) {
+    settings.update((s) => ({ ...s, colorTheme: color }));
   }
 
   function toggleCompactMode() {
     settings.update((s) => ({ ...s, compactMode: !s.compactMode }));
   }
+
+  function setNavStyle(style: NavStyle) {
+    settings.update((s) => ({ ...s, navStyle: style }));
+  }
+
+  const navStyleOptions: { value: NavStyle; label: string; icon: typeof PanelTop }[] = [
+    { value: 'navbar', label: 'Top Bar', icon: PanelTop },
+    { value: 'sidebar', label: 'Sidebar', icon: PanelLeft }
+  ];
 
   function toggleNotification(key: keyof NotificationSettings) {
     settings.update((s) => ({
@@ -103,7 +114,7 @@
     { key: 'peerConnected', label: 'Peer Connected', description: 'When a new peer connects to you' },
     { key: 'peerDisconnected', label: 'Peer Disconnected', description: 'When a peer disconnects from you' },
     { key: 'miningBlock', label: 'Mining Block Found', description: 'When you mine a new block' },
-    { key: 'paymentReceived', label: 'Payment Received', description: 'When you receive a CHR payment for a file' },
+    { key: 'paymentReceived', label: 'Payment Received', description: 'When you receive a CHI payment for a file' },
     { key: 'networkStatus', label: 'Network Status', description: 'Connection and disconnection events' },
     { key: 'fileShared', label: 'File Shared', description: 'When someone starts downloading your shared file' }
   ];
@@ -145,16 +156,16 @@
             onclick={() => setTheme(option.value)}
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.theme === option.value
-                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30'
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
                 : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
           >
             {#if $settings.theme === option.value}
               <div class="absolute top-2 right-2">
-                <Check class="w-4 h-4 text-blue-500" />
+                <Check class="w-4 h-4 text-primary-500" />
               </div>
             {/if}
-            <Icon class="w-6 h-6 {$settings.theme === option.value ? 'text-blue-500' : 'text-gray-500 dark:text-gray-400'}" />
-            <span class="text-sm font-medium {$settings.theme === option.value ? 'text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'}">
+            <Icon class="w-6 h-6 {$settings.theme === option.value ? 'text-primary-500' : 'text-gray-500 dark:text-gray-400'}" />
+            <span class="text-sm font-medium {$settings.theme === option.value ? 'text-primary-700 dark:text-primary-300' : 'text-gray-700 dark:text-gray-300'}">
               {option.label}
             </span>
           </button>
@@ -169,28 +180,27 @@
       </p>
     </div>
 
-    <!-- Reduced Motion -->
-    <div class="flex items-center justify-between py-4 border-t border-gray-200 dark:border-gray-700">
-      <div class="flex items-center gap-3">
-        <Zap class="w-5 h-5 text-gray-500 dark:text-gray-400" />
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">Reduced Motion</p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Minimize animations throughout the app</p>
-        </div>
+    <!-- Accent Color -->
+    <div class="mb-6">
+      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Accent Color</span>
+      <div class="flex gap-3">
+        {#each availableThemes as ct}
+          <button
+            onclick={() => setColorTheme(ct.value)}
+            class="relative w-10 h-10 rounded-full transition-all
+              {$settings.colorTheme === ct.value
+                ? 'scale-110 ring-2 ring-offset-2 ring-gray-400 dark:ring-gray-500 dark:ring-offset-gray-800'
+                : 'hover:scale-105'}"
+            style="background-color: {ct.previewHex}"
+            title={ct.label}
+            aria-label="Set accent color to {ct.label}"
+          >
+            {#if $settings.colorTheme === ct.value}
+              <Check class="w-5 h-5 text-white absolute inset-0 m-auto drop-shadow" />
+            {/if}
+          </button>
+        {/each}
       </div>
-      <button
-        onclick={toggleReducedMotion}
-        class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.reducedMotion ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}"
-        role="switch"
-        aria-checked={$settings.reducedMotion}
-        aria-label="Toggle reduced motion"
-      >
-        <span
-          class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-            {$settings.reducedMotion ? 'translate-x-6' : 'translate-x-0'}"
-        ></span>
-      </button>
     </div>
 
     <!-- Compact Mode -->
@@ -205,7 +215,7 @@
       <button
         onclick={toggleCompactMode}
         class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.compactMode ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}"
+          {$settings.compactMode ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
         role="switch"
         aria-checked={$settings.compactMode}
         aria-label="Toggle compact mode"
@@ -216,14 +226,65 @@
         ></span>
       </button>
     </div>
+
+    <!-- Navigation Style -->
+    <div class="py-4 border-t border-gray-200 dark:border-gray-700">
+      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Navigation Style</span>
+      <div class="grid grid-cols-2 gap-3">
+        {#each navStyleOptions as option}
+          {@const Icon = option.icon}
+          <button
+            onclick={() => setNavStyle(option.value)}
+            class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
+              {$settings.navStyle === option.value
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
+          >
+            {#if $settings.navStyle === option.value}
+              <div class="absolute top-2 right-2">
+                <Check class="w-4 h-4 text-primary-500" />
+              </div>
+            {/if}
+            <Icon class="w-6 h-6 {$settings.navStyle === option.value ? 'text-primary-500' : 'text-gray-500 dark:text-gray-400'}" />
+            <span class="text-sm font-medium {$settings.navStyle === option.value ? 'text-primary-700 dark:text-primary-300' : 'text-gray-700 dark:text-gray-300'}">
+              {option.label}
+            </span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <!-- Preview -->
+    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Preview</span>
+      <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-10 h-10 rounded-full bg-primary-500"></div>
+          <div>
+            <p class="font-medium text-gray-900 dark:text-white">Sample User</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">0x1234...5678</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
+            <p class="text-lg font-bold text-gray-900 dark:text-white">100.00 CHI</p>
+          </div>
+          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>
+            <p class="text-lg font-bold text-gray-900 dark:text-white">12</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Storage Section -->
   {#if isTauri}
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
       <div class="flex items-center gap-3 mb-6">
-        <div class="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
-          <HardDrive class="w-5 h-5 text-blue-600 dark:text-blue-400" />
+        <div class="p-2 bg-primary-100 dark:bg-primary-900 rounded-lg">
+          <HardDrive class="w-5 h-5 text-primary-600 dark:text-primary-400" />
         </div>
         <div>
           <h2 class="font-semibold text-lg dark:text-white">Storage</h2>
@@ -243,7 +304,7 @@
           </div>
           <button
             onclick={browseDownloadDirectory}
-            class="px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors flex-shrink-0"
+            class="px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors flex-shrink-0"
           >
             Browse
           </button>
@@ -270,62 +331,35 @@
 
   <!-- Notification Settings Section -->
   <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-    <div class="flex items-center gap-3 mb-6">
+    <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-amber-100 dark:bg-amber-900 rounded-lg">
         <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
       </div>
       <div>
         <h2 class="font-semibold text-lg dark:text-white">Notifications</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Choose which notifications and toast popups to show</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Toggle which toast notifications to show</p>
       </div>
     </div>
 
-    <div class="space-y-0">
-      {#each notificationOptions as option, i}
-        <div class="flex items-center justify-between py-4 {i > 0 ? 'border-t border-gray-200 dark:border-gray-700' : ''}">
-          <div>
-            <p class="font-medium text-gray-900 dark:text-white">{option.label}</p>
-            <p class="text-sm text-gray-500 dark:text-gray-400">{option.description}</p>
-          </div>
-          <button
-            onclick={() => toggleNotification(option.key)}
-            class="relative w-12 h-6 rounded-full transition-colors
-              {$settings.notifications?.[option.key] ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}"
-            role="switch"
-            aria-checked={$settings.notifications?.[option.key] ?? true}
-            aria-label="Toggle {option.label}"
-          >
+    <div class="grid grid-cols-2 gap-x-6 gap-y-2">
+      {#each notificationOptions as option}
+        <button
+          onclick={() => toggleNotification(option.key)}
+          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
+          role="switch"
+          aria-checked={$settings.notifications?.[option.key] ?? true}
+          title={option.description}
+        >
+          <span class="text-sm text-gray-700 dark:text-gray-300 text-left">{option.label}</span>
+          <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
+            {$settings.notifications?.[option.key] ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}">
             <span
-              class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-                {$settings.notifications?.[option.key] ? 'translate-x-6' : 'translate-x-0'}"
+              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform
+                {$settings.notifications?.[option.key] ? 'translate-x-4' : 'translate-x-0'}"
             ></span>
-          </button>
-        </div>
+          </div>
+        </button>
       {/each}
-    </div>
-  </div>
-
-  <!-- Preview Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-    <h3 class="font-semibold text-lg dark:text-white mb-4">Preview</h3>
-    <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
-      <div class="flex items-center gap-3 mb-3">
-        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600"></div>
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">Sample User</p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">0x1234...5678</p>
-        </div>
-      </div>
-      <div class="grid grid-cols-2 gap-3">
-        <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
-          <p class="text-lg font-bold text-gray-900 dark:text-white">100.00 CHR</p>
-        </div>
-        <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>
-          <p class="text-lg font-bold text-gray-900 dark:text-white">12</p>
-        </div>
-      </div>
     </div>
   </div>
 

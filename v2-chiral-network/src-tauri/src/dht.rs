@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 use crate::speed_tiers::SpeedTier;
 use libp2p::{
-    kad, mdns, noise, ping,
+    kad, mdns, noise, ping, relay, dcutr,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Swarm, PeerId, StreamProtocol, Multiaddr,
     identify, request_response,
@@ -138,11 +138,41 @@ mod cbor_codec {
 }
 
 /// Get bootstrap nodes for the Chiral Network DHT
-/// These are the same bootstrap nodes used in v1
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C".to_string(),
+        // Primary bootstrap node with relay server (IPv4 + IPv6)
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+        // Additional bootstrap node
+        "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
     ]
+}
+
+/// Get relay server nodes — only bootstrap nodes that run a relay server.
+/// Do NOT listen_on non-relay bootstrap nodes; the failed RESERVE creates a closed
+/// listener whose dropped receiver poisons the handler's to_listener channel on the
+/// SAME handler if libp2p reuses connections.
+pub fn get_relay_nodes() -> Vec<String> {
+    vec![
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+    ]
+}
+
+/// Get unique peer IDs of all bootstrap nodes
+pub fn get_bootstrap_peer_ids() -> Vec<String> {
+    let mut ids = Vec::new();
+    for addr_str in get_bootstrap_nodes() {
+        if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                let id_str = peer_id.to_string();
+                if !ids.contains(&id_str) {
+                    ids.push(id_str);
+                }
+            }
+        }
+    }
+    ids
 }
 
 /// Extract peer ID from a multiaddr like /ip4/.../tcp/.../p2p/<peer_id>
@@ -334,6 +364,8 @@ pub struct NetworkStats {
 
 #[derive(NetworkBehaviour)]
 struct DhtBehaviour {
+    relay_client: relay::client::Behaviour,
+    dcutr: dcutr::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
     mdns: mdns::tokio::Behaviour,
     ping: ping::Behaviour,
@@ -858,24 +890,31 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         request_response::Config::default(),
     );
 
-    let behaviour = DhtBehaviour {
-        kad,
-        mdns,
-        ping,
-        identify,
-        ping_protocol,
-        file_transfer,
-        file_request,
-    };
-
-    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
         .with_tokio()
         .with_tcp(
             tcp::Config::default(),
             noise::Config::new,
             yamux::Config::default,
         )?
-        .with_behaviour(|_| behaviour)?
+        .with_relay_client(
+            noise::Config::new,
+            yamux::Config::default,
+        )?
+        .with_behaviour(|_key, relay_client| {
+            let dcutr = dcutr::Behaviour::new(local_peer_id);
+            DhtBehaviour {
+                relay_client,
+                dcutr,
+                kad,
+                mdns,
+                ping,
+                identify,
+                ping_protocol,
+                file_transfer,
+                file_request,
+            }
+        })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
         .build();
 
@@ -883,19 +922,36 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
 
-    // Dial bootstrap nodes to establish connections
-    for addr_str in get_bootstrap_nodes() {
+    // Request relay reservations ONLY on nodes that run a relay server.
+    // Using get_relay_nodes() (not get_bootstrap_nodes()) to avoid sending RESERVE to
+    // non-relay nodes — a failed RESERVE closes the transport listener, which drops the
+    // receiver end of the to_listener channel. On the handler side, the next
+    // forward_messages_to_transport_listener poll sees the closed channel and resets
+    // Reservation to None, causing STOP requests to be denied with NO_RESERVATION.
+    //
+    // Only one listen_on per unique relay peer ID — multiple listen_on calls for the same
+    // relay (e.g., IPv4 + IPv6) cause multiple RESERVE requests on the same handler.
+    //
+    // Do NOT call swarm.dial() or kad.bootstrap() here — the swarm polls behaviours
+    // BEFORE the transport, so Kademlia's bootstrap query would race and dial the relay
+    // server before the relay client transport has delivered the ListenReq. kad.bootstrap()
+    // is deferred to the event loop (with a timer fallback).
+    let mut relay_peer_ids_seen = std::collections::HashSet::new();
+    for addr_str in get_relay_nodes() {
         if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-            match swarm.dial(addr.clone()) {
-                Ok(_) => println!("Dialing bootstrap node: {}", addr),
-                Err(e) => println!("Failed to dial bootstrap node {}: {:?}", addr, e),
+            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                // Only one listen_on per unique relay peer
+                if !relay_peer_ids_seen.insert(peer_id) {
+                    println!("⏭️ Skipping duplicate relay listen for peer {}", peer_id);
+                    continue;
+                }
+                let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
+                match swarm.listen_on(relay_addr.clone()) {
+                    Ok(id) => println!("✅ Relay listen requested: {} (listener {:?})", relay_addr, id),
+                    Err(e) => println!("❌ Relay listen failed for {}: {:?}", relay_addr, e),
+                }
             }
         }
-    }
-
-    // Trigger Kademlia bootstrap
-    if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-        println!("Kademlia bootstrap error (expected if no peers yet): {:?}", e);
     }
 
     Ok((swarm, local_peer_id.to_string()))
@@ -918,24 +974,99 @@ async fn event_loop(
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
-    
+    // File requests deferred until relay circuit is established.
+    // send_request() triggers its own dial via DialOpts::peer_id(), but the relay
+    // transport needs the full /p2p-circuit/p2p/<target> address which only our
+    // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
+    // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
+    let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
+    // to prevent Kademlia from racing the relay client for the bootstrap connection.
+    // A timer fallback ensures bootstrap happens even if relay reservation never completes.
+    let mut kad_bootstrapped = false;
+    let kad_bootstrap_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
+    let kad_bootstrap_timer = tokio::time::sleep_until(kad_bootstrap_deadline);
+    let mut kad_bootstrap_timer = std::pin::pin!(kad_bootstrap_timer);
+
     loop {
         let running = *is_running.lock().await;
         if !running {
             break;
         }
-        
+
         tokio::select! {
+            // Fallback: bootstrap Kademlia after 10s even if relay hasn't confirmed
+            _ = &mut kad_bootstrap_timer, if !kad_bootstrapped => {
+                kad_bootstrapped = true;
+                println!("⏰ Kademlia bootstrap timer fired (relay reservation may not have completed)");
+                // Manually dial bootstrap nodes so Kademlia has peers to query.
+                // Use DialOpts with PeerCondition::Disconnected to avoid duplicate
+                // connections (relay client may already be connected to relay nodes).
+                for addr_str in get_bootstrap_nodes() {
+                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                        if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                            swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                            let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
+                                .addresses(vec![addr])
+                                .condition(libp2p::swarm::dial_opts::PeerCondition::Disconnected)
+                                .build();
+                            let _ = swarm.dial(opts);
+                        }
+                    }
+                }
+                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+                    println!("Kademlia bootstrap error: {:?}", e);
+                } else {
+                    println!("✅ Kademlia bootstrap triggered via timer fallback");
+                }
+            }
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
                         handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        println!("Listening on {:?}", address);
+                        // Check if this is a relay circuit address
+                        let is_relay = address.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit));
+                        if is_relay {
+                            println!("✅ Relay reservation confirmed! Listening on relay: {}", address);
+                            // Add as external address so Identify advertises it to other peers
+                            swarm.add_external_address(address.clone());
+
+                            // Now that relay is established, bootstrap Kademlia (deferred from startup
+                            // to prevent Kademlia from racing the relay client for the bootstrap connection)
+                            if !kad_bootstrapped {
+                                kad_bootstrapped = true;
+                                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+                                    println!("Kademlia bootstrap error: {:?}", e);
+                                } else {
+                                    println!("✅ Kademlia bootstrap triggered after relay reservation");
+                                }
+                            }
+                        } else {
+                            println!("Listening on {:?}", address);
+                        }
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
+
+                        // Send any file requests that were waiting for this connection
+                        if let Some(pending) = pending_file_requests.remove(&peer_id) {
+                            println!("📤 Sending {} deferred file request(s) to {}", pending.len(), peer_id);
+                            for (req_id, fhash) in pending {
+                                let request = ChunkRequest::FileInfo {
+                                    request_id: req_id.clone(),
+                                    file_hash: fhash,
+                                };
+                                let outbound_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                outbound_request_map.insert(outbound_id, req_id);
+                            }
+                        }
+
+                        let bootstrap_peer_ids = get_bootstrap_peer_ids();
+                        if bootstrap_peer_ids.contains(&peer_id.to_string()) {
+                            println!("✅ Connected to bootstrap/relay node: {}", peer_id);
+                        }
 
                         // Add to peers list so ChiralDrop and Network page can see them
                         let peer_id_str = peer_id.to_string();
@@ -984,7 +1115,59 @@ async fn event_loop(
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                         if let Some(peer) = peer_id {
                             println!("Failed to connect to {:?}: {:?}", peer, error);
+
+                            // Fail any deferred file requests for this peer
+                            if let Some(pending) = pending_file_requests.remove(&peer) {
+                                let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
+                                for (req_id, fhash) in pending {
+                                    println!("❌ Deferred file request {} failed: peer unreachable", req_id);
+                                    let _ = app.emit("file-download-failed", serde_json::json!({
+                                        "requestId": req_id,
+                                        "fileHash": fhash,
+                                        "error": format!("Seeder ({}...) is offline or unreachable via relay.", peer_short)
+                                    }));
+                                }
+                            }
                         }
+                    }
+                    SwarmEvent::IncomingConnection { local_addr, send_back_addr, .. } => {
+                        println!("📥 Incoming connection: local={}, remote={}", local_addr, send_back_addr);
+                    }
+                    SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
+                        println!("❌ Incoming connection error: local={}, remote={}, error={:?}", local_addr, send_back_addr, error);
+                    }
+                    SwarmEvent::ListenerClosed { listener_id, reason, addresses, .. } => {
+                        let was_relay = addresses.iter().any(|a| {
+                            a.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit))
+                        });
+                        if was_relay {
+                            println!("⚠️ Relay listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
+                            println!("🔄 Re-requesting relay reservation...");
+                            // Re-request relay reservation on all relay nodes
+                            let mut relay_peer_ids_seen = std::collections::HashSet::new();
+                            for addr_str in get_relay_nodes() {
+                                if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                                    if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                                        if !relay_peer_ids_seen.insert(peer_id) {
+                                            continue;
+                                        }
+                                        let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
+                                        match swarm.listen_on(relay_addr.clone()) {
+                                            Ok(id) => println!("✅ Relay re-listen requested: {} (listener {:?})", relay_addr, id),
+                                            Err(e) => println!("❌ Relay re-listen failed for {}: {:?}", relay_addr, e),
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            println!("⚠️ Listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
+                        }
+                    }
+                    SwarmEvent::ListenerError { listener_id, error, .. } => {
+                        println!("❌ Listener {:?} error: {:?}", listener_id, error);
+                    }
+                    SwarmEvent::ExternalAddrConfirmed { address, .. } => {
+                        println!("✅ External address confirmed: {}", address);
                     }
                     _ => {}
                 }
@@ -1089,32 +1272,62 @@ async fn event_loop(
                     SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
 
-                        // Check if peer is actually connected before sending request
-                        if !swarm.is_connected(&peer_id) {
-                            println!("⚠️ Peer {} is not connected, attempting to dial...", peer_id);
-                            match swarm.dial(peer_id) {
-                                Ok(_) => {
-                                    println!("📡 Dialing peer {}...", peer_id);
-                                }
-                                Err(e) => {
-                                    println!("❌ Cannot reach peer {}: {:?}", peer_id, e);
-                                    let _ = app.emit("file-download-failed", serde_json::json!({
-                                        "requestId": request_id,
-                                        "fileHash": file_hash,
-                                        "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
-                                    }));
-                                    continue;
+                        if swarm.is_connected(&peer_id) {
+                            // Peer already connected — send immediately
+                            let request = ChunkRequest::FileInfo {
+                                request_id: request_id.clone(),
+                                file_hash: file_hash.clone(),
+                            };
+                            let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                            outbound_request_map.insert(req_id, request_id.clone());
+                            println!("File info request sent with ID: {:?}", req_id);
+                        } else {
+                            // Peer not connected — dial via relay, defer send_request()
+                            // until ConnectionEstablished. We CANNOT call send_request()
+                            // now because it triggers DialOpts::peer_id() internally,
+                            // which races with our relay dial (DialPending→DialFailure).
+                            println!("⚠️ Peer {} is not connected, dialing via relay...", peer_id);
+                            let mut dialed = false;
+                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
+                            for relay_addr_str in get_relay_nodes() {
+                                if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
+                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
+                                        if !relay_peer_ids_tried.insert(relay_pid) {
+                                            continue;
+                                        }
+                                    }
+                                    let circuit_addr = relay_addr
+                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
+                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id));
+                                    match swarm.dial(circuit_addr.clone()) {
+                                        Ok(_) => {
+                                            println!("📡 Dialing peer {} via relay: {}", peer_id, circuit_addr);
+                                            dialed = true;
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            println!("Relay dial failed: {:?}", e);
+                                        }
+                                    }
                                 }
                             }
-                        }
 
-                        let request = ChunkRequest::FileInfo {
-                            request_id: request_id.clone(),
-                            file_hash: file_hash.clone(),
-                        };
-                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                        outbound_request_map.insert(req_id, request_id.clone());
-                        println!("File info request sent with ID: {:?}", req_id);
+                            if dialed {
+                                // Queue the request — will be sent on ConnectionEstablished
+                                pending_file_requests.entry(peer_id)
+                                    .or_default()
+                                    .push((request_id.clone(), file_hash.clone()));
+                                println!("📋 File request queued, waiting for relay circuit...");
+                            } else {
+                                println!("❌ Cannot reach peer {}: all relay dial attempts failed", peer_id);
+                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                    "requestId": request_id,
+                                    "fileHash": file_hash,
+                                    "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
+                                }));
+                                continue;
+                            }
+                        }
                         let _ = app.emit("file-request-sent", serde_json::json!({
                             "requestId": request_id,
                             "fileHash": file_hash,
@@ -1261,9 +1474,14 @@ async fn handle_behaviour_event(
                 _ => {}
             }
         }
-        DhtBehaviourEvent::Identify(event) => {
-            println!("Identify event: {:?}", event);
+        DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
+            println!("Identified peer {}: protocol={}, addrs={:?}", peer_id, info.protocol_version, info.listen_addrs);
+            // Add all listen addresses to Kademlia so peers can discover each other
+            for addr in &info.listen_addrs {
+                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+            }
         }
+        DhtBehaviourEvent::Identify(_) => {}
         DhtBehaviourEvent::FileTransfer(event) => {
             use request_response::Event;
             match event {
@@ -1679,14 +1897,14 @@ async fn handle_behaviour_event(
                                         };
 
                                         if let Some(creds) = creds {
-                                            // Convert wei to CHR for send_transaction
-                                            let cost_chr = crate::speed_tiers::format_wei_as_chr(price);
+                                            // Convert wei to CHI for send_transaction
+                                            let cost_chi = crate::speed_tiers::format_wei_as_chi(price);
 
                                             // Send payment transaction
                                             match crate::send_payment_transaction(
                                                 &creds.wallet_address,
                                                 &wallet_address,
-                                                &cost_chr,
+                                                &cost_chi,
                                                 &creds.private_key,
                                             ).await {
                                                 Ok(payment) => {
@@ -2061,6 +2279,51 @@ async fn handle_behaviour_event(
                 _ => {}
             }
         }
+        DhtBehaviourEvent::RelayClient(event) => {
+            match event {
+                relay::client::Event::ReservationReqAccepted { relay_peer_id, renewal, .. } => {
+                    let action = if renewal { "renewed" } else { "accepted" };
+                    println!("🔄 Relay reservation {} by {}", action, relay_peer_id);
+                    let _ = app.emit("relay-reservation", serde_json::json!({
+                        "relayPeerId": relay_peer_id.to_string(),
+                        "renewal": renewal,
+                    }));
+                }
+                relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                    println!("✅ Outbound relay circuit established via {}", relay_peer_id);
+                    let _ = app.emit("relay-circuit-established", serde_json::json!({
+                        "relayPeerId": relay_peer_id.to_string(),
+                        "direction": "outbound",
+                    }));
+                }
+                relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+                    println!("✅ Inbound relay circuit from {}", src_peer_id);
+                    let _ = app.emit("relay-circuit-established", serde_json::json!({
+                        "srcPeerId": src_peer_id.to_string(),
+                        "direction": "inbound",
+                    }));
+                }
+            }
+        }
+        DhtBehaviourEvent::Dcutr(event) => {
+            match &event.result {
+                Ok(connection_id) => {
+                    println!("🕳️ DCUtR hole-punch succeeded with {} (conn {:?})", event.remote_peer_id, connection_id);
+                    let _ = app.emit("dcutr-event", serde_json::json!({
+                        "remotePeerId": event.remote_peer_id.to_string(),
+                        "success": true,
+                    }));
+                }
+                Err(e) => {
+                    println!("🕳️ DCUtR hole-punch failed with {}: {}", event.remote_peer_id, e);
+                    let _ = app.emit("dcutr-event", serde_json::json!({
+                        "remotePeerId": event.remote_peer_id.to_string(),
+                        "success": false,
+                        "error": format!("{}", e),
+                    }));
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -2073,7 +2336,7 @@ mod tests {
     fn test_bootstrap_nodes_not_empty() {
         let nodes = get_bootstrap_nodes();
         assert!(!nodes.is_empty());
-        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes.len(), 3);
     }
 
     #[test]
@@ -2095,13 +2358,14 @@ mod tests {
 
     #[test]
     fn test_bootstrap_nodes_have_unique_peer_ids() {
-        let mut peer_ids = Vec::new();
-        for addr_str in get_bootstrap_nodes() {
-            let addr: Multiaddr = addr_str.parse().unwrap();
-            let peer_id = extract_peer_id_from_multiaddr(&addr).unwrap();
-            assert!(!peer_ids.contains(&peer_id), "Duplicate peer ID: {}", peer_id);
-            peer_ids.push(peer_id);
+        let peer_ids = get_bootstrap_peer_ids();
+        let mut seen = Vec::new();
+        for id in &peer_ids {
+            assert!(!seen.contains(id), "Duplicate peer ID: {}", id);
+            seen.push(id.clone());
         }
+        // Should have 2 unique nodes (one has both IPv4 and IPv6)
+        assert_eq!(peer_ids.len(), 2);
     }
 
     #[test]

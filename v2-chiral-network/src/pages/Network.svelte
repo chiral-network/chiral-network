@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
-  import { peers, networkStats, networkConnected, walletAccount } from '$lib/stores';
+  import { peers, networkStats, networkConnected, walletAccount, blacklist } from '$lib/stores';
   import { dhtService, type DhtHealthInfo } from '$lib/dhtService';
   import { toasts } from '$lib/toastStore';
   import {
@@ -22,7 +22,10 @@
     ChevronDown,
     ChevronUp,
     ArrowDownToLine,
-    ArrowUpFromLine
+    ArrowUpFromLine,
+    ShieldBan,
+    Trash2,
+    Plus
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Network');
@@ -92,6 +95,29 @@
   let dhtHealth = $state<DhtHealthInfo | null>(null);
   let isCheckingDhtHealth = $state(false);
   let showDhtHealthDetails = $state(false);
+
+  // Bootstrap peer IDs (to filter from Connected Peers)
+  let bootstrapPeerIds = $state<Set<string>>(new Set());
+  let filteredPeers = $derived($peers.filter(p => !bootstrapPeerIds.has(p.id)));
+
+  // Relay / NAT Traversal State
+  interface RelayStatus {
+    relayPeerId: string;
+    active: boolean;
+    timestamp: number;
+  }
+  interface HolePunchEvent {
+    remotePeerId: string;
+    success: boolean;
+    error?: string;
+    timestamp: number;
+  }
+  let relayReservations = $state<RelayStatus[]>([]);
+  let holePunchEvents = $state<HolePunchEvent[]>([]);
+  let unlistenRelay: (() => void) | null = null;
+  let unlistenRelayFailed: (() => void) | null = null;
+  let unlistenRelayCircuit: (() => void) | null = null;
+  let unlistenDcutr: (() => void) | null = null;
 
   // Traffic Statistics State
   let trafficStats = $state({
@@ -174,6 +200,12 @@
     loadTrafficStats();
 
     if (isTauri()) {
+      // Load bootstrap peer IDs to filter them from Connected Peers
+      try {
+        const ids: string[] = await invoke('get_bootstrap_peer_ids');
+        bootstrapPeerIds = new Set(ids);
+      } catch {}
+
       await loadGethStatus();
       await loadBootstrapHealth();
 
@@ -184,6 +216,44 @@
           isDownloading = false;
           loadGethStatus();
         }
+      });
+
+      // Listen for relay/hole-punch events
+      unlistenRelay = await listen<{ relayPeerId: string; renewal: boolean }>('relay-reservation', (event) => {
+        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
+        if (existing) {
+          existing.active = true;
+          existing.timestamp = Date.now();
+          relayReservations = [...relayReservations];
+        } else {
+          relayReservations = [...relayReservations, {
+            relayPeerId: event.payload.relayPeerId,
+            active: true,
+            timestamp: Date.now(),
+          }];
+        }
+      });
+
+      unlistenRelayFailed = await listen<{ relayPeerId: string }>('relay-reservation-failed', (event) => {
+        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
+        if (existing) {
+          existing.active = false;
+          existing.timestamp = Date.now();
+          relayReservations = [...relayReservations];
+        }
+      });
+
+      unlistenRelayCircuit = await listen<{ direction: string }>('relay-circuit-established', () => {
+        log.info('Relay circuit established');
+      });
+
+      unlistenDcutr = await listen<{ remotePeerId: string; success: boolean; error?: string }>('dcutr-event', (event) => {
+        holePunchEvents = [{
+          remotePeerId: event.payload.remotePeerId,
+          success: event.payload.success,
+          error: event.payload.error,
+          timestamp: Date.now(),
+        }, ...holePunchEvents.slice(0, 9)]; // keep last 10
       });
 
       // Refresh status every 10 seconds
@@ -205,6 +275,10 @@
     if (trafficInterval) {
       clearInterval(trafficInterval);
     }
+    unlistenRelay?.();
+    unlistenRelayFailed?.();
+    unlistenRelayCircuit?.();
+    unlistenDcutr?.();
     saveTrafficStats();
   });
 
@@ -399,6 +473,37 @@
     if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(2)} KB`;
     return `${bytes} B`;
   }
+
+  // Blacklist
+  let blacklistAddress = $state('');
+  let blacklistReason = $state('');
+
+  function addToBlacklist() {
+    const addr = blacklistAddress.trim();
+    if (!addr) {
+      toasts.show('Please enter an address', 'error');
+      return;
+    }
+    const current = $blacklist;
+    if (current.some(e => e.address.toLowerCase() === addr.toLowerCase())) {
+      toasts.show('Address is already blacklisted', 'warning');
+      return;
+    }
+    blacklist.add(addr, blacklistReason.trim() || 'No reason given');
+    blacklistAddress = '';
+    blacklistReason = '';
+    toasts.show('Address added to blacklist', 'success');
+  }
+
+  function removeFromBlacklist(address: string) {
+    blacklist.remove(address);
+    toasts.show('Address removed from blacklist', 'success');
+  }
+
+  function truncateAddress(addr: string): string {
+    if (addr.length <= 16) return addr;
+    return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
+  }
 </script>
 
 <div class="p-6">
@@ -481,7 +586,7 @@
           </div>
           <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
             <div
-              class="bg-blue-600 h-2 rounded-full transition-all"
+              class="bg-primary-600 h-2 rounded-full transition-all"
               style="width: {downloadProgress.percentage}%"
             ></div>
           </div>
@@ -495,7 +600,7 @@
         <button
           onclick={handleDownloadGeth}
           disabled={isDownloading}
-          class="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <Download class="w-5 h-5" />
           Download Geth
@@ -551,8 +656,8 @@
 
       <!-- Connecting Info -->
       {#if showGethConnectingMsg}
-        <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg">
-          <p class="text-sm text-blue-800 dark:text-blue-300">
+        <div class="mt-4 p-3 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 rounded-lg">
+          <p class="text-sm text-primary-800 dark:text-primary-300">
             <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
             This may take a moment. Peer count will update automatically.
           </p>
@@ -718,7 +823,7 @@
         <button
           onclick={connectToNetwork}
           disabled={isConnecting}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50"
         >
           {#if isConnecting}
             <Loader2 class="w-4 h-4 animate-spin" />
@@ -837,7 +942,7 @@
                 <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
                 <div class="flex flex-wrap gap-1.5">
                   {#each dhtHealth.protocols as protocol}
-                    <span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded-full font-mono">
+                    <span class="px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 text-xs rounded-full font-mono">
                       {protocol}
                     </span>
                   {/each}
@@ -891,24 +996,76 @@
       </div>
     </div>
 
+    <!-- NAT Traversal / Relay Status -->
+    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+      <div class="flex items-center gap-2 mb-3">
+        <Globe class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">NAT Traversal</span>
+        {#if relayReservations.some(r => r.active)}
+          <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 font-medium">
+            Relay Active
+          </span>
+        {:else if $networkConnected}
+          <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 font-medium">
+            Connecting to Relays
+          </span>
+        {/if}
+      </div>
+
+      {#if relayReservations.length > 0}
+        <div class="space-y-1.5 mb-3">
+          {#each relayReservations as relay}
+            <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full {relay.active ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+                <span class="font-mono dark:text-gray-300">{relay.relayPeerId.slice(0, 16)}...</span>
+              </div>
+              <span class="{relay.active ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+                {relay.active ? 'Reserved' : 'Failed'}
+              </span>
+            </div>
+          {/each}
+        </div>
+      {:else if $networkConnected}
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Relay reservations will appear here when connected to relay nodes.
+          Relays enable connections between peers behind NAT.
+        </p>
+      {/if}
+
+      {#if holePunchEvents.length > 0}
+        <div class="mb-2">
+          <p class="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Hole-Punch Events (DCUtR)</p>
+          <div class="space-y-1">
+            {#each holePunchEvents.slice(0, 5) as event}
+              <div class="flex items-center justify-between p-1.5 text-xs {event.success ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}">
+                <span class="font-mono">{event.remotePeerId.slice(0, 16)}...</span>
+                <span>{event.success ? 'Direct connection established' : `Failed: ${event.error || 'unknown'}`}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
+
     <!-- Connected Peers -->
     <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
         <Radio class="w-4 h-4 text-gray-500 dark:text-gray-400" />
         <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Connected Peers</span>
         <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
-          {$peers.length}
+          {filteredPeers.length}
         </span>
       </div>
 
-      {#if $peers.length === 0}
+      {#if filteredPeers.length === 0}
         <div class="text-center py-4 text-gray-500 dark:text-gray-400">
           <p class="text-sm">No peers connected</p>
           <p class="text-xs">Connect to the P2P network to discover peers</p>
         </div>
       {:else}
         <div class="space-y-2">
-          {#each $peers as peer}
+          {#each filteredPeers as peer}
             <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
@@ -916,13 +1073,10 @@
                   {#if peer.address}
                     <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Address: {peer.address}</div>
                   {/if}
-                  <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Last seen: {formatDate(peer.lastSeen)}
-                  </div>
                 </div>
                 <button
                   onclick={() => pingPeer(peer.id)}
-                  class="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition shrink-0"
+                  class="flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white text-sm rounded hover:bg-primary-700 transition shrink-0"
                   title="Ping this peer"
                 >
                   <Radio class="w-3 h-3" />
@@ -934,5 +1088,81 @@
         </div>
       {/if}
     </div>
+  </div>
+
+  <!-- Blacklist Section -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-6">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+        <ShieldBan class="w-5 h-5 text-red-600 dark:text-red-400" />
+      </div>
+      <div>
+        <h2 class="font-semibold dark:text-white">Blacklist</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Block addresses from file transfers</p>
+      </div>
+      {#if $blacklist.length > 0}
+        <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium">
+          {$blacklist.length}
+        </span>
+      {/if}
+    </div>
+
+    <!-- Add Form -->
+    <div class="flex gap-2 mb-4">
+      <input
+        type="text"
+        bind:value={blacklistAddress}
+        placeholder="Wallet or peer address"
+        class="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
+      />
+      <input
+        type="text"
+        bind:value={blacklistReason}
+        placeholder="Reason (optional)"
+        class="w-48 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
+      />
+      <button
+        onclick={addToBlacklist}
+        class="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors shrink-0"
+      >
+        <Plus class="w-4 h-4" />
+        Add
+      </button>
+    </div>
+
+    <!-- Entries List -->
+    {#if $blacklist.length === 0}
+      <div class="text-center py-6 text-gray-500 dark:text-gray-400">
+        <ShieldBan class="w-8 h-8 mx-auto mb-2 opacity-40" />
+        <p class="text-sm">No blacklisted addresses</p>
+        <p class="text-xs mt-1">Add addresses above to block them from file transfers</p>
+      </div>
+    {:else}
+      <div class="space-y-2 max-h-64 overflow-y-auto">
+        {#each $blacklist as entry}
+          <div class="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg group">
+            <div class="flex-1 min-w-0">
+              <div class="font-mono text-sm dark:text-gray-200 truncate" title={entry.address}>
+                {truncateAddress(entry.address)}
+              </div>
+              <div class="flex items-center gap-2 mt-0.5">
+                <span class="text-xs text-gray-500 dark:text-gray-400">{entry.reason}</span>
+                <span class="text-xs text-gray-400 dark:text-gray-500">&middot;</span>
+                <span class="text-xs text-gray-400 dark:text-gray-500">{new Date(entry.addedAt).toLocaleDateString()}</span>
+              </div>
+            </div>
+            <button
+              onclick={() => removeFromBlacklist(entry.address)}
+              class="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+              title="Remove from blacklist"
+            >
+              <Trash2 class="w-4 h-4" />
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 </div>

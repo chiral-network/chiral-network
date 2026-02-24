@@ -1912,6 +1912,28 @@ async fn start_dht_node(
                             println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
                     }
+                    DhtEvent::RelayReservation { relay_peer_id, renewal } => {
+                        let payload = serde_json::json!({
+                            "relayPeerId": relay_peer_id,
+                            "renewal": renewal,
+                        });
+                        let _ = app_handle.emit("relay-reservation", payload);
+                    }
+                    DhtEvent::RelayCircuitEstablished { peer_id, direction } => {
+                        let payload = serde_json::json!({
+                            "peerId": peer_id,
+                            "direction": direction,
+                        });
+                        let _ = app_handle.emit("relay-circuit-established", payload);
+                    }
+                    DhtEvent::DcutrEvent { remote_peer_id, success, error } => {
+                        let payload = serde_json::json!({
+                            "remotePeerId": remote_peer_id,
+                            "success": success,
+                            "error": error,
+                        });
+                        let _ = app_handle.emit("dcutr-event", payload);
+                    }
                     _ => {}
                 }
             }
@@ -2041,6 +2063,44 @@ async fn connect_to_peer(state: State<'_, AppState>, peer_address: String) -> Re
     } else {
         Err("DHT node is not running".to_string())
     }
+}
+
+#[tauri::command]
+async fn ping_peer(state: State<'_, AppState>, peer_address: String) -> Result<u64, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT node is not running".to_string())?
+    };
+
+    // First ensure we're connected to the peer
+    dht.connect_peer(peer_address.clone()).await?;
+
+    // Extract peer ID from the multiaddr string
+    let peer_id_str = peer_address
+        .split("/p2p/")
+        .nth(1)
+        .ok_or_else(|| {
+            "Invalid address format: expected /ip4/.../tcp/.../p2p/<peer_id>".to_string()
+        })?
+        .to_string();
+
+    // Small delay to let the connection establish
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    // Send echo and measure round-trip time
+    let payload = b"ping".to_vec();
+    let start = std::time::Instant::now();
+    let response = dht.echo(peer_id_str, payload.clone()).await?;
+    let rtt_ms = start.elapsed().as_millis() as u64;
+
+    if response != payload {
+        return Err("Ping failed: echo response did not match".to_string());
+    }
+
+    Ok(rtt_ms)
 }
 
 #[tauri::command]
@@ -2341,6 +2401,15 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                     }))
                     .unwrap_or_else(|_| "{}".to_string());
                     format!("reputation_event:{}", json)
+                }
+                DhtEvent::RelayReservation { relay_peer_id, renewal } => {
+                    format!("relay_reservation:{}:{}", relay_peer_id, renewal)
+                }
+                DhtEvent::RelayCircuitEstablished { peer_id, direction } => {
+                    format!("relay_circuit_established:{}:{}", peer_id, direction)
+                }
+                DhtEvent::DcutrEvent { remote_peer_id, success, error } => {
+                    format!("dcutr_event:{}:{}:{}", remote_peer_id, success, error.unwrap_or_default())
                 }
             })
             .collect();
@@ -9449,6 +9518,7 @@ fn main() {
             search_by_infohash,
             get_file_seeders,
             connect_to_peer,
+            ping_peer,
             get_dht_events,
             detect_locale,
             get_download_directory,

@@ -145,11 +145,15 @@
       "run": "运行发现",
       "directConnect": "直接连接",
       "placeholder": "输入节点地址 (IP:端口 或 节点ID)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "连接",
       "foundPeers": "已发现节点: {count}",
       "discoveryStarted": "发现已开始。已发现节点: {count}",
       "peerAddedToInput": "节点已添加到输入框",
-      "add": "添加"
+      "add": "添加",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "已连接节点 ({count})",
@@ -1538,6 +1542,8 @@
       "connectionSuccess": "连接成功！",
       "connectionFailed": "连接失败。节点可能不可达或地址无效。",
       "connectError": "无法连接到节点：{error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "信令服务器未连接。请先启动 DHT。",
       "peerNotFound": "在已发现的节点中未找到 {peer}",
       "messageReceived": "收到来自节点的消息：{message}",

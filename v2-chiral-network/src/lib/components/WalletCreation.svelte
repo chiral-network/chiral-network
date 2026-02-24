@@ -146,7 +146,7 @@
         </button>
         <button
           on:click={proceedToVerification}
-          class="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+          class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
         >
           I've Saved It
         </button>
@@ -169,7 +169,7 @@
             id="word-{index}"
             type="text"
             bind:value={userInputs[i]}
-            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-white"
+            class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-white"
             placeholder="Enter word {index + 1}"
           />
         </div>
@@ -190,7 +190,7 @@
         </button>
         <button
           on:click={verifyAndCreateWallet}
-          class="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+          class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
         >
           Create Wallet
         </button>

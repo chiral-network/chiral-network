@@ -16,6 +16,7 @@
     X,
     CheckCircle,
     AlertCircle,
+    AlertTriangle,
     History,
     Loader2,
     Link,
@@ -27,7 +28,9 @@
     Eye
   } from 'lucide-svelte';
   import { Zap, Gauge, Rocket } from 'lucide-svelte';
-  import { networkConnected, walletAccount } from '$lib/stores';
+  import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
+  import { get } from 'svelte/store';
+  import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { walletService } from '$lib/services/walletService';
   import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
@@ -166,7 +169,7 @@
     }).format(date);
   }
 
-  // Format wei price as CHR string
+  // Format wei price as CHI string
   function formatPriceWei(weiStr: string): string {
     if (!weiStr || weiStr === '0') return 'Free';
     try {
@@ -174,10 +177,10 @@
       if (wei === 0n) return 'Free';
       const whole = wei / 1_000_000_000_000_000_000n;
       const frac = wei % 1_000_000_000_000_000_000n;
-      if (frac === 0n) return `${whole} CHR`;
+      if (frac === 0n) return `${whole} CHI`;
       const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
       const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) : fracStr;
-      return `${whole}.${decimals} CHR`;
+      return `${whole}.${decimals} CHI`;
     } catch {
       return 'Free';
     }
@@ -203,6 +206,12 @@
   let selectedTier = $state<SpeedTier>('free');
   let walletBalance = $state<string>('0');
   let isProcessingPayment = $state(false);
+
+  // Blacklist warning modal
+  let blacklistWarning = $state<{ match: BlacklistEntry; result: SearchResult } | null>(null);
+
+  // Download confirmation modal
+  let pendingDownload = $state<{ result: SearchResult; tierCost: number; seederPriceChi: number; totalCost: number } | null>(null);
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -515,8 +524,8 @@
     }
   }
 
-  // Start download
-  async function startDownload(result: SearchResult) {
+  // Start download (validates, shows confirmation if paid, then proceeds)
+  async function startDownload(result: SearchResult, skipBlacklistCheck = false, skipCostConfirm = false) {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
       toasts.show('Download requires the desktop app', 'error');
@@ -535,13 +544,29 @@
       return;
     }
 
+    // Check blacklist - compare against wallet address AND peer IDs (seeders)
+    const bl = get(blacklist);
+    if (!skipBlacklistCheck && bl.length > 0) {
+      const candidates = [result.walletAddress, ...result.seeders]
+        .filter(Boolean)
+        .map(a => a.trim().toLowerCase());
+      const blacklistedMatch = bl.find(entry => {
+        const entryAddr = entry.address.trim().toLowerCase();
+        return candidates.some(addr => addr === entryAddr || addr.includes(entryAddr) || entryAddr.includes(addr));
+      });
+      if (blacklistedMatch) {
+        blacklistWarning = { match: blacklistedMatch, result };
+        return;
+      }
+    }
+
     // Calculate total cost: speed tier + seeder file price
     const tierCost = calculateCost(selectedTier, result.fileSize);
     const seederPriceWei = result.priceWei || '0';
-    const seederPriceChr = seederPriceWei !== '0'
+    const seederPriceChi = seederPriceWei !== '0'
       ? Number(BigInt(seederPriceWei)) / 1e18
       : 0;
-    const totalCost = tierCost + seederPriceChr;
+    const totalCost = tierCost + seederPriceChi;
 
     if (totalCost > 0) {
       if (!$walletAccount) {
@@ -549,7 +574,12 @@
         return;
       }
       if (parseFloat(walletBalance) < totalCost) {
-        toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHR, have ${walletBalance} CHR`, 'error');
+        toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHI, have ${walletBalance} CHI`, 'error');
+        return;
+      }
+      // Show confirmation modal before spending CHI
+      if (!skipCostConfirm) {
+        pendingDownload = { result, tierCost, seederPriceChi, totalCost };
         return;
       }
     }
@@ -601,7 +631,7 @@
       if (tierCost > 0) {
         toasts.show(`Speed tier payment processed! Requesting file from seeder...`, 'success');
         refreshWalletBalance();
-      } else if (seederPriceChr > 0) {
+      } else if (seederPriceChi > 0) {
         toasts.show(`Requesting file from seeder (payment will be sent automatically)...`, 'info');
       } else {
         toasts.show(`Requesting file from seeder...`, 'info');
@@ -992,7 +1022,7 @@
     <div class="flex gap-2 mb-4">
       <button
         onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <Search class="w-4 h-4" />
         Merkle Hash
@@ -1034,7 +1064,7 @@
               type="text"
               bind:value={searchQuery}
               placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
+              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1044,7 +1074,7 @@
           <button
             onclick={searchFile}
             disabled={isSearching || !$networkConnected}
-            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+            class="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
           >
             {#if isSearching}
               <Loader2 class="w-5 h-5 animate-spin" />
@@ -1124,15 +1154,15 @@
                 disabled={isDisabled}
                 class="relative p-3 rounded-lg border-2 text-left transition-all
                   {isSelected
-                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 ring-1 ring-blue-500'
+                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 ring-1 ring-primary-500'
                     : isDisabled
                       ? 'border-gray-200 dark:border-gray-600 opacity-50 cursor-not-allowed'
                       : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
                   }"
               >
                 <div class="flex items-center gap-2 mb-1">
-                  <TierIcon class="w-4 h-4 {isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'}" />
-                  <span class="text-sm font-semibold {isSelected ? 'text-blue-700 dark:text-blue-300' : 'dark:text-white'}">{tier.name}</span>
+                  <TierIcon class="w-4 h-4 {isSelected ? 'text-primary-600 dark:text-primary-400' : 'text-gray-500 dark:text-gray-400'}" />
+                  <span class="text-sm font-semibold {isSelected ? 'text-primary-700 dark:text-primary-300' : 'dark:text-white'}">{tier.name}</span>
                 </div>
                 <p class="text-xs text-gray-500 dark:text-gray-400">{tier.speedLabel}</p>
                 <p class="text-xs font-medium mt-1 {isPaid ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}">
@@ -1141,7 +1171,7 @@
                   {:else if fileSizeKnown}
                     {formatCost(cost)}
                   {:else}
-                    {tier.costPerMb} CHR/MB
+                    {tier.costPerMb} CHI/MB
                   {/if}
                 </p>
                 {#if needsWallet}
@@ -1175,7 +1205,7 @@
                   {/if}
                   {#if $walletAccount}
                     <span class="text-gray-400 mx-1">•</span>
-                    Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHR</span>
+                    Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHI</span>
                   {/if}
                 {/if}
               </div>
@@ -1218,13 +1248,13 @@
           onclick={() => downloadsTab = 'active'}
           class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
             {downloadsTab === 'active'
-              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
               : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
         >
           <Download class="w-4 h-4" />
           Active
           {#if getActiveDownloads().length > 0}
-            <span class="px-1.5 py-0.5 text-xs font-semibold bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-400 rounded-full">
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400 rounded-full">
               {getActiveDownloads().length}
             </span>
           {/if}
@@ -1233,7 +1263,7 @@
           onclick={() => downloadsTab = 'history'}
           class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
             {downloadsTab === 'history'
-              ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
               : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'}"
         >
           <History class="w-4 h-4" />
@@ -1300,7 +1330,7 @@
                       </span>
                     {/if}
                     {#if isActive}
-                      <span class="text-blue-600 dark:text-blue-400 font-medium">{download.speed}</span>
+                      <span class="text-primary-600 dark:text-primary-400 font-medium">{download.speed}</span>
                       <span>{download.eta}</span>
                     {/if}
                     {#if download.status === 'completed' && download.startedAt && download.completedAt}
@@ -1356,10 +1386,10 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(download.filePath!)}
-                        class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-primary-50 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
                         title="Open file"
                       >
-                        <ExternalLink class="w-4 h-4 text-blue-500" />
+                        <ExternalLink class="w-4 h-4 text-primary-500" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(download.filePath!)}
@@ -1386,7 +1416,7 @@
                   <div class="flex items-center gap-3">
                     <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
                       <div
-                        class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}"
+                        class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-primary-500'}"
                         style="width: {download.progress}%"
                       ></div>
                     </div>
@@ -1466,7 +1496,7 @@
 
                   {#if entry.balanceBefore && entry.balanceAfter}
                     <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Balance: {entry.balanceBefore} → {entry.balanceAfter} CHR
+                      Balance: {entry.balanceBefore} → {entry.balanceAfter} CHI
                     </p>
                   {/if}
                   <p class="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1 truncate">{entry.hash}</p>
@@ -1487,10 +1517,10 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(entry.filePath!)}
-                        class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-primary-50 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
                         title="Open file"
                       >
-                        <ExternalLink class="w-4 h-4 text-blue-500" />
+                        <ExternalLink class="w-4 h-4 text-primary-500" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(entry.filePath!)}
@@ -1583,6 +1613,93 @@
             <p class="text-sm text-gray-600 dark:text-gray-400">Preview is not supported for this file type.</p>
           </div>
         {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if blacklistWarning}
+  <BlacklistWarningModal
+    address={blacklistWarning.match.address}
+    reason={blacklistWarning.match.reason}
+    action="download this file"
+    onconfirm={() => {
+      const result = blacklistWarning!.result;
+      blacklistWarning = null;
+      startDownload(result, true);
+    }}
+    oncancel={() => { blacklistWarning = null; }}
+  />
+{/if}
+
+{#if pendingDownload}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') pendingDownload = null; }}
+    onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
+  >
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 p-6 max-w-md w-full mx-4">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2.5 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+          <AlertTriangle class="w-6 h-6 text-amber-600 dark:text-amber-400" />
+        </div>
+        <h3 class="text-lg font-semibold dark:text-white">Confirm Download</h3>
+      </div>
+
+      <div class="space-y-3 mb-5">
+        <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+          <p class="text-sm text-gray-500 dark:text-gray-400">File</p>
+          <p class="font-medium dark:text-white truncate">{pendingDownload.result.fileName}</p>
+          {#if pendingDownload.result.fileSize > 0}
+            <p class="text-xs text-gray-400 mt-0.5">{formatFileSize(pendingDownload.result.fileSize)}</p>
+          {/if}
+        </div>
+
+        <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-2">
+          <p class="text-sm text-gray-500 dark:text-gray-400">Cost Breakdown</p>
+          {#if pendingDownload.seederPriceChi > 0}
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-600 dark:text-gray-300">File price</span>
+              <span class="font-medium text-amber-600 dark:text-amber-400">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
+            </div>
+          {/if}
+          {#if pendingDownload.tierCost > 0}
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-600 dark:text-gray-300">Speed tier ({selectedTier})</span>
+              <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
+            </div>
+          {/if}
+          <div class="flex justify-between text-sm pt-2 border-t border-gray-200 dark:border-gray-600">
+            <span class="font-semibold dark:text-white">Total</span>
+            <span class="font-semibold text-amber-600 dark:text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-sm text-gray-500 dark:text-gray-400 px-1">
+          <span>Your balance</span>
+          <span>{parseFloat(walletBalance).toFixed(4)} CHI</span>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <button
+          onclick={() => { pendingDownload = null; }}
+          class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300 font-medium"
+        >
+          Cancel
+        </button>
+        <button
+          onclick={() => {
+            const result = pendingDownload!.result;
+            pendingDownload = null;
+            startDownload(result, true, true);
+          }}
+          class="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 font-medium"
+        >
+          <Download class="w-4 h-4" />
+          Confirm & Pay
+        </button>
       </div>
     </div>
   </div>

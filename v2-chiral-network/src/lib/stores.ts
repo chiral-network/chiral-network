@@ -30,6 +30,8 @@ export const networkStats = writable({
 // ============================================================================
 
 export type ThemeMode = 'light' | 'dark' | 'system';
+export type ColorTheme = 'blue' | 'purple' | 'green' | 'red' | 'orange';
+export type NavStyle = 'navbar' | 'sidebar';
 
 export interface NotificationSettings {
   downloadComplete: boolean;
@@ -44,6 +46,8 @@ export interface NotificationSettings {
 
 export interface AppSettings {
   theme: ThemeMode;
+  colorTheme: ColorTheme;
+  navStyle: NavStyle;
   reducedMotion: boolean;
   compactMode: boolean;
   downloadDirectory: string; // empty string = system default Downloads folder
@@ -63,6 +67,8 @@ const defaultNotifications: NotificationSettings = {
 
 const defaultSettings: AppSettings = {
   theme: 'system',
+  colorTheme: 'blue',
+  navStyle: 'navbar',
   reducedMotion: false,
   compactMode: false,
   downloadDirectory: '',
@@ -135,3 +141,60 @@ function createDarkModeStore() {
 }
 
 export const isDarkMode = createDarkModeStore();
+
+// ============================================================================
+// Blacklist Store
+// ============================================================================
+
+export interface BlacklistEntry {
+  address: string;
+  reason: string;
+  addedAt: number;
+}
+
+function createBlacklistStore() {
+  const stored = browser ? localStorage.getItem('chiral-blacklist') : null;
+  const initial: BlacklistEntry[] = stored ? JSON.parse(stored) : [];
+
+  const { subscribe, set, update } = writable<BlacklistEntry[]>(initial);
+
+  const save = (entries: BlacklistEntry[]) => {
+    if (browser) {
+      localStorage.setItem('chiral-blacklist', JSON.stringify(entries));
+    }
+  };
+
+  return {
+    subscribe,
+    set: (value: BlacklistEntry[]) => {
+      save(value);
+      set(value);
+    },
+    update: (fn: (entries: BlacklistEntry[]) => BlacklistEntry[]) => {
+      update((current) => {
+        const updated = fn(current);
+        save(updated);
+        return updated;
+      });
+    },
+    add: (address: string, reason: string) => {
+      update((current) => {
+        if (current.some(e => e.address.toLowerCase() === address.toLowerCase())) {
+          return current;
+        }
+        const updated = [...current, { address, reason, addedAt: Date.now() }];
+        save(updated);
+        return updated;
+      });
+    },
+    remove: (address: string) => {
+      update((current) => {
+        const updated = current.filter(e => e.address.toLowerCase() !== address.toLowerCase());
+        save(updated);
+        return updated;
+      });
+    }
+  };
+}
+
+export const blacklist = createBlacklistStore();

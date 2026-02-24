@@ -149,11 +149,15 @@
       "run": "بدء الاكتشاف",
       "directConnect": "اتصال مباشر",
       "placeholder": "Enter peer multiaddress (e.g., /ip4/192.168.1.81/tcp/4001/p2p/12D3KooW...)",
+      "addressPlaceholder": "Peer Address / ID (e.g., /ip4/.../tcp/4001/p2p/12D3KooW...)",
       "connect": "اتصال",
       "foundPeers": "تم العثور على أقران: {count}",
       "discoveryStarted": "بدأ الاكتشاف. عدد الأقران المكتشفين: {count}",
       "peerAddedToInput": "تمت إضافة النظير إلى الحقل",
-      "add": "إضافة"
+      "add": "إضافة",
+      "pingTooltip": "Ping peer to test connectivity",
+      "pingResult": "Peer {address}... reachable — {rtt} ms",
+      "pingFailed": "Peer unreachable"
     },
     "connectedPeers": {
       "title": "الأقران المتصلون ({count})",
@@ -1622,6 +1626,8 @@
       "connectionSuccess": "تم الاتصال بنجاح!",
       "connectionFailed": "فشل الاتصال. قد يكون النظير غير متاح أو العنوان غير صالح.",
       "connectError": "فشل الاتصال بالنظير: {error}",
+      "pingSuccess": "Ping successful: {rtt} ms round-trip",
+      "pingFailed": "Ping failed: {error}",
       "signalingMissing": "خادم الإشارات غير متصل. يرجى تشغيل DHT أولًا.",
       "peerNotFound": "لم يتم العثور على النظير {peer} بين الأقران المكتشفين",
       "messageReceived": "تم الاستلام من النظير: {message}",
