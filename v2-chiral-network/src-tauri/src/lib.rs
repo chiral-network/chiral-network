@@ -2830,8 +2830,12 @@ async fn file_reputation_verdict(
         }
     };
 
-    let dht_guard = state.dht.lock().await;
-    let dht = dht_guard.as_ref().ok_or("DHT not running")?;
+    // Clone the Arc and drop the mutex guard immediately so other
+    // commands aren't blocked during the potentially slow DHT operations.
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        Arc::clone(dht_guard.as_ref().ok_or("DHT not running")?)
+    };
 
     let our_peer_id = dht
         .get_peer_id()
@@ -2857,11 +2861,15 @@ async fn file_reputation_verdict(
     };
     verdict.sign(state.reputation_key.signing_key(), &our_peer_id)?;
 
-    // Fetch existing verdicts, replace our previous verdict (if any), then store.
+    // Fetch existing verdicts (5s timeout — if we can't reach the DHT,
+    // start with an empty list rather than failing the entire submission).
     let dht_key = reputation::TransactionVerdict::dht_key_for_target(&target_peer_id);
-    let mut verdicts = match dht.get_dht_value(dht_key.clone()).await? {
-        Some(json_str) => reputation::verdicts_from_dht(&json_str),
-        None => vec![],
+    let mut verdicts = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        dht.get_dht_value(dht_key.clone()),
+    ).await {
+        Ok(Ok(Some(json_str))) => reputation::verdicts_from_dht(&json_str),
+        _ => vec![],
     };
 
     // Remove any previous verdict we issued about this target
