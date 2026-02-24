@@ -1128,14 +1128,16 @@ async fn event_loop(
                             let _ = app.emit("peer-discovered", peers_guard.clone());
                         }
                     }
-                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                    SwarmEvent::OutgoingConnectionError { peer_id, .. } => {
                         if let Some(peer) = peer_id {
-                            println!("Failed to connect to {:?}: {:?}", peer, error);
-
                             // Evict unreachable peer from Kademlia routing table
-                            // and remember it so we don't re-add it from identify/mDNS
+                            // and remember it so we don't re-add it from identify/mDNS.
+                            // Only log the first failure per peer to avoid log spam.
                             swarm.behaviour_mut().kad.remove_peer(&peer);
-                            failed_peers.insert(peer);
+                            let is_new_failure = failed_peers.insert(peer);
+                            if is_new_failure {
+                                println!("Evicted unreachable peer from routing table: {}", peer);
+                            }
 
                             // Also remove from local peer list
                             {
@@ -1426,11 +1428,6 @@ async fn handle_behaviour_event(
                     };
                     peers_guard.push(peer_info);
                 }
-            }
-            
-            // Bootstrap Kademlia when we have peers
-            if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-                println!("Kademlia bootstrap error: {:?}", e);
             }
             
             // Emit event to frontend
