@@ -4,6 +4,7 @@
   import {
     type VerifiedReputation,
     type TransactionVerdict,
+    type ReputationDetails,
     trustLevelBg,
     outcomeLabel,
     scoreToStars,
@@ -39,24 +40,26 @@
   }
 
   async function loadAll() {
-    try {
-      myPeerId = await invoke<string | null>('get_peer_id');
-      myPublicKey = await invoke<string>('get_reputation_public_key');
-    } catch {
-      // DHT not yet started
-      return;
-    }
+    // Fetch identity info in parallel (both are fast local calls)
+    const [peerIdResult, pubKeyResult] = await Promise.allSettled([
+      invoke<string | null>('get_peer_id'),
+      invoke<string>('get_reputation_public_key'),
+    ]);
+
+    myPeerId = peerIdResult.status === 'fulfilled' ? peerIdResult.value : null;
+    myPublicKey = pubKeyResult.status === 'fulfilled' ? pubKeyResult.value : null;
 
     if (!myPeerId) return;
 
-    // Load own reputation and verdicts in parallel
-    const [repResult, verdictsResult] = await Promise.allSettled([
-      invoke<VerifiedReputation>('get_reputation_score', { peerId: myPeerId }),
-      invoke<TransactionVerdict[]>('get_reputation_verdicts', { peerId: myPeerId }),
-    ]);
-
-    myRep = repResult.status === 'fulfilled' ? repResult.value : null;
-    myVerdicts = verdictsResult.status === 'fulfilled' ? verdictsResult.value : [];
+    // Single DHT fetch returns both score and verdicts
+    try {
+      const details = await invoke<ReputationDetails>('get_reputation_details', { peerId: myPeerId });
+      myRep = details.score;
+      myVerdicts = details.verdicts;
+    } catch {
+      myRep = null;
+      myVerdicts = [];
+    }
   }
 
   async function refresh() {

@@ -26,6 +26,11 @@ export interface TransactionVerdict {
   issuerSig: string;       // hex-encoded ed25519 signature
 }
 
+export interface ReputationDetails {
+  score: VerifiedReputation;
+  verdicts: TransactionVerdict[];
+}
+
 export function unknownReputation(): VerifiedReputation {
   return {
     score: 0.5,

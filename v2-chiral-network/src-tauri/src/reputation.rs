@@ -304,3 +304,14 @@ pub fn verdicts_from_dht(value: &str) -> Vec<TransactionVerdict> {
 pub fn verdicts_to_dht(verdicts: &[TransactionVerdict]) -> Result<String, String> {
     serde_json::to_string(verdicts).map_err(|e| e.to_string())
 }
+
+// ============================================================================
+// REPUTATION DETAILS — combined score + verdicts in one response
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReputationDetails {
+    pub score: VerifiedReputation,
+    pub verdicts: Vec<TransactionVerdict>,
+}

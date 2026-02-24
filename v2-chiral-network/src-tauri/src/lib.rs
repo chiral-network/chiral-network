@@ -2716,6 +2716,97 @@ async fn get_reputation_score(
     Ok(reputation::VerifiedReputation::compute(&verdicts, sig_verified))
 }
 
+/// Combined score + verdicts in a single DHT fetch (avoids the redundant
+/// double-query that `get_reputation_score` + `get_reputation_verdicts` caused).
+#[tauri::command]
+async fn get_reputation_details(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+) -> Result<reputation::ReputationDetails, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        Arc::clone(dht_guard.as_ref().ok_or("DHT not running")?)
+    };
+
+    let key = reputation::TransactionVerdict::dht_key_for_target(&peer_id);
+    let verdicts = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        dht.get_dht_value(key),
+    ).await {
+        Ok(Ok(Some(json_str))) => reputation::verdicts_from_dht(&json_str),
+        _ => return Ok(reputation::ReputationDetails {
+            score: reputation::VerifiedReputation::unknown(),
+            verdicts: vec![],
+        }),
+    };
+
+    if verdicts.is_empty() {
+        return Ok(reputation::ReputationDetails {
+            score: reputation::VerifiedReputation::unknown(),
+            verdicts: vec![],
+        });
+    }
+
+    // Collect unique issuer IDs to avoid redundant DHT lookups
+    let unique_issuers: std::collections::HashSet<String> = verdicts
+        .iter()
+        .map(|v| v.issuer_id.clone())
+        .collect();
+
+    // Determine which issuers are missing from the cache
+    let missing: Vec<String> = {
+        let cache = state.reputation_pubkey_cache.lock().await;
+        unique_issuers
+            .iter()
+            .filter(|id| !cache.contains_key(id.as_str()))
+            .cloned()
+            .collect()
+    };
+
+    // Fetch all missing public keys in parallel
+    if !missing.is_empty() {
+        let mut handles = Vec::with_capacity(missing.len());
+        for issuer_id in &missing {
+            let dht_clone = Arc::clone(&dht);
+            let pubkey_dht_key = reputation::PeerKeyRecord::dht_key(issuer_id);
+            handles.push(tokio::spawn(async move {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    dht_clone.get_dht_value(pubkey_dht_key),
+                ).await {
+                    Ok(Ok(Some(key_json))) => {
+                        serde_json::from_str::<reputation::PeerKeyRecord>(&key_json)
+                            .ok()
+                            .and_then(|r| r.to_verifying_key())
+                    }
+                    _ => None,
+                }
+            }));
+        }
+        let results = futures::future::join_all(handles).await;
+        let mut cache = state.reputation_pubkey_cache.lock().await;
+        for (issuer_id, result) in missing.iter().zip(results) {
+            let vk = result.unwrap_or(None);
+            cache.insert(issuer_id.clone(), vk);
+        }
+    }
+
+    // Verify signatures using cached keys
+    let cache = state.reputation_pubkey_cache.lock().await;
+    let mut sig_verified = 0usize;
+    for verdict in &verdicts {
+        if let Some(Some(vk)) = cache.get(&verdict.issuer_id) {
+            if verdict.verify_signature(vk) {
+                sig_verified += 1;
+            }
+        }
+    }
+    drop(cache);
+
+    let score = reputation::VerifiedReputation::compute(&verdicts, sig_verified);
+    Ok(reputation::ReputationDetails { score, verdicts })
+}
+
 /// File a signed reputation verdict about a peer and publish it to the DHT.
 /// The verdict is signed with our Ed25519 reputation key.
 #[tauri::command]
@@ -2924,6 +3015,7 @@ pub fn run() {
             get_reputation_public_key,
             get_reputation_verdicts,
             get_reputation_score,
+            get_reputation_details,
             file_reputation_verdict
         ])
         .build(tauri::generate_context!())
