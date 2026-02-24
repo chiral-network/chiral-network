@@ -13,7 +13,7 @@ use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use std::str::FromStr;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use sha2::{Sha256, Digest};
 use std::io::{Read as _, Seek as _, SeekFrom};
@@ -957,6 +957,54 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     Ok((swarm, local_peer_id.to_string()))
 }
 
+/// Path to the failed-peers persistence file.
+fn failed_peers_path() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("chiral-network").join("failed_peers.txt"))
+}
+
+/// Load failed peers from disk, discarding entries older than 24 hours.
+fn load_failed_peers() -> HashSet<PeerId> {
+    let mut set = HashSet::new();
+    let Some(path) = failed_peers_path() else { return set };
+    let Ok(contents) = std::fs::read_to_string(&path) else { return set };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let cutoff = now.saturating_sub(24 * 3600);
+    for line in contents.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() == 2 {
+            if let Ok(ts) = parts[1].parse::<u64>() {
+                if ts >= cutoff {
+                    if let Ok(pid) = PeerId::from_str(parts[0]) {
+                        set.insert(pid);
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Save the current failed peers set to disk.
+fn save_failed_peers(failed: &HashSet<PeerId>) {
+    let Some(path) = failed_peers_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let contents: String = failed
+        .iter()
+        .map(|pid| format!("{}\t{}", pid, now))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(&path, contents);
+}
+
 async fn event_loop(
     mut swarm: Swarm<DhtBehaviour>,
     peers: Arc<Mutex<Vec<PeerInfo>>>,
@@ -980,6 +1028,12 @@ async fn event_loop(
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    // Peers that have failed to connect — prevents re-adding via mDNS/Identify.
+    // Persisted to disk with 24h expiry so restarts don't re-try known-bad peers.
+    let mut failed_peers: HashSet<PeerId> = load_failed_peers();
+    if !failed_peers.is_empty() {
+        println!("Loaded {} previously-failed peers from disk", failed_peers.len());
+    }
     // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
     // to prevent Kademlia from racing the relay client for the bootstrap connection.
     // A timer fallback ensures bootstrap happens even if relay reservation never completes.
@@ -1023,7 +1077,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         // Check if this is a relay circuit address
@@ -1049,6 +1103,11 @@ async fn event_loop(
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
+
+                        // Peer is reachable — remove from failed set
+                        if failed_peers.remove(&peer_id) {
+                            save_failed_peers(&failed_peers);
+                        }
 
                         // Send any file requests that were waiting for this connection
                         if let Some(pending) = pending_file_requests.remove(&peer_id) {
@@ -1112,9 +1171,15 @@ async fn event_loop(
                             let _ = app.emit("peer-discovered", peers_guard.clone());
                         }
                     }
-                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                    SwarmEvent::OutgoingConnectionError { peer_id, .. } => {
                         if let Some(peer) = peer_id {
-                            println!("Failed to connect to {:?}: {:?}", peer, error);
+                            // Only log the first failure per peer (suppress repeated noise)
+                            let is_new_failure = failed_peers.insert(peer);
+                            if is_new_failure {
+                                println!("Failed to connect to {:?} — evicting from routing table", peer);
+                                swarm.behaviour_mut().kad.remove_peer(&peer);
+                                save_failed_peers(&failed_peers);
+                            }
 
                             // Fail any deferred file requests for this peer
                             if let Some(pending) = pending_file_requests.remove(&peer) {
@@ -1355,6 +1420,7 @@ async fn handle_behaviour_event(
     active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
     download_credentials: &DownloadCredentialsMap,
+    failed_peers: &HashSet<PeerId>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -1365,12 +1431,17 @@ async fn handle_behaviour_event(
                 .as_millis() as i64;
             
             for (peer_id, multiaddr) in list {
+                // Skip peers that previously failed to connect
+                if failed_peers.contains(&peer_id) {
+                    continue;
+                }
+
                 let peer_id_str = peer_id.to_string();
                 println!("Discovered peer: {}", peer_id_str);
-                
+
                 // Add peer to Kademlia routing table
                 swarm.behaviour_mut().kad.add_address(&peer_id, multiaddr.clone());
-                
+
                 // Check if peer already exists
                 if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
                     existing.last_seen = now;
@@ -1387,12 +1458,7 @@ async fn handle_behaviour_event(
                     peers_guard.push(peer_info);
                 }
             }
-            
-            // Bootstrap Kademlia when we have peers
-            if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-                println!("Kademlia bootstrap error: {:?}", e);
-            }
-            
+
             // Emit event to frontend
             let _ = app.emit("peer-discovered", peers_guard.clone());
         }
@@ -1401,6 +1467,7 @@ async fn handle_behaviour_event(
             for (peer_id, _) in list {
                 let peer_id_str = peer_id.to_string();
                 peers_guard.retain(|p| p.id != peer_id_str);
+                swarm.behaviour_mut().kad.remove_peer(&peer_id);
                 println!("Peer expired: {}", peer_id_str);
             }
         }
@@ -1463,7 +1530,9 @@ async fn handle_behaviour_event(
                     println!("DHT put successful for query {:?}, key: {}", id, key_str);
                 }
                 kad::QueryResult::PutRecord(Err(err)) => {
-                    println!("DHT put failed for query {:?}: {:?}", id, err);
+                    // Record is already stored locally — replication to remote peers
+                    // was incomplete, which is expected in sparse networks.
+                    println!("⚠️ DHT put replication incomplete for query {:?} (record stored locally): {:?}", id, err);
                 }
                 kad::QueryResult::Bootstrap(Ok(result)) => {
                     println!("Kademlia bootstrap successful: {:?} peers", result.num_remaining);
@@ -1476,9 +1545,12 @@ async fn handle_behaviour_event(
         }
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
             println!("Identified peer {}: protocol={}, addrs={:?}", peer_id, info.protocol_version, info.listen_addrs);
-            // Add all listen addresses to Kademlia so peers can discover each other
-            for addr in &info.listen_addrs {
-                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+            // Skip peers that previously failed to connect
+            if !failed_peers.contains(&peer_id) {
+                // Add all listen addresses to Kademlia so peers can discover each other
+                for addr in &info.listen_addrs {
+                    swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                }
             }
         }
         DhtBehaviourEvent::Identify(_) => {}
