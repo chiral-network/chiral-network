@@ -42,12 +42,12 @@
           <span class="text-lg font-bold dark:text-white hidden sm:inline xl:hidden">Chiral</span>
         </div>
 
-        <!-- Desktop nav: icons + labels at xl, icons only at md-xl -->
-        <div class="hidden md:flex gap-0.5">
+        <!-- Desktop nav: icons + labels at xl, icons only at md-xl, scrollable when too many items -->
+        <div class="hidden md:flex gap-0.5 overflow-x-auto nav-scrollbar-hide">
           {#each navItems as item}
             <button
               onclick={() => navigate(item.path)}
-              class="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded-lg transition text-sm
+              class="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap shrink-0
                 {currentPage === item.path
                   ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
                   : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
@@ -127,3 +127,13 @@
     </div>
   {/if}
 </nav>
+
+<style>
+  .nav-scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .nav-scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+</style>
