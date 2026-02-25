@@ -35,7 +35,7 @@
   <div class="max-w-7xl mx-auto px-3 sm:px-4">
     <div class="flex items-center justify-between h-14">
       <!-- Logo + Nav Items -->
-      <div class="flex items-center gap-2 lg:gap-6 min-w-0">
+      <div class="flex items-center gap-2 lg:gap-6 min-w-0 flex-1 overflow-hidden">
         <div class="flex items-center gap-2 shrink-0">
           <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg" />
           <span class="text-lg font-bold dark:text-white hidden xl:inline">Chiral Network</span>
