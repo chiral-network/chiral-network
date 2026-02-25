@@ -33,16 +33,16 @@
 
 <nav class="sticky top-0 z-50 bg-white dark:bg-gray-800 shadow-md border-b border-gray-200 dark:border-gray-700">
   <div class="max-w-7xl mx-auto px-3 sm:px-4">
-    <div class="flex items-center h-14 gap-2">
+    <div class="nav-grid items-center h-14 gap-2">
       <!-- Logo -->
-      <div class="flex items-center gap-2 shrink-0">
+      <div class="flex items-center gap-2">
         <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg" />
         <span class="text-lg font-bold dark:text-white hidden xl:inline">Chiral Network</span>
         <span class="text-lg font-bold dark:text-white hidden sm:inline xl:hidden">Chiral</span>
       </div>
 
       <!-- Desktop nav: scrollable, takes remaining space -->
-      <div class="hidden md:flex w-0 flex-1 overflow-x-auto nav-scrollbar-hide gap-0.5">
+      <div class="hidden md:flex overflow-x-auto nav-scrollbar-hide gap-0.5">
         {#each navItems as item}
           <button
             onclick={() => navigate(item.path)}
@@ -59,7 +59,7 @@
       </div>
 
       <!-- Right side: status + logout + hamburger -->
-      <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+      <div class="flex items-center gap-2 sm:gap-3">
         <div class="flex items-center gap-1.5 px-2 py-1 rounded-full
           {$networkConnected
             ? 'bg-green-50 dark:bg-green-900/30'
@@ -127,6 +127,18 @@
 </nav>
 
 <style>
+  /* Mobile: flexbox with space-between (nav items hidden) */
+  .nav-grid {
+    display: flex;
+    justify-content: space-between;
+  }
+  /* Desktop: grid with fixed columns so nav can't overflow into right side */
+  @media (min-width: 768px) {
+    .nav-grid {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+    }
+  }
   .nav-scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
