@@ -20,7 +20,7 @@
   // Check if running in Tauri environment
   let isTauri = $state(false);
   function checkTauriAvailability(): boolean {
-    return typeof window !== 'undefined' && ('__TAURI__' in window || '____TAURI_INTERNALS__' in window);
+    return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
   }
 
   // ---------------------------------------------------------------------------
