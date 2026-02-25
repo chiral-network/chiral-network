@@ -202,29 +202,18 @@
   }
 
   // Download
-  async function handleDownload(item: DriveItem) {
+  function handleDownload(item: DriveItem) {
     if (item.type !== 'file') return;
+    // Use direct server URL — the server sends Content-Disposition: attachment
+    // with the correct filename and Content-Type, so the browser/OS handles it properly.
     const url = driveStore.getDownloadUrl(item.id);
-    try {
-      const ownerAddr = $walletAccount?.address ?? '';
-      const response = await fetch(url, {
-        headers: ownerAddr ? { 'X-Owner': ownerAddr } : {},
-      });
-      if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
-      const contentType = response.headers.get('content-type') || 'application/octet-stream';
-      const data = await response.arrayBuffer();
-      const blob = new Blob([data], { type: contentType });
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = item.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-    } catch (e) {
-      toasts.show('Download failed: ' + (e as Error).message, 'error');
-    }
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   // Share
