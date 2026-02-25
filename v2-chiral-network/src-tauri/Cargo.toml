@@ -48,3 +48,8 @@ rand = { version = "0.8", features = ["std_rng"] }
 base64 = "0.21"
 cbor4ii = { version = "0.3", features = ["use_alloc", "serde1"] }
 async-trait = "0.1"
+
+# Hosting HTTP server
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["cors"] }

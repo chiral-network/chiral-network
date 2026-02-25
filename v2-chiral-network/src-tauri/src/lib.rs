@@ -3,6 +3,8 @@ mod encryption;
 mod file_transfer;
 mod geth;
 mod geth_bootstrap;
+mod hosting;
+mod hosting_server;
 mod speed_tiers;
 
 use dht::DhtService;
@@ -30,6 +32,10 @@ pub struct AppState {
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
     pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
     pub download_credentials: dht::DownloadCredentialsMap, // request_id -> wallet credentials for file payment
+    // Hosting
+    pub hosting_server_state: Arc<hosting_server::HostingServerState>,
+    pub hosting_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
+    pub hosting_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
 #[tauri::command]
@@ -2556,6 +2562,169 @@ async fn lookup_encryption_key(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hosting commands
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostingServerStatus {
+    running: bool,
+    address: Option<String>,
+}
+
+#[tauri::command]
+async fn create_hosted_site(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    file_paths: Vec<String>,
+) -> Result<hosting::HostedSite, String> {
+    let site_id = hosting::generate_site_id();
+    let base = hosting::sites_base_dir()
+        .ok_or_else(|| "Cannot determine data directory".to_string())?;
+    let site_dir = base.join(&site_id);
+    std::fs::create_dir_all(&site_dir).map_err(|e| format!("Failed to create site dir: {}", e))?;
+
+    let mut site_files = Vec::new();
+
+    for src_path_str in &file_paths {
+        let src = std::path::Path::new(src_path_str);
+        if !src.exists() {
+            // Clean up on error
+            let _ = std::fs::remove_dir_all(&site_dir);
+            return Err(format!("File not found: {}", src_path_str));
+        }
+        let file_name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("Invalid file name: {}", src_path_str))?;
+
+        let dest = site_dir.join(file_name);
+        std::fs::copy(src, &dest)
+            .map_err(|e| format!("Failed to copy {}: {}", file_name, e))?;
+
+        let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        site_files.push(hosting::SiteFile {
+            path: file_name.to_string(),
+            size,
+        });
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let site = hosting::HostedSite {
+        id: site_id,
+        name,
+        directory: site_dir.to_string_lossy().into_owned(),
+        created_at: now,
+        files: site_files,
+    };
+
+    // Persist to disk
+    let mut all_sites = hosting::load_sites();
+    all_sites.push(site.clone());
+    hosting::save_sites(&all_sites);
+
+    // Register with the running server
+    state.hosting_server_state.register_site(site.clone()).await;
+
+    println!("Created hosted site: {} ({})", site.name, site.id);
+    Ok(site)
+}
+
+#[tauri::command]
+async fn list_hosted_sites(
+    _state: tauri::State<'_, AppState>,
+) -> Result<Vec<hosting::HostedSite>, String> {
+    Ok(hosting::load_sites())
+}
+
+#[tauri::command]
+async fn delete_hosted_site(
+    state: tauri::State<'_, AppState>,
+    site_id: String,
+) -> Result<(), String> {
+    let mut all_sites = hosting::load_sites();
+    let before_len = all_sites.len();
+    all_sites.retain(|s| s.id != site_id);
+    if all_sites.len() == before_len {
+        return Err(format!("Site not found: {}", site_id));
+    }
+    hosting::save_sites(&all_sites);
+
+    // Remove files from disk
+    if let Some(base) = hosting::sites_base_dir() {
+        let site_dir = base.join(&site_id);
+        if site_dir.exists() {
+            let _ = std::fs::remove_dir_all(&site_dir);
+        }
+    }
+
+    // Unregister from server
+    state.hosting_server_state.unregister_site(&site_id).await;
+
+    println!("Deleted hosted site: {}", site_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_hosting_server(
+    state: tauri::State<'_, AppState>,
+    port: u16,
+) -> Result<String, String> {
+    // Check if already running
+    {
+        let addr = state.hosting_server_addr.lock().await;
+        if addr.is_some() {
+            return Err("Hosting server is already running".to_string());
+        }
+    }
+
+    // Load sites into server state
+    state.hosting_server_state.load_from_disk().await;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    let bound_addr = hosting_server::start_server(
+        Arc::clone(&state.hosting_server_state),
+        port,
+        rx,
+    )
+    .await?;
+
+    *state.hosting_server_addr.lock().await = Some(bound_addr);
+    *state.hosting_server_shutdown.lock().await = Some(tx);
+
+    Ok(bound_addr.to_string())
+}
+
+#[tauri::command]
+async fn stop_hosting_server(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let shutdown_tx = state.hosting_server_shutdown.lock().await.take();
+    if let Some(tx) = shutdown_tx {
+        let _ = tx.send(());
+    }
+    *state.hosting_server_addr.lock().await = None;
+    println!("Hosting server stopped");
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_hosting_server_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<HostingServerStatus, String> {
+    let addr = state.hosting_server_addr.lock().await;
+    Ok(HostingServerStatus {
+        running: addr.is_some(),
+        address: addr.map(|a| a.to_string()),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
@@ -2619,6 +2788,10 @@ pub fn run() {
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
+            // Hosting
+            hosting_server_state: Arc::new(hosting_server::HostingServerState::new()),
+            hosting_server_addr: Arc::new(Mutex::new(None)),
+            hosting_server_shutdown: Arc::new(Mutex::new(None)),
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -2684,7 +2857,14 @@ pub fn run() {
             decrypt_file_data,
             send_encrypted_file,
             publish_encryption_key,
-            lookup_encryption_key
+            lookup_encryption_key,
+            // Hosting commands
+            create_hosted_site,
+            list_hosted_sites,
+            delete_hosted_site,
+            start_hosting_server,
+            stop_hosting_server,
+            get_hosting_server_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
