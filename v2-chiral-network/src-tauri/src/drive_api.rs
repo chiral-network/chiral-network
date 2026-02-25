@@ -367,11 +367,12 @@ async fn delete_item(
     (StatusCode::OK, "Deleted").into_response()
 }
 
-/// GET /api/drive/download/:id  — direct file download
+/// GET /api/drive/download/:id/:filename  — direct file download
+/// The filename in the URL path ensures browsers save with the correct extension.
 async fn download_file(
     Extension(state): Extension<Arc<DriveState>>,
     headers: HeaderMap,
-    Path(item_id): Path<String>,
+    Path((item_id, _filename)): Path<(String, String)>,
 ) -> Response {
     let m = state.manifest.read().await;
     let owner = get_owner(&headers);
@@ -634,8 +635,8 @@ async fn public_browse_path(
     Path((token, subpath)): Path<(String, String)>,
     Query(q): Query<PublicBrowseQuery>,
 ) -> Response {
-    // Handle "download" as the special download route
-    if subpath == "download" {
+    // Handle "download" or "download/filename.ext" as the special download route
+    if subpath == "download" || subpath.starts_with("download/") {
         return public_download(Extension(state), Path(token), Query(q)).await;
     }
 
@@ -766,12 +767,13 @@ fn file_download_page(item: &DriveItem, token: &str, pw_param: &str) -> String {
 </div>
 <h1 class="text-xl font-bold mb-1">{name}</h1>
 <p class="text-gray-400 text-sm mb-6">{size}</p>
-<a href="/drive/{token}/download?dl=1{pw}"
+<a href="/drive/{token}/download/{urlname}?dl=1{pw}"
   class="inline-block px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">
 Download File</a>
 <p class="text-xs text-gray-500 mt-4">Shared via Chiral Network</p>
 </div></body></html>"#,
         name = html_escape(&item.name),
+        urlname = url_encode(&item.name),
         size = size_str,
         token = token,
         pw = pw_param,
@@ -857,6 +859,21 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -869,7 +886,7 @@ pub fn drive_routes(state: Arc<DriveState>) -> Router {
         .route("/api/drive/folders", post(create_folder))
         .route("/api/drive/upload", post(upload_file))
         .route("/api/drive/items/:id", put(update_item).delete(delete_item))
-        .route("/api/drive/download/:id", get(download_file))
+        .route("/api/drive/download/:id/:filename", get(download_file))
         .route("/api/drive/share", post(create_share))
         .route("/api/drive/share/:token", delete(revoke_share))
         .route("/api/drive/shares", get(list_shares))

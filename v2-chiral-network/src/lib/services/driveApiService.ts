@@ -127,9 +127,9 @@ export const driveApi = {
     return request<ShareLink[]>('/api/drive/shares');
   },
 
-  /** Get direct download URL for a file */
-  getDownloadUrl(id: string): string {
-    return `${RELAY_BASE}/api/drive/download/${encodeURIComponent(id)}`;
+  /** Get direct download URL for a file (includes filename for correct extension) */
+  getDownloadUrl(id: string, filename: string): string {
+    return `${RELAY_BASE}/api/drive/download/${encodeURIComponent(id)}/${encodeURIComponent(filename)}`;
   },
 
   /** Get public share URL */

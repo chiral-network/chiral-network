@@ -289,8 +289,8 @@ function createDriveStore() {
       return manifest.items.filter(i => i.type === 'folder');
     },
 
-    getDownloadUrl(id: string): string {
-      return driveApi.getDownloadUrl(id);
+    getDownloadUrl(id: string, filename: string): string {
+      return driveApi.getDownloadUrl(id, filename);
     },
 
     getShareUrl(token: string): string {
