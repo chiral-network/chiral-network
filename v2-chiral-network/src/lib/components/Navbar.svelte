@@ -58,8 +58,17 @@
         {/each}
       </div>
 
-      <!-- Right side: status + logout + hamburger -->
+      <!-- Right side: logout + status + hamburger -->
       <div class="flex items-center gap-2 sm:gap-3">
+        <button
+          onclick={handleLogout}
+          class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
+          title="Logout"
+        >
+          <LogOut class="w-4 h-4" />
+          <span class="hidden lg:inline">Logout</span>
+        </button>
+
         <div class="flex items-center gap-1.5 px-2 py-1 rounded-full
           {$networkConnected
             ? 'bg-green-50 dark:bg-green-900/30'
@@ -72,15 +81,6 @@
             {$networkConnected ? 'Connected' : 'Offline'}
           </span>
         </div>
-
-        <button
-          onclick={handleLogout}
-          class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
-          title="Logout"
-        >
-          <LogOut class="w-4 h-4" />
-          <span class="hidden lg:inline">Logout</span>
-        </button>
 
         <!-- Mobile hamburger -->
         <button
