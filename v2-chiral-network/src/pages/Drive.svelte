@@ -206,7 +206,7 @@
     if (item.type !== 'file') return;
     // Use direct server URL — the server sends Content-Disposition: attachment
     // with the correct filename and Content-Type, so the browser/OS handles it properly.
-    const url = driveStore.getDownloadUrl(item.id);
+    const url = driveStore.getDownloadUrl(item.id, item.name);
     const a = document.createElement('a');
     a.href = url;
     a.target = '_blank';
