@@ -189,10 +189,24 @@
   }
 
   // Download
-  function handleDownload(item: DriveItem) {
+  async function handleDownload(item: DriveItem) {
     if (item.type !== 'file') return;
     const url = driveStore.getDownloadUrl(item.id);
-    window.open(url, '_blank');
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = item.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      toasts.show('Download failed: ' + (e as Error).message, 'error');
+    }
   }
 
   // Share
