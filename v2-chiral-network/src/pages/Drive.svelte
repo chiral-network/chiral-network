@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { HardDrive, FolderPlus, Upload } from 'lucide-svelte';
+  import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import { toasts } from '$lib/toastStore';
   import DriveBreadcrumb from '$lib/components/drive/DriveBreadcrumb.svelte';
@@ -11,12 +11,14 @@
   import DriveShareModal from '$lib/components/drive/DriveShareModal.svelte';
   import DriveMoveModal from '$lib/components/drive/DriveMoveModal.svelte';
 
-  let manifest = $state<DriveManifest>({ version: 1, items: [], lastModified: 0 });
+  let manifest = $state<DriveManifest>({ version: 1, items: [], shares: [], lastModified: 0 });
   let currentFolderId = $state<string | null>(null);
   let viewMode = $state<'grid' | 'list'>('grid');
   let searchQuery = $state('');
   let creatingFolder = $state(false);
   let newFolderName = $state('');
+  let loading = $state(false);
+  let uploading = $state(false);
 
   // Context menu
   let contextItem = $state<DriveItem | null>(null);
@@ -36,9 +38,9 @@
   driveStore.subscribe(m => manifest = m);
 
   onMount(async () => {
-    await driveStore.load();
     const saved = localStorage.getItem('drive-view-mode');
     if (saved === 'list' || saved === 'grid') viewMode = saved;
+    await loadCurrentFolder();
   });
 
   // Derived
@@ -54,14 +56,20 @@
       .reduce((sum, i) => sum + (i.size || 0), 0)
   );
 
-  function isTauri(): boolean {
-    return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+  async function loadCurrentFolder() {
+    loading = true;
+    try {
+      await driveStore.loadFolder(currentFolderId);
+    } finally {
+      loading = false;
+    }
   }
 
   // Navigation
   function navigateTo(folderId: string | null) {
     currentFolderId = folderId;
     searchQuery = '';
+    loadCurrentFolder();
   }
 
   function handleOpen(item: DriveItem) {
@@ -76,64 +84,30 @@
     localStorage.setItem('drive-view-mode', mode);
   }
 
-  // Upload
+  // Upload via file input
   async function handleUpload() {
-    if (isTauri()) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async () => {
+      if (!input.files || input.files.length === 0) return;
+      uploading = true;
+      let count = 0;
       try {
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const selected = await open({ multiple: true });
-        if (!selected) return;
-        const paths = Array.isArray(selected) ? selected : [selected];
-        for (const filePath of paths) {
-          const name = filePath.split(/[/\\]/).pop() || 'unnamed';
-          let size: number | undefined;
-          try {
-            const invoke = (globalThis as any).__tauri_invoke ?? (globalThis as any).invoke;
-            if (invoke) size = await invoke('get_file_size', { filePath });
-          } catch { /* ignore */ }
-
-          // Publish to network
-          let hash: string | undefined;
-          try {
-            const invoke = (globalThis as any).__tauri_invoke ?? (globalThis as any).invoke;
-            if (invoke) {
-              const result = await invoke('publish_file', { filePath, price: 0 });
-              hash = result?.merkle_root || result?.hash;
-            }
-          } catch (e) {
-            console.warn('Failed to publish file to network:', e);
-          }
-
-          driveStore.addFile({
-            name,
-            parentId: currentFolderId,
-            hash,
-            size,
-            localPath: filePath,
-          });
+        for (const file of input.files) {
+          const result = await driveStore.uploadFile(file, currentFolderId);
+          if (result) count++;
         }
-        toasts.show(`Uploaded ${paths.length} file${paths.length > 1 ? 's' : ''}`, 'success');
+        if (count > 0) {
+          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+        }
       } catch (e) {
         toasts.show('Upload failed: ' + (e as Error).message, 'error');
+      } finally {
+        uploading = false;
       }
-    } else {
-      // Web fallback: file input
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.multiple = true;
-      input.onchange = () => {
-        if (!input.files) return;
-        for (const file of input.files) {
-          driveStore.addFile({
-            name: file.name,
-            parentId: currentFolderId,
-            size: file.size,
-          });
-        }
-        toasts.show(`Added ${input.files.length} file${input.files.length > 1 ? 's' : ''}`, 'success');
-      };
-      input.click();
-    }
+    };
+    input.click();
   }
 
   // New folder
@@ -146,10 +120,13 @@
     }, 50);
   }
 
-  function confirmNewFolder() {
+  async function confirmNewFolder() {
     const name = newFolderName.trim();
     if (!name) return;
-    driveStore.createFolder(name, currentFolderId);
+    const result = await driveStore.createFolder(name, currentFolderId);
+    if (result) {
+      toasts.show(`Created folder "${name}"`, 'success');
+    }
     creatingFolder = false;
     newFolderName = '';
   }
@@ -181,39 +158,52 @@
     }, 50);
   }
 
-  function confirmRename() {
+  async function confirmRename() {
     if (renamingId && renameValue.trim()) {
-      driveStore.renameItem(renamingId, renameValue.trim());
+      await driveStore.renameItem(renamingId, renameValue.trim());
     }
     renamingId = null;
     renameValue = '';
   }
 
-  // Copy hash
-  async function handleCopyHash(item: DriveItem) {
-    if (!item.hash) {
-      toasts.show('No hash available for this file', 'error');
-      return;
+  // Copy link
+  async function handleCopyLink(item: DriveItem) {
+    const existingShares = driveStore.getSharesForItem(item.id, manifest);
+    let url: string;
+    if (existingShares.length > 0) {
+      url = driveStore.getShareUrl(existingShares[0].id);
+    } else {
+      const share = await driveStore.createShareLink(item.id, undefined, true);
+      if (!share) {
+        toasts.show('Failed to create share link', 'error');
+        return;
+      }
+      url = driveStore.getShareUrl(share.id);
     }
     try {
-      await navigator.clipboard.writeText(item.hash);
-      toasts.show('Hash copied to clipboard', 'success');
+      await navigator.clipboard.writeText(url);
+      toasts.show('Link copied to clipboard', 'success');
     } catch {
-      toasts.show('Failed to copy hash', 'error');
+      toasts.show('Failed to copy link', 'error');
     }
-    driveStore.markShared(item.id);
+  }
+
+  // Download
+  function handleDownload(item: DriveItem) {
+    if (item.type !== 'file') return;
+    const url = driveStore.getDownloadUrl(item.id);
+    window.open(url, '_blank');
   }
 
   // Share
   function handleShare(item: DriveItem) {
     shareItem = item;
-    driveStore.markShared(item.id);
   }
 
   // Delete
-  function handleDelete(item: DriveItem) {
+  async function handleDelete(item: DriveItem) {
     if (confirm(`Delete "${item.name}"? ${item.type === 'folder' ? 'This will delete all contents.' : 'This will remove it from your Drive.'}`)) {
-      driveStore.deleteItem(item.id);
+      await driveStore.deleteItem(item.id);
       toasts.show(`Deleted "${item.name}"`, 'success');
     }
   }
@@ -223,14 +213,14 @@
     moveItem = item;
   }
 
-  function handleMoveConfirm(itemId: string, targetFolderId: string | null) {
-    driveStore.moveItem(itemId, targetFolderId);
+  async function handleMoveConfirm(itemId: string, targetFolderId: string | null) {
+    await driveStore.moveItem(itemId, targetFolderId);
     toasts.show('Item moved', 'success');
   }
 
   // Star
-  function handleToggleStar(item: DriveItem) {
-    driveStore.toggleStar(item.id);
+  async function handleToggleStar(item: DriveItem) {
+    await driveStore.toggleStar(item.id);
   }
 
   // Drag and drop
@@ -243,19 +233,24 @@
     isDragging = false;
   }
 
-  function handleDrop(e: DragEvent) {
+  async function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
-    if (e.dataTransfer?.files) {
-      for (const file of e.dataTransfer.files) {
-        driveStore.addFile({
-          name: file.name,
-          parentId: currentFolderId,
-          size: file.size,
-        });
-      }
-      if (e.dataTransfer.files.length > 0) {
-        toasts.show(`Added ${e.dataTransfer.files.length} file${e.dataTransfer.files.length > 1 ? 's' : ''}`, 'success');
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      uploading = true;
+      let count = 0;
+      try {
+        for (const file of e.dataTransfer.files) {
+          const result = await driveStore.uploadFile(file, currentFolderId);
+          if (result) count++;
+        }
+        if (count > 0) {
+          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+        }
+      } catch (e) {
+        toasts.show('Upload failed: ' + (e as Error).message, 'error');
+      } finally {
+        uploading = false;
       }
     }
   }
@@ -279,7 +274,7 @@
   <div>
     <h1 class="text-3xl font-bold text-gray-900 dark:text-white">My Drive</h1>
     <p class="text-muted-foreground mt-2">
-      Personal cloud storage with P2P sharing
+      Cloud storage with shareable links
       {#if manifest.items.length > 0}
         <span class="ml-2 text-xs">
           — {manifest.items.filter(i => i.type === 'file').length} files, {formatBytes(totalSize)}
@@ -324,6 +319,14 @@
     </div>
   {/if}
 
+  <!-- Upload progress -->
+  {#if uploading}
+    <div class="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+      <Loader2 class="w-4 h-4 animate-spin" />
+      Uploading files to server...
+    </div>
+  {/if}
+
   <!-- Drag overlay -->
   {#if isDragging}
     <div class="border-2 border-dashed border-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-xl p-12 text-center">
@@ -332,8 +335,12 @@
     </div>
   {/if}
 
-  <!-- Content -->
-  {#if currentItems.length === 0 && !creatingFolder && !isDragging}
+  <!-- Loading -->
+  {#if loading}
+    <div class="flex items-center justify-center py-16">
+      <Loader2 class="w-8 h-8 animate-spin text-blue-500" />
+    </div>
+  {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
     <!-- Empty state -->
     <div class="flex flex-col items-center justify-center py-16 text-center">
       <div class="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
@@ -437,7 +444,8 @@
     onRename={startRename}
     onMove={handleMoveAction}
     onShare={handleShare}
-    onCopyHash={handleCopyHash}
+    onCopyLink={handleCopyLink}
+    onDownload={handleDownload}
     onToggleStar={handleToggleStar}
     onDelete={handleDelete}
   />
@@ -445,7 +453,7 @@
 
 <!-- Share modal -->
 {#if shareItem}
-  <DriveShareModal item={shareItem} onClose={() => shareItem = null} />
+  <DriveShareModal item={shareItem} {manifest} onClose={() => shareItem = null} />
 {/if}
 
 <!-- Move modal -->

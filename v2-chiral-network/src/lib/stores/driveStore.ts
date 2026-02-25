@@ -1,17 +1,13 @@
 import { writable, get } from 'svelte/store';
+import { driveApi, type DriveItem as ApiDriveItem, type ShareLink } from '$lib/services/driveApiService';
 
 export interface DriveItem {
   id: string;
   name: string;
   type: 'file' | 'folder';
   parentId: string | null;
-  // File-specific
-  hash?: string;
   size?: number;
   mimeType?: string;
-  encrypted?: boolean;
-  localPath?: string;
-  // Metadata
   createdAt: number;
   modifiedAt: number;
   starred: boolean;
@@ -21,187 +17,224 @@ export interface DriveItem {
 export interface DriveManifest {
   version: number;
   items: DriveItem[];
+  shares: ShareLink[];
   lastModified: number;
 }
 
-const STORAGE_KEY = 'chiral.drive.v1';
-
-function generateId(): string {
-  return crypto.randomUUID?.() ?? Math.random().toString(36).substring(2, 15);
-}
-
-async function tauriInvoke(cmd: string, args?: any): Promise<any> {
-  const invoke = (globalThis as any).__tauri_invoke ?? (globalThis as any).invoke;
-  if (!invoke) throw new Error('tauri invoke not available');
-  return invoke(cmd, args);
+/** Convert server API item (camelCase itemType) to frontend item (type: 'file'|'folder') */
+function fromApi(item: ApiDriveItem): DriveItem {
+  return {
+    id: item.id,
+    name: item.name,
+    type: item.itemType === 'folder' ? 'folder' : 'file',
+    parentId: item.parentId ?? null,
+    size: item.size,
+    mimeType: item.mimeType,
+    createdAt: item.createdAt * 1000, // server sends seconds, frontend uses ms
+    modifiedAt: item.modifiedAt * 1000,
+    starred: item.starred,
+    shared: false, // will be updated from shares
+  };
 }
 
 function createDriveStore() {
-  const empty: DriveManifest = { version: 1, items: [], lastModified: Date.now() };
+  const empty: DriveManifest = { version: 1, items: [], shares: [], lastModified: Date.now() };
   const { subscribe, set, update } = writable<DriveManifest>(empty);
-
-  let saveTimeout: ReturnType<typeof setTimeout> | null = null;
-
-  function debouncedSave() {
-    if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => persist(), 400);
-  }
-
-  async function persist() {
-    const manifest = get({ subscribe });
-    manifest.lastModified = Date.now();
-    const json = JSON.stringify(manifest);
-    try {
-      if ((globalThis as any).__tauri_invoke || (globalThis as any).invoke) {
-        await tauriInvoke('save_drive_manifest', { manifestJson: json });
-        return;
-      }
-    } catch (e) {
-      console.warn('tauri save_drive_manifest failed, falling back to localStorage', e);
-    }
-    try {
-      localStorage.setItem(STORAGE_KEY, json);
-    } catch (e) {
-      console.error('Failed to persist drive manifest', e);
-    }
-  }
 
   return {
     subscribe,
 
+    /** Load all items from the server (fetches root-level, then all items) */
     async load() {
       try {
-        if ((globalThis as any).__tauri_invoke || (globalThis as any).invoke) {
-          const res = await tauriInvoke('load_drive_manifest');
-          if (res) {
-            const parsed = typeof res === 'string' ? JSON.parse(res) : res;
-            if (parsed && Array.isArray(parsed.items)) {
-              set(parsed as DriveManifest);
-              return;
+        const [items, shares] = await Promise.all([
+          driveApi.listItems(null),
+          driveApi.listShareLinks(),
+        ]);
+        const sharedIds = new Set(shares.map(s => s.itemId));
+        const converted = items.map(i => {
+          const item = fromApi(i);
+          item.shared = sharedIds.has(item.id);
+          return item;
+        });
+        set({
+          version: 1,
+          items: converted,
+          shares,
+          lastModified: Date.now(),
+        });
+      } catch (e) {
+        console.error('Failed to load drive items from server:', e);
+      }
+    },
+
+    /** Load items for a specific folder from the server */
+    async loadFolder(parentId: string | null) {
+      try {
+        const items = await driveApi.listItems(parentId);
+        const m = get({ subscribe });
+        const sharedIds = new Set(m.shares.map(s => s.itemId));
+        // Replace items for this parentId
+        const otherItems = m.items.filter(i => i.parentId !== parentId);
+        const newItems = items.map(i => {
+          const item = fromApi(i);
+          item.shared = sharedIds.has(item.id);
+          return item;
+        });
+        set({
+          ...m,
+          items: [...otherItems, ...newItems],
+          lastModified: Date.now(),
+        });
+      } catch (e) {
+        console.error('Failed to load folder:', e);
+      }
+    },
+
+    async createFolder(name: string, parentId: string | null): Promise<DriveItem | null> {
+      try {
+        const item = await driveApi.createFolder(name, parentId);
+        const converted = fromApi(item);
+        update(m => {
+          m.items.push(converted);
+          return m;
+        });
+        return converted;
+      } catch (e) {
+        console.error('Failed to create folder:', e);
+        return null;
+      }
+    },
+
+    async uploadFile(file: File, parentId: string | null): Promise<DriveItem | null> {
+      try {
+        const item = await driveApi.uploadFile(file, parentId);
+        const converted = fromApi(item);
+        update(m => {
+          m.items.push(converted);
+          return m;
+        });
+        return converted;
+      } catch (e) {
+        console.error('Failed to upload file:', e);
+        return null;
+      }
+    },
+
+    async renameItem(id: string, newName: string) {
+      try {
+        await driveApi.updateItem(id, { name: newName });
+        update(m => {
+          const item = m.items.find(i => i.id === id);
+          if (item) {
+            item.name = newName;
+            item.modifiedAt = Date.now();
+          }
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to rename item:', e);
+      }
+    },
+
+    async moveItem(id: string, newParentId: string | null) {
+      try {
+        await driveApi.updateItem(id, { parent_id: newParentId ?? '' });
+        update(m => {
+          const item = m.items.find(i => i.id === id);
+          if (item) {
+            item.parentId = newParentId;
+            item.modifiedAt = Date.now();
+          }
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to move item:', e);
+      }
+    },
+
+    async deleteItem(id: string) {
+      try {
+        await driveApi.deleteItem(id);
+        update(m => {
+          // Remove the item and all descendants locally
+          const toDelete = new Set<string>();
+          function collectDescendants(parentId: string) {
+            toDelete.add(parentId);
+            m.items.filter(i => i.parentId === parentId).forEach(i => collectDescendants(i.id));
+          }
+          collectDescendants(id);
+          m.items = m.items.filter(i => !toDelete.has(i.id));
+          m.shares = m.shares.filter(s => !toDelete.has(s.itemId));
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to delete item:', e);
+      }
+    },
+
+    async toggleStar(id: string) {
+      const m = get({ subscribe });
+      const item = m.items.find(i => i.id === id);
+      if (!item) return;
+      const newStarred = !item.starred;
+      try {
+        await driveApi.updateItem(id, { starred: newStarred });
+        update(m => {
+          const found = m.items.find(i => i.id === id);
+          if (found) found.starred = newStarred;
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to toggle star:', e);
+      }
+    },
+
+    async createShareLink(itemId: string, password?: string, isPublic?: boolean): Promise<ShareLink | null> {
+      try {
+        const share = await driveApi.createShareLink(itemId, password, isPublic);
+        update(m => {
+          m.shares.push(share);
+          const item = m.items.find(i => i.id === itemId);
+          if (item) item.shared = true;
+          return m;
+        });
+        return share;
+      } catch (e) {
+        console.error('Failed to create share link:', e);
+        return null;
+      }
+    },
+
+    async revokeShareLink(token: string) {
+      try {
+        await driveApi.revokeShareLink(token);
+        update(m => {
+          const share = m.shares.find(s => s.id === token);
+          m.shares = m.shares.filter(s => s.id !== token);
+          // Check if item still has other shares
+          if (share) {
+            const remaining = m.shares.filter(s => s.itemId === share.itemId);
+            if (remaining.length === 0) {
+              const item = m.items.find(i => i.id === share.itemId);
+              if (item) item.shared = false;
             }
           }
-        }
+          return m;
+        });
       } catch (e) {
-        console.warn('tauri load_drive_manifest failed, trying localStorage', e);
-      }
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed && Array.isArray(parsed.items)) {
-            set(parsed as DriveManifest);
-            return;
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to load drive manifest from localStorage', e);
+        console.error('Failed to revoke share link:', e);
       }
     },
 
-    createFolder(name: string, parentId: string | null): DriveItem {
-      const item: DriveItem = {
-        id: generateId(),
-        name,
-        type: 'folder',
-        parentId,
-        createdAt: Date.now(),
-        modifiedAt: Date.now(),
-        starred: false,
-        shared: false,
-      };
-      update(m => {
-        m.items.push(item);
-        return m;
-      });
-      debouncedSave();
-      return item;
-    },
-
-    addFile(file: { name: string; parentId: string | null; hash?: string; size?: number; localPath?: string; encrypted?: boolean }): DriveItem {
-      const item: DriveItem = {
-        id: generateId(),
-        name: file.name,
-        type: 'file',
-        parentId: file.parentId,
-        hash: file.hash,
-        size: file.size,
-        localPath: file.localPath,
-        encrypted: file.encrypted,
-        createdAt: Date.now(),
-        modifiedAt: Date.now(),
-        starred: false,
-        shared: false,
-      };
-      update(m => {
-        m.items.push(item);
-        return m;
-      });
-      debouncedSave();
-      return item;
-    },
-
-    renameItem(id: string, newName: string) {
-      update(m => {
-        const item = m.items.find(i => i.id === id);
-        if (item) {
-          item.name = newName;
-          item.modifiedAt = Date.now();
-        }
-        return m;
-      });
-      debouncedSave();
-    },
-
-    moveItem(id: string, newParentId: string | null) {
-      update(m => {
-        const item = m.items.find(i => i.id === id);
-        if (item) {
-          item.parentId = newParentId;
-          item.modifiedAt = Date.now();
-        }
-        return m;
-      });
-      debouncedSave();
-    },
-
-    deleteItem(id: string) {
-      update(m => {
-        // Collect all descendants recursively
-        const toDelete = new Set<string>();
-        function collectDescendants(parentId: string) {
-          toDelete.add(parentId);
-          m.items.filter(i => i.parentId === parentId).forEach(i => collectDescendants(i.id));
-        }
-        collectDescendants(id);
-        m.items = m.items.filter(i => !toDelete.has(i.id));
-        return m;
-      });
-      debouncedSave();
-    },
-
-    toggleStar(id: string) {
-      update(m => {
-        const item = m.items.find(i => i.id === id);
-        if (item) item.starred = !item.starred;
-        return m;
-      });
-      debouncedSave();
-    },
-
-    markShared(id: string) {
-      update(m => {
-        const item = m.items.find(i => i.id === id);
-        if (item) item.shared = true;
-        return m;
-      });
-      debouncedSave();
+    getSharesForItem(itemId: string, manifest: DriveManifest): ShareLink[] {
+      return manifest.shares.filter(s => s.itemId === itemId);
     },
 
     getChildren(parentId: string | null, manifest: DriveManifest): DriveItem[] {
       return manifest.items
         .filter(i => i.parentId === parentId)
         .sort((a, b) => {
-          // Folders first, then by name
           if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
@@ -230,6 +263,14 @@ function createDriveStore() {
 
     getAllFolders(manifest: DriveManifest): DriveItem[] {
       return manifest.items.filter(i => i.type === 'folder');
+    },
+
+    getDownloadUrl(id: string): string {
+      return driveApi.getDownloadUrl(id);
+    },
+
+    getShareUrl(token: string): string {
+      return driveApi.getShareUrl(token);
     },
   };
 }
