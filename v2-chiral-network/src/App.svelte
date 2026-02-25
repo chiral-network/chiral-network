@@ -17,6 +17,7 @@
   import MiningPage from './pages/Mining.svelte';
   import DiagnosticsPage from './pages/Diagnostics.svelte';
   import SettingsPage from './pages/Settings.svelte';
+  import HostingPage from './pages/Hosting.svelte';
 
   let currentPath = $state('/wallet');
   let sidebarCollapsed = $state(false);
@@ -67,6 +68,10 @@
     {
       path: '/diagnostics',
       component: DiagnosticsPage
+    },
+    {
+      path: '/hosting',
+      component: HostingPage
     },
     {
       path: '/settings',
