@@ -62,19 +62,35 @@
         <span class="text-lg font-bold dark:text-white hidden sm:inline xl:hidden">Chiral</span>
       </div>
 
-      <!-- Desktop nav -->
-      <div class="hidden md:flex items-center gap-0.5 shrink-0">
+      <!-- Desktop nav: icon-only, all items (md to xl) -->
+      <div class="hidden md:flex xl:hidden items-center gap-0.5 shrink-0">
+        {#each navItems as item}
+          <button
+            onclick={() => navigate(item.path)}
+            class="flex items-center px-2 py-1.5 rounded-lg transition text-sm
+              {currentPage === item.path
+                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+            title={item.label}
+          >
+            <svelte:component this={item.icon} class="w-4 h-4" />
+          </button>
+        {/each}
+      </div>
+
+      <!-- Desktop nav: with labels + More dropdown (xl+) -->
+      <div class="hidden xl:flex items-center gap-0.5 shrink-0">
         {#each visibleItems as item}
           <button
             onclick={() => navigate(item.path)}
-            class="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap
               {currentPage === item.path
                 ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
                 : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
             title={item.label}
           >
             <svelte:component this={item.icon} class="w-4 h-4 shrink-0" />
-            <span class="font-medium hidden xl:inline">{item.label}</span>
+            <span class="font-medium">{item.label}</span>
           </button>
         {/each}
 
@@ -82,13 +98,13 @@
           <div class="relative more-menu-container">
             <button
               onclick={() => moreMenuOpen = !moreMenuOpen}
-              class="flex items-center gap-1 px-2 xl:px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap
+              class="flex items-center gap-1 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap
                 {isMoreActive
                   ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
                   : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
               title="More"
             >
-              <span class="font-medium hidden xl:inline">More</span>
+              <span class="font-medium">More</span>
               <ChevronDown class="w-4 h-4 transition-transform {moreMenuOpen ? 'rotate-180' : ''}" />
             </button>
 
