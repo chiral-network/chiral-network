@@ -1,5 +1,13 @@
 const RELAY_BASE = 'http://130.245.173.73:8080';
 
+/** Current owner wallet address — set via setOwner() */
+let currentOwner = '';
+
+/** Set the owner wallet address for all Drive API requests */
+export function setDriveOwner(address: string) {
+  currentOwner = address;
+}
+
 export interface DriveItem {
   id: string;
   name: string;
@@ -28,6 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       ...(init?.headers || {}),
+      ...(currentOwner ? { 'X-Owner': currentOwner } : {}),
     },
   });
   if (!res.ok) {

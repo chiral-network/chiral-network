@@ -1,6 +1,6 @@
 use axum::{
     extract::{Extension, Multipart, Path, Query},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
@@ -49,6 +49,15 @@ impl DriveState {
         let m = self.manifest.read().await;
         drive_storage::save_manifest(&m);
     }
+}
+
+/// Extract the owner wallet address from X-Owner header.
+fn get_owner(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-owner")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -103,14 +112,19 @@ struct PublicBrowseQuery {
 /// GET /api/drive/items?parent_id=X
 async fn list_items(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     Query(q): Query<ListItemsQuery>,
 ) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     let m = state.manifest.read().await;
     let parent = q.parent_id.as_deref();
     let mut items: Vec<&DriveItem> = m
         .items
         .iter()
-        .filter(|i| i.parent_id.as_deref() == parent)
+        .filter(|i| i.parent_id.as_deref() == parent && i.owner == owner)
         .collect();
     // Folders first, then by name
     items.sort_by(|a, b| {
@@ -130,8 +144,13 @@ async fn list_items(
 /// POST /api/drive/folders
 async fn create_folder(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     Json(req): Json<CreateFolderRequest>,
 ) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     if req.name.is_empty() || req.name.len() > 255 {
         return (StatusCode::BAD_REQUEST, "Invalid folder name").into_response();
     }
@@ -146,6 +165,7 @@ async fn create_folder(
         modified_at: now_secs(),
         starred: false,
         storage_path: None,
+        owner,
     };
     {
         let mut m = state.manifest.write().await;
@@ -158,8 +178,13 @@ async fn create_folder(
 /// POST /api/drive/upload  (multipart: file + optional parent_id field)
 async fn upload_file(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     let mut parent_id: Option<String> = None;
     let mut file_name: Option<String> = None;
     let mut file_data: Option<Vec<u8>> = None;
@@ -246,6 +271,7 @@ async fn upload_file(
         modified_at: now_secs(),
         starred: false,
         storage_path: Some(storage_name),
+        owner,
     };
 
     {
@@ -261,11 +287,16 @@ async fn upload_file(
 /// PUT /api/drive/items/:id
 async fn update_item(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     Path(item_id): Path<String>,
     Json(req): Json<UpdateItemRequest>,
 ) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     let mut m = state.manifest.write().await;
-    let Some(item) = m.items.iter_mut().find(|i| i.id == item_id) else {
+    let Some(item) = m.items.iter_mut().find(|i| i.id == item_id && i.owner == owner) else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
 
@@ -293,12 +324,17 @@ async fn update_item(
 /// DELETE /api/drive/items/:id
 async fn delete_item(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     Path(item_id): Path<String>,
 ) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     let mut m = state.manifest.write().await;
 
-    // Check exists
-    if !m.items.iter().any(|i| i.id == item_id) {
+    // Check exists and belongs to owner
+    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     }
 
@@ -334,10 +370,12 @@ async fn delete_item(
 /// GET /api/drive/download/:id  — direct file download
 async fn download_file(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     Path(item_id): Path<String>,
 ) -> Response {
     let m = state.manifest.read().await;
-    let Some(item) = m.items.iter().find(|i| i.id == item_id) else {
+    let owner = get_owner(&headers);
+    let Some(item) = m.items.iter().find(|i| i.id == item_id && (owner.is_none() || i.owner == *owner.as_ref().unwrap())) else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
     if item.item_type != "file" {
@@ -381,12 +419,17 @@ async fn download_file(
 /// POST /api/drive/share
 async fn create_share(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     Json(req): Json<CreateShareRequest>,
 ) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     let mut m = state.manifest.write().await;
 
-    // Verify item exists
-    if !m.items.iter().any(|i| i.id == req.item_id) {
+    // Verify item exists and belongs to owner
+    if !m.items.iter().any(|i| i.id == req.item_id && i.owner == owner) {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     }
 
@@ -419,25 +462,49 @@ async fn create_share(
 /// DELETE /api/drive/share/:token
 async fn revoke_share(
     Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     let mut m = state.manifest.write().await;
-    let before = m.shares.len();
-    m.shares.retain(|s| s.id != token);
-    if m.shares.len() == before {
+    // Only allow revoking shares for items the owner owns
+    let share = m.shares.iter().find(|s| s.id == token);
+    let is_owner = share.map_or(false, |s| {
+        m.items.iter().any(|i| i.id == s.item_id && i.owner == owner)
+    });
+    if !is_owner {
         return (StatusCode::NOT_FOUND, "Share link not found").into_response();
     }
+    m.shares.retain(|s| s.id != token);
     drop(m);
     state.persist().await;
     (StatusCode::OK, "Revoked").into_response()
 }
 
 /// GET /api/drive/shares
-async fn list_shares(Extension(state): Extension<Arc<DriveState>>) -> Response {
+async fn list_shares(
+    Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
+) -> Response {
+    let owner = match get_owner(&headers) {
+        Some(o) => o,
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
     let m = state.manifest.read().await;
+    // Only return shares for items owned by this user
+    let owner_item_ids: HashSet<&str> = m
+        .items
+        .iter()
+        .filter(|i| i.owner == owner)
+        .map(|i| i.id.as_str())
+        .collect();
     let responses: Vec<ShareLinkResponse> = m
         .shares
         .iter()
+        .filter(|s| owner_item_ids.contains(s.item_id.as_str()))
         .map(|s| ShareLinkResponse {
             id: s.id.clone(),
             item_id: s.item_id.clone(),

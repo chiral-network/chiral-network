@@ -22,6 +22,9 @@ pub struct DriveItem {
     /// Relative path within drive_files_dir (files only)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_path: Option<String>,
+    /// Wallet address of the owner
+    #[serde(default)]
+    pub owner: String,
 }
 
 /// A share link granting access to a DriveItem.
@@ -204,6 +207,7 @@ mod tests {
                 modified_at: 0,
                 starred: false,
                 storage_path: None,
+                owner: "test-owner".into(),
             },
             DriveItem {
                 id: "child1".into(),
@@ -216,6 +220,7 @@ mod tests {
                 modified_at: 0,
                 starred: false,
                 storage_path: None,
+                owner: "test-owner".into(),
             },
             DriveItem {
                 id: "subfolder".into(),
@@ -228,6 +233,7 @@ mod tests {
                 modified_at: 0,
                 starred: false,
                 storage_path: None,
+                owner: "test-owner".into(),
             },
             DriveItem {
                 id: "grandchild".into(),
@@ -240,6 +246,7 @@ mod tests {
                 modified_at: 0,
                 starred: false,
                 storage_path: None,
+                owner: "test-owner".into(),
             },
         ];
         let desc = collect_descendants("root", &items);

@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
+  import { walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import DriveBreadcrumb from '$lib/components/drive/DriveBreadcrumb.svelte';
   import DriveToolbar from '$lib/components/drive/DriveToolbar.svelte';
@@ -36,6 +37,18 @@
 
   // Subscribe to store
   driveStore.subscribe(m => manifest = m);
+
+  // Reload drive when wallet changes
+  let prevWalletAddr = '';
+  const unsubWallet = walletAccount.subscribe((account) => {
+    const addr = account?.address ?? '';
+    if (addr !== prevWalletAddr) {
+      prevWalletAddr = addr;
+      currentFolderId = null;
+      loadCurrentFolder();
+    }
+  });
+  onDestroy(unsubWallet);
 
   onMount(async () => {
     const saved = localStorage.getItem('drive-view-mode');
@@ -193,7 +206,10 @@
     if (item.type !== 'file') return;
     const url = driveStore.getDownloadUrl(item.id);
     try {
-      const response = await fetch(url);
+      const ownerAddr = $walletAccount?.address ?? '';
+      const response = await fetch(url, {
+        headers: ownerAddr ? { 'X-Owner': ownerAddr } : {},
+      });
       if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
