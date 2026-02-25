@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     Globe,
     Plus,
@@ -223,34 +223,26 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Drag and drop
+  // Drag and drop (Tauri window-level events)
   // ---------------------------------------------------------------------------
 
-  function handleDragOver(e: DragEvent) {
-    e.preventDefault();
-    isDragOver = true;
-  }
+  let unlistenDragDrop: (() => void) | undefined;
 
-  function handleDragLeave() {
-    isDragOver = false;
-  }
-
-  async function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    isDragOver = false;
-    // In Tauri, dropped files come as paths via the dataTransfer
-    // For web preview, we show the file names
-    if (e.dataTransfer?.files) {
-      const files = Array.from(e.dataTransfer.files);
-      for (const file of files) {
-        if (!selectedFiles.some(f => f.name === file.name)) {
-          selectedFiles = [...selectedFiles, {
-            name: file.name,
-            path: (file as any).path || file.name,
-            size: file.size,
-          }];
-        }
+  async function addFilesFromPaths(paths: string[]) {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      for (const p of paths) {
+        const name = p.split(/[\\/]/).pop() || p;
+        if (selectedFiles.some(f => f.path === p)) continue;
+        let size = 0;
+        try {
+          size = await invoke<number>('get_file_size', { filePath: p });
+        } catch (_) { /* ignore */ }
+        selectedFiles = [...selectedFiles, { name, path: p, size }];
       }
+    } catch (err) {
+      log.error('Failed to add dropped files:', err);
     }
   }
 
@@ -272,6 +264,33 @@
 
     await loadServerStatus();
     await loadSites();
+
+    // Set up Tauri drag-drop listener
+    if (isTauri) {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+
+        unlistenDragDrop = await appWindow.onDragDropEvent((event) => {
+          if (event.payload.type === 'drop') {
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+              addFilesFromPaths(paths);
+            }
+          } else if (event.payload.type === 'enter') {
+            isDragOver = true;
+          } else if (event.payload.type === 'leave') {
+            isDragOver = false;
+          }
+        });
+      } catch (error) {
+        log.error('Failed to setup drag-drop listener:', error);
+      }
+    }
+  });
+
+  onDestroy(() => {
+    unlistenDragDrop?.();
   });
 </script>
 
@@ -364,9 +383,6 @@
     <div
       role="button"
       tabindex="0"
-      ondragover={handleDragOver}
-      ondragleave={handleDragLeave}
-      ondrop={handleDrop}
       onclick={selectFiles}
       onkeydown={(e) => e.key === 'Enter' && selectFiles()}
       class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-8 transition
@@ -376,7 +392,7 @@
     >
       <FolderOpen class="h-8 w-8 text-gray-400 dark:text-gray-500" />
       <p class="text-sm text-gray-500 dark:text-gray-400">
-        Drop files here or click to browse
+        {isDragOver ? 'Release to add files' : 'Drop files here or click to browse'}
       </p>
       <p class="text-xs text-gray-400 dark:text-gray-500">
         HTML, CSS, JS, images, fonts
