@@ -1,9 +1,10 @@
 //! Standalone v2-compatible relay server for the Chiral Network bootstrap node.
 //!
 //! Uses the same libp2p 0.53 + relay 0.17 as v2 peers, ensuring protocol compatibility.
+//! Also runs an HTTP gateway for hosting static sites uploaded by peers.
 //!
 //! Usage:
-//!   relay_server [--port PORT] [--secret SECRET]
+//!   relay_server [--port PORT] [--secret SECRET] [--http-port HTTP_PORT]
 //!
 //! The secret is used to derive a deterministic keypair for a stable PeerId.
 
@@ -14,7 +15,10 @@ use libp2p::{
 };
 use futures::StreamExt;
 use std::error::Error;
+use std::sync::Arc;
 use sha2::{Sha256, Digest};
+
+use chiral_network_v2_lib::hosting_server::{self, HostingServerState};
 
 #[derive(NetworkBehaviour)]
 struct RelayServerBehaviour {
@@ -40,6 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().collect();
 
     let mut port: u16 = 4001;
+    let mut http_port: u16 = 8080;
     let mut secret = String::from("chiral-relay-server-default");
 
     let mut i = 1;
@@ -51,6 +56,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     i += 2;
                 } else {
                     eprintln!("--port requires a value");
+                    std::process::exit(1);
+                }
+            }
+            "--http-port" => {
+                if i + 1 < args.len() {
+                    http_port = args[i + 1].parse().expect("Invalid HTTP port number");
+                    i += 2;
+                } else {
+                    eprintln!("--http-port requires a value");
                     std::process::exit(1);
                 }
             }
@@ -76,7 +90,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("=== Chiral Network v2 Relay Server ===");
     println!("PeerId: {}", local_peer_id);
-    println!("Port: {}", port);
+    println!("P2P Port: {}", port);
+    println!("HTTP Port: {}", http_port);
+
+    // -----------------------------------------------------------------------
+    // Start HTTP gateway for hosting
+    // -----------------------------------------------------------------------
+
+    let hosting_state = Arc::new(HostingServerState::new());
+    hosting_state.load_from_disk().await;
+
+    let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
+
+    match hosting_server::start_gateway_server(
+        Arc::clone(&hosting_state),
+        http_port,
+        http_shutdown_rx,
+    )
+    .await
+    {
+        Ok(addr) => println!("HTTP gateway listening on http://{}", addr),
+        Err(e) => eprintln!("WARNING: Failed to start HTTP gateway: {}", e),
+    }
+
+    // Keep shutdown sender alive — drop it on process exit
+    let _http_shutdown = http_shutdown_tx;
+
+    // -----------------------------------------------------------------------
+    // Configure libp2p
+    // -----------------------------------------------------------------------
 
     // Configure Kademlia
     let kad_store = kad::store::MemoryStore::new(local_peer_id);

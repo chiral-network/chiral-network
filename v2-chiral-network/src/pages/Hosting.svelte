@@ -11,11 +11,17 @@
     PowerOff,
     File as FileIcon,
     Server,
-    X
+    X,
+    Upload,
+    CloudOff,
+    Check
   } from 'lucide-svelte';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
   const log = logger('Hosting');
+
+  // Default relay gateway URL
+  const RELAY_GATEWAY = 'http://130.245.173.73:8080';
 
   // Check if running in Tauri environment
   let isTauri = $state(false);
@@ -38,6 +44,7 @@
     directory: string;
     createdAt: number;
     files: SiteFile[];
+    relayUrl?: string | null;
   }
 
   interface ServerStatus {
@@ -59,6 +66,9 @@
   let selectedFiles = $state<{ name: string; path: string; size: number }[]>([]);
   let isCreating = $state(false);
   let isStartingServer = $state(false);
+
+  // Publishing state per site
+  let publishingStates = $state<Record<string, boolean>>({});
 
   // Drag state
   let isDragOver = $state(false);
@@ -83,12 +93,17 @@
     return `${Math.floor(diff / 86400)}d ago`;
   }
 
-  function siteUrl(siteId: string): string {
+  function siteUrl(site: HostedSite): string {
+    // Prefer relay URL if published
+    if (site.relayUrl) {
+      return site.relayUrl;
+    }
+    // Fallback to local URL
     const p = serverStatus.address?.split(':').pop() || String(port);
     if (publicIp) {
-      return `http://${publicIp}:${p}/sites/${siteId}/`;
+      return `http://${publicIp}:${p}/sites/${site.id}/`;
     }
-    return `http://localhost:${p}/sites/${siteId}/`;
+    return `http://localhost:${p}/sites/${site.id}/`;
   }
 
   function localUrl(): string {
@@ -100,7 +115,6 @@
 
   async function fetchPublicIp() {
     try {
-      // Try multiple services in case one is down
       for (const url of [
         'https://api.ipify.org?format=text',
         'https://icanhazip.com',
@@ -149,7 +163,6 @@
       serverStatus = { running: true, address: addr };
       fetchPublicIp();
       toasts.show(`Hosting server started on ${addr}`, 'success');
-      // Save port preference
       localStorage.setItem('chiral-hosting-port', String(port));
     } catch (err: any) {
       toasts.show(`Failed to start server: ${err}`, 'error');
@@ -194,7 +207,6 @@
         for (const p of paths) {
           const name = p.split(/[\\/]/).pop() || p;
           const size = await invoke<number>('get_file_size', { filePath: p });
-          // Avoid duplicates
           if (!selectedFiles.some(f => f.path === p)) {
             selectedFiles = [...selectedFiles, { name, path: p, size }];
           }
@@ -221,8 +233,6 @@
       });
       sites = [...sites, site];
       toasts.show(`Site "${site.name}" created`, 'success');
-
-      // Reset form
       newSiteName = '';
       selectedFiles = [];
     } catch (err: any) {
@@ -246,14 +256,53 @@
     }
   }
 
-  function copyUrl(siteId: string) {
-    const url = siteUrl(siteId);
+  function copyUrl(site: HostedSite) {
+    const url = siteUrl(site);
     navigator.clipboard.writeText(url);
     toasts.show('URL copied to clipboard', 'success');
   }
 
-  function openSite(siteId: string) {
-    window.open(siteUrl(siteId), '_blank');
+  function openSite(site: HostedSite) {
+    window.open(siteUrl(site), '_blank');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Relay publishing
+  // ---------------------------------------------------------------------------
+
+  async function publishToRelay(siteId: string) {
+    if (!isTauri) return;
+    publishingStates = { ...publishingStates, [siteId]: true };
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const relayUrl = await invoke<string>('publish_site_to_relay', {
+        siteId,
+        relayUrl: RELAY_GATEWAY,
+      });
+      await loadSites();
+      toasts.show(`Published! URL: ${relayUrl}`, 'success');
+    } catch (err: any) {
+      toasts.show(`Failed to publish: ${err}`, 'error');
+      log.error('Publish error:', err);
+    } finally {
+      publishingStates = { ...publishingStates, [siteId]: false };
+    }
+  }
+
+  async function unpublishFromRelay(siteId: string) {
+    if (!isTauri) return;
+    publishingStates = { ...publishingStates, [siteId]: true };
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('unpublish_site_from_relay', { siteId });
+      await loadSites();
+      toasts.show('Site unpublished from network', 'info');
+    } catch (err: any) {
+      toasts.show(`Failed to unpublish: ${err}`, 'error');
+      log.error('Unpublish error:', err);
+    } finally {
+      publishingStates = { ...publishingStates, [siteId]: false };
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -287,7 +336,6 @@
   onMount(async () => {
     isTauri = checkTauriAvailability();
 
-    // Restore saved port
     const savedPort = localStorage.getItem('chiral-hosting-port');
     if (savedPort) {
       const parsed = parseInt(savedPort, 10);
@@ -298,11 +346,8 @@
 
     await loadServerStatus();
     await loadSites();
-
-    // Fetch public IP for shareable URLs
     fetchPublicIp();
 
-    // Set up Tauri drag-drop listener
     if (isTauri) {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -340,6 +385,7 @@
     </h1>
     <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
       Host static websites on the Chiral Network. Upload HTML, CSS, JS, and image files to serve them over HTTP.
+      Publish to the network to make your site accessible from anywhere.
     </p>
   </div>
 
@@ -351,17 +397,11 @@
           <Server class="h-5 w-5 {serverStatus.running ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500'}" />
         </div>
         <div>
-          <h2 class="text-sm font-semibold text-gray-900 dark:text-white">HTTP Server</h2>
+          <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Local HTTP Server</h2>
           {#if serverStatus.running}
             <p class="text-xs text-green-600 dark:text-green-400">
               Running on <span class="font-mono">{localUrl()}</span>
             </p>
-            {#if publicIp}
-              <p class="text-xs text-gray-500 dark:text-gray-400">
-                Public: <span class="font-mono">{publicIp}:{serverStatus.address?.split(':').pop() || port}</span>
-                <span class="text-gray-400 dark:text-gray-500">(requires port forwarding)</span>
-              </p>
-            {/if}
           {:else}
             <p class="text-xs text-gray-500 dark:text-gray-400">Not running</p>
           {/if}
@@ -504,10 +544,26 @@
           <div class="rounded-xl border border-gray-100 bg-gray-50/50 p-4 transition hover:border-gray-200 dark:border-gray-700/50 dark:bg-gray-700/30 dark:hover:border-gray-600">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0 flex-1">
-                <h3 class="font-medium text-gray-900 dark:text-white">{site.name}</h3>
-                <p class="mt-0.5 font-mono text-xs text-primary-600 dark:text-primary-400 truncate">
-                  {siteUrl(site.id)}
-                </p>
+                <div class="flex items-center gap-2">
+                  <h3 class="font-medium text-gray-900 dark:text-white">{site.name}</h3>
+                  {#if site.relayUrl}
+                    <span class="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                      <Check class="h-2.5 w-2.5" />
+                      Published
+                    </span>
+                  {/if}
+                </div>
+
+                {#if site.relayUrl}
+                  <p class="mt-0.5 font-mono text-xs text-green-600 dark:text-green-400 truncate">
+                    {site.relayUrl}
+                  </p>
+                {:else}
+                  <p class="mt-0.5 font-mono text-xs text-primary-600 dark:text-primary-400 truncate">
+                    {siteUrl(site)}
+                  </p>
+                {/if}
+
                 <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
                   {site.files.length} file{site.files.length === 1 ? '' : 's'}
                   · {formatFileSize(totalSize(site.files))}
@@ -533,15 +589,44 @@
 
               <!-- Actions -->
               <div class="flex items-center gap-1.5 flex-shrink-0">
+                <!-- Publish / Unpublish button -->
+                {#if site.relayUrl}
+                  <button
+                    onclick={() => unpublishFromRelay(site.id)}
+                    disabled={publishingStates[site.id]}
+                    title="Unpublish from network"
+                    class="rounded-lg p-2 text-gray-400 transition hover:bg-orange-50 hover:text-orange-500 dark:hover:bg-orange-900/30 dark:hover:text-orange-400 disabled:opacity-50"
+                  >
+                    {#if publishingStates[site.id]}
+                      <div class="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-orange-500"></div>
+                    {:else}
+                      <CloudOff class="h-4 w-4" />
+                    {/if}
+                  </button>
+                {:else}
+                  <button
+                    onclick={() => publishToRelay(site.id)}
+                    disabled={publishingStates[site.id]}
+                    title="Publish to network (makes site accessible from anywhere)"
+                    class="rounded-lg p-2 text-gray-400 transition hover:bg-green-50 hover:text-green-500 dark:hover:bg-green-900/30 dark:hover:text-green-400 disabled:opacity-50"
+                  >
+                    {#if publishingStates[site.id]}
+                      <div class="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-green-500"></div>
+                    {:else}
+                      <Upload class="h-4 w-4" />
+                    {/if}
+                  </button>
+                {/if}
+
                 <button
-                  onclick={() => copyUrl(site.id)}
+                  onclick={() => copyUrl(site)}
                   title="Copy URL"
                   class="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-600/50 dark:hover:text-gray-300"
                 >
                   <Copy class="h-4 w-4" />
                 </button>
                 <button
-                  onclick={() => openSite(site.id)}
+                  onclick={() => openSite(site)}
                   title="Open in browser"
                   class="rounded-lg p-2 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500 dark:hover:bg-blue-900/30 dark:hover:text-blue-400"
                 >
