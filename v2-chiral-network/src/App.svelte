@@ -18,6 +18,7 @@
   import DiagnosticsPage from './pages/Diagnostics.svelte';
   import SettingsPage from './pages/Settings.svelte';
   import HostingPage from './pages/Hosting.svelte';
+  import DrivePage from './pages/Drive.svelte';
 
   let currentPath = $state('/wallet');
   let sidebarCollapsed = $state(false);
@@ -72,6 +73,10 @@
     {
       path: '/hosting',
       component: HostingPage
+    },
+    {
+      path: '/drive',
+      component: DrivePage
     },
     {
       path: '/settings',

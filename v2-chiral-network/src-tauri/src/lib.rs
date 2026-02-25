@@ -2843,6 +2843,38 @@ async fn unpublish_site_from_relay(
     Ok(())
 }
 
+// ── Drive manifest persistence ───────────────────────────────────────────────
+
+fn drive_manifest_path() -> Option<std::path::PathBuf> {
+    dirs::data_dir().map(|d| d.join("chiral-network").join("drive_manifest.json"))
+}
+
+#[tauri::command]
+fn save_drive_manifest(manifest_json: String) -> Result<(), String> {
+    let path = drive_manifest_path()
+        .ok_or_else(|| "Cannot determine data directory".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create data directory: {}", e))?;
+    }
+    std::fs::write(&path, manifest_json)
+        .map_err(|e| format!("Failed to write drive manifest: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn load_drive_manifest() -> Result<Option<String>, String> {
+    let path = drive_manifest_path()
+        .ok_or_else(|| "Cannot determine data directory".to_string())?;
+    if path.exists() {
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read drive manifest: {}", e))?;
+        Ok(Some(contents))
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
@@ -2984,7 +3016,10 @@ pub fn run() {
             stop_hosting_server,
             get_hosting_server_status,
             publish_site_to_relay,
-            unpublish_site_from_relay
+            unpublish_site_from_relay,
+            // Drive commands
+            save_drive_manifest,
+            load_drive_manifest
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
