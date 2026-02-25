@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderInput, Pencil, Star, StarOff, Share2, Copy, Trash2 } from 'lucide-svelte';
+  import { FolderInput, Pencil, Star, StarOff, Share2, Link, Download, Trash2 } from 'lucide-svelte';
   import type { DriveItem } from '$lib/stores/driveStore';
 
   let {
@@ -10,7 +10,8 @@
     onRename,
     onMove,
     onShare,
-    onCopyHash,
+    onCopyLink,
+    onDownload,
     onToggleStar,
     onDelete,
   }: {
@@ -21,7 +22,8 @@
     onRename: (item: DriveItem) => void;
     onMove: (item: DriveItem) => void;
     onShare: (item: DriveItem) => void;
-    onCopyHash: (item: DriveItem) => void;
+    onCopyLink: (item: DriveItem) => void;
+    onDownload: (item: DriveItem) => void;
     onToggleStar: (item: DriveItem) => void;
     onDelete: (item: DriveItem) => void;
   } = $props();
@@ -39,12 +41,11 @@
   const menuItems = $derived([
     { label: 'Rename', icon: Pencil, action: action(onRename) },
     { label: 'Move to...', icon: FolderInput, action: action(onMove) },
-    ...(item.type === 'file' && item.hash
-      ? [{ label: 'Copy Hash', icon: Copy, action: action(onCopyHash) }]
-      : []),
     ...(item.type === 'file'
-      ? [{ label: 'Share', icon: Share2, action: action(onShare) }]
+      ? [{ label: 'Download', icon: Download, action: action(onDownload) }]
       : []),
+    { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
+    { label: 'Share...', icon: Share2, action: action(onShare) },
     { label: item.starred ? 'Unstar' : 'Star', icon: item.starred ? StarOff : Star, action: action(onToggleStar) },
     { label: 'Delete', icon: Trash2, action: action(onDelete), danger: true },
   ]);

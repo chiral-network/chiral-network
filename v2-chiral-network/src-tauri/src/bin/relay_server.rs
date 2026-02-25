@@ -18,6 +18,7 @@ use std::error::Error;
 use std::sync::Arc;
 use sha2::{Sha256, Digest};
 
+use chiral_network_v2_lib::drive_api::DriveState;
 use chiral_network_v2_lib::hosting_server::{self, HostingServerState};
 
 #[derive(NetworkBehaviour)]
@@ -100,10 +101,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let hosting_state = Arc::new(HostingServerState::new());
     hosting_state.load_from_disk().await;
 
+    // Initialize Drive state
+    let drive_state = Arc::new(DriveState::new());
+    drive_state.load_from_disk_async().await;
+    println!("Drive state loaded from disk");
+
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
 
     match hosting_server::start_gateway_server(
         Arc::clone(&hosting_state),
+        Some(Arc::clone(&drive_state)),
         http_port,
         http_shutdown_rx,
     )

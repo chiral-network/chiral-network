@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::drive_api::{self, DriveState};
 use crate::hosting::{self, HostedSite, SiteFile};
 
 /// Maximum total upload size per site (50 MB).
@@ -384,9 +385,12 @@ pub fn create_router(state: Arc<HostingServerState>) -> Router {
         .with_state(state)
 }
 
-/// Build the Axum router for the relay gateway (includes upload/delete API).
-pub fn create_gateway_router(state: Arc<HostingServerState>) -> Router {
-    Router::new()
+/// Build the Axum router for the relay gateway (includes upload/delete API + Drive API).
+pub fn create_gateway_router(
+    state: Arc<HostingServerState>,
+    drive_state: Option<Arc<DriveState>>,
+) -> Router {
+    let hosting_router = Router::new()
         // Serving routes
         .route("/health", get(health_check))
         .route("/sites/:site_id", get(redirect_to_index))
@@ -395,13 +399,21 @@ pub fn create_gateway_router(state: Arc<HostingServerState>) -> Router {
         // Gateway API routes
         .route("/api/sites", post(upload_site))
         .route("/api/sites/:site_id", delete(delete_site_api))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
-        .with_state(state)
+        .with_state(state);
+
+    let mut app = hosting_router;
+
+    // Merge Drive API routes if drive state is provided
+    if let Some(ds) = drive_state {
+        app = app.merge(drive_api::drive_routes(ds));
+    }
+
+    app.layer(
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any),
+    )
 }
 
 /// Start the hosting HTTP server. Returns the bound address.
@@ -436,13 +448,14 @@ pub async fn start_server(
     Ok(bound_addr)
 }
 
-/// Start the gateway HTTP server (with upload/delete API). Returns the bound address.
+/// Start the gateway HTTP server (with upload/delete API + Drive API). Returns the bound address.
 pub async fn start_gateway_server(
     state: Arc<HostingServerState>,
+    drive_state: Option<Arc<DriveState>>,
     port: u16,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<SocketAddr, String> {
-    let app = create_gateway_router(state);
+    let app = create_gateway_router(state, drive_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr)
@@ -598,7 +611,7 @@ mod tests {
         use base64::Engine;
 
         let state = Arc::new(HostingServerState::new());
-        let app = create_gateway_router(Arc::clone(&state));
+        let app = create_gateway_router(Arc::clone(&state), None);
 
         let html_content = "<h1>Gateway Test</h1>";
         let b64 = base64::engine::general_purpose::STANDARD.encode(html_content);
@@ -632,7 +645,7 @@ mod tests {
         drop(sites);
 
         // Now serve the uploaded file
-        let app2 = create_gateway_router(Arc::clone(&state));
+        let app2 = create_gateway_router(Arc::clone(&state), None);
         let response2 = app2
             .oneshot(
                 Request::builder()
@@ -658,7 +671,7 @@ mod tests {
         let state = Arc::new(HostingServerState::new());
 
         // First upload
-        let app = create_gateway_router(Arc::clone(&state));
+        let app = create_gateway_router(Arc::clone(&state), None);
         let b64 = base64::engine::general_purpose::STANDARD.encode("hello");
         let body = serde_json::json!({
             "id": "del1test",
@@ -679,7 +692,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         // Then delete
-        let app2 = create_gateway_router(Arc::clone(&state));
+        let app2 = create_gateway_router(Arc::clone(&state), None);
         let resp2 = app2
             .oneshot(
                 Request::builder()
@@ -700,7 +713,7 @@ mod tests {
     #[tokio::test]
     async fn test_gateway_upload_rejects_oversized() {
         let state = Arc::new(HostingServerState::new());
-        let app = create_gateway_router(state);
+        let app = create_gateway_router(state, None);
 
         // Create a base64 string that decodes to > 50 MB
         // We'll just test with an invalid site id instead for a simpler check

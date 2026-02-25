@@ -50,6 +50,7 @@ cbor4ii = { version = "0.3", features = ["use_alloc", "serde1"] }
 async-trait = "0.1"
 
 # Hosting HTTP server
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "multipart"] }
+uuid = { version = "1", features = ["v4"] }
 tower = "0.5"
 tower-http = { version = "0.5", features = ["cors"] }
