@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
-import { driveApi, type DriveItem as ApiDriveItem, type ShareLink } from '$lib/services/driveApiService';
+import { driveApi, setDriveOwner, type DriveItem as ApiDriveItem, type ShareLink } from '$lib/services/driveApiService';
+import { walletAccount } from '$lib/stores';
 
 export interface DriveItem {
   id: string;
@@ -37,6 +38,14 @@ function fromApi(item: ApiDriveItem): DriveItem {
   };
 }
 
+/** Sync the current wallet address to the API service. */
+function syncOwner(): string {
+  const account = get(walletAccount);
+  const addr = account?.address ?? '';
+  setDriveOwner(addr);
+  return addr;
+}
+
 function createDriveStore() {
   const empty: DriveManifest = { version: 1, items: [], shares: [], lastModified: Date.now() };
   const { subscribe, set, update } = writable<DriveManifest>(empty);
@@ -46,6 +55,12 @@ function createDriveStore() {
 
     /** Load all items from the server (fetches root-level, then all items) */
     async load() {
+      const owner = syncOwner();
+      if (!owner) {
+        // No wallet connected — clear items
+        set({ version: 1, items: [], shares: [], lastModified: Date.now() });
+        return;
+      }
       try {
         const [items, shares] = await Promise.all([
           driveApi.listItems(null),
@@ -70,6 +85,7 @@ function createDriveStore() {
 
     /** Load items for a specific folder from the server */
     async loadFolder(parentId: string | null) {
+      syncOwner();
       try {
         const items = await driveApi.listItems(parentId);
         const m = get({ subscribe });
@@ -92,6 +108,7 @@ function createDriveStore() {
     },
 
     async createFolder(name: string, parentId: string | null): Promise<DriveItem | null> {
+      syncOwner();
       try {
         const item = await driveApi.createFolder(name, parentId);
         const converted = fromApi(item);
@@ -107,6 +124,7 @@ function createDriveStore() {
     },
 
     async uploadFile(file: File, parentId: string | null): Promise<DriveItem | null> {
+      syncOwner();
       try {
         const item = await driveApi.uploadFile(file, parentId);
         const converted = fromApi(item);
@@ -122,6 +140,7 @@ function createDriveStore() {
     },
 
     async renameItem(id: string, newName: string) {
+      syncOwner();
       try {
         await driveApi.updateItem(id, { name: newName });
         update(m => {
@@ -138,6 +157,7 @@ function createDriveStore() {
     },
 
     async moveItem(id: string, newParentId: string | null) {
+      syncOwner();
       try {
         await driveApi.updateItem(id, { parent_id: newParentId ?? '' });
         update(m => {
@@ -154,6 +174,7 @@ function createDriveStore() {
     },
 
     async deleteItem(id: string) {
+      syncOwner();
       try {
         await driveApi.deleteItem(id);
         update(m => {
@@ -174,6 +195,7 @@ function createDriveStore() {
     },
 
     async toggleStar(id: string) {
+      syncOwner();
       const m = get({ subscribe });
       const item = m.items.find(i => i.id === id);
       if (!item) return;
@@ -191,6 +213,7 @@ function createDriveStore() {
     },
 
     async createShareLink(itemId: string, password?: string, isPublic?: boolean): Promise<ShareLink | null> {
+      syncOwner();
       try {
         const share = await driveApi.createShareLink(itemId, password, isPublic);
         update(m => {
@@ -207,6 +230,7 @@ function createDriveStore() {
     },
 
     async revokeShareLink(token: string) {
+      syncOwner();
       try {
         await driveApi.revokeShareLink(token);
         update(m => {
