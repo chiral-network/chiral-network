@@ -52,6 +52,7 @@
   let serverStatus = $state<ServerStatus>({ running: false, address: null });
   let port = $state(8080);
   let sites = $state<HostedSite[]>([]);
+  let publicIp = $state<string | null>(null);
 
   // New site form
   let newSiteName = $state('');
@@ -83,10 +84,42 @@
   }
 
   function siteUrl(siteId: string): string {
-    if (serverStatus.address) {
-      return `http://${serverStatus.address}/sites/${siteId}/`;
+    const p = serverStatus.address?.split(':').pop() || String(port);
+    if (publicIp) {
+      return `http://${publicIp}:${p}/sites/${siteId}/`;
     }
-    return `http://localhost:${port}/sites/${siteId}/`;
+    return `http://localhost:${p}/sites/${siteId}/`;
+  }
+
+  function localUrl(): string {
+    if (serverStatus.address) {
+      return `http://${serverStatus.address}`;
+    }
+    return `http://localhost:${port}`;
+  }
+
+  async function fetchPublicIp() {
+    try {
+      // Try multiple services in case one is down
+      for (const url of [
+        'https://api.ipify.org?format=text',
+        'https://icanhazip.com',
+        'https://ifconfig.me/ip',
+      ]) {
+        try {
+          const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+          if (resp.ok) {
+            const ip = (await resp.text()).trim();
+            if (ip && /^[\d.]+$/.test(ip)) {
+              publicIp = ip;
+              return;
+            }
+          }
+        } catch (_) { /* try next */ }
+      }
+    } catch (_) {
+      log.warn('Could not determine public IP');
+    }
   }
 
   function totalSize(files: SiteFile[]): number {
@@ -114,6 +147,7 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const addr = await invoke<string>('start_hosting_server', { port });
       serverStatus = { running: true, address: addr };
+      fetchPublicIp();
       toasts.show(`Hosting server started on ${addr}`, 'success');
       // Save port preference
       localStorage.setItem('chiral-hosting-port', String(port));
@@ -265,6 +299,9 @@
     await loadServerStatus();
     await loadSites();
 
+    // Fetch public IP for shareable URLs
+    fetchPublicIp();
+
     // Set up Tauri drag-drop listener
     if (isTauri) {
       try {
@@ -317,8 +354,14 @@
           <h2 class="text-sm font-semibold text-gray-900 dark:text-white">HTTP Server</h2>
           {#if serverStatus.running}
             <p class="text-xs text-green-600 dark:text-green-400">
-              Running on <span class="font-mono">{serverStatus.address}</span>
+              Running on <span class="font-mono">{localUrl()}</span>
             </p>
+            {#if publicIp}
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                Public: <span class="font-mono">{publicIp}:{serverStatus.address?.split(':').pop() || port}</span>
+                <span class="text-gray-400 dark:text-gray-500">(requires port forwarding)</span>
+              </p>
+            {/if}
           {:else}
             <p class="text-xs text-gray-500 dark:text-gray-400">Not running</p>
           {/if}
