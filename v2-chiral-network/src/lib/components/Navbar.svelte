@@ -33,31 +33,29 @@
 
 <nav class="sticky top-0 z-50 bg-white dark:bg-gray-800 shadow-md border-b border-gray-200 dark:border-gray-700">
   <div class="max-w-7xl mx-auto px-3 sm:px-4">
-    <div class="flex items-center h-14 gap-4">
-      <!-- Logo + Nav Items -->
-      <div class="flex items-center gap-2 lg:gap-6 min-w-0 flex-1 overflow-hidden">
-        <div class="flex items-center gap-2 shrink-0">
-          <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg" />
-          <span class="text-lg font-bold dark:text-white hidden xl:inline">Chiral Network</span>
-          <span class="text-lg font-bold dark:text-white hidden sm:inline xl:hidden">Chiral</span>
-        </div>
+    <div class="flex items-center h-14 gap-2">
+      <!-- Logo -->
+      <div class="flex items-center gap-2 shrink-0">
+        <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg" />
+        <span class="text-lg font-bold dark:text-white hidden xl:inline">Chiral Network</span>
+        <span class="text-lg font-bold dark:text-white hidden sm:inline xl:hidden">Chiral</span>
+      </div>
 
-        <!-- Desktop nav: icons + labels at xl, icons only at md-xl, scrollable when too many items -->
-        <div class="hidden md:flex flex-1 gap-0.5 overflow-x-auto nav-scrollbar-hide min-w-0">
-          {#each navItems as item}
-            <button
-              onclick={() => navigate(item.path)}
-              class="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap shrink-0
-                {currentPage === item.path
-                  ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
-              title={item.label}
-            >
-              <svelte:component this={item.icon} class="w-4 h-4 shrink-0" />
-              <span class="font-medium hidden xl:inline">{item.label}</span>
-            </button>
-          {/each}
-        </div>
+      <!-- Desktop nav: scrollable, takes remaining space -->
+      <div class="hidden md:flex w-0 flex-1 overflow-x-auto nav-scrollbar-hide gap-0.5">
+        {#each navItems as item}
+          <button
+            onclick={() => navigate(item.path)}
+            class="flex items-center gap-1.5 px-2 xl:px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap shrink-0
+              {currentPage === item.path
+                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
+                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+            title={item.label}
+          >
+            <svelte:component this={item.icon} class="w-4 h-4 shrink-0" />
+            <span class="font-medium hidden xl:inline">{item.label}</span>
+          </button>
+        {/each}
       </div>
 
       <!-- Right side: status + logout + hamburger -->
