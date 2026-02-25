@@ -412,7 +412,8 @@ pub fn create_gateway_router(
         CorsLayer::new()
             .allow_origin(Any)
             .allow_methods(Any)
-            .allow_headers(Any),
+            .allow_headers(Any)
+            .expose_headers(Any),
     )
 }
 

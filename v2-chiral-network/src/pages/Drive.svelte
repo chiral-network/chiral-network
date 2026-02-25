@@ -211,7 +211,9 @@
         headers: ownerAddr ? { 'X-Owner': ownerAddr } : {},
       });
       if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
-      const blob = await response.blob();
+      const contentType = response.headers.get('content-type') || 'application/octet-stream';
+      const data = await response.arrayBuffer();
+      const blob = new Blob([data], { type: contentType });
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
@@ -219,7 +221,7 @@
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     } catch (e) {
       toasts.show('Download failed: ' + (e as Error).message, 'error');
     }

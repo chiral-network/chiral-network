@@ -21,6 +21,8 @@
 
   const existingShares = $derived(driveStore.getSharesForItem(item.id, manifest));
 
+  let justCreatedUrl = $state<string | null>(null);
+
   async function createLink() {
     creating = true;
     try {
@@ -30,7 +32,15 @@
         isPublic,
       );
       if (share) {
-        toasts.show('Share link created', 'success');
+        const url = driveStore.getShareUrl(share.id);
+        justCreatedUrl = url;
+        // Auto-copy to clipboard
+        try {
+          await navigator.clipboard.writeText(url);
+          toasts.show('Link created & copied to clipboard!', 'success');
+        } catch {
+          toasts.show('Link created! Copy it below.', 'success');
+        }
         password = '';
       }
     } finally {
@@ -109,6 +119,27 @@
           Create Link
         {/if}
       </button>
+
+      {#if justCreatedUrl}
+        <div class="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+          <Check class="w-4 h-4 text-green-500 shrink-0" />
+          <code class="flex-1 text-xs font-mono text-green-800 dark:text-green-300 break-all select-all">{justCreatedUrl}</code>
+          <button
+            onclick={async () => {
+              try {
+                await navigator.clipboard.writeText(justCreatedUrl!);
+                toasts.show('Copied!', 'success');
+              } catch {
+                toasts.show('Failed to copy', 'error');
+              }
+            }}
+            class="p-1.5 hover:bg-green-100 dark:hover:bg-green-800 rounded transition shrink-0"
+            title="Copy link"
+          >
+            <Copy class="w-4 h-4 text-green-600 dark:text-green-400" />
+          </button>
+        </div>
+      {/if}
     </div>
 
     <!-- Existing share links -->
