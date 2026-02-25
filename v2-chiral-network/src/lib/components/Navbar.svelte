@@ -58,8 +58,7 @@
       <!-- Logo -->
       <div class="flex items-center gap-2 shrink-0">
         <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg" />
-        <span class="text-lg font-bold dark:text-white hidden xl:inline">Chiral Network</span>
-        <span class="text-lg font-bold dark:text-white hidden sm:inline xl:hidden">Chiral</span>
+        <span class="text-lg font-bold dark:text-white hidden sm:inline">Chiral Network</span>
       </div>
 
       <!-- Desktop nav: icon-only, all items (md to xl) -->
