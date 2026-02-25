@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import {
-    Globe,
     Plus,
     Trash2,
     Copy,
@@ -348,16 +347,12 @@
   });
 </script>
 
-<div class="flex flex-col gap-6 p-6 max-w-5xl mx-auto">
+<div class="space-y-6">
   <!-- Header -->
   <div>
-    <h1 class="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-      <Globe class="h-7 w-7 text-primary-500" />
-      Hosting
-    </h1>
-    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-      Host static websites on the Chiral Network. Upload HTML, CSS, JS, and image files to serve them over HTTP.
-      Publish to the network to make your site accessible from anywhere.
+    <h1 class="text-3xl font-bold">Hosting</h1>
+    <p class="text-muted-foreground mt-2">
+      Host static websites on the Chiral Network. Publish to the network to make your site accessible from anywhere.
     </p>
   </div>
 
@@ -495,7 +490,6 @@
   <!-- Hosted Sites -->
   <div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
     <h2 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-      <Globe class="h-4 w-4" />
       Hosted Sites
       {#if sites.length > 0}
         <span class="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/40 dark:text-primary-300">
@@ -506,7 +500,7 @@
 
     {#if sites.length === 0}
       <div class="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
-        <Globe class="h-12 w-12 mb-3 opacity-30" />
+        <Server class="h-12 w-12 mb-3 opacity-30" />
         <p class="text-sm">No hosted sites yet</p>
         <p class="text-xs mt-1">Create a site above to start hosting</p>
       </div>
