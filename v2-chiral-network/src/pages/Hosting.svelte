@@ -59,7 +59,6 @@
   let serverStatus = $state<ServerStatus>({ running: false, address: null });
   let port = $state(8080);
   let sites = $state<HostedSite[]>([]);
-  let publicIp = $state<string | null>(null);
 
   // New site form
   let newSiteName = $state('');
@@ -98,11 +97,9 @@
     if (site.relayUrl) {
       return site.relayUrl;
     }
-    // Fallback to local URL
+    // Local URL — always use localhost (public IP is unreachable behind NAT;
+    // use "Publish to Network" for public access instead)
     const p = serverStatus.address?.split(':').pop() || String(port);
-    if (publicIp) {
-      return `http://${publicIp}:${p}/sites/${site.id}/`;
-    }
     return `http://localhost:${p}/sites/${site.id}/`;
   }
 
@@ -111,29 +108,6 @@
       return `http://${serverStatus.address}`;
     }
     return `http://localhost:${port}`;
-  }
-
-  async function fetchPublicIp() {
-    try {
-      for (const url of [
-        'https://api.ipify.org?format=text',
-        'https://icanhazip.com',
-        'https://ifconfig.me/ip',
-      ]) {
-        try {
-          const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
-          if (resp.ok) {
-            const ip = (await resp.text()).trim();
-            if (ip && /^[\d.]+$/.test(ip)) {
-              publicIp = ip;
-              return;
-            }
-          }
-        } catch (_) { /* try next */ }
-      }
-    } catch (_) {
-      log.warn('Could not determine public IP');
-    }
   }
 
   function totalSize(files: SiteFile[]): number {
@@ -161,7 +135,6 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const addr = await invoke<string>('start_hosting_server', { port });
       serverStatus = { running: true, address: addr };
-      fetchPublicIp();
       toasts.show(`Hosting server started on ${addr}`, 'success');
       localStorage.setItem('chiral-hosting-port', String(port));
     } catch (err: any) {
@@ -346,7 +319,6 @@
 
     await loadServerStatus();
     await loadSites();
-    fetchPublicIp();
 
     if (isTauri) {
       try {
