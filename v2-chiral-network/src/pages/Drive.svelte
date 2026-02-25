@@ -4,6 +4,7 @@
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import { walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
+  import { open } from '@tauri-apps/plugin-shell';
   import DriveBreadcrumb from '$lib/components/drive/DriveBreadcrumb.svelte';
   import DriveToolbar from '$lib/components/drive/DriveToolbar.svelte';
   import DriveFileCard from '$lib/components/drive/DriveFileCard.svelte';
@@ -202,18 +203,16 @@
   }
 
   // Download
-  function handleDownload(item: DriveItem) {
+  async function handleDownload(item: DriveItem) {
     if (item.type !== 'file') return;
-    // Use direct server URL — the server sends Content-Disposition: attachment
-    // with the correct filename and Content-Type, so the browser/OS handles it properly.
     const url = driveStore.getDownloadUrl(item.id, item.name);
-    const a = document.createElement('a');
-    a.href = url;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    try {
+      // Open in the system's default browser which handles Content-Disposition properly
+      await open(url);
+    } catch {
+      // Fallback for non-Tauri environments
+      window.open(url, '_blank');
+    }
   }
 
   // Share
