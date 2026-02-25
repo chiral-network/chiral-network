@@ -24,6 +24,9 @@ pub struct HostedSite {
     pub created_at: u64,
     /// Files in the site
     pub files: Vec<SiteFile>,
+    /// URL on a relay gateway, if published (e.g. "http://130.245.173.73:8080/sites/a1b2c3d4/")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +186,7 @@ mod tests {
                 SiteFile { path: "index.html".into(), size: 1024 },
                 SiteFile { path: "css/style.css".into(), size: 512 },
             ],
+            relay_url: None,
         };
         let json = serde_json::to_string(&site).unwrap();
         let back: HostedSite = serde_json::from_str(&json).unwrap();

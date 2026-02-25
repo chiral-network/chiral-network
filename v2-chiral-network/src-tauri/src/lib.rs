@@ -3,8 +3,8 @@ mod encryption;
 mod file_transfer;
 mod geth;
 mod geth_bootstrap;
-mod hosting;
-mod hosting_server;
+pub mod hosting;
+pub mod hosting_server;
 mod speed_tiers;
 
 use dht::DhtService;
@@ -2621,6 +2621,7 @@ async fn create_hosted_site(
         directory: site_dir.to_string_lossy().into_owned(),
         created_at: now,
         files: site_files,
+        relay_url: None,
     };
 
     // Persist to disk
@@ -2723,6 +2724,123 @@ async fn get_hosting_server_status(
         running: addr.is_some(),
         address: addr.map(|a| a.to_string()),
     })
+}
+
+#[tauri::command]
+async fn publish_site_to_relay(
+    _state: tauri::State<'_, AppState>,
+    site_id: String,
+    relay_url: String,
+) -> Result<String, String> {
+    // Find the site in local metadata
+    let mut all_sites = hosting::load_sites();
+    let site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+
+    // Read all files from the site directory and base64-encode them
+    let site_dir = std::path::Path::new(&site.directory);
+    let mut upload_files = Vec::new();
+
+    for file_info in &site.files {
+        let file_path = site_dir.join(&file_info.path);
+        let data = std::fs::read(&file_path)
+            .map_err(|e| format!("Failed to read {}: {}", file_info.path, e))?;
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+        upload_files.push(serde_json::json!({
+            "path": file_info.path,
+            "data": b64,
+        }));
+    }
+
+    let body = serde_json::json!({
+        "id": site.id,
+        "name": site.name,
+        "files": upload_files,
+    });
+
+    // POST to the relay gateway
+    let relay_base = relay_url.trim_end_matches('/');
+    let url = format!("{}/api/sites", relay_base);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay returned {}: {}", status, text));
+    }
+
+    // Build the public URL
+    let public_url = format!("{}/sites/{}/", relay_base, site.id);
+
+    // Update local metadata with the relay URL
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.relay_url = Some(public_url.clone());
+    }
+    hosting::save_sites(&all_sites);
+
+    println!("Published site {} to relay: {}", site_id, public_url);
+    Ok(public_url)
+}
+
+#[tauri::command]
+async fn unpublish_site_from_relay(
+    _state: tauri::State<'_, AppState>,
+    site_id: String,
+) -> Result<(), String> {
+    let mut all_sites = hosting::load_sites();
+    let site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+
+    let relay_url = site
+        .relay_url
+        .as_ref()
+        .ok_or_else(|| "Site is not published to a relay".to_string())?;
+
+    // Extract the relay base URL from the full site URL
+    // e.g. "http://130.245.173.73:8080/sites/abc12345/" -> "http://130.245.173.73:8080"
+    let relay_base = relay_url
+        .find("/sites/")
+        .map(|pos| &relay_url[..pos])
+        .ok_or_else(|| "Invalid relay URL format".to_string())?;
+
+    let url = format!("{}/api/sites/{}", relay_base, site_id);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .delete(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay returned {}: {}", status, text));
+    }
+
+    // Clear relay URL from local metadata
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.relay_url = None;
+    }
+    hosting::save_sites(&all_sites);
+
+    println!("Unpublished site {} from relay", site_id);
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2864,7 +2982,9 @@ pub fn run() {
             delete_hosted_site,
             start_hosting_server,
             stop_hosting_server,
-            get_hosting_server_status
+            get_hosting_server_status,
+            publish_site_to_relay,
+            unpublish_site_from_relay
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
