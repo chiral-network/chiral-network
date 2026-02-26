@@ -1457,7 +1457,7 @@
                         style="width: {download.progress}%"
                       ></div>
                     </div>
-                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right">{download.progress.toFixed(1)}%</span>
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right">{(download.progress ?? 0).toFixed(1)}%</span>
                   </div>
                 </div>
               {/if}
