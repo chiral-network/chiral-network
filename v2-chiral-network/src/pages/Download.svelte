@@ -27,11 +27,13 @@
     ExternalLink,
     Eye
   } from 'lucide-svelte';
-  import { Zap, Gauge, Rocket } from 'lucide-svelte';
+  import { Zap, Gauge, Rocket, Star } from 'lucide-svelte';
   import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
+  import RateSeederModal from '$lib/components/RateSeederModal.svelte';
   import { walletService } from '$lib/services/walletService';
+  import { ratingApi, setRatingOwner, type BatchRatingEntry } from '$lib/services/ratingApiService';
   import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
@@ -212,6 +214,10 @@
 
   // Download confirmation modal
   let pendingDownload = $state<{ result: SearchResult; tierCost: number; seederPriceChi: number; totalCost: number } | null>(null);
+
+  // Seeder reputation
+  let seederRatings = $state<Record<string, BatchRatingEntry>>({});
+  let showRatingModal = $state<{ seederWallet: string; fileHash: string; fileName: string } | null>(null);
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -472,6 +478,10 @@
             result.fileName = `file-${fileHash.slice(0, 8)}`;
           }
           searchResult = result;
+          // Fetch seeder reputation ratings
+          if (result.seeders.length > 0) {
+            fetchSeederRatings(result.seeders, result.walletAddress);
+          }
           if (result.seeders.length > 0) {
             toasts.show(`Found ${result.seeders.length} potential seeder${result.seeders.length !== 1 ? 's' : ''} for: ${result.fileName}`, 'success');
           } else {
@@ -503,6 +513,18 @@
       searchError = `Search failed: ${error}`;
     } finally {
       isSearching = false;
+    }
+  }
+
+  // Fetch seeder reputation ratings (non-blocking)
+  async function fetchSeederRatings(seeders: string[], walletAddress?: string) {
+    try {
+      const wallets = [...new Set([...seeders, walletAddress].filter(Boolean) as string[])];
+      if (wallets.length === 0) return;
+      const ratings = await ratingApi.getBatchRatings(wallets);
+      seederRatings = ratings;
+    } catch (err) {
+      log.warn('Failed to fetch seeder ratings:', err);
     }
   }
 
@@ -750,6 +772,14 @@
         saveDownloadHistory();
 
         toasts.show(`Downloaded: ${fileName}`, 'success');
+
+        // Show rating modal for the seeder
+        if (searchResult && searchResult.hash === fileHash) {
+          const seederWallet = searchResult.walletAddress || searchResult.seeders[0] || '';
+          if (seederWallet) {
+            showRatingModal = { seederWallet, fileHash, fileName };
+          }
+        }
       });
 
       // Listen for failed downloads
@@ -1115,6 +1145,13 @@
               <span class="{searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
               </span>
+              {#if searchResult.walletAddress && seederRatings[searchResult.walletAddress]?.count > 0}
+                {@const rating = seederRatings[searchResult.walletAddress]}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">
+                  <Star class="w-3 h-3 fill-current" />
+                  {rating.average.toFixed(1)} ({rating.count})
+                </span>
+              {/if}
               {#if searchResult.priceWei && searchResult.priceWei !== '0'}
                 <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
                   {formatPriceWei(searchResult.priceWei)}
@@ -1703,4 +1740,13 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if showRatingModal}
+  <RateSeederModal
+    seederWallet={showRatingModal.seederWallet}
+    fileHash={showRatingModal.fileHash}
+    fileName={showRatingModal.fileName}
+    onclose={() => { showRatingModal = null; }}
+  />
 {/if}

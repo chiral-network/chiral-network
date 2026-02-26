@@ -1,6 +1,8 @@
 mod dht;
 pub mod drive_api;
 pub mod drive_storage;
+pub mod rating_api;
+pub mod rating_storage;
 mod encryption;
 mod file_transfer;
 mod geth;
