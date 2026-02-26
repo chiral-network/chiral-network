@@ -20,6 +20,7 @@ use sha2::{Sha256, Digest};
 
 use chiral_network_v2_lib::drive_api::DriveState;
 use chiral_network_v2_lib::hosting_server::{self, HostingServerState};
+use chiral_network_v2_lib::rating_storage::RatingState;
 
 #[derive(NetworkBehaviour)]
 struct RelayServerBehaviour {
@@ -106,11 +107,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     drive_state.load_from_disk_async().await;
     println!("Drive state loaded from disk");
 
+    // Initialize Rating state
+    let rating_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("chiral-network");
+    let rating_state = Arc::new(RatingState::new(rating_data_dir));
+    println!("Rating state loaded from disk");
+
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
 
     match hosting_server::start_gateway_server(
         Arc::clone(&hosting_state),
         Some(Arc::clone(&drive_state)),
+        Some(Arc::clone(&rating_state)),
         http_port,
         http_shutdown_rx,
     )

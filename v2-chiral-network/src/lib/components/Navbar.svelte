@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Download, Upload, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive } from 'lucide-svelte';
+  import { Download, Upload, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive, Star } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { isAuthenticated, walletAccount, networkConnected } from '$lib/stores';
 
@@ -31,6 +31,7 @@
     { path: '/mining', label: 'Mining', icon: Pickaxe },
     { path: '/hosting', label: 'Hosting', icon: Server },
     { path: '/drive', label: 'Drive', icon: HardDrive },
+    { path: '/reputation', label: 'Reputation', icon: Star },
     { path: '/diagnostics', label: 'Diagnostics', icon: Bug },
     { path: '/settings', label: 'Settings', icon: Settings }
   ];
