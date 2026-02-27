@@ -2734,51 +2734,42 @@ async fn get_hosting_server_status(
 
 #[tauri::command]
 async fn publish_site_to_relay(
-    _state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, AppState>,
     site_id: String,
     relay_url: String,
 ) -> Result<String, String> {
     // Find the site in local metadata
     let mut all_sites = hosting::load_sites();
-    let site = all_sites
+    let _site = all_sites
         .iter()
         .find(|s| s.id == site_id)
         .ok_or_else(|| format!("Site not found: {}", site_id))?
         .clone();
 
-    // Read all files from the site directory and base64-encode them
-    let site_dir = std::path::Path::new(&site.directory);
-    let mut upload_files = Vec::new();
+    // Get local server origin URL
+    let origin = state
+        .hosting_server_addr
+        .lock()
+        .await
+        .map(|a| format!("http://{}", a))
+        .ok_or("Local server not running")?;
 
-    for file_info in &site.files {
-        let file_path = site_dir.join(&file_info.path);
-        let data = std::fs::read(&file_path)
-            .map_err(|e| format!("Failed to read {}: {}", file_info.path, e))?;
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-        upload_files.push(serde_json::json!({
-            "path": file_info.path,
-            "data": b64,
-        }));
-    }
-
-    let body = serde_json::json!({
-        "id": site.id,
-        "name": site.name,
-        "files": upload_files,
-    });
-
-    // POST to the relay gateway
+    // Register site origin with relay (no file upload — relay will proxy)
     let relay_base = relay_url.trim_end_matches('/');
-    let url = format!("{}/api/sites", relay_base);
+    let url = format!("{}/api/sites/relay-register", relay_base);
 
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(60))
+        .json(&serde_json::json!({
+            "site_id": site_id,
+            "origin_url": origin,
+            "owner_wallet": "",
+        }))
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| format!("Failed to connect to relay: {}", e))?;
+        .map_err(|e| format!("Failed to register site with relay: {}", e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -2787,7 +2778,7 @@ async fn publish_site_to_relay(
     }
 
     // Build the public URL
-    let public_url = format!("{}/sites/{}/", relay_base, site.id);
+    let public_url = format!("{}/sites/{}/", relay_base, site_id);
 
     // Update local metadata with the relay URL
     if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
@@ -2795,7 +2786,10 @@ async fn publish_site_to_relay(
     }
     hosting::save_sites(&all_sites);
 
-    println!("Published site {} to relay: {}", site_id, public_url);
+    println!(
+        "[HOSTING] Published site {} to relay: {}",
+        site_id, public_url
+    );
     Ok(public_url)
 }
 
@@ -2823,7 +2817,7 @@ async fn unpublish_site_from_relay(
         .map(|pos| &relay_url[..pos])
         .ok_or_else(|| "Invalid relay URL format".to_string())?;
 
-    let url = format!("{}/api/sites/{}", relay_base, site_id);
+    let url = format!("{}/api/sites/relay-register/{}", relay_base, site_id);
 
     let client = reqwest::Client::new();
     let resp = client
@@ -2845,7 +2839,7 @@ async fn unpublish_site_from_relay(
     }
     hosting::save_sites(&all_sites);
 
-    println!("Unpublished site {} from relay", site_id);
+    println!("[HOSTING] Unpublished site {} from relay", site_id);
     Ok(())
 }
 

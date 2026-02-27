@@ -1,9 +1,10 @@
-//! Relay-side share registry and HTTP reverse proxy.
+//! Relay-side share and site registry with HTTP reverse proxy.
 //!
-//! The relay never stores file data. It only keeps a mapping from share tokens
-//! to the origin URL of the sharer's local server. When a downloader visits a
-//! share link on the relay, the relay proxies the request to the sharer's
-//! local server in real time. If the sharer is offline, an error page is shown.
+//! The relay never stores file data. It only keeps mappings from share tokens
+//! and site IDs to the origin URL of the owner's local server. When a visitor
+//! requests a share link or hosted site on the relay, the relay proxies the
+//! request to the owner's local server in real time. If the owner is offline,
+//! an error page is shown.
 
 use axum::{
     body::Body,
@@ -31,15 +32,26 @@ pub struct ShareRegistration {
     pub registered_at: u64,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SiteRegistration {
+    pub site_id: String,
+    pub origin_url: String,
+    pub owner_wallet: String,
+    pub registered_at: u64,
+}
+
 #[derive(Clone)]
 pub struct RelayShareRegistry {
     pub shares: Arc<RwLock<HashMap<String, ShareRegistration>>>,
+    pub sites: Arc<RwLock<HashMap<String, SiteRegistration>>>,
     persist_path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 struct PersistedRegistry {
     shares: Vec<ShareRegistration>,
+    #[serde(default)]
+    sites: Vec<SiteRegistration>,
 }
 
 impl RelayShareRegistry {
@@ -47,6 +59,7 @@ impl RelayShareRegistry {
         let persist_path = data_dir.join("chiral-relay-shares").join("registry.json");
         Self {
             shares: Arc::new(RwLock::new(HashMap::new())),
+            sites: Arc::new(RwLock::new(HashMap::new())),
             persist_path,
         }
     }
@@ -54,23 +67,37 @@ impl RelayShareRegistry {
     pub async fn load_from_disk(&self) {
         if let Ok(data) = std::fs::read_to_string(&self.persist_path) {
             if let Ok(reg) = serde_json::from_str::<PersistedRegistry>(&data) {
-                let mut map = self.shares.write().await;
+                let mut share_map = self.shares.write().await;
                 for s in reg.shares {
-                    map.insert(s.token.clone(), s);
+                    share_map.insert(s.token.clone(), s);
                 }
+                let share_count = share_map.len();
+                drop(share_map);
+
+                let mut site_map = self.sites.write().await;
+                for s in reg.sites {
+                    site_map.insert(s.site_id.clone(), s);
+                }
+                let site_count = site_map.len();
+                drop(site_map);
+
                 println!(
-                    "[RELAY-SHARE] Loaded {} share registrations from disk",
-                    map.len()
+                    "[RELAY-SHARE] Loaded {} share + {} site registrations from disk",
+                    share_count, site_count
                 );
             }
         }
     }
 
     async fn persist(&self) {
-        let map = self.shares.read().await;
+        let share_map = self.shares.read().await;
+        let site_map = self.sites.read().await;
         let reg = PersistedRegistry {
-            shares: map.values().cloned().collect(),
+            shares: share_map.values().cloned().collect(),
+            sites: site_map.values().cloned().collect(),
         };
+        drop(share_map);
+        drop(site_map);
         if let Some(parent) = self.persist_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -78,6 +105,8 @@ impl RelayShareRegistry {
             let _ = std::fs::write(&self.persist_path, json);
         }
     }
+
+    // --- Share methods ---
 
     pub async fn register(&self, reg: ShareRegistration) {
         let mut map = self.shares.write().await;
@@ -100,6 +129,30 @@ impl RelayShareRegistry {
         let map = self.shares.read().await;
         map.get(token).cloned()
     }
+
+    // --- Site methods ---
+
+    pub async fn register_site(&self, reg: SiteRegistration) {
+        let mut map = self.sites.write().await;
+        map.insert(reg.site_id.clone(), reg);
+        drop(map);
+        self.persist().await;
+    }
+
+    pub async fn unregister_site(&self, site_id: &str) -> bool {
+        let mut map = self.sites.write().await;
+        let removed = map.remove(site_id).is_some();
+        drop(map);
+        if removed {
+            self.persist().await;
+        }
+        removed
+    }
+
+    pub async fn lookup_site(&self, site_id: &str) -> Option<SiteRegistration> {
+        let map = self.sites.read().await;
+        map.get(site_id).cloned()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +162,13 @@ impl RelayShareRegistry {
 #[derive(Deserialize)]
 struct RegisterRequest {
     token: String,
+    origin_url: String,
+    owner_wallet: String,
+}
+
+#[derive(Deserialize)]
+struct SiteRegisterRequest {
+    site_id: String,
     origin_url: String,
     owner_wallet: String,
 }
@@ -254,6 +314,110 @@ async fn proxy_request(target: &str) -> Response {
 }
 
 // ---------------------------------------------------------------------------
+// Site registration API handlers
+// ---------------------------------------------------------------------------
+
+/// POST /api/sites/relay-register — register a site origin
+async fn register_site(
+    Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Json(req): Json<SiteRegisterRequest>,
+) -> Response {
+    if req.site_id.is_empty() || req.origin_url.is_empty() {
+        return (StatusCode::BAD_REQUEST, "site_id and origin_url required").into_response();
+    }
+    println!(
+        "[RELAY-SITE] Registering site={} origin={}",
+        req.site_id, req.origin_url
+    );
+    state
+        .register_site(SiteRegistration {
+            site_id: req.site_id,
+            origin_url: req.origin_url,
+            owner_wallet: req.owner_wallet,
+            registered_at: now_secs(),
+        })
+        .await;
+    (StatusCode::OK, "Registered").into_response()
+}
+
+/// DELETE /api/sites/relay-register/:site_id — unregister a site
+async fn unregister_site(
+    Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Path(site_id): Path<String>,
+) -> Response {
+    if state.unregister_site(&site_id).await {
+        println!("[RELAY-SITE] Unregistered site={}", site_id);
+        (StatusCode::OK, "Unregistered").into_response()
+    } else {
+        (StatusCode::NOT_FOUND, "Site not found").into_response()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Site reverse proxy handlers
+// ---------------------------------------------------------------------------
+
+/// Proxy GET /sites/:site_id to redirect (matching local server behavior).
+async fn proxy_site_redirect(
+    Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Path(site_id): Path<String>,
+) -> Response {
+    // Check if site is registered before redirecting
+    if state.lookup_site(&site_id).await.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Html(offline_page("Site not found")),
+        )
+            .into_response();
+    }
+    // Redirect to trailing slash (same as local hosting server)
+    (
+        StatusCode::MOVED_PERMANENTLY,
+        [("Location", format!("/sites/{}/", site_id))],
+        "",
+    )
+        .into_response()
+}
+
+/// Proxy GET /sites/:site_id/ to the owner's local server.
+async fn proxy_site_root(
+    Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Path(site_id): Path<String>,
+) -> Response {
+    let reg = match state.lookup_site(&site_id).await {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(offline_page("Site not found")),
+            )
+                .into_response()
+        }
+    };
+    let target = format!("{}/sites/{}/", reg.origin_url, site_id);
+    proxy_request(&target).await
+}
+
+/// Proxy GET /sites/:site_id/*path to the owner's local server.
+async fn proxy_site_path(
+    Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Path((site_id, subpath)): Path<(String, String)>,
+) -> Response {
+    let reg = match state.lookup_site(&site_id).await {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(offline_page("Site not found")),
+            )
+                .into_response()
+        }
+    };
+    let target = format!("{}/sites/{}/{}", reg.origin_url, site_id, subpath);
+    proxy_request(&target).await
+}
+
+// ---------------------------------------------------------------------------
 // HTML template
 // ---------------------------------------------------------------------------
 
@@ -283,14 +447,24 @@ fn offline_page(msg: &str) -> String {
 /// Create the relay share proxy router. Uses Extension for state injection.
 pub fn relay_share_routes(state: Arc<RelayShareRegistry>) -> Router {
     Router::new()
-        // Registration API
+        // Drive share registration API
         .route("/api/drive/relay-register", post(register_share))
         .route(
             "/api/drive/relay-register/:token",
             delete(unregister_share),
         )
-        // Proxy routes — forward to sharer's local server
+        // Drive share proxy routes
         .route("/drive/:token", get(proxy_share_root))
         .route("/drive/:token/*path", get(proxy_share_path))
+        // Site registration API
+        .route("/api/sites/relay-register", post(register_site))
+        .route(
+            "/api/sites/relay-register/:site_id",
+            delete(unregister_site),
+        )
+        // Site proxy routes
+        .route("/sites/:site_id", get(proxy_site_redirect))
+        .route("/sites/:site_id/", get(proxy_site_root))
+        .route("/sites/:site_id/*path", get(proxy_site_path))
         .layer(Extension(state))
 }

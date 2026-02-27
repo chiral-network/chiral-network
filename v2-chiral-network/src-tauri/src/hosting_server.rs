@@ -395,18 +395,24 @@ pub fn create_gateway_router(
     rating_state: Option<Arc<RatingState>>,
     relay_share_state: Option<Arc<RelayShareRegistry>>,
 ) -> Router {
-    let hosting_router = Router::new()
-        // Serving routes
-        .route("/health", get(health_check))
-        .route("/sites/:site_id", get(redirect_to_index))
-        .route("/sites/:site_id/", get(serve_site_root))
-        .route("/sites/:site_id/*path", get(serve_site_file))
-        // Gateway API routes
-        .route("/api/sites", post(upload_site))
-        .route("/api/sites/:site_id", delete(delete_site_api))
-        .with_state(state);
+    // Base: health check is always present
+    let mut app = Router::new().route("/health", get(health_check));
 
-    let mut app = hosting_router;
+    if relay_share_state.is_some() {
+        // Relay mode: /sites/* and /drive/* handled by proxy routes below.
+        // No local hosting serving routes or upload/delete API needed.
+    } else {
+        // Local mode: serve sites from disk + upload/delete API
+        app = app.merge(
+            Router::new()
+                .route("/sites/:site_id", get(redirect_to_index))
+                .route("/sites/:site_id/", get(serve_site_root))
+                .route("/sites/:site_id/*path", get(serve_site_file))
+                .route("/api/sites", post(upload_site))
+                .route("/api/sites/:site_id", delete(delete_site_api))
+                .with_state(state),
+        );
+    }
 
     // Merge Drive API routes if drive state is provided (local server)
     if let Some(ds) = drive_state {
