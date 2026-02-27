@@ -1,25 +1,31 @@
-//! Relay-side share and site registry with HTTP reverse proxy.
+//! Relay-side share and site registry with HTTP reverse proxy + WebSocket tunnel.
 //!
-//! The relay never stores file data. It only keeps mappings from share tokens
-//! and site IDs to the origin URL of the owner's local server. When a visitor
-//! requests a share link or hosted site on the relay, the relay proxies the
-//! request to the owner's local server in real time. If the owner is offline,
-//! an error page is shown.
+//! The relay never stores file data. It keeps mappings from share tokens and
+//! site IDs to the owner's local server. When a visitor requests content:
+//!
+//! 1. If the owner has an active WebSocket tunnel, the request is forwarded
+//!    through the tunnel (works behind NAT without port forwarding).
+//! 2. Otherwise, the relay tries a direct HTTP proxy to the origin URL.
+//! 3. If both fail, an offline error page is shown.
 
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Extension, Path, Query},
+    extract::{
+        ws::{Message, WebSocket},
+        ConnectInfo, Extension, Path, Query, WebSocketUpgrade,
+    },
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
-use std::net::SocketAddr;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, RwLock};
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -157,6 +163,85 @@ impl RelayShareRegistry {
 }
 
 // ---------------------------------------------------------------------------
+// WebSocket tunnel registry
+// ---------------------------------------------------------------------------
+
+/// A pending tunnel request: the relay sends a TunnelRequest over the WS and
+/// waits on the oneshot for the client's TunnelResponse.
+type TunnelResponder = oneshot::Sender<TunnelResponse>;
+
+/// Messages sent relay → client over the WebSocket.
+#[derive(Serialize, Deserialize)]
+struct TunnelRequest {
+    id: String,
+    path: String,
+}
+
+/// Messages sent client → relay over the WebSocket.
+#[derive(Serialize, Deserialize)]
+struct TunnelResponse {
+    id: String,
+    status: u16,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    /// Base64-encoded body
+    body: String,
+}
+
+/// Active tunnel: a sender half of an mpsc channel to push requests into the
+/// WebSocket writer task, which forwards them to the connected client.
+type TunnelSender = tokio::sync::mpsc::Sender<(TunnelRequest, TunnelResponder)>;
+
+/// Global registry of active tunnels keyed by resource key (e.g. "site:abc" or
+/// "share:xyz").
+pub struct TunnelRegistry {
+    tunnels: RwLock<HashMap<String, TunnelSender>>,
+}
+
+impl TunnelRegistry {
+    pub fn new() -> Self {
+        Self {
+            tunnels: RwLock::new(HashMap::new()),
+        }
+    }
+
+    async fn register(&self, key: String, sender: TunnelSender) {
+        self.tunnels.write().await.insert(key, sender);
+    }
+
+    async fn unregister(&self, key: &str) {
+        self.tunnels.write().await.remove(key);
+    }
+
+    /// Send a request through the tunnel and wait for the response.
+    async fn request(&self, key: &str, path: String) -> Option<TunnelResponse> {
+        let sender = {
+            let map = self.tunnels.read().await;
+            map.get(key).cloned()
+        };
+        let sender = sender?;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let (resp_tx, resp_rx) = oneshot::channel();
+
+        let req = TunnelRequest {
+            id: id.clone(),
+            path,
+        };
+
+        if sender.send((req, resp_tx)).await.is_err() {
+            return None;
+        }
+
+        // Wait up to 30s for the client to respond
+        match tokio::time::timeout(std::time::Duration::from_secs(30), resp_rx).await {
+            Ok(Ok(resp)) => Some(resp),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Request/response types
 // ---------------------------------------------------------------------------
 
@@ -178,6 +263,15 @@ struct SiteRegisterRequest {
 struct ProxyQuery {
     #[serde(flatten)]
     params: HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct TunnelQuery {
+    /// "site" or "share"
+    #[serde(rename = "type")]
+    resource_type: String,
+    /// The site_id or share token
+    id: String,
 }
 
 fn now_secs() -> u64 {
@@ -241,7 +335,103 @@ async fn unregister_share(
 }
 
 // ---------------------------------------------------------------------------
-// Reverse proxy handlers
+// WebSocket tunnel endpoint
+// ---------------------------------------------------------------------------
+
+/// GET /api/tunnel/ws?type=site&id=xxx — WebSocket tunnel for NAT traversal.
+///
+/// The client (site/share owner) connects here after publishing. The relay
+/// forwards incoming visitor requests through this WebSocket.
+async fn tunnel_ws_handler(
+    Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
+    Query(q): Query<TunnelQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let key = format!("{}:{}", q.resource_type, q.id);
+    println!("[TUNNEL] WebSocket upgrade for key={}", key);
+    ws.on_upgrade(move |socket| handle_tunnel_ws(socket, key, tunnel_reg))
+}
+
+async fn handle_tunnel_ws(
+    socket: WebSocket,
+    key: String,
+    tunnel_reg: Arc<TunnelRegistry>,
+) {
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // Channel for the proxy handlers to send requests into this tunnel
+    let (req_tx, mut req_rx) = tokio::sync::mpsc::channel::<(TunnelRequest, TunnelResponder)>(32);
+
+    tunnel_reg.register(key.clone(), req_tx).await;
+    println!("[TUNNEL] Connected: {}", key);
+
+    // Map of pending request IDs → responders
+    let pending: Arc<RwLock<HashMap<String, TunnelResponder>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+    let pending_for_read = Arc::clone(&pending);
+
+    // Task: read responses from the WebSocket client
+    let read_key = key.clone();
+    let read_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = ws_rx.next().await {
+            match msg {
+                Message::Text(text) => {
+                    if let Ok(resp) = serde_json::from_str::<TunnelResponse>(&text) {
+                        let mut map = pending_for_read.write().await;
+                        if let Some(tx) = map.remove(&resp.id) {
+                            let _ = tx.send(resp);
+                        }
+                    }
+                }
+                Message::Close(_) => {
+                    println!("[TUNNEL] Client closed: {}", read_key);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Task: forward requests from proxy handlers to the WebSocket client
+    let write_task = tokio::spawn(async move {
+        // Also send periodic pings to keep the connection alive
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                req = req_rx.recv() => {
+                    match req {
+                        Some((tunnel_req, responder)) => {
+                            let id = tunnel_req.id.clone();
+                            pending.write().await.insert(id, responder);
+                            let json = serde_json::to_string(&tunnel_req).unwrap_or_default();
+                            if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                _ = ping_interval.tick() => {
+                    if ws_tx.send(Message::Ping(vec![].into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Wait for either task to finish (connection dropped)
+    tokio::select! {
+        _ = read_task => {}
+        _ = write_task => {}
+    }
+
+    tunnel_reg.unregister(&key).await;
+    println!("[TUNNEL] Disconnected: {}", key);
+}
+
+// ---------------------------------------------------------------------------
+// Reverse proxy helpers
 // ---------------------------------------------------------------------------
 
 /// Build the query string from the flattened params map.
@@ -256,42 +446,47 @@ fn build_query_string(params: &HashMap<String, String>) -> String {
     format!("?{}", qs.join("&"))
 }
 
-/// Proxy GET /drive/:token to the sharer's local server.
-async fn proxy_share_root(
-    Extension(state): Extension<Arc<RelayShareRegistry>>,
-    Path(token): Path<String>,
-    Query(q): Query<ProxyQuery>,
+/// Try the WebSocket tunnel first; if unavailable fall back to direct HTTP proxy.
+async fn proxy_via_tunnel_or_http(
+    tunnel_reg: &Arc<TunnelRegistry>,
+    tunnel_key: &str,
+    path: &str,
+    direct_url: &str,
 ) -> Response {
-    let reg = match state.lookup(&token).await {
-        Some(r) => r,
-        None => return (StatusCode::NOT_FOUND, Html(offline_page("Share link not found"))).into_response(),
-    };
+    // Try tunnel first
+    if let Some(resp) = tunnel_reg.request(tunnel_key, path.to_string()).await {
+        return tunnel_response_to_axum(resp);
+    }
 
-    let qs = build_query_string(&q.params);
-    let target = format!("{}/drive/{}{}", reg.origin_url, token, qs);
-    proxy_request(&target).await
+    // Fall back to direct HTTP proxy (works if port is forwarded)
+    proxy_request_direct(direct_url).await
 }
 
-/// Proxy GET /drive/:token/*path to the sharer's local server.
-async fn proxy_share_path(
-    Extension(state): Extension<Arc<RelayShareRegistry>>,
-    Path((token, subpath)): Path<(String, String)>,
-    Query(q): Query<ProxyQuery>,
-) -> Response {
-    let reg = match state.lookup(&token).await {
-        Some(r) => r,
-        None => return (StatusCode::NOT_FOUND, Html(offline_page("Share link not found"))).into_response(),
-    };
+/// Convert a TunnelResponse into an Axum HTTP response.
+fn tunnel_response_to_axum(resp: TunnelResponse) -> Response {
+    use base64::Engine;
+    let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let body_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&resp.body)
+        .unwrap_or_default();
 
-    let qs = build_query_string(&q.params);
-    let target = format!("{}/drive/{}/{}{}", reg.origin_url, token, subpath, qs);
-    proxy_request(&target).await
+    let mut headers = axum::http::HeaderMap::new();
+    for (k, v) in &resp.headers {
+        if let Ok(name) = axum::http::header::HeaderName::from_bytes(k.as_bytes()) {
+            if let Ok(hv) = axum::http::HeaderValue::from_str(v) {
+                headers.insert(name, hv);
+            }
+        }
+    }
+
+    (status, headers, body_bytes).into_response()
 }
 
-/// Forward a GET request to the target URL and stream the response back.
-async fn proxy_request(target: &str) -> Response {
+/// Forward a GET request to the target URL directly and stream the response back.
+async fn proxy_request_direct(target: &str) -> Response {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
+        .timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap_or_default();
 
@@ -300,17 +495,26 @@ async fn proxy_request(target: &str) -> Response {
         Err(_) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Html(offline_page("The file owner is currently offline. Please try again later.")),
+                Html(offline_page(
+                    "The owner is currently offline. Please try again later.",
+                )),
             )
                 .into_response();
         }
     };
 
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
 
     // Forward relevant headers (convert reqwest HeaderValue -> axum HeaderValue)
     let mut headers = axum::http::HeaderMap::new();
-    for key in &["content-type", "content-length", "content-disposition"] {
+    for key in &[
+        "content-type",
+        "content-length",
+        "content-disposition",
+        "cache-control",
+        "etag",
+    ] {
         if let Some(val) = upstream.headers().get(*key) {
             if let Ok(name) = axum::http::header::HeaderName::from_bytes(key.as_bytes()) {
                 if let Ok(hv) = axum::http::HeaderValue::from_bytes(val.as_bytes()) {
@@ -325,6 +529,60 @@ async fn proxy_request(target: &str) -> Response {
     let body = Body::from_stream(stream);
 
     (status, headers, body).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Drive share proxy handlers
+// ---------------------------------------------------------------------------
+
+/// Proxy GET /drive/:token to the sharer's local server.
+async fn proxy_share_root(
+    Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
+    Path(token): Path<String>,
+    Query(q): Query<ProxyQuery>,
+) -> Response {
+    let reg = match state.lookup(&token).await {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(offline_page("Share link not found")),
+            )
+                .into_response()
+        }
+    };
+
+    let qs = build_query_string(&q.params);
+    let path = format!("/drive/{}{}", token, qs);
+    let direct_url = format!("{}{}", reg.origin_url, path);
+    let tunnel_key = format!("share:{}", token);
+    proxy_via_tunnel_or_http(&tunnel_reg, &tunnel_key, &path, &direct_url).await
+}
+
+/// Proxy GET /drive/:token/*path to the sharer's local server.
+async fn proxy_share_path(
+    Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
+    Path((token, subpath)): Path<(String, String)>,
+    Query(q): Query<ProxyQuery>,
+) -> Response {
+    let reg = match state.lookup(&token).await {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(offline_page("Share link not found")),
+            )
+                .into_response()
+        }
+    };
+
+    let qs = build_query_string(&q.params);
+    let path = format!("/drive/{}/{}{}", token, subpath, qs);
+    let direct_url = format!("{}{}", reg.origin_url, path);
+    let tunnel_key = format!("share:{}", token);
+    proxy_via_tunnel_or_http(&tunnel_reg, &tunnel_key, &path, &direct_url).await
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +636,6 @@ async fn proxy_site_redirect(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
     Path(site_id): Path<String>,
 ) -> Response {
-    // Check if site is registered before redirecting
     if state.lookup_site(&site_id).await.is_none() {
         return (
             StatusCode::NOT_FOUND,
@@ -386,7 +643,6 @@ async fn proxy_site_redirect(
         )
             .into_response();
     }
-    // Redirect to trailing slash (same as local hosting server)
     (
         StatusCode::MOVED_PERMANENTLY,
         [("Location", format!("/sites/{}/", site_id))],
@@ -398,6 +654,7 @@ async fn proxy_site_redirect(
 /// Proxy GET /sites/:site_id/ to the owner's local server.
 async fn proxy_site_root(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
     Path(site_id): Path<String>,
 ) -> Response {
     let reg = match state.lookup_site(&site_id).await {
@@ -410,13 +667,16 @@ async fn proxy_site_root(
                 .into_response()
         }
     };
-    let target = format!("{}/sites/{}/", reg.origin_url, site_id);
-    proxy_request(&target).await
+    let path = format!("/sites/{}/", site_id);
+    let direct_url = format!("{}{}", reg.origin_url, path);
+    let tunnel_key = format!("site:{}", site_id);
+    proxy_via_tunnel_or_http(&tunnel_reg, &tunnel_key, &path, &direct_url).await
 }
 
 /// Proxy GET /sites/:site_id/*path to the owner's local server.
 async fn proxy_site_path(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
+    Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
     Path((site_id, subpath)): Path<(String, String)>,
 ) -> Response {
     let reg = match state.lookup_site(&site_id).await {
@@ -429,8 +689,10 @@ async fn proxy_site_path(
                 .into_response()
         }
     };
-    let target = format!("{}/sites/{}/{}", reg.origin_url, site_id, subpath);
-    proxy_request(&target).await
+    let path = format!("/sites/{}/{}", site_id, subpath);
+    let direct_url = format!("{}{}", reg.origin_url, path);
+    let tunnel_key = format!("site:{}", site_id);
+    proxy_via_tunnel_or_http(&tunnel_reg, &tunnel_key, &path, &direct_url).await
 }
 
 // ---------------------------------------------------------------------------
@@ -441,7 +703,7 @@ fn offline_page(msg: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Chiral Drive</title>
+<title>Chiral Network</title>
 <script src="https://cdn.tailwindcss.com"></script>
 </head><body class="bg-gray-900 text-white flex items-center justify-center min-h-screen">
 <div class="bg-gray-800 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl text-center">
@@ -461,7 +723,10 @@ fn offline_page(msg: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Create the relay share proxy router. Uses Extension for state injection.
-pub fn relay_share_routes(state: Arc<RelayShareRegistry>) -> Router {
+pub fn relay_share_routes(
+    state: Arc<RelayShareRegistry>,
+    tunnel_reg: Arc<TunnelRegistry>,
+) -> Router {
     Router::new()
         // Drive share registration API
         .route("/api/drive/relay-register", post(register_share))
@@ -482,5 +747,8 @@ pub fn relay_share_routes(state: Arc<RelayShareRegistry>) -> Router {
         .route("/sites/:site_id", get(proxy_site_redirect))
         .route("/sites/:site_id/", get(proxy_site_root))
         .route("/sites/:site_id/*path", get(proxy_site_path))
+        // WebSocket tunnel
+        .route("/api/tunnel/ws", get(tunnel_ws_handler))
         .layer(Extension(state))
+        .layer(Extension(tunnel_reg))
 }

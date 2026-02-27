@@ -42,6 +42,9 @@ pub struct AppState {
     pub hosting_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
     pub hosting_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     pub drive_state: Arc<drive_api::DriveState>,
+    /// Active WebSocket tunnel tasks keyed by resource key (e.g. "site:abc123").
+    /// Dropping the AbortHandle cancels the tunnel task.
+    pub tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
 }
 
 #[tauri::command]
@@ -2732,6 +2735,127 @@ async fn get_hosting_server_status(
     })
 }
 
+// ---------------------------------------------------------------------------
+// WebSocket tunnel to relay (NAT traversal for hosting/drive proxy)
+// ---------------------------------------------------------------------------
+
+/// Spawn a background task that maintains a WebSocket tunnel to the relay.
+/// The relay forwards incoming visitor HTTP requests through this tunnel.
+/// Returns the AbortHandle so the tunnel can be cancelled on unpublish.
+fn spawn_relay_tunnel(
+    relay_base: String,
+    resource_type: String,
+    resource_id: String,
+    local_origin: String,
+) -> tokio::task::AbortHandle {
+    use futures_util::StreamExt;
+    let handle = tokio::spawn(async move {
+        loop {
+            let ws_url = format!(
+                "{}/api/tunnel/ws?type={}&id={}",
+                relay_base.replace("http://", "ws://").replace("https://", "wss://"),
+                resource_type,
+                resource_id
+            );
+            println!(
+                "[TUNNEL] Connecting to {} for {}:{}",
+                ws_url, resource_type, resource_id
+            );
+
+            match tokio_tungstenite::connect_async(&ws_url).await {
+                Ok((ws_stream, _)) => {
+                    println!(
+                        "[TUNNEL] Connected for {}:{}",
+                        resource_type, resource_id
+                    );
+                    let (mut ws_tx, mut ws_rx) = futures_util::StreamExt::split(ws_stream);
+
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(30))
+                        .build()
+                        .unwrap_or_default();
+                    let local = local_origin.clone();
+
+                    while let Some(Ok(msg)) = ws_rx.next().await {
+                        match msg {
+                            tokio_tungstenite::tungstenite::Message::Text(text) => {
+                                // Parse the tunnel request from the relay
+                                #[derive(serde::Deserialize)]
+                                struct TunnelReq {
+                                    id: String,
+                                    path: String,
+                                }
+                                let req: TunnelReq = match serde_json::from_str(&text) {
+                                    Ok(r) => r,
+                                    Err(_) => continue,
+                                };
+
+                                // Fetch from local server
+                                let target = format!("{}{}", local, req.path);
+                                let (status, headers, body_bytes): (u16, HashMap<String, String>, Vec<u8>) =
+                                    match client.get(&target).send().await {
+                                        Ok(resp) => {
+                                            let st = resp.status().as_u16();
+                                            let mut hdr = HashMap::<String, String>::new();
+                                            for (k, v) in resp.headers() {
+                                                if let Ok(vs) = v.to_str() {
+                                                    hdr.insert(k.to_string(), vs.to_string());
+                                                }
+                                            }
+                                            let bytes = resp.bytes().await.unwrap_or_default().to_vec();
+                                            (st, hdr, bytes)
+                                        }
+                                        Err(_) => {
+                                            (502, HashMap::new(), b"Local server error".to_vec())
+                                        }
+                                    };
+
+                                // Send response back through the tunnel
+                                use base64::Engine;
+                                let resp_json = serde_json::json!({
+                                    "id": req.id,
+                                    "status": status,
+                                    "headers": headers,
+                                    "body": base64::engine::general_purpose::STANDARD.encode(&body_bytes),
+                                });
+                                let msg = tokio_tungstenite::tungstenite::Message::Text(
+                                    resp_json.to_string(),
+                                );
+                                if futures_util::SinkExt::send(&mut ws_tx, msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            tokio_tungstenite::tungstenite::Message::Ping(data) => {
+                                let _ = futures_util::SinkExt::send(
+                                    &mut ws_tx,
+                                    tokio_tungstenite::tungstenite::Message::Pong(data),
+                                )
+                                .await;
+                            }
+                            tokio_tungstenite::tungstenite::Message::Close(_) => break,
+                            _ => {}
+                        }
+                    }
+                    println!(
+                        "[TUNNEL] Disconnected from relay for {}:{}",
+                        resource_type, resource_id
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "[TUNNEL] Failed to connect for {}:{}: {}",
+                        resource_type, resource_id, e
+                    );
+                }
+            }
+
+            // Reconnect after a short delay
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+    handle.abort_handle()
+}
+
 #[tauri::command]
 async fn publish_site_to_relay(
     state: tauri::State<'_, AppState>,
@@ -2786,6 +2910,20 @@ async fn publish_site_to_relay(
     }
     hosting::save_sites(&all_sites);
 
+    // Start WebSocket tunnel to relay for NAT traversal
+    let tunnel_key = format!("site:{}", site_id);
+    let abort_handle = spawn_relay_tunnel(
+        relay_base.to_string(),
+        "site".to_string(),
+        site_id.clone(),
+        origin,
+    );
+    state
+        .tunnel_handles
+        .lock()
+        .await
+        .insert(tunnel_key, abort_handle);
+
     println!(
         "[HOSTING] Published site {} to relay: {}",
         site_id, public_url
@@ -2795,7 +2933,7 @@ async fn publish_site_to_relay(
 
 #[tauri::command]
 async fn unpublish_site_from_relay(
-    _state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, AppState>,
     site_id: String,
 ) -> Result<(), String> {
     let mut all_sites = hosting::load_sites();
@@ -2833,6 +2971,12 @@ async fn unpublish_site_from_relay(
         return Err(format!("Relay returned {}: {}", status, text));
     }
 
+    // Cancel the WebSocket tunnel
+    let tunnel_key = format!("site:{}", site_id);
+    if let Some(handle) = state.tunnel_handles.lock().await.remove(&tunnel_key) {
+        handle.abort();
+    }
+
     // Clear relay URL from local metadata
     if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
         s.relay_url = None;
@@ -2857,7 +3001,9 @@ async fn get_drive_server_url(
     for _ in 0..100 {
         let addr = state.hosting_server_addr.lock().await;
         if let Some(a) = *addr {
-            return Ok(Some(format!("http://{}", a)));
+            // The server binds to 0.0.0.0 which isn't fetchable from a
+            // browser/WebView. Return localhost instead.
+            return Ok(Some(format!("http://localhost:{}", a.port())));
         }
         drop(addr);
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -2900,6 +3046,20 @@ async fn publish_drive_share(
         return Err(format!("Relay error: {}", text));
     }
 
+    // Start WebSocket tunnel to relay for NAT traversal
+    let tunnel_key = format!("share:{}", share_token);
+    let abort_handle = spawn_relay_tunnel(
+        relay_base.to_string(),
+        "share".to_string(),
+        share_token.clone(),
+        origin,
+    );
+    state
+        .tunnel_handles
+        .lock()
+        .await
+        .insert(tunnel_key, abort_handle);
+
     println!(
         "[DRIVE] Published share token={} to relay {}",
         share_token, relay_base
@@ -2909,6 +3069,7 @@ async fn publish_drive_share(
 
 #[tauri::command]
 async fn unpublish_drive_share(
+    state: tauri::State<'_, AppState>,
     share_token: String,
     relay_url: String,
 ) -> Result<(), String> {
@@ -2929,6 +3090,12 @@ async fn unpublish_drive_share(
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
         return Err(format!("Relay error: {}", text));
+    }
+
+    // Cancel the WebSocket tunnel
+    let tunnel_key = format!("share:{}", share_token);
+    if let Some(handle) = state.tunnel_handles.lock().await.remove(&tunnel_key) {
+        handle.abort();
     }
 
     println!(
@@ -3006,6 +3173,7 @@ pub fn run() {
             hosting_server_addr: Arc::new(Mutex::new(None)),
             hosting_server_shutdown: Arc::new(Mutex::new(None)),
             drive_state: Arc::new(drive_api::DriveState::new()),
+            tunnel_handles: Arc::new(Mutex::new(HashMap::new())),
         })
         .setup(|app| {
             use tauri::Manager;
@@ -3018,6 +3186,8 @@ pub fn run() {
                 Arc::clone(&state.hosting_server_addr);
             let shutdown_store: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> =
                 Arc::clone(&state.hosting_server_shutdown);
+            let tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>> =
+                Arc::clone(&state.tunnel_handles);
             tauri::async_runtime::spawn(async move {
                 hosting.load_from_disk().await;
                 drive.load_from_disk_async().await;
@@ -3037,6 +3207,26 @@ pub fn run() {
                         *addr_store.lock().await = Some(addr);
                         *shutdown_store.lock().await = Some(tx);
                         println!("[DRIVE] Local server started on http://{}", addr);
+
+                        // Re-establish tunnels for already-published sites
+                        let local_origin = format!("http://localhost:{}", addr.port());
+                        let relay_base = "http://130.245.173.73:8080";
+                        let sites = hosting::load_sites();
+                        for site in &sites {
+                            if site.relay_url.is_some() {
+                                println!("[TUNNEL] Re-establishing tunnel for site {}", site.id);
+                                let abort = spawn_relay_tunnel(
+                                    relay_base.to_string(),
+                                    "site".to_string(),
+                                    site.id.clone(),
+                                    local_origin.clone(),
+                                );
+                                tunnel_handles
+                                    .lock()
+                                    .await
+                                    .insert(format!("site:{}", site.id), abort);
+                            }
+                        }
                     }
                     Err(e) => eprintln!("[DRIVE] Failed to start local server: {}", e),
                 }

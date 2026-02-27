@@ -426,7 +426,8 @@ pub fn create_gateway_router(
 
     // Merge relay share proxy routes if relay share state is provided (relay server)
     if let Some(rss) = relay_share_state {
-        app = app.merge(relay_share_proxy::relay_share_routes(rss));
+        let tunnel_reg = Arc::new(relay_share_proxy::TunnelRegistry::new());
+        app = app.merge(relay_share_proxy::relay_share_routes(rss, tunnel_reg));
     }
 
     app.layer(
