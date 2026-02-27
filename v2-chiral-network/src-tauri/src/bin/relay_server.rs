@@ -18,9 +18,9 @@ use std::error::Error;
 use std::sync::Arc;
 use sha2::{Sha256, Digest};
 
-use chiral_network_v2_lib::drive_api::DriveState;
 use chiral_network_v2_lib::hosting_server::{self, HostingServerState};
 use chiral_network_v2_lib::rating_storage::RatingState;
+use chiral_network_v2_lib::relay_share_proxy::RelayShareRegistry;
 
 #[derive(NetworkBehaviour)]
 struct RelayServerBehaviour {
@@ -102,11 +102,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let hosting_state = Arc::new(HostingServerState::new());
     hosting_state.load_from_disk().await;
 
-    // Initialize Drive state
-    let drive_state = Arc::new(DriveState::new());
-    drive_state.load_from_disk_async().await;
-    println!("Drive state loaded from disk");
-
     // Initialize Rating state
     let rating_data_dir = dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -114,12 +109,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rating_state = Arc::new(RatingState::new(rating_data_dir));
     println!("Rating state loaded from disk");
 
+    // Initialize relay share registry (metadata only — no file storage)
+    let relay_share_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("chiral-network");
+    let relay_share_state = Arc::new(RelayShareRegistry::new(relay_share_data_dir));
+    relay_share_state.load_from_disk().await;
+    println!("Relay share registry loaded from disk");
+
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
 
     match hosting_server::start_gateway_server(
         Arc::clone(&hosting_state),
-        Some(Arc::clone(&drive_state)),
+        None, // No local Drive API on relay
         Some(Arc::clone(&rating_state)),
+        Some(Arc::clone(&relay_share_state)),
         http_port,
         http_shutdown_rx,
     )

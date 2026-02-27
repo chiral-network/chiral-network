@@ -3,6 +3,7 @@ pub mod drive_api;
 pub mod drive_storage;
 pub mod rating_api;
 pub mod rating_storage;
+pub mod relay_share_proxy;
 mod encryption;
 mod file_transfer;
 mod geth;
@@ -36,10 +37,11 @@ pub struct AppState {
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
     pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
     pub download_credentials: dht::DownloadCredentialsMap, // request_id -> wallet credentials for file payment
-    // Hosting
+    // Hosting & Drive
     pub hosting_server_state: Arc<hosting_server::HostingServerState>,
     pub hosting_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
     pub hosting_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    pub drive_state: Arc<drive_api::DriveState>,
 }
 
 #[tauri::command]
@@ -2847,6 +2849,94 @@ async fn unpublish_site_from_relay(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Drive commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn get_drive_server_url(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    Ok(state
+        .hosting_server_addr
+        .lock()
+        .await
+        .map(|a| format!("http://{}", a)))
+}
+
+#[tauri::command]
+async fn publish_drive_share(
+    state: tauri::State<'_, AppState>,
+    share_token: String,
+    relay_url: String,
+    owner_wallet: String,
+) -> Result<(), String> {
+    let origin = state
+        .hosting_server_addr
+        .lock()
+        .await
+        .map(|a| format!("http://{}", a))
+        .ok_or("Local server not running")?;
+
+    let relay_base = relay_url.trim_end_matches('/');
+    let url = format!("{}/api/drive/relay-register", relay_base);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "token": share_token,
+            "origin_url": origin,
+            "owner_wallet": owner_wallet,
+        }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to register share with relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay error: {}", text));
+    }
+
+    println!(
+        "[DRIVE] Published share token={} to relay {}",
+        share_token, relay_base
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn unpublish_drive_share(
+    share_token: String,
+    relay_url: String,
+) -> Result<(), String> {
+    let relay_base = relay_url.trim_end_matches('/');
+    let url = format!(
+        "{}/api/drive/relay-register/{}",
+        relay_base, share_token
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .delete(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to unregister share from relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay error: {}", text));
+    }
+
+    println!(
+        "[DRIVE] Unpublished share token={} from relay",
+        share_token
+    );
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
@@ -2910,10 +3000,47 @@ pub fn run() {
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
-            // Hosting
+            // Hosting & Drive
             hosting_server_state: Arc::new(hosting_server::HostingServerState::new()),
             hosting_server_addr: Arc::new(Mutex::new(None)),
             hosting_server_shutdown: Arc::new(Mutex::new(None)),
+            drive_state: Arc::new(drive_api::DriveState::new()),
+        })
+        .setup(|app| {
+            use tauri::Manager;
+            // Auto-start local server with Drive routes on port 9419
+            let state = app.state::<AppState>();
+            let hosting: Arc<hosting_server::HostingServerState> =
+                Arc::clone(&state.hosting_server_state);
+            let drive: Arc<drive_api::DriveState> = Arc::clone(&state.drive_state);
+            let addr_store: Arc<Mutex<Option<std::net::SocketAddr>>> =
+                Arc::clone(&state.hosting_server_addr);
+            let shutdown_store: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> =
+                Arc::clone(&state.hosting_server_shutdown);
+            tauri::async_runtime::spawn(async move {
+                hosting.load_from_disk().await;
+                drive.load_from_disk_async().await;
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                // Local server: has drive routes, no relay share proxy
+                match hosting_server::start_gateway_server(
+                    hosting,
+                    Some(drive),
+                    None,
+                    None,
+                    9419,
+                    rx,
+                )
+                .await
+                {
+                    Ok(addr) => {
+                        *addr_store.lock().await = Some(addr);
+                        *shutdown_store.lock().await = Some(tx);
+                        println!("[DRIVE] Local server started on http://{}", addr);
+                    }
+                    Err(e) => eprintln!("[DRIVE] Failed to start local server: {}", e),
+                }
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -2989,6 +3116,10 @@ pub fn run() {
             get_hosting_server_status,
             publish_site_to_relay,
             unpublish_site_from_relay,
+            // Drive commands
+            get_drive_server_url,
+            publish_drive_share,
+            unpublish_drive_share,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
