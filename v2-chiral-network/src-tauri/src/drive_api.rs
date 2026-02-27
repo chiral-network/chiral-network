@@ -45,7 +45,7 @@ impl DriveState {
         *m = loaded;
     }
 
-    async fn persist(&self) {
+    pub async fn persist(&self) {
         let m = self.manifest.read().await;
         drive_storage::save_manifest(&m);
     }

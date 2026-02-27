@@ -4,6 +4,9 @@
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import { setLocalDriveServer } from '$lib/services/driveApiService';
   import { walletAccount } from '$lib/stores';
+
+  // Track whether initialization is complete (prevents wallet subscription from firing too early)
+  let initialized = false;
   import { toasts } from '$lib/toastStore';
   import { open } from '@tauri-apps/plugin-shell';
   import DriveBreadcrumb from '$lib/components/drive/DriveBreadcrumb.svelte';
@@ -40,20 +43,20 @@
   // Subscribe to store
   driveStore.subscribe(m => manifest = m);
 
-  // Reload drive when wallet changes
+  // Reload drive when wallet changes (only after initialization)
   let prevWalletAddr = '';
   const unsubWallet = walletAccount.subscribe((account) => {
     const addr = account?.address ?? '';
     if (addr !== prevWalletAddr) {
       prevWalletAddr = addr;
       currentFolderId = null;
-      loadCurrentFolder();
+      if (initialized) loadCurrentFolder();
     }
   });
   onDestroy(unsubWallet);
 
   onMount(async () => {
-    // Init local Drive server URL (Tauri only)
+    // Init local Drive server URL (Tauri only — used as fallback for downloads)
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const url = await invoke<string | null>('get_drive_server_url');
@@ -64,6 +67,7 @@
 
     const saved = localStorage.getItem('drive-view-mode');
     if (saved === 'list' || saved === 'grid') viewMode = saved;
+    initialized = true;
     await loadCurrentFolder();
   });
 
@@ -108,8 +112,36 @@
     localStorage.setItem('drive-view-mode', mode);
   }
 
-  // Upload via file input
+  // Upload via Tauri file dialog (or browser fallback)
   async function handleUpload() {
+    // Try Tauri file dialog first — returns file paths directly (no browser security issues)
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const paths: string[] | null = await invoke('open_file_dialog', { multiple: true });
+      if (!paths || paths.length === 0) return;
+      uploading = true;
+      let count = 0;
+      try {
+        for (const path of paths) {
+          const result = await driveStore.uploadFile(path, currentFolderId);
+          if (result) count++;
+        }
+        if (count > 0) {
+          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+        } else {
+          toasts.show('Upload failed', 'error');
+        }
+      } catch (e) {
+        toasts.show('Upload failed: ' + (e as Error).message, 'error');
+      } finally {
+        uploading = false;
+      }
+      return;
+    } catch {
+      // Not Tauri or dialog command unavailable — fall through to browser input
+    }
+
+    // Browser fallback
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
@@ -271,22 +303,31 @@
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
-    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-      uploading = true;
-      let count = 0;
-      try {
-        for (const file of e.dataTransfer.files) {
-          const result = await driveStore.uploadFile(file, currentFolderId);
-          if (result) count++;
-        }
-        if (count > 0) {
-          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
-        }
-      } catch (e) {
-        toasts.show('Upload failed: ' + (e as Error).message, 'error');
-      } finally {
-        uploading = false;
+    if (!e.dataTransfer?.files || e.dataTransfer.files.length === 0) return;
+
+    // In Tauri mode, browser File objects can't be uploaded via HTTP (mixed-content).
+    // Show a hint to use the Upload button instead.
+    const isTauriEnv = !!(window as any).__TAURI_INTERNALS__;
+    if (isTauriEnv) {
+      toasts.show('Please use the Upload button to add files', 'info');
+      return;
+    }
+
+    // Web/browser mode — use File objects
+    uploading = true;
+    let count = 0;
+    try {
+      for (const file of e.dataTransfer.files) {
+        const result = await driveStore.uploadFile(file, currentFolderId);
+        if (result) count++;
       }
+      if (count > 0) {
+        toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+      }
+    } catch (e) {
+      toasts.show('Upload failed: ' + (e as Error).message, 'error');
+    } finally {
+      uploading = false;
     }
   }
 

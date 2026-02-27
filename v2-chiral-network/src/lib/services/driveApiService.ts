@@ -44,6 +44,41 @@ export interface ShareLink {
   downloadCount: number;
 }
 
+/** Check if running inside Tauri */
+let _isTauri: boolean | null = null;
+function isTauri(): boolean {
+  if (_isTauri === null) {
+    _isTauri = !!(window as any).__TAURI_INTERNALS__;
+  }
+  return _isTauri;
+}
+
+/** Lazy-loaded invoke function */
+let _invoke: ((cmd: string, args?: Record<string, unknown>) => Promise<any>) | null = null;
+async function getInvoke() {
+  if (!_invoke) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    _invoke = invoke;
+  }
+  return _invoke;
+}
+
+/** Convert Tauri command result (snake_case) to frontend format (camelCase) */
+function convertItem(raw: any): DriveItem {
+  return {
+    id: raw.id,
+    name: raw.name,
+    itemType: raw.item_type ?? raw.itemType ?? 'file',
+    parentId: raw.parent_id ?? raw.parentId ?? null,
+    size: raw.size ?? undefined,
+    mimeType: raw.mime_type ?? raw.mimeType ?? undefined,
+    createdAt: raw.created_at ?? raw.createdAt ?? 0,
+    modifiedAt: raw.modified_at ?? raw.modifiedAt ?? 0,
+    starred: raw.starred ?? false,
+    storagePath: raw.storage_path ?? raw.storagePath ?? undefined,
+  };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${getCrudBase()}${path}`, {
     ...init,
@@ -66,12 +101,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const driveApi = {
   /** List items in a folder (null parentId = root) */
   async listItems(parentId?: string | null): Promise<DriveItem[]> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      const items: any[] = await invoke('drive_list_items', {
+        owner: currentOwner,
+        parentId: parentId ?? null,
+      });
+      return items.map(convertItem);
+    }
     const params = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : '';
     return request<DriveItem[]>(`/api/drive/items${params}`);
   },
 
   /** Create a new folder */
   async createFolder(name: string, parentId?: string | null): Promise<DriveItem> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      const item = await invoke('drive_create_folder', {
+        owner: currentOwner,
+        name,
+        parentId: parentId ?? null,
+      });
+      return convertItem(item);
+    }
     return request<DriveItem>('/api/drive/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -79,8 +131,19 @@ export const driveApi = {
     });
   },
 
-  /** Upload a file via multipart form data */
-  async uploadFile(file: File, parentId?: string | null): Promise<DriveItem> {
+  /** Upload a file — in Tauri mode, takes a file path string instead of File object */
+  async uploadFile(fileOrPath: File | string, parentId?: string | null): Promise<DriveItem> {
+    if (isTauri() && typeof fileOrPath === 'string') {
+      const invoke = await getInvoke();
+      const item = await invoke('drive_upload_file', {
+        owner: currentOwner,
+        filePath: fileOrPath,
+        parentId: parentId ?? null,
+      });
+      return convertItem(item);
+    }
+    // Fallback: HTTP multipart upload (web mode or File object)
+    const file = fileOrPath as File;
     const formData = new FormData();
     formData.append('file', file);
     if (parentId) {
@@ -97,6 +160,17 @@ export const driveApi = {
     id: string,
     updates: { name?: string; parent_id?: string | null; starred?: boolean },
   ): Promise<DriveItem> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      const item = await invoke('drive_update_item', {
+        owner: currentOwner,
+        itemId: id,
+        name: updates.name ?? null,
+        parentId: updates.parent_id ?? null,
+        starred: updates.starred ?? null,
+      });
+      return convertItem(item);
+    }
     return request<DriveItem>(`/api/drive/items/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -106,6 +180,14 @@ export const driveApi = {
 
   /** Delete an item (recursive for folders) */
   async deleteItem(id: string): Promise<void> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      await invoke('drive_delete_item', {
+        owner: currentOwner,
+        itemId: id,
+      });
+      return;
+    }
     await request<string>(`/api/drive/items/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     });
@@ -117,6 +199,16 @@ export const driveApi = {
     password?: string,
     isPublic?: boolean,
   ): Promise<ShareLink> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      const share = await invoke('drive_create_share', {
+        owner: currentOwner,
+        itemId,
+        password: password ?? null,
+        isPublic: isPublic ?? false,
+      });
+      return share as ShareLink;
+    }
     return request<ShareLink>('/api/drive/share', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -130,6 +222,11 @@ export const driveApi = {
 
   /** Revoke a share link */
   async revokeShareLink(token: string): Promise<void> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      await invoke('drive_revoke_share', { token });
+      return;
+    }
     await request<string>(`/api/drive/share/${encodeURIComponent(token)}`, {
       method: 'DELETE',
     });
@@ -137,6 +234,10 @@ export const driveApi = {
 
   /** List all share links */
   async listShareLinks(): Promise<ShareLink[]> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      return await invoke('drive_list_shares') as ShareLink[];
+    }
     return request<ShareLink[]>('/api/drive/shares');
   },
 

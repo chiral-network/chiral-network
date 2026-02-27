@@ -2749,6 +2749,10 @@ fn spawn_relay_tunnel(
     local_origin: String,
 ) -> tokio::task::AbortHandle {
     use futures_util::StreamExt;
+    // Fix 0.0.0.0 — it's not a valid destination address for clients
+    let local_origin = local_origin
+        .replace("://0.0.0.0:", "://127.0.0.1:")
+        .replace("://0.0.0.0/", "://127.0.0.1/");
     let handle = tokio::spawn(async move {
         loop {
             let ws_url = format!(
@@ -2911,12 +2915,19 @@ async fn publish_site_to_relay(
     hosting::save_sites(&all_sites);
 
     // Start WebSocket tunnel to relay for NAT traversal
+    // Use localhost for the tunnel's local fetch (origin may be 0.0.0.0 which isn't routable)
+    let local_for_tunnel = state
+        .hosting_server_addr
+        .lock()
+        .await
+        .map(|a| format!("http://127.0.0.1:{}", a.port()))
+        .ok_or("Local server not running")?;
     let tunnel_key = format!("site:{}", site_id);
     let abort_handle = spawn_relay_tunnel(
         relay_base.to_string(),
         "site".to_string(),
         site_id.clone(),
-        origin,
+        local_for_tunnel,
     );
     state
         .tunnel_handles
@@ -2988,7 +2999,281 @@ async fn unpublish_site_from_relay(
 }
 
 // ---------------------------------------------------------------------------
-// Drive commands
+// Drive CRUD commands (via Tauri invoke, bypasses browser HTTP restrictions)
+// ---------------------------------------------------------------------------
+
+use crate::drive_storage::{
+    self as ds, DriveItem as DsItem, ShareLink as DsShareLink,
+};
+
+#[tauri::command]
+async fn drive_list_items(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    parent_id: Option<String>,
+) -> Result<Vec<DsItem>, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let m = state.drive_state.manifest.read().await;
+    let parent = parent_id.as_deref();
+    let mut items: Vec<DsItem> = m
+        .items
+        .iter()
+        .filter(|i| i.parent_id.as_deref() == parent && i.owner == owner)
+        .cloned()
+        .collect();
+    items.sort_by(|a, b| {
+        if a.item_type != b.item_type {
+            if a.item_type == "folder" {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        } else {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+        }
+    });
+    Ok(items)
+}
+
+#[tauri::command]
+async fn drive_create_folder(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    name: String,
+    parent_id: Option<String>,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    if name.is_empty() || name.len() > 255 {
+        return Err("Invalid folder name".into());
+    }
+    let item = DsItem {
+        id: ds::generate_id(),
+        name,
+        item_type: "folder".into(),
+        parent_id,
+        size: None,
+        mime_type: None,
+        created_at: ds::now_secs(),
+        modified_at: ds::now_secs(),
+        starred: false,
+        storage_path: None,
+        owner,
+    };
+    {
+        let mut m = state.drive_state.manifest.write().await;
+        m.items.push(item.clone());
+    }
+    state.drive_state.persist().await;
+    Ok(item)
+}
+
+#[tauri::command]
+async fn drive_upload_file(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    file_path: String,
+    parent_id: Option<String>,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let src = std::path::Path::new(&file_path);
+    let file_name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid file path")?
+        .to_string();
+    let data = std::fs::read(src).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    if data.len() > 500 * 1024 * 1024 {
+        return Err("File exceeds 500 MB limit".into());
+    }
+
+    let item_id = ds::generate_id();
+    let storage_name = format!("{}_{}", item_id, file_name);
+    let mime = ds::mime_from_name(&file_name);
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine storage directory")?;
+    std::fs::create_dir_all(&files_dir)
+        .map_err(|e| format!("Failed to create storage dir: {}", e))?;
+    let dest = files_dir.join(&storage_name);
+    std::fs::write(&dest, &data).map_err(|e| format!("Failed to write file: {}", e))?;
+
+    let item = DsItem {
+        id: item_id,
+        name: file_name.clone(),
+        item_type: "file".into(),
+        parent_id,
+        size: Some(data.len() as u64),
+        mime_type: Some(mime),
+        created_at: ds::now_secs(),
+        modified_at: ds::now_secs(),
+        starred: false,
+        storage_path: Some(storage_name),
+        owner,
+    };
+    {
+        let mut m = state.drive_state.manifest.write().await;
+        m.items.push(item.clone());
+    }
+    state.drive_state.persist().await;
+    println!("[DRIVE] Uploaded file: {} ({} bytes)", file_name, data.len());
+    Ok(item)
+}
+
+#[tauri::command]
+async fn drive_update_item(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+    name: Option<String>,
+    parent_id: Option<String>,
+    starred: Option<bool>,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    let item = m
+        .items
+        .iter_mut()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .ok_or("Item not found")?;
+    if let Some(n) = name {
+        if n.is_empty() || n.len() > 255 {
+            return Err("Invalid name".into());
+        }
+        item.name = n;
+    }
+    if let Some(pid) = parent_id {
+        item.parent_id = if pid.is_empty() { None } else { Some(pid) };
+    }
+    if let Some(s) = starred {
+        item.starred = s;
+    }
+    item.modified_at = ds::now_secs();
+    let updated = item.clone();
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(updated)
+}
+
+#[tauri::command]
+async fn drive_delete_item(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<(), String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
+        return Err("Item not found".into());
+    }
+    let to_delete: std::collections::HashSet<String> =
+        ds::collect_descendants(&item_id, &m.items)
+            .into_iter()
+            .collect();
+    if let Some(files_dir) = ds::drive_files_dir() {
+        for id in &to_delete {
+            if let Some(item) = m.items.iter().find(|i| &i.id == id) {
+                if let Some(sp) = &item.storage_path {
+                    let _ = std::fs::remove_file(files_dir.join(sp));
+                }
+            }
+        }
+    }
+    m.items.retain(|i| !to_delete.contains(&i.id));
+    m.shares.retain(|s| !to_delete.contains(&s.item_id));
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn drive_create_share(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+    password: Option<String>,
+    is_public: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
+        return Err("Item not found".into());
+    }
+    let token = ds::generate_share_token();
+    let share = DsShareLink {
+        id: token.clone(),
+        item_id: item_id.clone(),
+        created_at: ds::now_secs(),
+        expires_at: None,
+        password_hash: password.as_deref().map(ds::hash_password),
+        is_public: is_public.unwrap_or(false),
+        download_count: 0,
+    };
+    m.shares.push(share.clone());
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(serde_json::json!({
+        "id": share.id,
+        "itemId": item_id,
+        "url": format!("/drive/{}", share.id),
+        "isPublic": share.is_public,
+        "hasPassword": share.password_hash.is_some(),
+        "createdAt": share.created_at,
+        "downloadCount": 0,
+    }))
+}
+
+#[tauri::command]
+async fn drive_revoke_share(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<(), String> {
+    let mut m = state.drive_state.manifest.write().await;
+    let before = m.shares.len();
+    m.shares.retain(|s| s.id != token);
+    if m.shares.len() == before {
+        return Err("Share not found".into());
+    }
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn drive_list_shares(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let m = state.drive_state.manifest.read().await;
+    let shares: Vec<serde_json::Value> = m
+        .shares
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "itemId": s.item_id,
+                "url": format!("/drive/{}", s.id),
+                "isPublic": s.is_public,
+                "hasPassword": s.password_hash.is_some(),
+                "createdAt": s.created_at,
+                "downloadCount": s.download_count,
+            })
+        })
+        .collect();
+    Ok(shares)
+}
+
+// ---------------------------------------------------------------------------
+// Drive server & relay commands
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
@@ -3311,6 +3596,14 @@ pub fn run() {
             get_drive_server_url,
             publish_drive_share,
             unpublish_drive_share,
+            drive_list_items,
+            drive_create_folder,
+            drive_upload_file,
+            drive_update_item,
+            drive_delete_item,
+            drive_create_share,
+            drive_revoke_share,
+            drive_list_shares,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
