@@ -122,8 +122,11 @@
           const result = await driveStore.uploadFile(file, currentFolderId);
           if (result) count++;
         }
+        const total = input.files.length;
         if (count > 0) {
           toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+        } else if (total > 0) {
+          toasts.show('Upload failed — could not reach the local server', 'error');
         }
       } catch (e) {
         toasts.show('Upload failed: ' + (e as Error).message, 'error');
@@ -150,6 +153,8 @@
     const result = await driveStore.createFolder(name, currentFolderId);
     if (result) {
       toasts.show(`Created folder "${name}"`, 'success');
+    } else {
+      toasts.show('Failed to create folder — could not reach the local server', 'error');
     }
     creatingFolder = false;
     newFolderName = '';
