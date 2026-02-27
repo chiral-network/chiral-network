@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
+  import { setLocalDriveServer } from '$lib/services/driveApiService';
   import { walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
   import { open } from '@tauri-apps/plugin-shell';
@@ -52,6 +53,15 @@
   onDestroy(unsubWallet);
 
   onMount(async () => {
+    // Init local Drive server URL (Tauri only)
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const url = await invoke<string | null>('get_drive_server_url');
+      if (url) setLocalDriveServer(url);
+    } catch {
+      // Non-Tauri environment — falls back to relay URL
+    }
+
     const saved = localStorage.getItem('drive-view-mode');
     if (saved === 'list' || saved === 'grid') viewMode = saved;
     await loadCurrentFolder();

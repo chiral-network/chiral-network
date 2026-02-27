@@ -213,7 +213,7 @@ function createDriveStore() {
     },
 
     async createShareLink(itemId: string, password?: string, isPublic?: boolean): Promise<ShareLink | null> {
-      syncOwner();
+      const owner = syncOwner();
       try {
         const share = await driveApi.createShareLink(itemId, password, isPublic);
         update(m => {
@@ -222,6 +222,19 @@ function createDriveStore() {
           if (item) item.shared = true;
           return m;
         });
+
+        // Publish share metadata to relay so the share URL works via proxy
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('publish_drive_share', {
+            shareToken: share.id,
+            relayUrl: 'http://130.245.173.73:8080',
+            ownerWallet: owner,
+          });
+        } catch (e) {
+          console.warn('Failed to publish share to relay (share works locally only):', e);
+        }
+
         return share;
       } catch (e) {
         console.error('Failed to create share link:', e);
@@ -246,6 +259,17 @@ function createDriveStore() {
           }
           return m;
         });
+
+        // Best-effort: remove share registration from relay
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('unpublish_drive_share', {
+            shareToken: token,
+            relayUrl: 'http://130.245.173.73:8080',
+          });
+        } catch {
+          // Relay cleanup failure is non-critical
+        }
       } catch (e) {
         console.error('Failed to revoke share link:', e);
       }

@@ -17,6 +17,7 @@ use crate::drive_api::{self, DriveState};
 use crate::hosting::{self, HostedSite, SiteFile};
 use crate::rating_api;
 use crate::rating_storage::RatingState;
+use crate::relay_share_proxy::{self, RelayShareRegistry};
 
 /// Maximum total upload size per site (50 MB).
 const MAX_SITE_BYTES: usize = 50 * 1024 * 1024;
@@ -392,6 +393,7 @@ pub fn create_gateway_router(
     state: Arc<HostingServerState>,
     drive_state: Option<Arc<DriveState>>,
     rating_state: Option<Arc<RatingState>>,
+    relay_share_state: Option<Arc<RelayShareRegistry>>,
 ) -> Router {
     let hosting_router = Router::new()
         // Serving routes
@@ -406,7 +408,7 @@ pub fn create_gateway_router(
 
     let mut app = hosting_router;
 
-    // Merge Drive API routes if drive state is provided
+    // Merge Drive API routes if drive state is provided (local server)
     if let Some(ds) = drive_state {
         app = app.merge(drive_api::drive_routes(ds));
     }
@@ -414,6 +416,11 @@ pub fn create_gateway_router(
     // Merge Rating API routes if rating state is provided
     if let Some(rs) = rating_state {
         app = app.merge(rating_api::rating_routes(rs));
+    }
+
+    // Merge relay share proxy routes if relay share state is provided (relay server)
+    if let Some(rss) = relay_share_state {
+        app = app.merge(relay_share_proxy::relay_share_routes(rss));
     }
 
     app.layer(
@@ -462,10 +469,11 @@ pub async fn start_gateway_server(
     state: Arc<HostingServerState>,
     drive_state: Option<Arc<DriveState>>,
     rating_state: Option<Arc<RatingState>>,
+    relay_share_state: Option<Arc<RelayShareRegistry>>,
     port: u16,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<SocketAddr, String> {
-    let app = create_gateway_router(state, drive_state, rating_state);
+    let app = create_gateway_router(state, drive_state, rating_state, relay_share_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr)
@@ -621,7 +629,7 @@ mod tests {
         use base64::Engine;
 
         let state = Arc::new(HostingServerState::new());
-        let app = create_gateway_router(Arc::clone(&state), None, None);
+        let app = create_gateway_router(Arc::clone(&state), None, None, None);
 
         let html_content = "<h1>Gateway Test</h1>";
         let b64 = base64::engine::general_purpose::STANDARD.encode(html_content);
@@ -655,7 +663,7 @@ mod tests {
         drop(sites);
 
         // Now serve the uploaded file
-        let app2 = create_gateway_router(Arc::clone(&state), None, None);
+        let app2 = create_gateway_router(Arc::clone(&state), None, None, None);
         let response2 = app2
             .oneshot(
                 Request::builder()
@@ -681,7 +689,7 @@ mod tests {
         let state = Arc::new(HostingServerState::new());
 
         // First upload
-        let app = create_gateway_router(Arc::clone(&state), None, None);
+        let app = create_gateway_router(Arc::clone(&state), None, None, None);
         let b64 = base64::engine::general_purpose::STANDARD.encode("hello");
         let body = serde_json::json!({
             "id": "del1test",
@@ -702,7 +710,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         // Then delete
-        let app2 = create_gateway_router(Arc::clone(&state), None, None);
+        let app2 = create_gateway_router(Arc::clone(&state), None, None, None);
         let resp2 = app2
             .oneshot(
                 Request::builder()
@@ -723,7 +731,7 @@ mod tests {
     #[tokio::test]
     async fn test_gateway_upload_rejects_oversized() {
         let state = Arc::new(HostingServerState::new());
-        let app = create_gateway_router(state, None, None);
+        let app = create_gateway_router(state, None, None, None);
 
         // Create a base64 string that decodes to > 50 MB
         // We'll just test with an invalid site id instead for a simpler check

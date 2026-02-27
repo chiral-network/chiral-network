@@ -1,5 +1,18 @@
 const RELAY_BASE = 'http://130.245.173.73:8080';
 
+/** Local Drive server URL — set when Tauri app starts */
+let localBase: string | null = null;
+
+/** Set the local Drive server URL for CRUD operations */
+export function setLocalDriveServer(url: string) {
+  localBase = url;
+}
+
+/** Get the base URL for CRUD operations (local server if available, relay as fallback) */
+function getCrudBase(): string {
+  return localBase || RELAY_BASE;
+}
+
 /** Current owner wallet address — set via setOwner() */
 let currentOwner = '';
 
@@ -32,7 +45,7 @@ export interface ShareLink {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${RELAY_BASE}${path}`, {
+  const res = await fetch(`${getCrudBase()}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -129,7 +142,7 @@ export const driveApi = {
 
   /** Get direct download URL for a file (includes filename for correct extension) */
   getDownloadUrl(id: string, filename: string): string {
-    return `${RELAY_BASE}/api/drive/download/${encodeURIComponent(id)}/${encodeURIComponent(filename)}`;
+    return `${getCrudBase()}/api/drive/download/${encodeURIComponent(id)}/${encodeURIComponent(filename)}`;
   },
 
   /** Get public share URL */
