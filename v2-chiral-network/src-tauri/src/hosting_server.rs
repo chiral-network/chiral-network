@@ -490,7 +490,11 @@ pub async fn start_gateway_server(
     println!("Gateway server started on http://{}", bound_addr);
 
     tokio::spawn(async move {
-        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+        let server = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async {
             shutdown_rx.await.ok();
             println!("Gateway server received shutdown signal");
         });

@@ -8,12 +8,13 @@
 
 use axum::{
     body::Body,
-    extract::{Extension, Path, Query},
+    extract::{ConnectInfo, Extension, Path, Query},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
+use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -190,22 +191,35 @@ fn now_secs() -> u64 {
 // Registration API handlers
 // ---------------------------------------------------------------------------
 
+/// Replace 0.0.0.0 or 127.0.0.1 in origin URL with the client's real IP.
+/// e.g. "http://0.0.0.0:9419" + client_ip 1.2.3.4 → "http://1.2.3.4:9419"
+fn fix_origin_url(origin_url: &str, client_ip: std::net::IpAddr) -> String {
+    for placeholder in &["0.0.0.0", "127.0.0.1", "localhost"] {
+        if origin_url.contains(placeholder) {
+            return origin_url.replace(placeholder, &client_ip.to_string());
+        }
+    }
+    origin_url.to_string()
+}
+
 /// POST /api/drive/relay-register — register a share origin
 async fn register_share(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> Response {
     if req.token.is_empty() || req.origin_url.is_empty() {
         return (StatusCode::BAD_REQUEST, "token and origin_url required").into_response();
     }
+    let origin = fix_origin_url(&req.origin_url, addr.ip());
     println!(
-        "[RELAY-SHARE] Registering share token={} origin={}",
-        req.token, req.origin_url
+        "[RELAY-SHARE] Registering share token={} origin={} (raw={})",
+        req.token, origin, req.origin_url
     );
     state
         .register(ShareRegistration {
             token: req.token,
-            origin_url: req.origin_url,
+            origin_url: origin,
             owner_wallet: req.owner_wallet,
             registered_at: now_secs(),
         })
@@ -320,19 +334,21 @@ async fn proxy_request(target: &str) -> Response {
 /// POST /api/sites/relay-register — register a site origin
 async fn register_site(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<SiteRegisterRequest>,
 ) -> Response {
     if req.site_id.is_empty() || req.origin_url.is_empty() {
         return (StatusCode::BAD_REQUEST, "site_id and origin_url required").into_response();
     }
+    let origin = fix_origin_url(&req.origin_url, addr.ip());
     println!(
-        "[RELAY-SITE] Registering site={} origin={}",
-        req.site_id, req.origin_url
+        "[RELAY-SITE] Registering site={} origin={} (raw={})",
+        req.site_id, origin, req.origin_url
     );
     state
         .register_site(SiteRegistration {
             site_id: req.site_id,
-            origin_url: req.origin_url,
+            origin_url: origin,
             owner_wallet: req.owner_wallet,
             registered_at: now_secs(),
         })

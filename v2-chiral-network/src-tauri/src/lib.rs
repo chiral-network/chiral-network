@@ -2851,11 +2851,18 @@ async fn unpublish_site_from_relay(
 async fn get_drive_server_url(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    Ok(state
-        .hosting_server_addr
-        .lock()
-        .await
-        .map(|a| format!("http://{}", a)))
+    // The local server starts asynchronously in .setup(). Wait up to 10s for it
+    // to become ready, polling every 100ms, so the frontend doesn't get a null
+    // URL on first mount.
+    for _ in 0..100 {
+        let addr = state.hosting_server_addr.lock().await;
+        if let Some(a) = *addr {
+            return Ok(Some(format!("http://{}", a)));
+        }
+        drop(addr);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(None)
 }
 
 #[tauri::command]
