@@ -123,10 +123,10 @@ function createDriveStore() {
       }
     },
 
-    async uploadFile(file: File, parentId: string | null): Promise<DriveItem | null> {
+    async uploadFile(fileOrPath: File | string, parentId: string | null): Promise<DriveItem | null> {
       syncOwner();
       try {
-        const item = await driveApi.uploadFile(file, parentId);
+        const item = await driveApi.uploadFile(fileOrPath, parentId);
         const converted = fromApi(item);
         update(m => {
           m.items.push(converted);
