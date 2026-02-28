@@ -466,10 +466,11 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
             "return POSIX path of (choose file)"
         };
 
-        let output = std::process::Command::new("osascript")
+        let output = tokio::process::Command::new("osascript")
             .arg("-e")
             .arg(script)
             .output()
+            .await
             .map_err(|e| format!("Failed to run osascript: {}", e))?;
 
         if !output.status.success() {
@@ -487,24 +488,27 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        use rfd::FileDialog;
-        let result = if multiple {
-            FileDialog::new()
-                .pick_files()
-                .map(|paths| {
-                    paths
-                        .iter()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            FileDialog::new()
-                .pick_file()
-                .map(|path| vec![path.to_string_lossy().to_string()])
-                .unwrap_or_default()
-        };
-        Ok(result)
+        tokio::task::spawn_blocking(move || {
+            use rfd::FileDialog;
+            if multiple {
+                FileDialog::new()
+                    .pick_files()
+                    .map(|paths| {
+                        paths
+                            .iter()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                FileDialog::new()
+                    .pick_file()
+                    .map(|path| vec![path.to_string_lossy().to_string()])
+                    .unwrap_or_default()
+            }
+        })
+        .await
+        .map_err(|e| format!("Dialog task failed: {}", e))
     }
 }
 
@@ -512,10 +516,11 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
 async fn pick_download_directory() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("osascript")
+        let output = tokio::process::Command::new("osascript")
             .arg("-e")
             .arg("return POSIX path of (choose folder)")
             .output()
+            .await
             .map_err(|e| format!("Failed to run osascript: {}", e))?;
 
         if !output.status.success() {
@@ -532,11 +537,15 @@ async fn pick_download_directory() -> Result<Option<String>, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        use rfd::FileDialog;
-        Ok(FileDialog::new()
-            .set_title("Choose Download Directory")
-            .pick_folder()
-            .map(|p| p.to_string_lossy().to_string()))
+        tokio::task::spawn_blocking(|| {
+            use rfd::FileDialog;
+            FileDialog::new()
+                .set_title("Choose Download Directory")
+                .pick_folder()
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .await
+        .map_err(|e| format!("Dialog task failed: {}", e))
     }
 }
 
@@ -630,16 +639,20 @@ async fn publish_file(
     price_chi: Option<String>,
     wallet_address: Option<String>,
 ) -> Result<PublishResult, String> {
-    // Read file and compute hash
-    let file_data = std::fs::read(&file_path).map_err(|e| e.to_string())?;
+    // Read file and compute hash on a blocking thread to avoid freezing the runtime
+    let file_path_clone = file_path.clone();
+    let (file_data, merkle_root) = tokio::task::spawn_blocking(move || {
+        use sha2::{Sha256, Digest};
+        let file_data = std::fs::read(&file_path_clone).map_err(|e| e.to_string())?;
+        let mut hasher = Sha256::new();
+        hasher.update(&file_data);
+        let hash = hasher.finalize();
+        Ok::<_, String>((file_data, hex::encode(hash)))
+    })
+    .await
+    .map_err(|e| format!("File processing failed: {}", e))?
+    .map_err(|e: String| e)?;
     let file_size = file_data.len() as u64;
-
-    // Compute SHA-256 hash
-    use sha2::{Sha256, Digest};
-    let mut hasher = Sha256::new();
-    hasher.update(&file_data);
-    let hash = hasher.finalize();
-    let merkle_root = hex::encode(hash);
 
     println!("Publishing file: {} with hash: {}", file_name, merkle_root);
 
