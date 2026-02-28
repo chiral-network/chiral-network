@@ -216,8 +216,21 @@
   }
 
   // ── Lifecycle ──
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
   onMount(() => {
     loadData();
+    // Poll for incoming proposals every 30 seconds
+    pollInterval = setInterval(async () => {
+      try {
+        const updated = await hostingService.getMyAgreements();
+        myAgreements = updated;
+      } catch { /* ignore poll errors */ }
+    }, 30_000);
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
   });
 
   $effect(() => {

@@ -409,6 +409,55 @@ async fn store_hosting_agreement(
     }
 }
 
+/// Append an agreement ID to a host's inbox in DHT (read-modify-write).
+/// The inbox is stored at chiral_host_inbox_{host_peer_id} as a JSON array of strings.
+#[tauri::command]
+async fn append_to_host_inbox(
+    state: tauri::State<'_, AppState>,
+    host_peer_id: String,
+    agreement_id: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_host_inbox_{}", host_peer_id);
+        let mut inbox: Vec<String> = match dht.get_dht_value(key.clone()).await {
+            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        if !inbox.contains(&agreement_id) {
+            inbox.push(agreement_id);
+        }
+
+        let inbox_json = serde_json::to_string(&inbox)
+            .map_err(|e| format!("Failed to serialize inbox: {}", e))?;
+        dht.put_dht_value(key, inbox_json).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+/// Get a host's inbox (list of agreement IDs pending review).
+#[tauri::command]
+async fn get_host_inbox(
+    state: tauri::State<'_, AppState>,
+    host_peer_id: String,
+) -> Result<String, String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_host_inbox_{}", host_peer_id);
+        match dht.get_dht_value(key).await {
+            Ok(Some(json)) => Ok(json),
+            Ok(None) => Ok("[]".to_string()),
+            Err(e) => Err(e),
+        }
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
 // File operations for Upload/Download pages
 
 #[tauri::command]
@@ -3759,6 +3808,8 @@ pub fn run() {
             get_host_registry,
             get_host_advertisement,
             store_hosting_agreement,
+            append_to_host_inbox,
+            get_host_inbox,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
