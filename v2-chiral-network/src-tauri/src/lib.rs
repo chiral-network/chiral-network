@@ -445,14 +445,39 @@ async fn get_available_storage() -> Result<u64, String> {
     }
 }
 
+/// Parse osascript output — returns Ok(paths) on success, Ok(empty) on user cancel,
+/// Err on actual failures (permissions, sandbox, etc.)
+#[cfg(target_os = "macos")]
+fn parse_osascript_result(output: std::process::Output) -> Result<Vec<String>, String> {
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .lines()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // AppleScript error -128 = user pressed Cancel
+    if stderr.contains("-128") {
+        return Ok(vec![]);
+    }
+
+    // Real error — surface it to the user
+    Err(format!("File dialog failed: {}", stderr.trim()))
+}
+
 #[tauri::command]
 async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
     #[cfg(target_os = "macos")]
     {
         use tokio::process::Command;
-        // NSOpenPanel crashes in Tauri's objc2-app-kit; use osascript instead
+        // NSOpenPanel crashes in Tauri's objc2-app-kit; use osascript instead.
+        // "activate" brings the dialog to the foreground above the Tauri window.
         let script = if multiple {
-            r#"set theFiles to choose file with multiple selections allowed
+            r#"activate
+set theFiles to choose file with multiple selections allowed
 set output to ""
 repeat with f in theFiles
   set output to output & POSIX path of f & linefeed
@@ -462,7 +487,8 @@ if length of output > 0 then
 end if
 return """#
         } else {
-            "return POSIX path of (choose file)"
+            r#"activate
+return POSIX path of (choose file)"#
         };
 
         let output = Command::new("osascript")
@@ -470,18 +496,9 @@ return """#
             .arg(script)
             .output()
             .await
-            .map_err(|e| format!("osascript failed: {}", e))?;
+            .map_err(|e| format!("Could not launch file dialog: {}", e))?;
 
-        if !output.status.success() {
-            return Ok(vec![]); // user cancelled
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .lines()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect())
+        parse_osascript_result(output)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -508,17 +525,13 @@ async fn pick_download_directory() -> Result<Option<String>, String> {
         use tokio::process::Command;
         let output = Command::new("osascript")
             .arg("-e")
-            .arg("return POSIX path of (choose folder)")
+            .arg("activate\nreturn POSIX path of (choose folder)")
             .output()
             .await
-            .map_err(|e| format!("osascript failed: {}", e))?;
+            .map_err(|e| format!("Could not launch folder dialog: {}", e))?;
 
-        if !output.status.success() {
-            return Ok(None);
-        }
-
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(if path.is_empty() { None } else { Some(path) })
+        let paths = parse_osascript_result(output)?;
+        Ok(paths.into_iter().next())
     }
 
     #[cfg(not(target_os = "macos"))]
