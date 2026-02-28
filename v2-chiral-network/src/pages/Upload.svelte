@@ -120,11 +120,14 @@
     }
   }
 
+  // Hidden file input element reference (used as fallback when native dialog fails)
+  let fileInputEl: HTMLInputElement | undefined = $state(undefined);
+
   // Handle file selection
   async function openFileDialog() {
     // Check Tauri availability at runtime
     const tauriAvailable = checkTauriAvailability();
-    
+
     if (!tauriAvailable) {
       log.error('Tauri not detected. Window properties:', Object.keys(window).filter(k => k.includes('TAURI')));
       toasts.show('File upload requires the desktop app. Please run with: npm run tauri:dev', 'error');
@@ -149,13 +152,84 @@
         await processFiles(selectedPaths);
       }
     } catch (error) {
-      log.error('File dialog error:', error);
-      toasts.show(`Failed to open file dialog: ${error}`, 'error');
+      // Native dialog failed (e.g. macOS NSOpenPanel crash) — fall back to HTML file input
+      log.warn('Native file dialog failed, using HTML fallback:', error);
+      fileInputEl?.click();
     } finally {
       isUploading = false;
     }
   }
 
+  // Handle files selected via the hidden HTML file input (macOS fallback)
+  async function handleFileInputChange(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const files = input.files;
+    if (!files || files.length === 0) return;
+
+    if (!$networkConnected) {
+      toasts.show('Please connect to the network first', 'error');
+      input.value = '';
+      return;
+    }
+
+    isUploading = true;
+    try {
+      await processFileObjects(Array.from(files));
+    } finally {
+      isUploading = false;
+      input.value = ''; // reset so the same file can be selected again
+    }
+  }
+
+  // Process File objects from the HTML input — reads bytes and uses publish_file_data
+  async function processFileObjects(files: File[]) {
+    const { invoke } = await import('@tauri-apps/api/core');
+
+    for (const file of files) {
+      try {
+        const priceChi = filePrice && parseFloat(String(filePrice)) > 0 ? String(filePrice) : undefined;
+        const walletAddr = $walletAccount?.address;
+
+        if (priceChi && !walletAddr) {
+          toasts.show('Connect your wallet to set a file price', 'error');
+          continue;
+        }
+
+        // Read file bytes
+        const arrayBuffer = await file.arrayBuffer();
+        const fileData = Array.from(new Uint8Array(arrayBuffer));
+
+        const result = await invoke<{ merkleRoot: string }>('publish_file_data', {
+          fileName: file.name,
+          fileData,
+          priceChi: priceChi || null,
+          walletAddress: walletAddr || null,
+        });
+
+        const newFile: SharedFile = {
+          id: `file-${Date.now()}-${Math.random()}`,
+          name: file.name,
+          size: file.size,
+          hash: result.merkleRoot,
+          protocol: selectedProtocol,
+          fileType: getFileType(file.name),
+          seeders: 1,
+          uploadDate: new Date(),
+          filePath: `memory:${result.merkleRoot}`,
+          priceChi: priceChi || '0',
+        };
+
+        sharedFiles = [...sharedFiles, newFile];
+        saveUploadHistory();
+        toasts.show(`${file.name} is now being shared via ${selectedProtocol}`, 'success');
+      } catch (error) {
+        log.error('Failed to process file:', error);
+        toasts.show(`Failed to share file: ${error}`, 'error');
+      }
+    }
+  }
+
+  // Process file paths from native dialog (Linux/Windows)
   async function processFiles(paths: string[]) {
     const { invoke } = await import('@tauri-apps/api/core');
 
@@ -710,4 +784,13 @@
       {/if}
     {/if}
   </div>
+
+  <!-- Hidden file input for macOS fallback (WKWebView native picker) -->
+  <input
+    bind:this={fileInputEl}
+    type="file"
+    multiple
+    onchange={handleFileInputChange}
+    class="hidden"
+  />
 </div>
