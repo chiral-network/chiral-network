@@ -510,7 +510,7 @@
           fileHash: transfer.fileHash,
           fileName: transfer.fileName,
           seeders: [transfer.fromPeerId],
-          speedTier: 'free',
+          speedTier: 'standard',
           fileSize: transfer.fileSize,
           walletAddress: $walletAccount.address,
           privateKey: $walletAccount.privateKey,

@@ -1896,7 +1896,7 @@ async fn handle_behaviour_event(
                                     // Get speed tier
                                     let tier = {
                                         let tiers = download_tiers.lock().await;
-                                        tiers.get(&request_id).cloned().unwrap_or(SpeedTier::Free)
+                                        tiers.get(&request_id).cloned().unwrap_or(SpeedTier::Standard)
                                     };
 
                                     // Determine output path

@@ -173,10 +173,10 @@
 
   // Format wei price as CHI string
   function formatPriceWei(weiStr: string): string {
-    if (!weiStr || weiStr === '0') return 'Free';
+    if (!weiStr || weiStr === '0') return '0 CHI';
     try {
       const wei = BigInt(weiStr);
-      if (wei === 0n) return 'Free';
+      if (wei === 0n) return '0 CHI';
       const whole = wei / 1_000_000_000_000_000_000n;
       const frac = wei % 1_000_000_000_000_000_000n;
       if (frac === 0n) return `${whole} CHI`;
@@ -184,7 +184,7 @@
       const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) : fracStr;
       return `${whole}.${decimals} CHI`;
     } catch {
-      return 'Free';
+      return '0 CHI';
     }
   }
 
@@ -205,7 +205,7 @@
   let viewerError = $state<string | null>(null);
 
   // Speed tier state
-  let selectedTier = $state<SpeedTier>('free');
+  let selectedTier = $state<SpeedTier>('standard');
   let walletBalance = $state<string>('0');
   let isProcessingPayment = $state(false);
 
@@ -540,9 +540,10 @@
   // Get tier icon component
   function getTierIcon(tier: SpeedTier) {
     switch (tier) {
-      case 'free': return Zap;
-      case 'standard': return Gauge;
-      case 'premium': return Rocket;
+      case 'standard': return Zap;
+      case 'premium': return Gauge;
+      case 'ultra': return Rocket;
+      default: return Zap;
     }
   }
 
@@ -994,18 +995,18 @@
 
   function getTierLabel(tier?: SpeedTier): string {
     switch (tier) {
-      case 'free': return 'Free';
       case 'standard': return 'Standard';
       case 'premium': return 'Premium';
-      default: return 'Free';
+      case 'ultra': return 'Ultra';
+      default: return 'Standard';
     }
   }
 
   function getTierBadgeColor(tier?: SpeedTier): string {
     switch (tier) {
-      case 'premium': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400';
-      case 'standard': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400';
-      default: return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400';
+      case 'ultra': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400';
+      case 'premium': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400';
+      default: return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400';
     }
   }
 
@@ -1152,15 +1153,9 @@
                   {rating.average.toFixed(1)} ({rating.count})
                 </span>
               {/if}
-              {#if searchResult.priceWei && searchResult.priceWei !== '0'}
-                <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-                  {formatPriceWei(searchResult.priceWei)}
-                </span>
-              {:else}
-                <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-                  Free
-                </span>
-              {/if}
+              <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+                {formatPriceWei(searchResult.priceWei || '0')}
+              </span>
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
               {searchResult.hash}
@@ -1202,10 +1197,8 @@
                   <span class="text-sm font-semibold {isSelected ? 'text-primary-700 dark:text-primary-300' : 'dark:text-white'}">{tier.name}</span>
                 </div>
                 <p class="text-xs text-gray-500 dark:text-gray-400">{tier.speedLabel}</p>
-                <p class="text-xs font-medium mt-1 {isPaid ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}">
-                  {#if !isPaid}
-                    Free
-                  {:else if fileSizeKnown}
+                <p class="text-xs font-medium mt-1 text-amber-600 dark:text-amber-400">
+                  {#if fileSizeKnown}
                     {formatCost(cost)}
                   {:else}
                     {tier.costPerMb} CHI/MB
@@ -1227,23 +1220,19 @@
             {@const hasCost = seederPrice || tierCostVal > 0}
             <div class="mt-4 flex items-center justify-between">
               <div class="text-sm text-gray-600 dark:text-gray-400">
-                {#if !hasCost && selectedTier === 'free'}
-                  Free download — no payment required
-                {:else}
-                  Cost:
-                  {#if seederPrice}
-                    <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span> (file)
-                  {/if}
-                  {#if seederPrice && tierCostVal > 0}
-                    <span class="mx-1">+</span>
-                  {/if}
-                  {#if tierCostVal > 0}
-                    <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
-                  {/if}
-                  {#if $walletAccount}
-                    <span class="text-gray-400 mx-1">•</span>
-                    Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHI</span>
-                  {/if}
+                Cost:
+                {#if seederPrice}
+                  <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span> (file)
+                {/if}
+                {#if seederPrice && tierCostVal > 0}
+                  <span class="mx-1">+</span>
+                {/if}
+                {#if tierCostVal > 0}
+                  <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
+                {/if}
+                {#if $walletAccount}
+                  <span class="text-gray-400 mx-1">•</span>
+                  Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHI</span>
                 {/if}
               </div>
             <button
@@ -1336,7 +1325,7 @@
         <div class="divide-y divide-gray-100 dark:divide-gray-700">
           {#each downloads as download (download.id)}
             {@const DownloadIcon = getFileIcon(download.name)}
-            {@const TierIcon = getTierIcon(download.speedTier || 'free')}
+            {@const TierIcon = getTierIcon(download.speedTier || 'standard')}
             {@const isActive = download.status === 'downloading' || download.status === 'paused'}
             {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
             <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
@@ -1490,7 +1479,7 @@
         <div class="divide-y divide-gray-100 dark:divide-gray-700">
           {#each downloadHistory as entry (entry.id)}
             {@const EntryIcon = getFileIcon(entry.fileName)}
-            {@const EntryTierIcon = getTierIcon(entry.speedTier || 'free')}
+            {@const EntryTierIcon = getTierIcon(entry.speedTier || 'standard')}
             <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0

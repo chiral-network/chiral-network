@@ -176,9 +176,9 @@ describe('Download Flow Simulation', () => {
   });
 
   describe('download cost calculation', () => {
-    it('should calculate free tier download as zero cost', () => {
-      const cost = calculateCost('free', 10_000_000);
-      expect(cost).toBe(0);
+    it('should calculate standard tier download cost', () => {
+      const cost = calculateCost('standard', 10_000_000);
+      expect(cost).toBeCloseTo(0.01, 6);
     });
 
     it('should calculate standard tier cost for 50 MB file', () => {
@@ -213,9 +213,8 @@ describe('Download Flow Simulation', () => {
       expect(formatted).toBe('0.01 CHI');
     });
 
-    it('should format free download cost', () => {
-      const cost = calculateCost('free', 10_000_000);
-      expect(formatCost(cost)).toBe('Free');
+    it('should format zero cost', () => {
+      expect(formatCost(0)).toBe('0 CHI');
     });
   });
 
@@ -259,17 +258,19 @@ describe('Download Flow Simulation', () => {
       }));
     });
 
-    it('should call start_download for free tier without wallet', async () => {
+    it('should call start_download for standard tier', async () => {
       mockInvoke.mockResolvedValueOnce({ requestId: 'dl-002' });
 
       await invoke('start_download', {
-        fileHash: 'free_file',
-        fileName: 'free.txt',
-        speedTier: 'free',
+        fileHash: 'std_file',
+        fileName: 'std.txt',
+        speedTier: 'standard',
+        walletAddress: '0xwallet',
+        privateKey: '0xkey',
       });
 
       expect(mockInvoke).toHaveBeenCalledWith('start_download', expect.objectContaining({
-        speedTier: 'free',
+        speedTier: 'standard',
       }));
     });
 
@@ -280,7 +281,7 @@ describe('Download Flow Simulation', () => {
         invoke('start_download', {
           fileHash: 'unavailable',
           fileName: 'missing.zip',
-          speedTier: 'free',
+          speedTier: 'standard',
         })
       ).rejects.toBe('No seeders available');
     });
@@ -289,20 +290,24 @@ describe('Download Flow Simulation', () => {
   describe('speed tier cost comparison for same file', () => {
     const fileSize = 100_000_000; // 100 MB
 
-    it('free tier should always be cheapest (0)', () => {
-      expect(calculateCost('free', fileSize)).toBe(0);
-    });
-
-    it('standard should be cheaper than premium', () => {
+    it('standard should be cheapest paid tier', () => {
       const stdCost = calculateCost('standard', fileSize);
       const premCost = calculateCost('premium', fileSize);
+      const ultraCost = calculateCost('ultra', fileSize);
       expect(stdCost).toBeLessThan(premCost);
+      expect(premCost).toBeLessThan(ultraCost);
     });
 
     it('premium should cost 5x standard', () => {
       const stdCost = calculateCost('standard', fileSize);
       const premCost = calculateCost('premium', fileSize);
       expect(premCost / stdCost).toBeCloseTo(5.0, 4);
+    });
+
+    it('ultra should cost 10x standard', () => {
+      const stdCost = calculateCost('standard', fileSize);
+      const ultraCost = calculateCost('ultra', fileSize);
+      expect(ultraCost / stdCost).toBeCloseTo(10.0, 4);
     });
   });
 });

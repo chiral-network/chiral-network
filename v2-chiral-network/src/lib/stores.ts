@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import type { HostingConfig } from '$lib/types/hosting';
 
 // Check if we're in a browser environment
 const browser = typeof window !== 'undefined';
@@ -52,6 +53,7 @@ export interface AppSettings {
   compactMode: boolean;
   downloadDirectory: string; // empty string = system default Downloads folder
   notifications: NotificationSettings;
+  hostingConfig: HostingConfig;
 }
 
 const defaultNotifications: NotificationSettings = {
@@ -72,7 +74,13 @@ const defaultSettings: AppSettings = {
   reducedMotion: false,
   compactMode: false,
   downloadDirectory: '',
-  notifications: { ...defaultNotifications }
+  notifications: { ...defaultNotifications },
+  hostingConfig: {
+    enabled: false,
+    maxStorageBytes: 10 * 1024 * 1024 * 1024, // 10 GB
+    pricePerMbPerDayWei: '1000000000000000',   // 0.001 CHI per MB/day
+    minDepositWei: '100000000000000000',        // 0.1 CHI
+  }
 };
 
 function createSettingsStore() {
