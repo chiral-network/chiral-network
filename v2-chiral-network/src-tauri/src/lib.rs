@@ -453,19 +453,19 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
 
 #[tauri::command]
 async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
-    use rfd::FileDialog;
+    use rfd::AsyncFileDialog;
 
     if multiple {
-        let files = FileDialog::new().pick_files();
-        if let Some(paths) = files {
-            Ok(paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
+        let files = AsyncFileDialog::new().pick_files().await;
+        if let Some(handles) = files {
+            Ok(handles.iter().map(|h| h.path().to_string_lossy().to_string()).collect())
         } else {
             Ok(vec![])
         }
     } else {
-        let file = FileDialog::new().pick_file();
-        if let Some(path) = file {
-            Ok(vec![path.to_string_lossy().to_string()])
+        let file = AsyncFileDialog::new().pick_file().await;
+        if let Some(handle) = file {
+            Ok(vec![handle.path().to_string_lossy().to_string()])
         } else {
             Ok(vec![])
         }
@@ -474,13 +474,14 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 async fn pick_download_directory() -> Result<Option<String>, String> {
-    use rfd::FileDialog;
+    use rfd::AsyncFileDialog;
 
-    let dir = FileDialog::new()
+    let dir = AsyncFileDialog::new()
         .set_title("Choose Download Directory")
-        .pick_folder();
+        .pick_folder()
+        .await;
 
-    Ok(dir.map(|p| p.to_string_lossy().to_string()))
+    Ok(dir.map(|h| h.path().to_string_lossy().to_string()))
 }
 
 #[tauri::command]
