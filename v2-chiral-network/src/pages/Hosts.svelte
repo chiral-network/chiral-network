@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     Users, Star, HardDrive, Clock, Coins, Shield,
     Check, X, Loader2, RefreshCw, FileText,
@@ -10,6 +10,7 @@
   import { toasts } from '$lib/toastStore';
   import { hostingService } from '$lib/services/hostingService';
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import type {
     HostEntry,
     HostingAgreement,
@@ -216,8 +217,36 @@
   }
 
   // ── Lifecycle ──
-  onMount(() => {
+  let unlistenProposal: (() => void) | null = null;
+
+  onMount(async () => {
     loadData();
+
+    // Listen for incoming hosting proposals sent directly via echo protocol
+    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    if (isTauri) {
+      unlistenProposal = await listen<{ fromPeer: string; agreementJson: string }>(
+        'hosting_proposal_received',
+        (event) => {
+          try {
+            const agreement: HostingAgreement = JSON.parse(event.payload.agreementJson);
+            // Store in DHT and local index so it persists
+            hostingService.storeAndIndex(agreement);
+            // Add to live list if not already present
+            if (!myAgreements.some((a) => a.agreementId === agreement.agreementId)) {
+              myAgreements = [...myAgreements, agreement];
+              toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`, 'info');
+            }
+          } catch {
+            // Ignore malformed proposals
+          }
+        },
+      );
+    }
+  });
+
+  onDestroy(() => {
+    unlistenProposal?.();
   });
 
   $effect(() => {
