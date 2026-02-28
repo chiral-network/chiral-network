@@ -95,9 +95,19 @@ class HostingService {
     const connectedPeers = get(peers);
     const connectedIds = new Set(connectedPeers.map((p) => p.id));
 
+    // Get own peer ID to exclude self from the list
+    let myPeerId: string | null = null;
+    try {
+      myPeerId = await invoke<string | null>('get_peer_id');
+    } catch {}
+
     // Fetch advertisements
     const ads: { entry: typeof registry[0]; ad: HostAdvertisement }[] = [];
     for (const entry of registry) {
+      // Skip self
+      if (entry.peerId === myPeerId) continue;
+      // Skip offline peers
+      if (!connectedIds.has(entry.peerId)) continue;
       try {
         const adJson = await invoke<string | null>('get_host_advertisement', {
           peerId: entry.peerId,
