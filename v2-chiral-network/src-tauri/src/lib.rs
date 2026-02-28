@@ -446,6 +446,101 @@ async fn get_available_storage() -> Result<u64, String> {
 }
 
 #[tauri::command]
+async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Use osascript to avoid NSOpenPanel crash with objc2-app-kit in Tauri
+        let script = if multiple {
+            concat!(
+                "set theFiles to choose file with multiple selections allowed\n",
+                "set output to \"\"\n",
+                "repeat with f in theFiles\n",
+                "set output to output & POSIX path of f & linefeed\n",
+                "end repeat\n",
+                "if length of output > 0 then\n",
+                "return text 1 thru -2 of output\n",
+                "end if\n",
+                "return \"\"",
+            )
+        } else {
+            "return POSIX path of (choose file)"
+        };
+
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()
+            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+
+        if !output.status.success() {
+            // User cancelled
+            return Ok(vec![]);
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .split('\n')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        use rfd::FileDialog;
+        let result = if multiple {
+            FileDialog::new()
+                .pick_files()
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            FileDialog::new()
+                .pick_file()
+                .map(|path| vec![path.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        };
+        Ok(result)
+    }
+}
+
+#[tauri::command]
+async fn pick_download_directory() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("return POSIX path of (choose folder)")
+            .output()
+            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        use rfd::FileDialog;
+        Ok(FileDialog::new()
+            .set_title("Choose Download Directory")
+            .pick_folder()
+            .map(|p| p.to_string_lossy().to_string()))
+    }
+}
+
+#[tauri::command]
 async fn get_file_size(file_path: String) -> Result<u64, String> {
     let metadata = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
     Ok(metadata.len())
@@ -3554,7 +3649,6 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             dht: Arc::new(Mutex::new(None)),
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
@@ -3649,6 +3743,8 @@ pub fn run() {
             // File commands
             get_available_storage,
             get_file_size,
+            open_file_dialog,
+            pick_download_directory,
             set_download_directory,
             get_download_directory,
             publish_file,

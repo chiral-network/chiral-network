@@ -139,18 +139,14 @@
     if (isUploading) return;
 
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({
-        multiple: true,
-        directory: false,
+      const { invoke } = await import('@tauri-apps/api/core');
+      const selectedPaths = await invoke<string[]>('open_file_dialog', {
+        multiple: true
       });
 
-      if (selected) {
-        const selectedPaths = Array.isArray(selected) ? selected : [selected];
-        if (selectedPaths.length > 0) {
-          isUploading = true;
-          await processFiles(selectedPaths);
-        }
+      if (selectedPaths && selectedPaths.length > 0) {
+        isUploading = true;
+        await processFiles(selectedPaths);
       }
     } catch (error) {
       log.error('File dialog error:', error);
