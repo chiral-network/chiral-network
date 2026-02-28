@@ -1912,6 +1912,14 @@ async fn start_dht_node(
                             println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
                     }
+                    DhtEvent::HostingProposalReceived { from_peer, agreement_json } => {
+                        println!("📋 Hosting proposal received from peer {}", from_peer);
+                        let payload = serde_json::json!({
+                            "fromPeer": from_peer,
+                            "agreementJson": agreement_json,
+                        });
+                        let _ = app_handle.emit("hosting_proposal_received", payload);
+                    }
                     DhtEvent::RelayReservation { relay_peer_id, renewal } => {
                         let payload = serde_json::json!({
                             "relayPeerId": relay_peer_id,
@@ -2386,6 +2394,9 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 }
                 DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
                     format!("payment_notification_received:{}:{:?}", from_peer, payload)
+                }
+                DhtEvent::HostingProposalReceived { from_peer, .. } => {
+                    format!("hosting_proposal_received:{}", from_peer)
                 }
                 DhtEvent::ReputationEvent {
                     peer_id,
@@ -10900,6 +10911,13 @@ async fn pump_dht_events(
                     {
                         let _ = app_handle.emit("seeder_payment_received", &notification);
                     }
+                }
+                DhtEvent::HostingProposalReceived { from_peer, agreement_json } => {
+                    let payload = serde_json::json!({
+                        "fromPeer": from_peer,
+                        "agreementJson": agreement_json,
+                    });
+                    let _ = app_handle.emit("hosting_proposal_received", payload);
                 }
                 _ => {}
             }

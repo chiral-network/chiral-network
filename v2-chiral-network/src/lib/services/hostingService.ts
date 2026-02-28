@@ -181,21 +181,19 @@ class HostingService {
 
     addToIndex(agreementId);
 
-    // Write agreement ID to the host's DHT index so they can discover it
+    // Send the proposal directly to the host peer via echo protocol
     if (isTauri()) {
       try {
-        const hostIndexKey = `chiral_agreements_host_${hostPeerId}`;
-        const existingJson = await invoke<string | null>('get_dht_value', { key: hostIndexKey });
-        let hostIds: string[] = [];
-        if (existingJson) {
-          try { hostIds = JSON.parse(existingJson); } catch { hostIds = []; }
-        }
-        if (!hostIds.includes(agreementId)) {
-          hostIds.push(agreementId);
-          await invoke('store_dht_value', { key: hostIndexKey, value: JSON.stringify(hostIds) });
-        }
+        const message = JSON.stringify({
+          type: 'hosting_proposal',
+          agreement,
+        });
+        await invoke('proxy_echo', {
+          peerId: hostPeerId,
+          payload: Array.from(new TextEncoder().encode(message)),
+        });
       } catch {
-        // Non-fatal: agreement is stored, host index update failed
+        // Non-fatal: agreement is stored in DHT, direct delivery failed
       }
     }
 
@@ -235,25 +233,6 @@ class HostingService {
 
   /** Get all agreements for this peer (as client or host) */
   async getMyAgreements(): Promise<HostingAgreement[]> {
-    // Merge any agreements from the DHT host index into local storage
-    if (isTauri()) {
-      try {
-        const myPeerId = await invoke<string | null>('get_peer_id');
-        if (myPeerId) {
-          const hostIndexKey = `chiral_agreements_host_${myPeerId}`;
-          const indexJson = await invoke<string | null>('get_dht_value', { key: hostIndexKey });
-          if (indexJson) {
-            const dhtIds: string[] = JSON.parse(indexJson);
-            for (const id of dhtIds) {
-              addToIndex(id);
-            }
-          }
-        }
-      } catch {
-        // Non-fatal: continue with local index only
-      }
-    }
-
     const ids = loadAgreementIndex();
     const agreements: HostingAgreement[] = [];
 
@@ -306,6 +285,17 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
     }
+  }
+
+  /** Store a received agreement in DHT and add to local index */
+  async storeAndIndex(agreement: HostingAgreement): Promise<void> {
+    if (isTauri()) {
+      await invoke('store_hosting_agreement', {
+        agreementId: agreement.agreementId,
+        agreementJson: JSON.stringify(agreement),
+      });
+    }
+    addToIndex(agreement.agreementId);
   }
 
   /** Calculate the total cost in wei for a hosting agreement */
