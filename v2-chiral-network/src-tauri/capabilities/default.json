@@ -42,7 +42,6 @@
     "core:window:allow-set-ignore-cursor-events",
     "core:window:allow-start-dragging",
     "core:webview:allow-print",
-    "shell:allow-open",
-    "dialog:default"
+    "shell:allow-open"
   ]
 }
