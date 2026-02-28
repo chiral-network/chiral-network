@@ -409,55 +409,6 @@ async fn store_hosting_agreement(
     }
 }
 
-/// Append an agreement ID to a host's inbox in DHT (read-modify-write).
-/// The inbox is stored at chiral_host_inbox_{host_peer_id} as a JSON array of strings.
-#[tauri::command]
-async fn append_to_host_inbox(
-    state: tauri::State<'_, AppState>,
-    host_peer_id: String,
-    agreement_id: String,
-) -> Result<(), String> {
-    let dht_guard = state.dht.lock().await;
-
-    if let Some(dht) = dht_guard.as_ref() {
-        let key = format!("chiral_host_inbox_{}", host_peer_id);
-        let mut inbox: Vec<String> = match dht.get_dht_value(key.clone()).await {
-            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-            _ => Vec::new(),
-        };
-
-        if !inbox.contains(&agreement_id) {
-            inbox.push(agreement_id);
-        }
-
-        let inbox_json = serde_json::to_string(&inbox)
-            .map_err(|e| format!("Failed to serialize inbox: {}", e))?;
-        dht.put_dht_value(key, inbox_json).await
-    } else {
-        Err("DHT not running".to_string())
-    }
-}
-
-/// Get a host's inbox (list of agreement IDs pending review).
-#[tauri::command]
-async fn get_host_inbox(
-    state: tauri::State<'_, AppState>,
-    host_peer_id: String,
-) -> Result<String, String> {
-    let dht_guard = state.dht.lock().await;
-
-    if let Some(dht) = dht_guard.as_ref() {
-        let key = format!("chiral_host_inbox_{}", host_peer_id);
-        match dht.get_dht_value(key).await {
-            Ok(Some(json)) => Ok(json),
-            Ok(None) => Ok("[]".to_string()),
-            Err(e) => Err(e),
-        }
-    } else {
-        Err("DHT not running".to_string())
-    }
-}
-
 // File operations for Upload/Download pages
 
 #[tauri::command]
@@ -500,44 +451,6 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
     Ok(metadata.len())
 }
 
-#[tauri::command]
-async fn open_file_dialog(app: tauri::AppHandle, multiple: bool) -> Result<Vec<String>, String> {
-    use rfd::FileDialog;
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.run_on_main_thread(move || {
-        let result = if multiple {
-            FileDialog::new()
-                .pick_files()
-                .map(|paths| paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
-                .unwrap_or_default()
-        } else {
-            FileDialog::new()
-                .pick_file()
-                .map(|path| vec![path.to_string_lossy().to_string()])
-                .unwrap_or_default()
-        };
-        let _ = tx.send(result);
-    }).map_err(|e| e.to_string())?;
-
-    rx.await.map_err(|e| format!("Dialog channel error: {}", e))
-}
-
-#[tauri::command]
-async fn pick_download_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use rfd::FileDialog;
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.run_on_main_thread(move || {
-        let result = FileDialog::new()
-            .set_title("Choose Download Directory")
-            .pick_folder()
-            .map(|p| p.to_string_lossy().to_string());
-        let _ = tx.send(result);
-    }).map_err(|e| e.to_string())?;
-
-    rx.await.map_err(|e| format!("Dialog channel error: {}", e))
-}
 
 #[tauri::command]
 async fn set_download_directory(
@@ -3641,6 +3554,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             dht: Arc::new(Mutex::new(None)),
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
@@ -3735,8 +3649,6 @@ pub fn run() {
             // File commands
             get_available_storage,
             get_file_size,
-            open_file_dialog,
-            pick_download_directory,
             set_download_directory,
             get_download_directory,
             publish_file,
@@ -3808,8 +3720,6 @@ pub fn run() {
             get_host_registry,
             get_host_advertisement,
             store_hosting_agreement,
-            append_to_host_inbox,
-            get_host_inbox,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

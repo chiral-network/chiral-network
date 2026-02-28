@@ -17,6 +17,7 @@
     "@mateothegreat/svelte5-router": "^2.16.19",
     "@noble/hashes": "^2.0.1",
     "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-dialog": "^2.2.0",
     "@tauri-apps/plugin-shell": "^2.3.1",
     "@types/qrcode": "^1.5.6",
     "clsx": "^2.1.1",

@@ -47,9 +47,13 @@
 
   async function browseDownloadDirectory() {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const picked = await invoke<string | null>('pick_download_directory');
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({
+        multiple: false,
+        directory: true,
+      });
       if (picked) {
+        const { invoke } = await import('@tauri-apps/api/core');
         await invoke('set_download_directory', { path: picked });
         settings.update((s) => ({ ...s, downloadDirectory: picked }));
         displayDownloadDir = picked;

@@ -177,11 +177,6 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the host by appending to their DHT inbox
-      await invoke('append_to_host_inbox', {
-        hostPeerId,
-        agreementId,
-      });
     }
 
     addToIndex(agreementId);
@@ -202,9 +197,6 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
     }
-
-    // Ensure it's tracked locally
-    addToIndex(agreementId);
   }
 
   /** Get an agreement by ID from DHT */
@@ -222,33 +214,12 @@ class HostingService {
     }
   }
 
-  /** Get all agreements for this peer (as client or host).
-   *  Merges local index with DHT inbox (for incoming proposals). */
+  /** Get all agreements for this peer (as client or host) */
   async getMyAgreements(): Promise<HostingAgreement[]> {
-    const localIds = new Set(loadAgreementIndex());
-
-    // Check DHT inbox for incoming proposals addressed to this peer
-    if (isTauri()) {
-      try {
-        const peerId = await invoke<string | null>('get_peer_id');
-        if (peerId) {
-          const inboxJson = await invoke<string>('get_host_inbox', { hostPeerId: peerId });
-          const inboxIds: string[] = JSON.parse(inboxJson);
-          for (const id of inboxIds) {
-            if (!localIds.has(id)) {
-              localIds.add(id);
-              addToIndex(id);
-            }
-          }
-        }
-      } catch {
-        // Inbox unavailable — continue with local index only
-      }
-    }
-
+    const ids = loadAgreementIndex();
     const agreements: HostingAgreement[] = [];
 
-    for (const id of localIds) {
+    for (const id of ids) {
       const agreement = await this.getAgreement(id);
       if (agreement) {
         // Update expired status
