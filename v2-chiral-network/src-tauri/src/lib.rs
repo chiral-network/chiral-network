@@ -452,36 +452,42 @@ async fn get_file_size(file_path: String) -> Result<u64, String> {
 }
 
 #[tauri::command]
-async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
-    use rfd::AsyncFileDialog;
+async fn open_file_dialog(app: tauri::AppHandle, multiple: bool) -> Result<Vec<String>, String> {
+    use rfd::FileDialog;
 
-    if multiple {
-        let files = AsyncFileDialog::new().pick_files().await;
-        if let Some(handles) = files {
-            Ok(handles.iter().map(|h| h.path().to_string_lossy().to_string()).collect())
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let result = if multiple {
+            FileDialog::new()
+                .pick_files()
+                .map(|paths| paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
+                .unwrap_or_default()
         } else {
-            Ok(vec![])
-        }
-    } else {
-        let file = AsyncFileDialog::new().pick_file().await;
-        if let Some(handle) = file {
-            Ok(vec![handle.path().to_string_lossy().to_string()])
-        } else {
-            Ok(vec![])
-        }
-    }
+            FileDialog::new()
+                .pick_file()
+                .map(|path| vec![path.to_string_lossy().to_string()])
+                .unwrap_or_default()
+        };
+        let _ = tx.send(result);
+    }).map_err(|e| e.to_string())?;
+
+    rx.await.map_err(|e| format!("Dialog channel error: {}", e))
 }
 
 #[tauri::command]
-async fn pick_download_directory() -> Result<Option<String>, String> {
-    use rfd::AsyncFileDialog;
+async fn pick_download_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use rfd::FileDialog;
 
-    let dir = AsyncFileDialog::new()
-        .set_title("Choose Download Directory")
-        .pick_folder()
-        .await;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let result = FileDialog::new()
+            .set_title("Choose Download Directory")
+            .pick_folder()
+            .map(|p| p.to_string_lossy().to_string());
+        let _ = tx.send(result);
+    }).map_err(|e| e.to_string())?;
 
-    Ok(dir.map(|h| h.path().to_string_lossy().to_string()))
+    rx.await.map_err(|e| format!("Dialog channel error: {}", e))
 }
 
 #[tauri::command]
