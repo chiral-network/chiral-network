@@ -201,6 +201,13 @@ pub struct PingRequest(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PingResponse(pub String);
 
+// Echo protocol messages (arbitrary payload delivery)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoRequest(pub Vec<u8>);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoResponse(pub Vec<u8>);
+
 // File transfer protocol messages (for direct file push / ChiralDrop)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileTransferRequest {
@@ -324,6 +331,11 @@ enum SwarmCommand {
         peer_id: PeerId,
         response_tx: tokio::sync::oneshot::Sender<bool>,
     },
+    Echo {
+        peer_id: PeerId,
+        payload: Vec<u8>,
+        response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    },
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -373,6 +385,7 @@ struct DhtBehaviour {
     ping_protocol: request_response::cbor::Behaviour<PingRequest, PingResponse>,
     file_transfer: cbor_codec::Behaviour<FileTransferRequest, FileTransferResponse>,
     file_request: cbor_codec::Behaviour<ChunkRequest, ChunkResponse>,
+    echo_protocol: request_response::cbor::Behaviour<EchoRequest, EchoResponse>,
 }
 
 /// Map of file hash -> file path for files we're seeding
@@ -728,6 +741,23 @@ impl DhtService {
         }
     }
 
+    /// Send an echo message to a peer and wait for the response
+    pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            tx.send(SwarmCommand::Echo {
+                peer_id: peer_id_parsed,
+                payload,
+                response_tx,
+            }).map_err(|e| e.to_string())?;
+            response_rx.await.map_err(|e| e.to_string())?
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
     /// Request a file from a remote peer by hash (initiates chunked transfer)
     pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
@@ -890,6 +920,11 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         request_response::Config::default(),
     );
 
+    let echo_protocol = request_response::cbor::Behaviour::new(
+        [(StreamProtocol::new("/chiral/echo/1.0.0"), request_response::ProtocolSupport::Full)],
+        request_response::Config::default(),
+    );
+
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
         .with_tokio()
         .with_tcp(
@@ -913,6 +948,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
                 ping_protocol,
                 file_transfer,
                 file_request,
+                echo_protocol,
             }
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
@@ -1028,6 +1064,8 @@ async fn event_loop(
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    // Pending echo responses
+    let mut pending_echo: HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>> = HashMap::new();
     // Peers that have failed to connect — prevents re-adding via mDNS/Identify.
     // Persisted to disk with 24h expiry so restarts don't re-try known-bad peers.
     let mut failed_peers: HashSet<PeerId> = load_failed_peers();
@@ -1077,7 +1115,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers, &mut pending_echo).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         // Check if this is a relay circuit address
@@ -1334,6 +1372,10 @@ async fn event_loop(
                         let is_connected = swarm.is_connected(&peer_id);
                         let _ = response_tx.send(is_connected);
                     }
+                    SwarmCommand::Echo { peer_id, payload, response_tx } => {
+                        let req_id = swarm.behaviour_mut().echo_protocol.send_request(&peer_id, EchoRequest(payload));
+                        pending_echo.insert(req_id, response_tx);
+                    }
                     SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
 
@@ -1421,6 +1463,7 @@ async fn handle_behaviour_event(
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
     download_credentials: &DownloadCredentialsMap,
     failed_peers: &HashSet<PeerId>,
+    pending_echo: &mut HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -1498,6 +1541,56 @@ async fn handle_behaviour_event(
                 }
                 Event::InboundFailure { peer, error, .. } => {
                     println!("Inbound ping failed from {:?}: {:?}", peer, error);
+                }
+                _ => {}
+            }
+        }
+        DhtBehaviourEvent::EchoProtocol(event) => {
+            use request_response::Event;
+            match event {
+                Event::Message { peer, message } => {
+                    match message {
+                        request_response::Message::Request { request, channel, .. } => {
+                            let EchoRequest(data) = request;
+
+                            // Check for typed JSON messages (hosting proposals, etc.)
+                            if let Ok(json_str) = std::str::from_utf8(&data) {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                    if parsed.get("type").and_then(|v| v.as_str()) == Some("hosting_proposal") {
+                                        if let Some(agreement) = parsed.get("agreement") {
+                                            println!("📋 Received hosting proposal from peer {}", peer);
+                                            // Save to disk immediately
+                                            if let Some(id) = agreement.get("agreementId").and_then(|v| v.as_str()) {
+                                                if let Some(data_dir) = dirs::data_dir() {
+                                                    let dir = data_dir.join("chiral-network").join("agreements");
+                                                    let _ = std::fs::create_dir_all(&dir);
+                                                    let _ = std::fs::write(dir.join(format!("{}.json", id)), agreement.to_string());
+                                                }
+                                            }
+                                            let _ = app.emit("hosting_proposal_received", serde_json::json!({
+                                                "fromPeer": peer.to_string(),
+                                                "agreementJson": agreement.to_string(),
+                                            }));
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Echo the data back
+                            let _ = swarm.behaviour_mut().echo_protocol.send_response(channel, EchoResponse(data));
+                        }
+                        request_response::Message::Response { request_id, response } => {
+                            if let Some(tx) = pending_echo.remove(&request_id) {
+                                let EchoResponse(data) = response;
+                                let _ = tx.send(Ok(data));
+                            }
+                        }
+                    }
+                }
+                Event::OutboundFailure { request_id, error, .. } => {
+                    if let Some(tx) = pending_echo.remove(&request_id) {
+                        let _ = tx.send(Err(format!("Echo failed: {:?}", error)));
+                    }
                 }
                 _ => {}
             }
