@@ -1556,22 +1556,51 @@ async fn handle_behaviour_event(
                             // Check for typed JSON messages (hosting proposals, etc.)
                             if let Ok(json_str) = std::str::from_utf8(&data) {
                                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                    if parsed.get("type").and_then(|v| v.as_str()) == Some("hosting_proposal") {
-                                        if let Some(agreement) = parsed.get("agreement") {
-                                            println!("📋 Received hosting proposal from peer {}", peer);
-                                            // Save to disk immediately
-                                            if let Some(id) = agreement.get("agreementId").and_then(|v| v.as_str()) {
+                                    match parsed.get("type").and_then(|v| v.as_str()) {
+                                        Some("hosting_proposal") => {
+                                            if let Some(agreement) = parsed.get("agreement") {
+                                                println!("📋 Received hosting proposal from peer {}", peer);
+                                                // Save to disk immediately
+                                                if let Some(id) = agreement.get("agreementId").and_then(|v| v.as_str()) {
+                                                    if let Some(data_dir) = dirs::data_dir() {
+                                                        let dir = data_dir.join("chiral-network").join("agreements");
+                                                        let _ = std::fs::create_dir_all(&dir);
+                                                        let _ = std::fs::write(dir.join(format!("{}.json", id)), agreement.to_string());
+                                                    }
+                                                }
+                                                let _ = app.emit("hosting_proposal_received", serde_json::json!({
+                                                    "fromPeer": peer.to_string(),
+                                                    "agreementJson": agreement.to_string(),
+                                                }));
+                                            }
+                                        }
+                                        Some("hosting_response") => {
+                                            let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
+                                            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                                            println!("📋 Received hosting response for agreement {}: {}", agreement_id, status);
+
+                                            // Update agreement on disk
+                                            if !agreement_id.is_empty() {
                                                 if let Some(data_dir) = dirs::data_dir() {
                                                     let dir = data_dir.join("chiral-network").join("agreements");
-                                                    let _ = std::fs::create_dir_all(&dir);
-                                                    let _ = std::fs::write(dir.join(format!("{}.json", id)), agreement.to_string());
+                                                    let path = dir.join(format!("{}.json", agreement_id));
+                                                    if let Ok(contents) = std::fs::read_to_string(&path) {
+                                                        if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
+                                                            if let Some(obj) = ag.as_object_mut() {
+                                                                obj.insert("status".to_string(), serde_json::Value::String(status.to_string()));
+                                                                let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
-                                            let _ = app.emit("hosting_proposal_received", serde_json::json!({
-                                                "fromPeer": peer.to_string(),
-                                                "agreementJson": agreement.to_string(),
+
+                                            let _ = app.emit("hosting_response_received", serde_json::json!({
+                                                "agreementId": agreement_id,
+                                                "status": status,
                                             }));
                                         }
+                                        _ => {}
                                     }
                                 }
                             }

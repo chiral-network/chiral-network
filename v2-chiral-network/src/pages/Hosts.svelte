@@ -192,13 +192,20 @@
 
   async function respondToAgreement(agreementId: string, accept: boolean) {
     try {
-      await hostingService.respondToAgreement(agreementId, accept);
+      const updated = await hostingService.respondToAgreement(agreementId, accept);
       myAgreements = myAgreements.map((a) =>
         a.agreementId === agreementId
           ? { ...a, status: accept ? 'accepted' : 'rejected', respondedAt: Math.floor(Date.now() / 1000) }
           : a
       );
-      toasts.show(accept ? 'Agreement accepted' : 'Agreement rejected', accept ? 'success' : 'info');
+      toasts.show(accept ? 'Agreement accepted — downloading files...' : 'Agreement rejected', accept ? 'success' : 'info');
+
+      // Start downloading files from proposer after accepting
+      if (accept && updated) {
+        hostingService.fulfillAgreement(updated).catch((err: any) => {
+          toasts.show(`Failed to start file download: ${err.message || err}`, 'error');
+        });
+      }
     } catch (err: any) {
       toasts.show(`Failed: ${err.message || err}`, 'error');
     }
@@ -218,21 +225,21 @@
 
   // ── Lifecycle ──
   let unlistenProposal: (() => void) | null = null;
+  let unlistenResponse: (() => void) | null = null;
+  let unlistenDownloadComplete: (() => void) | null = null;
 
   onMount(async () => {
     loadData();
 
-    // Listen for incoming hosting proposals sent directly via echo protocol
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
     if (isTauri) {
+      // Listen for incoming hosting proposals sent directly via echo protocol
       unlistenProposal = await listen<{ fromPeer: string; agreementJson: string }>(
         'hosting_proposal_received',
         (event) => {
           try {
             const agreement: HostingAgreement = JSON.parse(event.payload.agreementJson);
-            // Store in DHT and local index so it persists
             hostingService.storeAndIndex(agreement);
-            // Add to live list if not already present
             if (!myAgreements.some((a) => a.agreementId === agreement.agreementId)) {
               myAgreements = [...myAgreements, agreement];
               toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`, 'info');
@@ -242,11 +249,87 @@
           }
         },
       );
+
+      // Listen for acceptance/rejection responses from hosts
+      unlistenResponse = await listen<{ agreementId: string; status: string }>(
+        'hosting_response_received',
+        (event) => {
+          const { agreementId, status } = event.payload;
+          myAgreements = myAgreements.map((a) =>
+            a.agreementId === agreementId ? { ...a, status: status as any } : a
+          );
+          if (status === 'accepted') {
+            toasts.show('Agreement accepted by host!', 'success');
+          } else if (status === 'rejected') {
+            toasts.show('Agreement rejected by host', 'info');
+          } else if (status === 'active') {
+            toasts.show('Host is now seeding your files!', 'success');
+          }
+        },
+      );
+
+      // Listen for file download completions — register as seeder for hosting agreements
+      unlistenDownloadComplete = await listen<{
+        fileHash: string; fileName: string; filePath: string; fileSize: number;
+      }>(
+        'file-download-complete',
+        async (event) => {
+          const { fileHash, fileName, filePath, fileSize } = event.payload;
+          // Check if this file belongs to an accepted hosting agreement
+          const agreement = myAgreements.find(
+            (a) => a.hostPeerId === myPeerId && (a.status === 'accepted' || a.status === 'active') && a.fileHashes.includes(fileHash)
+          );
+          if (!agreement) return;
+
+          try {
+            // Register as seeder for this file
+            await invoke('register_shared_file', {
+              fileHash,
+              filePath,
+              fileName,
+              fileSize,
+              priceChi: null,
+              walletAddress: null,
+            });
+            toasts.show(`Now seeding ${fileName} for hosting agreement`, 'success');
+
+            // Check if all files in the agreement are downloaded
+            const allDownloaded = agreement.fileHashes.every((h) =>
+              h === fileHash || myAgreements.some((a) => a.status === 'active' && a.fileHashes.includes(h))
+            );
+
+            // Update agreement status to active
+            agreement.status = 'active';
+            await invoke('store_hosting_agreement', {
+              agreementId: agreement.agreementId,
+              agreementJson: JSON.stringify(agreement),
+            });
+            myAgreements = myAgreements.map((a) =>
+              a.agreementId === agreement.agreementId ? { ...a, status: 'active' } : a
+            );
+
+            // Notify the proposer that hosting is active
+            const message = JSON.stringify({
+              type: 'hosting_response',
+              agreementId: agreement.agreementId,
+              status: 'active',
+            });
+            await invoke('echo_peer', {
+              peerId: agreement.clientPeerId,
+              payload: Array.from(new TextEncoder().encode(message)),
+            });
+          } catch (err: any) {
+            console.error('Failed to register as seeder:', err);
+          }
+        },
+      );
     }
   });
 
   onDestroy(() => {
     unlistenProposal?.();
+    unlistenResponse?.();
+    unlistenDownloadComplete?.();
   });
 
   $effect(() => {

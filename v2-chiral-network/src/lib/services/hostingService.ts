@@ -207,7 +207,7 @@ class HostingService {
   }
 
   /** Accept or reject a hosting agreement (called by host) */
-  async respondToAgreement(agreementId: string, accept: boolean): Promise<void> {
+  async respondToAgreement(agreementId: string, accept: boolean): Promise<HostingAgreement> {
     const agreement = await this.getAgreement(agreementId);
     if (!agreement) throw new Error('Agreement not found');
 
@@ -218,6 +218,36 @@ class HostingService {
       await invoke('store_hosting_agreement', {
         agreementId,
         agreementJson: JSON.stringify(agreement),
+      });
+
+      // Notify the proposer of the response via echo protocol
+      const message = JSON.stringify({
+        type: 'hosting_response',
+        agreementId,
+        status: agreement.status,
+      });
+      await invoke('echo_peer', {
+        peerId: agreement.clientPeerId,
+        payload: Array.from(new TextEncoder().encode(message)),
+      });
+    }
+
+    return agreement;
+  }
+
+  /** Download files from proposer after accepting an agreement (called by host) */
+  async fulfillAgreement(agreement: HostingAgreement): Promise<void> {
+    for (const fileHash of agreement.fileHashes) {
+      await invoke('start_download', {
+        fileHash,
+        fileName: fileHash,
+        seeders: [agreement.clientPeerId],
+        speedTier: 'free',
+        fileSize: 0,
+        walletAddress: null,
+        privateKey: null,
+        seederPriceWei: null,
+        _seederWalletAddress: null,
       });
     }
   }
