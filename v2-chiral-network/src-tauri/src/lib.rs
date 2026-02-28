@@ -454,6 +454,22 @@ async fn get_hosting_agreement(
     }
 }
 
+#[tauri::command]
+async fn list_hosting_agreements() -> Result<Vec<String>, String> {
+    let dir = agreements_dir()?;
+    let mut ids = Vec::new();
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read agreements dir: {e}"))?;
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if let Some(id) = name.strip_suffix(".json") {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    Ok(ids)
+}
+
 // File operations for Upload/Download pages
 
 #[tauri::command]
@@ -3798,6 +3814,7 @@ pub fn run() {
             get_host_advertisement,
             store_hosting_agreement,
             get_hosting_agreement,
+            list_hosting_agreements,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

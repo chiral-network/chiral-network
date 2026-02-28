@@ -242,6 +242,16 @@ class HostingService {
 
   /** Get all agreements for this peer (as client or host) */
   async getMyAgreements(): Promise<HostingAgreement[]> {
+    // Merge any agreements saved to disk (e.g. received via echo while on another page)
+    if (isTauri()) {
+      try {
+        const diskIds = await invoke<string[]>('list_hosting_agreements');
+        for (const id of diskIds) {
+          addToIndex(id);
+        }
+      } catch {}
+    }
+
     const ids = loadAgreementIndex();
     const agreements: HostingAgreement[] = [];
 
