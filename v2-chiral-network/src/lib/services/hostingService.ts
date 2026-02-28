@@ -193,18 +193,14 @@ class HostingService {
 
     // Send the proposal directly to the host peer via echo protocol
     if (isTauri()) {
-      try {
-        const message = JSON.stringify({
-          type: 'hosting_proposal',
-          agreement,
-        });
-        await invoke('proxy_echo', {
-          peerId: hostPeerId,
-          payload: Array.from(new TextEncoder().encode(message)),
-        });
-      } catch {
-        // Non-fatal: agreement is stored in DHT, direct delivery failed
-      }
+      const message = JSON.stringify({
+        type: 'hosting_proposal',
+        agreement,
+      });
+      await invoke('proxy_echo', {
+        peerId: hostPeerId,
+        payload: Array.from(new TextEncoder().encode(message)),
+      });
     }
 
     return agreement;
