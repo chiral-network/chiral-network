@@ -1914,6 +1914,18 @@ async fn start_dht_node(
                     }
                     DhtEvent::HostingProposalReceived { from_peer, agreement_json } => {
                         println!("📋 Hosting proposal received from peer {}", from_peer);
+
+                        // Persist to local disk so it survives regardless of which page is open
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&agreement_json) {
+                            if let Some(id) = parsed.get("agreementId").and_then(|v| v.as_str()) {
+                                if let Some(data_dir) = dirs::data_dir() {
+                                    let dir = data_dir.join("chiral-network").join("agreements");
+                                    let _ = std::fs::create_dir_all(&dir);
+                                    let _ = std::fs::write(dir.join(format!("{}.json", id)), &agreement_json);
+                                }
+                            }
+                        }
+
                         let payload = serde_json::json!({
                             "fromPeer": from_peer,
                             "agreementJson": agreement_json,
@@ -10913,6 +10925,15 @@ async fn pump_dht_events(
                     }
                 }
                 DhtEvent::HostingProposalReceived { from_peer, agreement_json } => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&agreement_json) {
+                        if let Some(id) = parsed.get("agreementId").and_then(|v| v.as_str()) {
+                            if let Some(data_dir) = dirs::data_dir() {
+                                let dir = data_dir.join("chiral-network").join("agreements");
+                                let _ = std::fs::create_dir_all(&dir);
+                                let _ = std::fs::write(dir.join(format!("{}.json", id)), &agreement_json);
+                            }
+                        }
+                    }
                     let payload = serde_json::json!({
                         "fromPeer": from_peer,
                         "agreementJson": agreement_json,
