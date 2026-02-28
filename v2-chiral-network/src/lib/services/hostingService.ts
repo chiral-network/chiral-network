@@ -180,6 +180,25 @@ class HostingService {
     }
 
     addToIndex(agreementId);
+
+    // Write agreement ID to the host's DHT index so they can discover it
+    if (isTauri()) {
+      try {
+        const hostIndexKey = `chiral_agreements_host_${hostPeerId}`;
+        const existingJson = await invoke<string | null>('get_dht_value', { key: hostIndexKey });
+        let hostIds: string[] = [];
+        if (existingJson) {
+          try { hostIds = JSON.parse(existingJson); } catch { hostIds = []; }
+        }
+        if (!hostIds.includes(agreementId)) {
+          hostIds.push(agreementId);
+          await invoke('store_dht_value', { key: hostIndexKey, value: JSON.stringify(hostIds) });
+        }
+      } catch {
+        // Non-fatal: agreement is stored, host index update failed
+      }
+    }
+
     return agreement;
   }
 
@@ -216,6 +235,25 @@ class HostingService {
 
   /** Get all agreements for this peer (as client or host) */
   async getMyAgreements(): Promise<HostingAgreement[]> {
+    // Merge any agreements from the DHT host index into local storage
+    if (isTauri()) {
+      try {
+        const myPeerId = await invoke<string | null>('get_peer_id');
+        if (myPeerId) {
+          const hostIndexKey = `chiral_agreements_host_${myPeerId}`;
+          const indexJson = await invoke<string | null>('get_dht_value', { key: hostIndexKey });
+          if (indexJson) {
+            const dhtIds: string[] = JSON.parse(indexJson);
+            for (const id of dhtIds) {
+              addToIndex(id);
+            }
+          }
+        }
+      } catch {
+        // Non-fatal: continue with local index only
+      }
+    }
+
     const ids = loadAgreementIndex();
     const agreements: HostingAgreement[] = [];
 
