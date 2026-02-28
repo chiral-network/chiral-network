@@ -445,111 +445,43 @@ async fn get_available_storage() -> Result<u64, String> {
     }
 }
 
-/// Parse osascript output — returns Ok(paths) on success, Ok(empty) on user cancel,
-/// Err on actual failures (permissions, sandbox, etc.)
-#[cfg(target_os = "macos")]
-fn parse_osascript_result(output: std::process::Output) -> Result<Vec<String>, String> {
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .lines()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    // AppleScript error -128 = user pressed Cancel
-    if stderr.contains("-128") {
-        return Ok(vec![]);
-    }
-
-    // Real error — surface it to the user
-    Err(format!("File dialog failed: {}", stderr.trim()))
-}
-
-#[tauri::command]
-async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use tokio::process::Command;
-        // NSOpenPanel crashes in Tauri's objc2-app-kit; use osascript instead.
-        // "activate" brings the dialog to the foreground above the Tauri window.
-        let script = if multiple {
-            r#"activate
-set theFiles to choose file with multiple selections allowed
-set output to ""
-repeat with f in theFiles
-  set output to output & POSIX path of f & linefeed
-end repeat
-if length of output > 0 then
-  return text 1 thru -2 of output
-end if
-return """#
-        } else {
-            r#"activate
-return POSIX path of (choose file)"#
-        };
-
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()
-            .await
-            .map_err(|e| format!("Could not launch file dialog: {}", e))?;
-
-        parse_osascript_result(output)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        use rfd::FileDialog;
-        if multiple {
-            Ok(FileDialog::new()
-                .pick_files()
-                .map(|paths| paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
-                .unwrap_or_default())
-        } else {
-            Ok(FileDialog::new()
-                .pick_file()
-                .map(|path| vec![path.to_string_lossy().to_string()])
-                .unwrap_or_default())
-        }
-    }
-}
-
-#[tauri::command]
-async fn pick_download_directory() -> Result<Option<String>, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use tokio::process::Command;
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg("activate\nreturn POSIX path of (choose folder)")
-            .output()
-            .await
-            .map_err(|e| format!("Could not launch folder dialog: {}", e))?;
-
-        let paths = parse_osascript_result(output)?;
-        Ok(paths.into_iter().next())
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        use rfd::FileDialog;
-        Ok(FileDialog::new()
-            .set_title("Choose Download Directory")
-            .pick_folder()
-            .map(|p| p.to_string_lossy().to_string()))
-    }
-}
-
 #[tauri::command]
 async fn get_file_size(file_path: String) -> Result<u64, String> {
     let metadata = std::fs::metadata(&file_path).map_err(|e| e.to_string())?;
     Ok(metadata.len())
 }
 
+#[tauri::command]
+async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
+    use rfd::FileDialog;
+
+    if multiple {
+        let files = FileDialog::new().pick_files();
+        if let Some(paths) = files {
+            Ok(paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
+        } else {
+            Ok(vec![])
+        }
+    } else {
+        let file = FileDialog::new().pick_file();
+        if let Some(path) = file {
+            Ok(vec![path.to_string_lossy().to_string()])
+        } else {
+            Ok(vec![])
+        }
+    }
+}
+
+#[tauri::command]
+async fn pick_download_directory() -> Result<Option<String>, String> {
+    use rfd::FileDialog;
+
+    let dir = FileDialog::new()
+        .set_title("Choose Download Directory")
+        .pick_folder();
+
+    Ok(dir.map(|p| p.to_string_lossy().to_string()))
+}
 
 #[tauri::command]
 async fn set_download_directory(
