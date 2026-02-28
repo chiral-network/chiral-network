@@ -197,7 +197,7 @@ class HostingService {
         type: 'hosting_proposal',
         agreement,
       });
-      await invoke('proxy_echo', {
+      await invoke('echo_peer', {
         peerId: hostPeerId,
         payload: Array.from(new TextEncoder().encode(message)),
       });

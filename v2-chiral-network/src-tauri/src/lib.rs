@@ -138,6 +138,19 @@ async fn get_peer_id(state: tauri::State<'_, AppState>) -> Result<Option<String>
 }
 
 #[tauri::command]
+async fn echo_peer(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    payload: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard
+        .as_ref()
+        .ok_or_else(|| "DHT not running".to_string())?;
+    dht.echo(peer_id, payload).await
+}
+
+#[tauri::command]
 async fn ping_peer(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -3812,6 +3825,7 @@ pub fn run() {
             unpublish_host_advertisement,
             get_host_registry,
             get_host_advertisement,
+            echo_peer,
             store_hosting_agreement,
             get_hosting_agreement,
             list_hosting_agreements,
