@@ -267,6 +267,148 @@ async fn get_dht_value(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hosting marketplace commands
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct HostRegistryEntry {
+    #[serde(rename = "peerId")]
+    peer_id: String,
+    #[serde(rename = "walletAddress")]
+    wallet_address: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: u64,
+}
+
+#[tauri::command]
+async fn publish_host_advertisement(
+    state: tauri::State<'_, AppState>,
+    advertisement_json: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.ok_or("Peer ID not available")?;
+
+        // Parse advertisement to extract wallet address, inject peer_id
+        let mut ad: serde_json::Value = serde_json::from_str(&advertisement_json)
+            .map_err(|e| format!("Invalid advertisement JSON: {}", e))?;
+        ad["peerId"] = serde_json::Value::String(peer_id.clone());
+        let ad_json = serde_json::to_string(&ad)
+            .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
+
+        let wallet_address = ad["walletAddress"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        // Store individual advertisement
+        let host_key = format!("chiral_host_{}", peer_id);
+        dht.put_dht_value(host_key, ad_json).await?;
+
+        // Update registry (read-modify-write)
+        let registry_key = "chiral_host_registry".to_string();
+        let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
+            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        // Remove existing entry for this peer, add fresh one
+        registry.retain(|e| e.peer_id != peer_id);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        registry.push(HostRegistryEntry {
+            peer_id,
+            wallet_address,
+            updated_at: now,
+        });
+
+        let registry_json = serde_json::to_string(&registry)
+            .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+        dht.put_dht_value(registry_key, registry_json).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn unpublish_host_advertisement(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.ok_or("Peer ID not available")?;
+
+        // Remove from registry
+        let registry_key = "chiral_host_registry".to_string();
+        let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
+            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        registry.retain(|e| e.peer_id != peer_id);
+
+        let registry_json = serde_json::to_string(&registry)
+            .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+        dht.put_dht_value(registry_key, registry_json).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_host_registry(
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let registry_key = "chiral_host_registry".to_string();
+        match dht.get_dht_value(registry_key).await {
+            Ok(Some(json)) => Ok(json),
+            Ok(None) => Ok("[]".to_string()),
+            Err(e) => Err(e),
+        }
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_host_advertisement(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+) -> Result<Option<String>, String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_host_{}", peer_id);
+        dht.get_dht_value(key).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn store_hosting_agreement(
+    state: tauri::State<'_, AppState>,
+    agreement_id: String,
+    agreement_json: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_agreement_{}", agreement_id);
+        dht.put_dht_value(key, agreement_json).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
 // File operations for Upload/Download pages
 
 #[tauri::command]
@@ -3604,6 +3746,12 @@ pub fn run() {
             drive_create_share,
             drive_revoke_share,
             drive_list_shares,
+            // Hosting marketplace commands
+            publish_host_advertisement,
+            unpublish_host_advertisement,
+            get_host_registry,
+            get_host_advertisement,
+            store_hosting_agreement,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

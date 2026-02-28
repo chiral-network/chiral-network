@@ -14,44 +14,38 @@ describe('speedTiers', () => {
       expect(TIERS).toHaveLength(3);
     });
 
-    it('should have free, standard, and premium tiers in order', () => {
-      expect(TIERS[0].id).toBe('free');
-      expect(TIERS[1].id).toBe('standard');
-      expect(TIERS[2].id).toBe('premium');
-    });
-
-    it('free tier should have 100 KB/s speed limit', () => {
-      expect(TIERS[0].speedLimit).toBe(100 * 1024);
+    it('should have standard, premium, and ultra tiers in order', () => {
+      expect(TIERS[0].id).toBe('standard');
+      expect(TIERS[1].id).toBe('premium');
+      expect(TIERS[2].id).toBe('ultra');
     });
 
     it('standard tier should have 1 MB/s speed limit', () => {
-      expect(TIERS[1].speedLimit).toBe(1024 * 1024);
+      expect(TIERS[0].speedLimit).toBe(1024 * 1024);
     });
 
-    it('premium tier should have unlimited (0) speed limit', () => {
+    it('premium tier should have 5 MB/s speed limit', () => {
+      expect(TIERS[1].speedLimit).toBe(5 * 1024 * 1024);
+    });
+
+    it('ultra tier should have unlimited (0) speed limit', () => {
       expect(TIERS[2].speedLimit).toBe(0);
     });
 
-    it('free tier should cost 0 per MB', () => {
-      expect(TIERS[0].costPerMb).toBe(0);
-    });
-
     it('standard tier should cost 0.001 CHI per MB', () => {
-      expect(TIERS[1].costPerMb).toBe(0.001);
+      expect(TIERS[0].costPerMb).toBe(0.001);
     });
 
     it('premium tier should cost 0.005 CHI per MB', () => {
-      expect(TIERS[2].costPerMb).toBe(0.005);
+      expect(TIERS[1].costPerMb).toBe(0.005);
+    });
+
+    it('ultra tier should cost 0.01 CHI per MB', () => {
+      expect(TIERS[2].costPerMb).toBe(0.01);
     });
   });
 
   describe('getTierConfig', () => {
-    it('should return correct config for free tier', () => {
-      const config = getTierConfig('free');
-      expect(config.name).toBe('Free');
-      expect(config.speedLabel).toBe('100 KB/s');
-    });
-
     it('should return correct config for standard tier', () => {
       const config = getTierConfig('standard');
       expect(config.name).toBe('Standard');
@@ -61,17 +55,17 @@ describe('speedTiers', () => {
     it('should return correct config for premium tier', () => {
       const config = getTierConfig('premium');
       expect(config.name).toBe('Premium');
+      expect(config.speedLabel).toBe('5 MB/s');
+    });
+
+    it('should return correct config for ultra tier', () => {
+      const config = getTierConfig('ultra');
+      expect(config.name).toBe('Ultra');
       expect(config.speedLabel).toBe('Unlimited');
     });
   });
 
   describe('calculateCost', () => {
-    it('should return 0 for free tier regardless of file size', () => {
-      expect(calculateCost('free', 10_000_000)).toBe(0);
-      expect(calculateCost('free', 1_000_000_000)).toBe(0);
-      expect(calculateCost('free', 0)).toBe(0);
-    });
-
     it('should calculate standard tier cost: 10 MB = 0.01 CHI', () => {
       const cost = calculateCost('standard', 10_000_000);
       expect(cost).toBeCloseTo(0.01, 6);
@@ -82,10 +76,15 @@ describe('speedTiers', () => {
       expect(cost).toBeCloseTo(0.05, 6);
     });
 
+    it('should calculate ultra tier cost: 10 MB = 0.1 CHI', () => {
+      const cost = calculateCost('ultra', 10_000_000);
+      expect(cost).toBeCloseTo(0.1, 6);
+    });
+
     it('should return 0 for zero bytes on any tier', () => {
-      expect(calculateCost('free', 0)).toBe(0);
       expect(calculateCost('standard', 0)).toBe(0);
       expect(calculateCost('premium', 0)).toBe(0);
+      expect(calculateCost('ultra', 0)).toBe(0);
     });
 
     it('should handle 1 byte file (tiny non-zero cost for paid tiers)', () => {
@@ -108,8 +107,8 @@ describe('speedTiers', () => {
   });
 
   describe('formatCost', () => {
-    it('should return "Free" for zero cost', () => {
-      expect(formatCost(0)).toBe('Free');
+    it('should return "0 CHI" for zero cost', () => {
+      expect(formatCost(0)).toBe('0 CHI');
     });
 
     it('should return "< 0.000001 CHI" for very tiny amounts', () => {

@@ -1,4 +1,4 @@
-export type SpeedTier = 'free' | 'standard' | 'premium';
+export type SpeedTier = 'standard' | 'premium' | 'ultra';
 
 export interface TierConfig {
   id: SpeedTier;
@@ -11,14 +11,6 @@ export interface TierConfig {
 
 export const TIERS: TierConfig[] = [
   {
-    id: 'free',
-    name: 'Free',
-    speedLimit: 100 * 1024, // 100 KB/s
-    speedLabel: '100 KB/s',
-    costPerMb: 0,
-    description: 'Rate-limited, always available',
-  },
-  {
     id: 'standard',
     name: 'Standard',
     speedLimit: 1024 * 1024, // 1 MB/s
@@ -29,10 +21,18 @@ export const TIERS: TierConfig[] = [
   {
     id: 'premium',
     name: 'Premium',
+    speedLimit: 5 * 1024 * 1024, // 5 MB/s
+    speedLabel: '5 MB/s',
+    costPerMb: 0.005,
+    description: 'Fast speed, balanced pricing',
+  },
+  {
+    id: 'ultra',
+    name: 'Ultra',
     speedLimit: 0, // unlimited
     speedLabel: 'Unlimited',
-    costPerMb: 0.005,
-    description: 'Full speed, premium pricing',
+    costPerMb: 0.01,
+    description: 'Maximum speed, premium pricing',
   },
 ];
 
@@ -50,7 +50,7 @@ export function calculateCost(tier: SpeedTier, fileSizeBytes: number): number {
 
 /** Format a CHI cost for display */
 export function formatCost(costChi: number): string {
-  if (costChi === 0) return 'Free';
+  if (costChi === 0) return '0 CHI';
   if (costChi < 0.000001) return '< 0.000001 CHI';
   return `${costChi.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} CHI`;
 }
