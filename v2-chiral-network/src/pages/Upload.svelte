@@ -141,6 +141,13 @@
 
     if (isUploading) return;
 
+    // macOS: skip native dialog entirely (NSOpenPanel crashes in Tauri's objc2-app-kit)
+    const isMac = navigator.platform?.startsWith('Mac') || navigator.userAgent?.includes('Macintosh');
+    if (isMac) {
+      fileInputEl?.click();
+      return;
+    }
+
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const selectedPaths = await invoke<string[]>('open_file_dialog', {
@@ -152,7 +159,6 @@
         await processFiles(selectedPaths);
       }
     } catch (error) {
-      // Native dialog failed (e.g. macOS NSOpenPanel crash) — fall back to HTML file input
       log.warn('Native file dialog failed, using HTML fallback:', error);
       fileInputEl?.click();
     } finally {
