@@ -226,12 +226,11 @@ class HostingService {
     }
   }
 
-  /** Get an agreement by ID from DHT */
+  /** Get an agreement by ID (local disk first, DHT fallback) */
   async getAgreement(agreementId: string): Promise<HostingAgreement | null> {
     if (!isTauri()) return null;
 
-    const key = `chiral_agreement_${agreementId}`;
-    const json = await invoke<string | null>('get_dht_value', { key });
+    const json = await invoke<string | null>('get_hosting_agreement', { agreementId });
     if (!json) return null;
 
     try {

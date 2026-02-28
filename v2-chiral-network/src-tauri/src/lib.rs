@@ -393,19 +393,64 @@ async fn get_host_advertisement(
     }
 }
 
+fn agreements_dir() -> Result<std::path::PathBuf, String> {
+    let dir = dirs::data_dir()
+        .ok_or("Could not find data directory")?
+        .join("chiral-network")
+        .join("agreements");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create agreements dir: {e}"))?;
+    }
+    Ok(dir)
+}
+
 #[tauri::command]
 async fn store_hosting_agreement(
     state: tauri::State<'_, AppState>,
     agreement_id: String,
     agreement_json: String,
 ) -> Result<(), String> {
-    let dht_guard = state.dht.lock().await;
+    // Save locally on disk
+    let path = agreements_dir()?.join(format!("{}.json", agreement_id));
+    std::fs::write(&path, &agreement_json)
+        .map_err(|e| format!("Failed to write agreement to disk: {e}"))?;
 
+    // Also store in DHT for the other party
+    let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
         let key = format!("chiral_agreement_{}", agreement_id);
-        dht.put_dht_value(key, agreement_json).await
+        let _ = dht.put_dht_value(key, agreement_json).await;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_hosting_agreement(
+    state: tauri::State<'_, AppState>,
+    agreement_id: String,
+) -> Result<Option<String>, String> {
+    // Try local disk first
+    let path = agreements_dir()?.join(format!("{}.json", agreement_id));
+    if path.exists() {
+        let json = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read agreement: {e}"))?;
+        return Ok(Some(json));
+    }
+
+    // Fall back to DHT
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_agreement_{}", agreement_id);
+        let result = dht.get_dht_value(key).await?;
+        // If found in DHT, cache locally
+        if let Some(ref json) = result {
+            let _ = std::fs::write(&path, json);
+        }
+        Ok(result)
     } else {
-        Err("DHT not running".to_string())
+        Ok(None)
     }
 }
 
@@ -3752,6 +3797,7 @@ pub fn run() {
             get_host_registry,
             get_host_advertisement,
             store_hosting_agreement,
+            get_hosting_agreement,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
