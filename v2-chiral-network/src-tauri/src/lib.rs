@@ -449,38 +449,36 @@ async fn get_available_storage() -> Result<u64, String> {
 async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
     #[cfg(target_os = "macos")]
     {
-        // Use osascript to avoid NSOpenPanel crash with objc2-app-kit in Tauri
+        use tokio::process::Command;
+        // NSOpenPanel crashes in Tauri's objc2-app-kit; use osascript instead
         let script = if multiple {
-            concat!(
-                "set theFiles to choose file with multiple selections allowed\n",
-                "set output to \"\"\n",
-                "repeat with f in theFiles\n",
-                "set output to output & POSIX path of f & linefeed\n",
-                "end repeat\n",
-                "if length of output > 0 then\n",
-                "return text 1 thru -2 of output\n",
-                "end if\n",
-                "return \"\"",
-            )
+            r#"set theFiles to choose file with multiple selections allowed
+set output to ""
+repeat with f in theFiles
+  set output to output & POSIX path of f & linefeed
+end repeat
+if length of output > 0 then
+  return text 1 thru -2 of output
+end if
+return """#
         } else {
             "return POSIX path of (choose file)"
         };
 
-        let output = tokio::process::Command::new("osascript")
+        let output = Command::new("osascript")
             .arg("-e")
             .arg(script)
             .output()
             .await
-            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+            .map_err(|e| format!("osascript failed: {}", e))?;
 
         if !output.status.success() {
-            // User cancelled
-            return Ok(vec![]);
+            return Ok(vec![]); // user cancelled
         }
 
         Ok(String::from_utf8_lossy(&output.stdout)
             .trim()
-            .split('\n')
+            .lines()
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .collect())
@@ -488,27 +486,18 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
 
     #[cfg(not(target_os = "macos"))]
     {
-        tokio::task::spawn_blocking(move || {
-            use rfd::FileDialog;
-            if multiple {
-                FileDialog::new()
-                    .pick_files()
-                    .map(|paths| {
-                        paths
-                            .iter()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                FileDialog::new()
-                    .pick_file()
-                    .map(|path| vec![path.to_string_lossy().to_string()])
-                    .unwrap_or_default()
-            }
-        })
-        .await
-        .map_err(|e| format!("Dialog task failed: {}", e))
+        use rfd::FileDialog;
+        if multiple {
+            Ok(FileDialog::new()
+                .pick_files()
+                .map(|paths| paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
+                .unwrap_or_default())
+        } else {
+            Ok(FileDialog::new()
+                .pick_file()
+                .map(|path| vec![path.to_string_lossy().to_string()])
+                .unwrap_or_default())
+        }
     }
 }
 
@@ -516,36 +505,29 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
 async fn pick_download_directory() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
-        let output = tokio::process::Command::new("osascript")
+        use tokio::process::Command;
+        let output = Command::new("osascript")
             .arg("-e")
             .arg("return POSIX path of (choose folder)")
             .output()
             .await
-            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+            .map_err(|e| format!("osascript failed: {}", e))?;
 
         if !output.status.success() {
             return Ok(None);
         }
 
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(path))
-        }
+        Ok(if path.is_empty() { None } else { Some(path) })
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        tokio::task::spawn_blocking(|| {
-            use rfd::FileDialog;
-            FileDialog::new()
-                .set_title("Choose Download Directory")
-                .pick_folder()
-                .map(|p| p.to_string_lossy().to_string())
-        })
-        .await
-        .map_err(|e| format!("Dialog task failed: {}", e))
+        use rfd::FileDialog;
+        Ok(FileDialog::new()
+            .set_title("Choose Download Directory")
+            .pick_folder()
+            .map(|p| p.to_string_lossy().to_string()))
     }
 }
 
@@ -639,20 +621,16 @@ async fn publish_file(
     price_chi: Option<String>,
     wallet_address: Option<String>,
 ) -> Result<PublishResult, String> {
-    // Read file and compute hash on a blocking thread to avoid freezing the runtime
-    let file_path_clone = file_path.clone();
-    let (file_data, merkle_root) = tokio::task::spawn_blocking(move || {
-        use sha2::{Sha256, Digest};
-        let file_data = std::fs::read(&file_path_clone).map_err(|e| e.to_string())?;
-        let mut hasher = Sha256::new();
-        hasher.update(&file_data);
-        let hash = hasher.finalize();
-        Ok::<_, String>((file_data, hex::encode(hash)))
-    })
-    .await
-    .map_err(|e| format!("File processing failed: {}", e))?
-    .map_err(|e: String| e)?;
+    // Read file and compute hash
+    let file_data = std::fs::read(&file_path).map_err(|e| e.to_string())?;
     let file_size = file_data.len() as u64;
+
+    // Compute SHA-256 hash
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(&file_data);
+    let hash = hasher.finalize();
+    let merkle_root = hex::encode(hash);
 
     println!("Publishing file: {} with hash: {}", file_name, merkle_root);
 
