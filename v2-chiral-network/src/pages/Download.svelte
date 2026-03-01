@@ -59,11 +59,17 @@
   type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'cancelled' | 'failed';
   type PreviewType = 'video' | 'audio' | 'image' | 'pdf' | 'unsupported';
 
+  interface SeederInfo {
+    peerId: string;
+    priceWei: string;
+    walletAddress: string;
+  }
+
   interface SearchResult {
     hash: string;
     fileName: string;
     fileSize: number;
-    seeders: string[];
+    seeders: SeederInfo[];
     createdAt: number;
     priceWei: string;
     walletAddress: string;
@@ -218,6 +224,9 @@
   // Seeder reputation
   let seederRatings = $state<Record<string, BatchRatingEntry>>({});
   let showRatingModal = $state<{ seederWallet: string; fileHash: string; fileName: string } | null>(null);
+
+  // Seeder selection (for multi-seeder downloads)
+  let selectedSeederIndex = $state<number>(0);
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -441,6 +450,7 @@
     isSearching = true;
     searchResult = null;
     searchError = null;
+    selectedSeederIndex = 0;
 
     try {
       let fileHash = searchQuery.trim();
@@ -480,7 +490,7 @@
           searchResult = result;
           // Fetch seeder reputation ratings
           if (result.seeders.length > 0) {
-            fetchSeederRatings(result.seeders, result.walletAddress);
+            fetchSeederRatings(result.seeders);
           }
           if (result.seeders.length > 0) {
             toasts.show(`Found ${result.seeders.length} potential seeder${result.seeders.length !== 1 ? 's' : ''} for: ${result.fileName}`, 'success');
@@ -517,9 +527,11 @@
   }
 
   // Fetch seeder reputation ratings (non-blocking)
-  async function fetchSeederRatings(seeders: string[], walletAddress?: string) {
+  async function fetchSeederRatings(seeders: SeederInfo[]) {
     try {
-      const wallets = [...new Set([...seeders, walletAddress].filter(Boolean) as string[])];
+      const wallets = [...new Set(
+        seeders.flatMap(s => [s.peerId, s.walletAddress]).filter(Boolean)
+      )];
       if (wallets.length === 0) return;
       const ratings = await ratingApi.getBatchRatings(wallets);
       seederRatings = ratings;
@@ -567,12 +579,13 @@
       return;
     }
 
-    // Check blacklist - compare against wallet address AND peer IDs (seeders)
+    // Check blacklist - compare against wallet addresses AND peer IDs from all seeders
     const bl = get(blacklist);
     if (!skipBlacklistCheck && bl.length > 0) {
-      const candidates = [result.walletAddress, ...result.seeders]
-        .filter(Boolean)
-        .map(a => a.trim().toLowerCase());
+      const candidates = [
+        result.walletAddress,
+        ...result.seeders.flatMap(s => [s.peerId, s.walletAddress])
+      ].filter(Boolean).map(a => a.trim().toLowerCase());
       const blacklistedMatch = bl.find(entry => {
         const entryAddr = entry.address.trim().toLowerCase();
         return candidates.some(addr => addr === entryAddr || addr.includes(entryAddr) || entryAddr.includes(addr));
@@ -583,9 +596,13 @@
       }
     }
 
+    // Use selected seeder's pricing (fall back to file-level for backward compat)
+    const selected = result.seeders[selectedSeederIndex] || result.seeders[0];
+    const seederPriceWei = selected?.priceWei || result.priceWei || '0';
+    const seederWalletAddr = selected?.walletAddress || result.walletAddress || '';
+
     // Calculate total cost: speed tier + seeder file price
     const tierCost = calculateCost(selectedTier, result.fileSize);
-    const seederPriceWei = result.priceWei || '0';
     const seederPriceChi = seederPriceWei !== '0'
       ? Number(BigInt(seederPriceWei)) / 1e18
       : 0;
@@ -631,10 +648,19 @@
       const { invoke } = await import('@tauri-apps/api/core');
 
       // Build params - only include wallet fields when they have values
+      // Extract peer IDs for the download command, with selected seeder first
+      const seederPeerIds = result.seeders.map(s => s.peerId);
+      if (selected && selectedSeederIndex > 0) {
+        // Move selected seeder to front of list
+        const selectedId = selected.peerId;
+        const reordered = [selectedId, ...seederPeerIds.filter(id => id !== selectedId)];
+        seederPeerIds.splice(0, seederPeerIds.length, ...reordered);
+      }
+
       const params: Record<string, unknown> = {
         fileHash: result.hash,
         fileName: result.fileName,
-        seeders: result.seeders,
+        seeders: seederPeerIds,
         speedTier: selectedTier,
         fileSize: result.fileSize || 0,
       };
@@ -642,10 +668,10 @@
         params.walletAddress = $walletAccount.address;
         params.privateKey = $walletAccount.privateKey;
       }
-      // Pass seeder pricing info
+      // Pass selected seeder's pricing info
       if (seederPriceWei !== '0') {
         params.seederPriceWei = seederPriceWei;
-        params.seederWalletAddress = result.walletAddress;
+        params.seederWalletAddress = seederWalletAddr;
       }
 
       const response = await invoke<{ requestId: string; status: string }>('start_download', params);
@@ -776,7 +802,7 @@
 
         // Show rating modal for the seeder
         if (searchResult && searchResult.hash === fileHash) {
-          const seederWallet = searchResult.walletAddress || searchResult.seeders[0] || '';
+          const seederWallet = searchResult.walletAddress || searchResult.seeders[0]?.walletAddress || searchResult.seeders[0]?.peerId || '';
           if (seederWallet) {
             showRatingModal = { seederWallet, fileHash, fileName };
           }
@@ -1146,16 +1172,6 @@
               <span class="{searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
               </span>
-              {#if searchResult.walletAddress && seederRatings[searchResult.walletAddress]?.count > 0}
-                {@const rating = seederRatings[searchResult.walletAddress]}
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">
-                  <Star class="w-3 h-3 fill-current" />
-                  {rating.average.toFixed(1)} ({rating.count})
-                </span>
-              {/if}
-              <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-                {formatPriceWei(searchResult.priceWei || '0')}
-              </span>
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
               {searchResult.hash}
@@ -1168,9 +1184,64 @@
           </div>
         </div>
 
+        <!-- Seeder Selection (when multiple seeders available) -->
+        {#if searchResult.seeders.length > 1}
+          <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+            <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Select Seeder</p>
+            <div class="space-y-2 max-h-48 overflow-y-auto">
+              {#each searchResult.seeders as seeder, i}
+                {@const ratingKey = seeder.walletAddress || seeder.peerId}
+                {@const rating = seederRatings[ratingKey]}
+                <button
+                  onclick={() => selectedSeederIndex = i}
+                  class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
+                    {selectedSeederIndex === i
+                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                    }"
+                >
+                  <div class="flex items-center gap-2 min-w-0">
+                    <input type="radio" checked={selectedSeederIndex === i} class="accent-primary-500" />
+                    <span class="font-mono text-xs truncate max-w-[180px]" title={seeder.peerId}>
+                      {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
+                    </span>
+                    {#if rating && rating.count > 0}
+                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 flex-shrink-0">
+                        <Star class="w-3 h-3 fill-current" />
+                        {rating.average.toFixed(1)} ({rating.count})
+                      </span>
+                    {/if}
+                  </div>
+                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 flex-shrink-0">
+                    {formatPriceWei(seeder.priceWei || '0')}
+                  </span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {:else if searchResult.seeders.length === 1}
+          {@const seeder = searchResult.seeders[0]}
+          {@const ratingKey = seeder.walletAddress || seeder.peerId}
+          {@const rating = seederRatings[ratingKey]}
+          <div class="mt-3 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+            <span class="font-mono text-xs truncate" title={seeder.peerId}>
+              Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
+            </span>
+            {#if rating && rating.count > 0}
+              <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">
+                <Star class="w-3 h-3 fill-current" />
+                {rating.average.toFixed(1)} ({rating.count})
+              </span>
+            {/if}
+            <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+              {formatPriceWei(seeder.priceWei || '0')}
+            </span>
+          </div>
+        {/if}
+
         <!-- Speed Tier Selector -->
         <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
-          <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">⚡ Select Download Speed</p>
+          <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Select Download Speed</p>
           <div class="grid grid-cols-3 gap-3">
             {#each TIERS as tier}
               {@const fileSizeKnown = searchResult.fileSize > 0}
@@ -1215,7 +1286,9 @@
 
           <!-- Download button -->
           {#if searchResult}
-            {@const seederPrice = searchResult.priceWei && searchResult.priceWei !== '0' ? formatPriceWei(searchResult.priceWei) : null}
+            {@const selectedSeeder = searchResult.seeders[selectedSeederIndex] || searchResult.seeders[0]}
+            {@const selectedPriceWei = selectedSeeder?.priceWei || searchResult.priceWei || '0'}
+            {@const seederPrice = selectedPriceWei !== '0' ? formatPriceWei(selectedPriceWei) : null}
             {@const tierCostVal = searchResult.fileSize > 0 ? calculateCost(selectedTier, searchResult.fileSize) : 0}
             {@const hasCost = seederPrice || tierCostVal > 0}
             <div class="mt-4 flex items-center justify-between">
