@@ -45,15 +45,76 @@
   });
 
   // Unpublish shared files from DHT when the window is closing
+  // + Auto-register hosted files as seeded when downloads complete
   onMount(async () => {
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const { invoke } = await import('@tauri-apps/api/core');
+      const { listen } = await import('@tauri-apps/api/event');
+
       getCurrentWindow().onCloseRequested(async () => {
         try {
           await invoke('unpublish_all_shared_files');
         } catch {
           // DHT may already be stopped — let the window close
+        }
+      });
+
+      // Global listener: when a file download completes, check if it belongs
+      // to a hosting agreement and auto-register as seeder + publish to DHT.
+      // This runs regardless of which page is mounted.
+      await listen<{
+        fileHash: string; fileName: string; filePath: string; fileSize: number;
+      }>('file-download-complete', async (event) => {
+        const { fileHash, fileName, filePath, fileSize } = event.payload;
+        try {
+          // Check if this file belongs to any hosting agreement we're hosting
+          const myPeerId = await invoke<string | null>('get_peer_id');
+          if (!myPeerId) return;
+
+          const agreementIds = await invoke<string[]>('list_hosting_agreements');
+          for (const id of agreementIds) {
+            const json = await invoke<string | null>('get_hosting_agreement', { agreementId: id });
+            if (!json) continue;
+            const agreement = JSON.parse(json);
+            if (
+              agreement.hostPeerId === myPeerId &&
+              (agreement.status === 'accepted' || agreement.status === 'active') &&
+              agreement.fileHashes?.includes(fileHash)
+            ) {
+              // Register as seeder and publish to DHT
+              await invoke('republish_shared_file', {
+                fileHash, filePath, fileName, fileSize,
+                priceChi: null, walletAddress: null,
+              });
+              console.log(`✅ Auto-registered hosted file ${fileHash} as seeder`);
+
+              // Update agreement status to active
+              agreement.status = 'active';
+              await invoke('store_hosting_agreement', {
+                agreementId: id,
+                agreementJson: JSON.stringify(agreement),
+              });
+
+              // Notify proposer that hosting is active (best-effort)
+              const message = JSON.stringify({
+                type: 'hosting_response',
+                agreementId: id,
+                status: 'active',
+              });
+              try {
+                await invoke('echo_peer', {
+                  peerId: agreement.clientPeerId,
+                  payload: Array.from(new TextEncoder().encode(message)),
+                });
+              } catch {
+                // Peer offline — they'll see the status change when they load agreements
+              }
+              break;
+            }
+          }
+        } catch {
+          // Non-hosting download or error — ignore silently
         }
       });
     }

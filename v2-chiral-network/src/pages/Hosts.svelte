@@ -379,59 +379,23 @@
         },
       );
 
-      // Listen for file download completions — register as seeder for hosting agreements
+      // Listen for file download completions — update UI when hosting files finish downloading
+      // (The actual seeder registration + DHT publish is handled globally in App.svelte)
       unlistenDownloadComplete = await listen<{
         fileHash: string; fileName: string; filePath: string; fileSize: number;
       }>(
         'file-download-complete',
         async (event) => {
-          const { fileHash, fileName, filePath, fileSize } = event.payload;
-          // Check if this file belongs to an accepted hosting agreement
+          const { fileHash, fileName } = event.payload;
           const agreement = myAgreements.find(
             (a) => a.hostPeerId === myPeerId && (a.status === 'accepted' || a.status === 'active') && a.fileHashes.includes(fileHash)
           );
           if (!agreement) return;
 
-          try {
-            // Register as seeder and publish to DHT so other peers can find us
-            await invoke('republish_shared_file', {
-              fileHash,
-              filePath,
-              fileName,
-              fileSize,
-              priceChi: null,
-              walletAddress: null,
-            });
-            toasts.show(`Now seeding ${fileName} for hosting agreement`, 'success');
-
-            // Check if all files in the agreement are downloaded
-            const allDownloaded = agreement.fileHashes.every((h) =>
-              h === fileHash || myAgreements.some((a) => a.status === 'active' && a.fileHashes.includes(h))
-            );
-
-            // Update agreement status to active
-            agreement.status = 'active';
-            await invoke('store_hosting_agreement', {
-              agreementId: agreement.agreementId,
-              agreementJson: JSON.stringify(agreement),
-            });
-            myAgreements = myAgreements.map((a) =>
-              a.agreementId === agreement.agreementId ? { ...a, status: 'active' } : a
-            );
-
-            // Notify the proposer that hosting is active
-            const message = JSON.stringify({
-              type: 'hosting_response',
-              agreementId: agreement.agreementId,
-              status: 'active',
-            });
-            await invoke('echo_peer', {
-              peerId: agreement.clientPeerId,
-              payload: Array.from(new TextEncoder().encode(message)),
-            });
-          } catch (err: any) {
-            console.error('Failed to register as seeder:', err);
-          }
+          toasts.show(`Now seeding ${fileName} for hosting agreement`, 'success');
+          myAgreements = myAgreements.map((a) =>
+            a.agreementId === agreement.agreementId ? { ...a, status: 'active' } : a
+          );
         },
       );
 
