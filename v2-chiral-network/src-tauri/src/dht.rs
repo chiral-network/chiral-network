@@ -1604,7 +1604,6 @@ async fn handle_behaviour_event(
                                             let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
                                             println!("📋 Received cancellation request for agreement {} from peer {}", agreement_id, peer);
 
-                                            // Update agreement on disk: set cancelRequestedBy
                                             if !agreement_id.is_empty() {
                                                 if let Some(data_dir) = dirs::data_dir() {
                                                     let dir = data_dir.join("chiral-network").join("agreements");
@@ -1612,18 +1611,31 @@ async fn handle_behaviour_event(
                                                     if let Ok(contents) = std::fs::read_to_string(&path) {
                                                         if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
                                                             if let Some(obj) = ag.as_object_mut() {
-                                                                obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
-                                                                let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                let current_status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                if current_status == "proposed" {
+                                                                    // Proposed agreements: auto-cancel (proposer is withdrawing)
+                                                                    obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
+                                                                    let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                    let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                        "agreementId": agreement_id,
+                                                                        "fromPeer": peer.to_string(),
+                                                                        "autoCancelled": true,
+                                                                    }));
+                                                                } else {
+                                                                    // Accepted/active: needs mutual consent
+                                                                    obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
+                                                                    let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                    let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                        "agreementId": agreement_id,
+                                                                        "fromPeer": peer.to_string(),
+                                                                        "autoCancelled": false,
+                                                                    }));
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
-
-                                            let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
-                                                "agreementId": agreement_id,
-                                                "fromPeer": peer.to_string(),
-                                            }));
                                         }
                                         Some("hosting_cancel_response") => {
                                             let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
