@@ -290,6 +290,16 @@
     await driveStore.toggleStar(item.id);
   }
 
+  // Toggle visibility (public/private)
+  async function handleToggleVisibility(item: DriveItem) {
+    await driveStore.toggleVisibility(item.id);
+    const newState = !item.isPublic;
+    toasts.show(
+      newState ? `"${item.name}" is now public` : `"${item.name}" is now private`,
+      'success'
+    );
+  }
+
   // Drag and drop
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
@@ -523,6 +533,7 @@
     onCopyLink={handleCopyLink}
     onDownload={handleDownload}
     onToggleStar={handleToggleStar}
+    onToggleVisibility={handleToggleVisibility}
     onDelete={handleDelete}
   />
 {/if}

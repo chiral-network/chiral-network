@@ -32,6 +32,7 @@ export interface DriveItem {
   modifiedAt: number;
   starred: boolean;
   storagePath?: string;
+  isPublic?: boolean;
 }
 
 export interface ShareLink {
@@ -76,6 +77,7 @@ function convertItem(raw: any): DriveItem {
     modifiedAt: raw.modified_at ?? raw.modifiedAt ?? 0,
     starred: raw.starred ?? false,
     storagePath: raw.storage_path ?? raw.storagePath ?? undefined,
+    isPublic: raw.is_public ?? raw.isPublic ?? true,
   };
 }
 
@@ -244,6 +246,24 @@ export const driveApi = {
   /** Get direct download URL for a file (includes filename for correct extension) */
   getDownloadUrl(id: string, filename: string): string {
     return `${getCrudBase()}/api/drive/download/${encodeURIComponent(id)}/${encodeURIComponent(filename)}`;
+  },
+
+  /** Toggle file visibility (public/private) */
+  async toggleVisibility(id: string, isPublic: boolean): Promise<DriveItem> {
+    if (isTauri()) {
+      const invoke = await getInvoke();
+      const item = await invoke('drive_toggle_visibility', {
+        owner: currentOwner,
+        itemId: id,
+        isPublic,
+      });
+      return convertItem(item);
+    }
+    return request<DriveItem>(`/api/drive/items/${encodeURIComponent(id)}/visibility`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_public: isPublic }),
+    });
   },
 
   /** Get public share URL */

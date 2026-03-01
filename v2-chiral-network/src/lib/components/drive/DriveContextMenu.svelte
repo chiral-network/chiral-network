@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderInput, Pencil, Star, StarOff, Share2, Link, Download, Trash2 } from 'lucide-svelte';
+  import { FolderInput, Pencil, Star, StarOff, Share2, Link, Download, Trash2, Eye, EyeOff } from 'lucide-svelte';
   import type { DriveItem } from '$lib/stores/driveStore';
 
   let {
@@ -13,6 +13,7 @@
     onCopyLink,
     onDownload,
     onToggleStar,
+    onToggleVisibility,
     onDelete,
   }: {
     item: DriveItem;
@@ -25,6 +26,7 @@
     onCopyLink: (item: DriveItem) => void;
     onDownload: (item: DriveItem) => void;
     onToggleStar: (item: DriveItem) => void;
+    onToggleVisibility: (item: DriveItem) => void;
     onDelete: (item: DriveItem) => void;
   } = $props();
 
@@ -46,6 +48,9 @@
       : []),
     { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
     { label: 'Share...', icon: Share2, action: action(onShare) },
+    ...(item.shared
+      ? [{ label: item.isPublic ? 'Make Private' : 'Make Public', icon: item.isPublic ? EyeOff : Eye, action: action(onToggleVisibility) }]
+      : []),
     { label: item.starred ? 'Unstar' : 'Star', icon: item.starred ? StarOff : Star, action: action(onToggleStar) },
     { label: 'Delete', icon: Trash2, action: action(onDelete), danger: true },
   ]);

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Copy, Check, X, Link, Lock, Globe, Trash2, Loader2 } from 'lucide-svelte';
+  import { Copy, Check, X, Link, Lock, Globe, Trash2, Loader2, Eye, EyeOff } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import type { ShareLink } from '$lib/services/driveApiService';
   import { toasts } from '$lib/toastStore';
@@ -20,8 +20,21 @@
   let copied = $state<string | null>(null);
 
   const existingShares = $derived(driveStore.getSharesForItem(item.id, manifest));
+  const currentItem = $derived(manifest.items.find(i => i.id === item.id));
+  const isItemPublic = $derived(currentItem?.isPublic ?? true);
 
   let justCreatedUrl = $state<string | null>(null);
+  let toggling = $state(false);
+
+  async function toggleVisibility() {
+    toggling = true;
+    try {
+      await driveStore.toggleVisibility(item.id);
+      toasts.show(isItemPublic ? 'File is now private' : 'File is now public', 'success');
+    } finally {
+      toggling = false;
+    }
+  }
 
   async function createLink() {
     creating = true;
@@ -82,6 +95,30 @@
       </button>
     </div>
 
+    <!-- Visibility toggle (only show when shares exist) -->
+    {#if existingShares.length > 0}
+      <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg mb-4">
+        <div class="flex items-center gap-2">
+          {#if isItemPublic}
+            <Eye class="w-4 h-4 text-green-500" />
+            <span class="text-sm text-gray-700 dark:text-gray-300">Public — share links are active</span>
+          {:else}
+            <EyeOff class="w-4 h-4 text-orange-500" />
+            <span class="text-sm text-gray-700 dark:text-gray-300">Private — share links are blocked</span>
+          {/if}
+        </div>
+        <button
+          onclick={toggleVisibility}
+          disabled={toggling}
+          class="px-3 py-1.5 text-sm font-medium rounded-lg transition disabled:opacity-50 {isItemPublic
+            ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 hover:bg-orange-200 dark:hover:bg-orange-900/50'
+            : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50'}"
+        >
+          {isItemPublic ? 'Make Private' : 'Make Public'}
+        </button>
+      </div>
+    {/if}
+
     <!-- Create new share link -->
     <div class="space-y-3 mb-6">
       <p class="text-sm text-gray-600 dark:text-gray-400">
@@ -119,6 +156,14 @@
           Create Link
         {/if}
       </button>
+
+      {#if !isItemPublic}
+        <div class="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+          <p class="text-xs text-yellow-700 dark:text-yellow-300">
+            This file is currently private. Share links won't work until you make it public.
+          </p>
+        </div>
+      {/if}
 
       {#if justCreatedUrl}
         <div class="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">

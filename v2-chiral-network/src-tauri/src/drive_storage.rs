@@ -25,6 +25,14 @@ pub struct DriveItem {
     /// Wallet address of the owner
     #[serde(default)]
     pub owner: String,
+    /// Whether the file is publicly accessible via share links.
+    /// When false, all share links for this item are blocked.
+    #[serde(default = "default_true")]
+    pub is_public: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A share link granting access to a DriveItem.
@@ -208,6 +216,7 @@ mod tests {
                 starred: false,
                 storage_path: None,
                 owner: "test-owner".into(),
+                is_public: true,
             },
             DriveItem {
                 id: "child1".into(),
@@ -221,6 +230,7 @@ mod tests {
                 starred: false,
                 storage_path: None,
                 owner: "test-owner".into(),
+                is_public: true,
             },
             DriveItem {
                 id: "subfolder".into(),
@@ -234,6 +244,7 @@ mod tests {
                 starred: false,
                 storage_path: None,
                 owner: "test-owner".into(),
+                is_public: true,
             },
             DriveItem {
                 id: "grandchild".into(),
@@ -247,6 +258,7 @@ mod tests {
                 starred: false,
                 storage_path: None,
                 owner: "test-owner".into(),
+                is_public: true,
             },
         ];
         let desc = collect_descendants("root", &items);

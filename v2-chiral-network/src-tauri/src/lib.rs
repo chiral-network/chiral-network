@@ -3539,6 +3539,7 @@ async fn drive_create_folder(
         starred: false,
         storage_path: None,
         owner,
+        is_public: true,
     };
     {
         let mut m = state.drive_state.manifest.write().await;
@@ -3591,6 +3592,7 @@ async fn drive_upload_file(
         starred: false,
         storage_path: Some(storage_name),
         owner,
+        is_public: true,
     };
     {
         let mut m = state.drive_state.manifest.write().await;
@@ -3747,6 +3749,30 @@ async fn drive_list_shares(
         })
         .collect();
     Ok(shares)
+}
+
+#[tauri::command]
+async fn drive_toggle_visibility(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+    is_public: bool,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    let item = m
+        .items
+        .iter_mut()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .ok_or("Item not found")?;
+    item.is_public = is_public;
+    item.modified_at = ds::now_secs();
+    let updated = item.clone();
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(updated)
 }
 
 /// Publish a Drive file to the P2P network (compute hash, register as shared, publish to DHT).
@@ -4168,6 +4194,7 @@ pub fn run() {
             drive_create_share,
             drive_revoke_share,
             drive_list_shares,
+            drive_toggle_visibility,
             publish_drive_file,
             // Hosting marketplace commands
             publish_host_advertisement,
