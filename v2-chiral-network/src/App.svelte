@@ -5,6 +5,7 @@
   import { dhtService } from '$lib/dhtService';
   import { gethService } from '$lib/services/gethService';
   import { applyColorTheme } from '$lib/services/colorThemeService';
+  import { onMount } from 'svelte';
   import Navbar from '$lib/components/Navbar.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -42,7 +43,22 @@
       applyColorTheme($settings.colorTheme);
     }
   });
-  
+
+  // Unpublish shared files from DHT when the window is closing
+  onMount(async () => {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const { invoke } = await import('@tauri-apps/api/core');
+      getCurrentWindow().onCloseRequested(async () => {
+        try {
+          await invoke('unpublish_all_shared_files');
+        } catch {
+          // DHT may already be stopped — let the window close
+        }
+      });
+    }
+  });
+
   const authenticatedRoutes: RouteConfig[] = [
     {
       path: '/download',

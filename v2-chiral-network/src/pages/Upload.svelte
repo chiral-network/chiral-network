@@ -310,7 +310,7 @@
 
       for (const file of filesToRegister) {
         try {
-          await invoke('register_shared_file', {
+          await invoke('republish_shared_file', {
             fileHash: file.hash,
             filePath: file.filePath,
             fileName: file.name,
