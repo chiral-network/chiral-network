@@ -1622,14 +1622,32 @@ async fn handle_behaviour_event(
                                                                         "autoCancelled": true,
                                                                     }));
                                                                 } else {
-                                                                    // Accepted/active: needs mutual consent
-                                                                    obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
-                                                                    let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
-                                                                    let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
-                                                                        "agreementId": agreement_id,
-                                                                        "fromPeer": peer.to_string(),
-                                                                        "autoCancelled": false,
-                                                                    }));
+                                                                    // Check if we already requested cancellation too
+                                                                    let already_requested = obj.get("cancelRequestedBy")
+                                                                        .and_then(|v| v.as_str())
+                                                                        .map(|v| !v.is_empty())
+                                                                        .unwrap_or(false);
+
+                                                                    if already_requested {
+                                                                        // Both sides want to cancel — auto-approve
+                                                                        obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
+                                                                        obj.remove("cancelRequestedBy");
+                                                                        let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                        let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                            "agreementId": agreement_id,
+                                                                            "fromPeer": peer.to_string(),
+                                                                            "autoCancelled": true,
+                                                                        }));
+                                                                    } else {
+                                                                        // Only other party wants to cancel — needs our consent
+                                                                        obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
+                                                                        let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                        let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                            "agreementId": agreement_id,
+                                                                            "fromPeer": peer.to_string(),
+                                                                            "autoCancelled": false,
+                                                                        }));
+                                                                    }
                                                                 }
                                                             }
                                                         }
