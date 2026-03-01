@@ -259,11 +259,20 @@
   async function requestCancellation(agreementId: string) {
     if (!myPeerId) return;
     try {
-      await hostingService.requestCancellation(agreementId, myPeerId);
-      myAgreements = myAgreements.map((a) =>
-        a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId } : a
-      );
-      toasts.show('Cancellation requested — waiting for other party', 'info');
+      const result = await hostingService.requestCancellation(agreementId, myPeerId);
+      if (result === 'cancelled') {
+        // Proposed agreement — directly cancelled
+        myAgreements = myAgreements.map((a) =>
+          a.agreementId === agreementId ? { ...a, status: 'cancelled' } : a
+        );
+        toasts.show('Proposal withdrawn', 'info');
+      } else {
+        // Accepted/active — waiting for other party
+        myAgreements = myAgreements.map((a) =>
+          a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId } : a
+        );
+        toasts.show('Cancellation requested — waiting for other party', 'info');
+      }
     } catch (err: any) {
       toasts.show(`Failed to request cancellation: ${err.message || err}`, 'error');
     }
@@ -274,6 +283,15 @@
     try {
       await hostingService.respondToCancellation(agreementId, approve, myPeerId);
       if (approve) {
+        // Clean up hosted files if we're the host
+        const agreement = myAgreements.find((a) => a.agreementId === agreementId);
+        if (agreement && agreement.hostPeerId === myPeerId) {
+          try {
+            await invoke('cleanup_agreement_files', { agreementId });
+          } catch {
+            // Best-effort cleanup
+          }
+        }
         myAgreements = myAgreements.map((a) =>
           a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
         );
@@ -418,23 +436,41 @@
       );
 
       // Listen for cancellation requests from the other party
-      unlistenCancelRequest = await listen<{ agreementId: string; fromPeer: string }>(
+      unlistenCancelRequest = await listen<{ agreementId: string; fromPeer: string; autoCancelled: boolean }>(
         'hosting_cancel_request_received',
         (event) => {
-          const { agreementId, fromPeer } = event.payload;
-          myAgreements = myAgreements.map((a) =>
-            a.agreementId === agreementId ? { ...a, cancelRequestedBy: fromPeer } : a
-          );
-          toasts.show(`Cancellation requested by ${fromPeer.slice(0, 8)}...`, 'info');
+          const { agreementId, fromPeer, autoCancelled } = event.payload;
+          if (autoCancelled) {
+            // Proposed agreement was withdrawn by the proposer — remove from list
+            myAgreements = myAgreements.map((a) =>
+              a.agreementId === agreementId ? { ...a, status: 'cancelled' } : a
+            );
+            toasts.show(`Proposal withdrawn by ${fromPeer.slice(0, 8)}...`, 'info');
+          } else {
+            // Accepted/active agreement — show approve/deny buttons
+            myAgreements = myAgreements.map((a) =>
+              a.agreementId === agreementId ? { ...a, cancelRequestedBy: fromPeer } : a
+            );
+            toasts.show(`Cancellation requested by ${fromPeer.slice(0, 8)}...`, 'info');
+          }
         },
       );
 
       // Listen for cancellation responses (approval/denial)
       unlistenCancelResponse = await listen<{ agreementId: string; approved: boolean }>(
         'hosting_cancel_response_received',
-        (event) => {
+        async (event) => {
           const { agreementId, approved } = event.payload;
           if (approved) {
+            // Clean up hosted files if we're the host
+            const agreement = myAgreements.find((a) => a.agreementId === agreementId);
+            if (agreement && agreement.hostPeerId === myPeerId) {
+              try {
+                await invoke('cleanup_agreement_files', { agreementId });
+              } catch {
+                // Best-effort cleanup
+              }
+            }
             myAgreements = myAgreements.map((a) =>
               a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
             );

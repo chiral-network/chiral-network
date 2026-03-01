@@ -321,12 +321,23 @@ class HostingService {
     }
   }
 
-  /** Request early cancellation (requires other party's consent) */
-  async requestCancellation(agreementId: string, myPeerId: string): Promise<void> {
+  /** Request early cancellation.
+   *  - Proposed agreements: cancelled directly (no consent needed — client is withdrawing).
+   *  - Accepted/active agreements: sets cancelRequestedBy, other party must approve.
+   */
+  async requestCancellation(agreementId: string, myPeerId: string): Promise<'cancelled' | 'pending'> {
     const agreement = await this.getAgreement(agreementId);
     if (!agreement) throw new Error('Agreement not found');
 
-    agreement.cancelRequestedBy = myPeerId;
+    const isProposed = agreement.status === 'proposed';
+
+    if (isProposed) {
+      // Direct cancel — no mutual consent needed for withdrawing a proposal
+      agreement.status = 'cancelled';
+    } else {
+      // Mutual consent needed for accepted/active agreements
+      agreement.cancelRequestedBy = myPeerId;
+    }
 
     if (isTauri()) {
       await invoke('store_hosting_agreement', {
@@ -334,7 +345,7 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the other party via echo (best-effort — they'll see it on next load if offline)
+      // Notify the other party via echo
       const otherPeerId = myPeerId === agreement.clientPeerId
         ? agreement.hostPeerId
         : agreement.clientPeerId;
@@ -348,9 +359,11 @@ class HostingService {
           payload: Array.from(new TextEncoder().encode(message)),
         });
       } catch {
-        // Other party is offline — they'll see the request when they load agreements from DHT
+        // Other party is offline — they'll see the change when they load agreements
       }
     }
+
+    return isProposed ? 'cancelled' : 'pending';
   }
 
   /** Approve or deny a cancellation request from the other party */

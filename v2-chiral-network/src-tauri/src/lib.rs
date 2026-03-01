@@ -1390,6 +1390,88 @@ async fn get_active_hosted_files(
     Ok(hosted_files)
 }
 
+/// Clean up files for a cancelled hosting agreement: unregister from DHT, remove from cache, delete from disk.
+#[tauri::command]
+async fn cleanup_agreement_files(
+    state: tauri::State<'_, AppState>,
+    agreement_id: String,
+) -> Result<(), String> {
+    let dir = agreements_dir()?;
+    let path = dir.join(format!("{}.json", agreement_id));
+    let json = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read agreement: {e}"))?;
+    let agreement: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("Failed to parse agreement: {e}"))?;
+
+    let file_hashes: Vec<String> = agreement
+        .get("fileHashes")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+
+    if file_hashes.is_empty() {
+        return Ok(());
+    }
+
+    // Get download directory for file deletion
+    let download_dir = {
+        let dir_lock = state.download_directory.lock().await;
+        dir_lock
+            .clone()
+            .unwrap_or_else(|| {
+                dirs::download_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+    };
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let shared = dht.get_shared_files();
+        for file_hash in &file_hashes {
+            // Remove from SharedFilesMap
+            {
+                let mut map = shared.lock().await;
+                map.remove(file_hash);
+            }
+
+            // Clear peer_id in DHT record
+            let dht_key = format!("chiral_file_{}", file_hash);
+            if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
+                if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
+                    if let Some(obj) = metadata.as_object_mut() {
+                        obj.insert("peerId".to_string(), serde_json::Value::String(String::new()));
+                        if let Ok(updated) = serde_json::to_string(&metadata) {
+                            let _ = dht.put_dht_value(dht_key, updated).await;
+                        }
+                    }
+                }
+            }
+
+            println!("🗑️ Cleaned up hosted file: {}", file_hash);
+        }
+    }
+
+    // Remove from in-memory file storage
+    {
+        let mut storage = state.file_storage.lock().await;
+        for file_hash in &file_hashes {
+            storage.remove(file_hash);
+        }
+    }
+
+    // Delete files from download directory
+    for file_hash in &file_hashes {
+        let file_path = std::path::Path::new(&download_dir).join(file_hash);
+        if file_path.exists() {
+            let _ = std::fs::remove_file(&file_path);
+            println!("🗑️ Deleted hosted file from disk: {}", file_hash);
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TorrentInfo {
@@ -4100,6 +4182,7 @@ pub fn run() {
             republish_shared_file,
             unpublish_all_shared_files,
             get_active_hosted_files,
+            cleanup_agreement_files,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
