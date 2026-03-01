@@ -166,6 +166,7 @@ async fn create_folder(
         starred: false,
         storage_path: None,
         owner,
+        is_public: true,
     };
     {
         let mut m = state.manifest.write().await;
@@ -272,6 +273,7 @@ async fn upload_file(
         starred: false,
         storage_path: Some(storage_name),
         owner,
+        is_public: true,
     };
 
     {
@@ -549,6 +551,12 @@ async fn public_browse(
             .into_response();
     };
 
+    // Block access if the item has been made private
+    if !item.is_public {
+        return (StatusCode::FORBIDDEN, Html(error_page("This file is currently unavailable")))
+            .into_response();
+    }
+
     let pw_param = q.p.as_deref().map(|p| format!("&p={}", p)).unwrap_or_default();
 
     if item.item_type == "file" {
@@ -584,27 +592,36 @@ async fn public_download(
         }
     }
 
-    share.download_count += 1;
     let item_id = share.item_id.clone();
 
+    // Check visibility and extract file info before mutable borrow for download_count
     let Some(item) = m.items.iter().find(|i| i.id == item_id) else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
+    if !item.is_public {
+        return (StatusCode::FORBIDDEN, "This file is currently unavailable").into_response();
+    }
     if item.item_type != "file" {
         return (StatusCode::BAD_REQUEST, "Cannot download a folder").into_response();
     }
-    let Some(sp) = &item.storage_path else {
+    let Some(sp) = item.storage_path.clone() else {
         return (StatusCode::NOT_FOUND, "File not stored").into_response();
     };
-    let Some(files_dir) = drive_storage::drive_files_dir() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response();
-    };
-    let file_path = files_dir.join(sp);
     let file_name = item.name.clone();
     let content_type = item
         .mime_type
         .clone()
         .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    // Now safe to mutably borrow shares for download count increment
+    if let Some(share) = m.shares.iter_mut().find(|s| s.id == token) {
+        share.download_count += 1;
+    }
+
+    let Some(files_dir) = drive_storage::drive_files_dir() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response();
+    };
+    let file_path = files_dir.join(&sp);
 
     drop(m);
     state.persist().await;
@@ -644,6 +661,14 @@ async fn public_browse_path(
     let Some(share) = m.shares.iter().find(|s| s.id == token) else {
         return (StatusCode::NOT_FOUND, Html(error_page("Share link not found"))).into_response();
     };
+
+    // Check visibility of the root shared item (blocks access to all children too)
+    if let Some(root_item) = m.items.iter().find(|i| i.id == share.item_id) {
+        if !root_item.is_public {
+            return (StatusCode::FORBIDDEN, Html(error_page("This content is currently unavailable")))
+                .into_response();
+        }
+    }
 
     // Password check
     if let Some(pw_hash) = &share.password_hash {

@@ -13,6 +13,7 @@ export interface DriveItem {
   modifiedAt: number;
   starred: boolean;
   shared: boolean;
+  isPublic: boolean;
 }
 
 export interface DriveManifest {
@@ -35,6 +36,7 @@ function fromApi(item: ApiDriveItem): DriveItem {
     modifiedAt: item.modifiedAt * 1000,
     starred: item.starred,
     shared: false, // will be updated from shares
+    isPublic: item.isPublic ?? true,
   };
 }
 
@@ -209,6 +211,27 @@ function createDriveStore() {
         });
       } catch (e) {
         console.error('Failed to toggle star:', e);
+      }
+    },
+
+    async toggleVisibility(id: string) {
+      syncOwner();
+      const m = get({ subscribe });
+      const item = m.items.find(i => i.id === id);
+      if (!item) return;
+      const newPublic = !item.isPublic;
+      try {
+        await driveApi.toggleVisibility(id, newPublic);
+        update(m => {
+          const found = m.items.find(i => i.id === id);
+          if (found) {
+            found.isPublic = newPublic;
+            found.modifiedAt = Date.now();
+          }
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to toggle visibility:', e);
       }
     },
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Star, MoreVertical, Link, Folder } from 'lucide-svelte';
+  import { Star, MoreVertical, Link, Folder, EyeOff } from 'lucide-svelte';
   import { getFileIcon, getFileColor, getFolderColor } from '$lib/utils/fileIcons';
   import type { DriveItem } from '$lib/stores/driveStore';
 
@@ -45,7 +45,11 @@
         <Star class="w-3.5 h-3.5 text-yellow-500 fill-yellow-500 shrink-0" />
       {/if}
       {#if item.shared}
-        <Link class="w-3.5 h-3.5 text-blue-500 shrink-0" />
+        {#if item.isPublic}
+          <Link class="w-3.5 h-3.5 text-blue-500 shrink-0" />
+        {:else}
+          <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
+        {/if}
       {/if}
     </div>
   </td>
