@@ -548,7 +548,7 @@
   <title>Hosts - Chiral Network</title>
 </svelte:head>
 
-<div class="max-w-5xl mx-auto py-6 px-4 sm:px-6">
+<div class="p-6 space-y-6">
   <!-- Header -->
   <div class="mb-8">
     <h1 class="text-2xl font-bold dark:text-white">Hosts</h1>
