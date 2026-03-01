@@ -615,6 +615,17 @@ struct PublishResult {
     merkle_root: String,
 }
 
+/// Per-seeder info stored in DHT file metadata
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SeederInfo {
+    peer_id: String,
+    #[serde(default)]
+    price_wei: String,
+    #[serde(default)]
+    wallet_address: String,
+}
+
 /// File metadata stored in DHT
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -624,11 +635,16 @@ struct FileMetadata {
     file_size: u64,
     protocol: String,
     created_at: u64,
+    /// Legacy single-seeder field — kept for backward compat with old DHT records
+    #[serde(default)]
     peer_id: String,
     #[serde(default)]
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
+    /// Multi-seeder list — each seeder has their own price and wallet
+    #[serde(default)]
+    seeders: Vec<SeederInfo>,
 }
 
 #[tauri::command]
@@ -692,30 +708,64 @@ async fn publish_file(
             wallet_addr.clone(),
         ).await;
 
-        // Create file metadata
-        let metadata = FileMetadata {
-            hash: merkle_root.clone(),
-            file_name: file_name.clone(),
-            file_size,
-            protocol: protocol.unwrap_or_else(|| "WebRTC".to_string()),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+        // Build our seeder entry
+        let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
         };
 
-        // Serialize metadata to JSON
+        // Read-modify-write: preserve existing seeders from other peers
+        let dht_key = format!("chiral_file_{}", merkle_root);
+        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => {
+                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                    hash: merkle_root.clone(),
+                    file_name: file_name.clone(),
+                    file_size,
+                    protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                })
+            }
+            _ => FileMetadata {
+                hash: merkle_root.clone(),
+                file_name: file_name.clone(),
+                file_size,
+                protocol: protocol.unwrap_or_else(|| "WebRTC".to_string()),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        // Upsert our seeder entry (add or update by peer_id)
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        // Update legacy fields for backward compat
+        metadata.peer_id = peer_id.clone();
+        metadata.price_wei = price_wei_val.to_string();
+        metadata.wallet_address = metadata.seeders.iter()
+            .find(|s| s.peer_id == peer_id).map(|s| s.wallet_address.clone())
+            .unwrap_or_default();
+
+        // Serialize and store in DHT
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-
-        // Store metadata in DHT using the hash as key
-        let dht_key = format!("chiral_file_{}", merkle_root);
         dht.put_dht_value(dht_key, metadata_json).await?;
 
-        println!("File metadata published to DHT: {}", merkle_root);
+        println!("File metadata published to DHT: {} ({} seeders)", merkle_root, metadata.seeders.len());
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -781,28 +831,63 @@ async fn publish_file_data(
             wallet_addr.clone(),
         ).await;
 
-        // Create file metadata
-        let metadata = FileMetadata {
-            hash: merkle_root.clone(),
-            file_name: file_name.clone(),
-            file_size,
-            protocol: "WebRTC".to_string(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+        // Build our seeder entry
+        let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
         };
 
+        // Read-modify-write: preserve existing seeders from other peers
+        let dht_key = format!("chiral_file_{}", merkle_root);
+        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => {
+                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                    hash: merkle_root.clone(),
+                    file_name: file_name.clone(),
+                    file_size,
+                    protocol: "WebRTC".to_string(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                })
+            }
+            _ => FileMetadata {
+                hash: merkle_root.clone(),
+                file_name: file_name.clone(),
+                file_size,
+                protocol: "WebRTC".to_string(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        // Upsert our seeder entry
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        metadata.peer_id = peer_id.clone();
+        metadata.price_wei = price_wei_val.to_string();
+        metadata.wallet_address = metadata.seeders.iter()
+            .find(|s| s.peer_id == peer_id).map(|s| s.wallet_address.clone())
+            .unwrap_or_default();
+
         // Serialize and store in DHT
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        let dht_key = format!("chiral_file_{}", merkle_root);
         dht.put_dht_value(dht_key, metadata_json).await?;
 
-        println!("File data published to DHT: {}", merkle_root);
+        println!("File data published to DHT: {} ({} seeders)", merkle_root, metadata.seeders.len());
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -816,7 +901,7 @@ struct SearchResult {
     hash: String,
     file_name: String,
     file_size: u64,
-    seeders: Vec<String>,
+    seeders: Vec<SeederInfo>,
     created_at: u64,
     price_wei: String,
     wallet_address: String,
@@ -844,10 +929,15 @@ async fn search_file(
 
                 println!("Found file in DHT: {} ({})", metadata.file_name, metadata.hash);
 
-                // Build result with seeder info
-                let mut seeders = Vec::new();
-                if !metadata.peer_id.is_empty() {
-                    seeders.push(metadata.peer_id);
+                // Build seeder list: use seeders vec if present, fall back to legacy peer_id
+                let mut seeders = metadata.seeders;
+                if seeders.is_empty() && !metadata.peer_id.is_empty() {
+                    // Legacy record: single peer_id with file-level price/wallet
+                    seeders.push(SeederInfo {
+                        peer_id: metadata.peer_id,
+                        price_wei: metadata.price_wei.clone(),
+                        wallet_address: metadata.wallet_address.clone(),
+                    });
                 }
 
                 Ok(Some(SearchResult {
@@ -1244,43 +1334,60 @@ async fn republish_shared_file(
             price_wei, wallet_addr.clone(),
         ).await;
 
-        // Step 2: Update DHT metadata with our peer_id
+        // Step 2: Update DHT metadata — add ourselves to seeders list
         let peer_id = dht.get_peer_id().await.unwrap_or_default();
         if !peer_id.is_empty() {
             let dht_key = format!("chiral_file_{}", file_hash);
 
-            // Try to read existing metadata and update peer_id
-            let metadata_json = match dht.get_dht_value(dht_key.clone()).await {
-                Ok(Some(json)) => {
-                    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&json) {
-                        if let Some(obj) = val.as_object_mut() {
-                            obj.insert("peerId".to_string(), serde_json::Value::String(peer_id.clone()));
-                        }
-                        serde_json::to_string(&val).ok()
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
+            let our_seeder = SeederInfo {
+                peer_id: peer_id.clone(),
+                price_wei: price_wei.to_string(),
+                wallet_address: wallet_addr.clone(),
             };
 
-            // If no existing record, create a fresh one
-            let metadata_json = metadata_json.unwrap_or_else(|| {
-                serde_json::to_string(&FileMetadata {
+            // Read existing metadata or create fresh
+            let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+                Ok(Some(json)) => {
+                    serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                        hash: file_hash.clone(),
+                        file_name: file_name.clone(),
+                        file_size,
+                        protocol: "WebRTC".to_string(),
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                        peer_id: String::new(),
+                        price_wei: String::new(),
+                        wallet_address: String::new(),
+                        seeders: Vec::new(),
+                    })
+                }
+                _ => FileMetadata {
                     hash: file_hash.clone(),
                     file_name: file_name.clone(),
                     file_size,
                     protocol: "WebRTC".to_string(),
                     created_at: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                    peer_id: peer_id.clone(),
-                    price_wei: price_wei.to_string(),
-                    wallet_address: wallet_addr.clone(),
-                }).unwrap()
-            });
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                },
+            };
 
+            // Upsert our seeder entry
+            if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+                existing.price_wei = our_seeder.price_wei;
+                existing.wallet_address = our_seeder.wallet_address;
+            } else {
+                metadata.seeders.push(our_seeder);
+            }
+            metadata.peer_id = peer_id.clone();
+
+            let metadata_json = serde_json::to_string(&metadata)
+                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
             let _ = dht.put_dht_value(dht_key, metadata_json).await;
-            println!("✅ Re-published {} to DHT with peer_id {}", file_hash, peer_id);
+            println!("✅ Re-published {} to DHT with peer_id {} ({} seeders)", file_hash, peer_id, metadata.seeders.len());
         }
 
         Ok(())
@@ -1319,13 +1426,16 @@ async fn unpublish_all_shared_files(
         let dht_key = format!("chiral_file_{}", file_hash);
         match dht.get_dht_value(dht_key.clone()).await {
             Ok(Some(json)) => {
-                if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&json) {
-                    if let Some(obj) = metadata.as_object_mut() {
-                        obj.insert("peerId".to_string(), serde_json::Value::String(String::new()));
-                        if let Ok(updated_json) = serde_json::to_string(&metadata) {
-                            let _ = dht.put_dht_value(dht_key, updated_json).await;
-                            count += 1;
-                        }
+                if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
+                    // Remove our peer_id from seeders list (preserve other seeders)
+                    metadata.seeders.retain(|s| s.peer_id != peer_id);
+                    // Clear legacy peer_id if it was us
+                    if metadata.peer_id == peer_id {
+                        metadata.peer_id = String::new();
+                    }
+                    if let Ok(updated_json) = serde_json::to_string(&metadata) {
+                        let _ = dht.put_dht_value(dht_key, updated_json).await;
+                        count += 1;
                     }
                 }
             }
@@ -1333,7 +1443,7 @@ async fn unpublish_all_shared_files(
         }
     }
 
-    println!("✅ Unpublished {} files from DHT", count);
+    println!("✅ Unpublished {} files from DHT (removed our seeder entry)", count);
     Ok(count)
 }
 
@@ -3839,23 +3949,40 @@ async fn publish_drive_file(
             String::new(),
         ).await;
 
-        let metadata = FileMetadata {
-            hash: file_hash.clone(),
-            file_name: file_name.clone(),
-            file_size: actual_size,
-            protocol: "WebRTC".to_string(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            peer_id,
+        let our_seeder = SeederInfo {
+            peer_id: peer_id.clone(),
             price_wei: "0".to_string(),
             wallet_address: String::new(),
         };
 
+        let dht_key = format!("chiral_file_{}", file_hash);
+        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
+                protocol: "WebRTC".to_string(),
+                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
+                seeders: Vec::new(),
+            }),
+            _ => FileMetadata {
+                hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
+                protocol: "WebRTC".to_string(),
+                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        metadata.peer_id = peer_id;
+
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        let dht_key = format!("chiral_file_{}", file_hash);
         dht.put_dht_value(dht_key, metadata_json).await?;
     }
 
