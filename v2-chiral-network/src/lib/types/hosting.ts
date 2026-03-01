@@ -59,6 +59,8 @@ export interface HostingAgreement {
   clientSignature?: string;
   /** Host's wallet signature over the agreement body */
   hostSignature?: string;
+  /** Peer ID of the party that requested early cancellation (mutual consent required) */
+  cancelRequestedBy?: string;
 }
 
 /** Host entry for UI display, combining DHT data with reputation */
