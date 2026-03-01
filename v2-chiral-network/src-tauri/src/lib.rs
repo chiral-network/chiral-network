@@ -3667,6 +3667,93 @@ async fn drive_list_shares(
     Ok(shares)
 }
 
+/// Publish a Drive file to the P2P network (compute hash, register as shared, publish to DHT).
+/// Returns the SHA-256 file hash so it can be used in hosting proposals.
+#[tauri::command]
+async fn publish_drive_file(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<String, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    // Look up the Drive item from the manifest
+    let (file_name, storage_path, _file_size) = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m
+            .items
+            .iter()
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
+            .ok_or("Drive file not found")?;
+        let sp = item.storage_path.as_ref().ok_or("Drive file has no storage path")?;
+        (item.name.clone(), sp.clone(), item.size.unwrap_or(0))
+    };
+
+    // Resolve the full filesystem path
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
+    let full_path = files_dir.join(&storage_path);
+    if !full_path.exists() {
+        return Err("Drive file not found on disk".into());
+    }
+    let full_path_str = full_path.to_string_lossy().to_string();
+
+    // Read file and compute SHA-256 hash
+    let file_data = std::fs::read(&full_path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let actual_size = file_data.len() as u64;
+
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(&file_data);
+    let hash = hasher.finalize();
+    let file_hash = hex::encode(hash);
+
+    println!("[DRIVE] Publishing drive file to network: {} (hash: {})", file_name, file_hash);
+
+    // Store file data in memory for serving to peers
+    {
+        let mut storage = state.file_storage.lock().await;
+        storage.insert(file_hash.clone(), file_data);
+    }
+
+    // Register with DHT and shared files map
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+
+        dht.register_shared_file(
+            file_hash.clone(),
+            full_path_str,
+            file_name.clone(),
+            actual_size,
+            0u128,
+            String::new(),
+        ).await;
+
+        let metadata = FileMetadata {
+            hash: file_hash.clone(),
+            file_name: file_name.clone(),
+            file_size: actual_size,
+            protocol: "WebRTC".to_string(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            peer_id,
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+        };
+
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        let dht_key = format!("chiral_file_{}", file_hash);
+        dht.put_dht_value(dht_key, metadata_json).await?;
+    }
+
+    Ok(file_hash)
+}
+
 // ---------------------------------------------------------------------------
 // Drive server & relay commands
 // ---------------------------------------------------------------------------
@@ -3999,6 +4086,7 @@ pub fn run() {
             drive_create_share,
             drive_revoke_share,
             drive_list_shares,
+            publish_drive_file,
             // Hosting marketplace commands
             publish_host_advertisement,
             unpublish_host_advertisement,

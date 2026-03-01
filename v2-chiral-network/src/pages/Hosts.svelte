@@ -3,9 +3,9 @@
   import {
     Users, Star, HardDrive, Clock, Coins, Shield,
     Check, X, Loader2, RefreshCw, FileText,
-    ChevronDown, ChevronUp, Rocket, AlertCircle, Send
+    ChevronDown, ChevronUp, Rocket, AlertCircle, Send, FolderOpen
   } from 'lucide-svelte';
-  import { walletAccount, peers, networkConnected } from '$lib/stores';
+  import { walletAccount } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
   import { hostingService } from '$lib/services/hostingService';
@@ -17,7 +17,8 @@
   } from '$lib/types/hosting';
 
   // ── State ──
-  let loading = $state(true);
+  let loadingAgreements = $state(true);
+  let loadingHosts = $state(true);
   let error = $state<string | null>(null);
   let hosts = $state<HostEntry[]>([]);
   let myAgreements = $state<HostingAgreement[]>([]);
@@ -30,6 +31,46 @@
   let proposalFileHashes = $state('');
   let proposalDurationDays = $state(7);
   let isProposing = $state(false);
+
+  // Drive file picker
+  let driveFiles = $state<{ id: string; name: string; size: number }[]>([]);
+  let showDrivePicker = $state(false);
+  let publishingDriveFile = $state<string | null>(null);
+
+  async function loadDriveFiles() {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) return;
+    try {
+      const items = await invoke<{ id: string; name: string; itemType: string; size?: number }[]>(
+        'drive_list_items', { owner: wallet.address, parentId: null }
+      );
+      driveFiles = items
+        .filter((i) => i.itemType === 'file' && i.size)
+        .map((i) => ({ id: i.id, name: i.name, size: i.size! }));
+      showDrivePicker = true;
+    } catch {
+      toasts.show('Failed to load Drive files', 'error');
+    }
+  }
+
+  async function addDriveFile(fileId: string, fileName: string) {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) return;
+    publishingDriveFile = fileId;
+    try {
+      const hash = await invoke<string>('publish_drive_file', { owner: wallet.address, itemId: fileId });
+      // Add hash to proposal (avoid duplicates)
+      const existing = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
+      if (!existing.includes(hash)) {
+        proposalFileHashes = [...existing, hash].join('\n');
+      }
+      toasts.show(`${fileName} published to network`, 'success');
+    } catch (err: any) {
+      toasts.show(`Failed to publish ${fileName}: ${err.message || err}`, 'error');
+    } finally {
+      publishingDriveFile = null;
+    }
+  }
 
   // ── Helpers ──
   function formatPeerId(id: string): string {
@@ -101,38 +142,42 @@
   }
 
   // ── Data Loading ──
-  async function loadData() {
-    loading = true;
-    error = null;
-
+  async function loadAgreements() {
+    loadingAgreements = true;
     try {
       const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-
       if (isTauri) {
         const pid = await invoke<string | null>('get_peer_id');
         myPeerId = pid;
       }
-
-      const [hostResults, agreementResults] = await Promise.all([
-        hostingService.discoverHosts().catch(() => [] as HostEntry[]),
-        hostingService.getMyAgreements().catch(() => [] as HostingAgreement[]),
-      ]);
-
-      hosts = hostResults;
-      myAgreements = agreementResults;
+      myAgreements = await hostingService.getMyAgreements().catch(() => [] as HostingAgreement[]);
     } catch (err: any) {
-      error = `Failed to load hosting data: ${err.message || err}`;
+      error = `Failed to load agreements: ${err.message || err}`;
     } finally {
-      loading = false;
+      loadingAgreements = false;
+    }
+  }
+
+  async function loadHosts() {
+    loadingHosts = true;
+    try {
+      hosts = await hostingService.discoverHosts().catch(() => [] as HostEntry[]);
+    } catch {
+      // Don't block the page — hosts section will show empty
+    } finally {
+      loadingHosts = false;
     }
   }
 
   async function refreshHosts() {
+    loadingHosts = true;
     try {
       hosts = await hostingService.discoverHosts();
       toasts.show('Host list refreshed', 'success');
     } catch (err: any) {
       toasts.show(`Failed to refresh: ${err.message || err}`, 'error');
+    } finally {
+      loadingHosts = false;
     }
   }
 
@@ -252,7 +297,9 @@
   let unlistenCancelResponse: (() => void) | null = null;
 
   onMount(async () => {
-    loadData();
+    // Load agreements (fast, local disk) and hosts (slow, DHT) in parallel
+    loadAgreements();
+    loadHosts();
 
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
     if (isTauri) {
@@ -411,13 +458,6 @@
     unlistenCancelResponse?.();
   });
 
-  $effect(() => {
-    // Reload when network connection changes
-    if ($networkConnected) {
-      loadData();
-    }
-  });
-
   // Computed
   let sortedHostList = $derived(sortedHosts(hosts));
   let proposalCostWei = $derived.by(() => {
@@ -434,7 +474,10 @@
     myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status === 'proposed')
   );
   let activeAgreements = $derived(
-    myAgreements.filter((a) => a.status !== 'proposed' || a.clientPeerId === myPeerId)
+    myAgreements.filter((a) =>
+      a.status !== 'cancelled' &&
+      (a.status !== 'proposed' || a.clientPeerId === myPeerId)
+    )
   );
 
   // Files we're hosting on behalf of others
@@ -470,18 +513,16 @@
     </p>
   </div>
 
-  {#if loading}
-    <div class="flex items-center justify-center py-20">
-      <Loader2 class="w-8 h-8 text-gray-400 animate-spin" />
-    </div>
-  {:else if error}
+  {#if error}
     <div class="text-center py-20">
       <AlertCircle class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
       <p class="text-gray-500 dark:text-gray-400">{error}</p>
     </div>
   {:else}
     <!-- ──────────── Incoming Proposals ──────────── -->
-    {#if incomingProposals.length > 0}
+    {#if loadingAgreements}
+      <!-- will show once loaded -->
+    {:else if incomingProposals.length > 0}
       <div class="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 dark:border-blue-800 p-6 mb-6">
         <div class="flex items-center gap-3 mb-4">
           <div class="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
@@ -547,7 +588,11 @@
           <div class="text-left">
             <h2 class="font-semibold text-lg dark:text-white">My Agreements</h2>
             <p class="text-sm text-gray-500 dark:text-gray-400">
-              {activeAgreements.length} agreement{activeAgreements.length !== 1 ? 's' : ''}
+              {#if loadingAgreements}
+                Loading...
+              {:else}
+                {activeAgreements.length} agreement{activeAgreements.length !== 1 ? 's' : ''}
+              {/if}
             </p>
           </div>
         </div>
@@ -560,7 +605,11 @@
 
       {#if showAgreements}
         <div class="mt-4">
-          {#if activeAgreements.length === 0}
+          {#if loadingAgreements}
+            <div class="flex items-center justify-center py-8">
+              <Loader2 class="w-6 h-6 text-gray-400 animate-spin" />
+            </div>
+          {:else if activeAgreements.length === 0}
             <div class="text-center py-8">
               <Shield class="w-10 h-10 mx-auto text-gray-300 dark:text-gray-600 mb-2" />
               <p class="text-sm text-gray-500 dark:text-gray-400">No agreements yet</p>
@@ -647,7 +696,7 @@
     </div>
 
     <!-- ──────────── Files I'm Hosting ──────────── -->
-    {#if hostedFiles.length > 0}
+    {#if !loadingAgreements && hostedFiles.length > 0}
       <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
         <div class="flex items-center gap-3 mb-4">
           <div class="p-2 bg-green-100 dark:bg-green-900 rounded-lg">
@@ -697,7 +746,11 @@
           <div>
             <h2 class="font-semibold text-lg dark:text-white">Available Hosts</h2>
             <p class="text-sm text-gray-500 dark:text-gray-400">
-              {hosts.length} host{hosts.length !== 1 ? 's' : ''} on the network
+              {#if loadingHosts}
+                Searching network...
+              {:else}
+                {hosts.length} host{hosts.length !== 1 ? 's' : ''} on the network
+              {/if}
             </p>
           </div>
         </div>
@@ -714,15 +767,21 @@
           </select>
           <button
             onclick={refreshHosts}
-            class="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            disabled={loadingHosts}
+            class="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
             title="Refresh host list"
           >
-            <RefreshCw class="w-4 h-4" />
+            <RefreshCw class="w-4 h-4 {loadingHosts ? 'animate-spin' : ''}" />
           </button>
         </div>
       </div>
 
-      {#if sortedHostList.length === 0}
+      {#if loadingHosts}
+        <div class="flex items-center justify-center py-12">
+          <Loader2 class="w-6 h-6 text-gray-400 animate-spin" />
+          <span class="ml-2 text-sm text-gray-400">Discovering hosts on the network...</span>
+        </div>
+      {:else if sortedHostList.length === 0}
         <div class="text-center py-12">
           <Users class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
           <p class="text-gray-500 dark:text-gray-400">No hosts available</p>
@@ -821,15 +880,51 @@
       </div>
 
       <!-- File hashes -->
-      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-        File Hashes (one per line)
-      </label>
+      <div class="flex items-center justify-between mb-1.5">
+        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          File Hashes (one per line)
+        </label>
+        <button
+          onclick={loadDriveFiles}
+          class="flex items-center gap-1 text-xs text-primary-600 dark:text-primary-400 hover:underline"
+        >
+          <FolderOpen class="w-3.5 h-3.5" />
+          Select from Drive
+        </button>
+      </div>
       <textarea
         bind:value={proposalFileHashes}
         rows="4"
         placeholder="Enter file hashes to host, one per line..."
         class="w-full p-3 text-sm font-mono bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
       ></textarea>
+
+      {#if showDrivePicker}
+        <div class="mt-2 max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50">
+          {#if driveFiles.length === 0}
+            <p class="text-xs text-gray-400 dark:text-gray-500 p-3 text-center">No files in Drive</p>
+          {:else}
+            {#each driveFiles as file (file.id)}
+              <button
+                onclick={() => addDriveFile(file.id, file.name)}
+                disabled={publishingDriveFile === file.id}
+                class="flex items-center justify-between w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors border-b border-gray-100 dark:border-gray-600 last:border-b-0 disabled:opacity-50"
+              >
+                <div class="flex items-center gap-2 min-w-0">
+                  <FileText class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                  <span class="truncate text-gray-700 dark:text-gray-300">{file.name}</span>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  <span class="text-xs text-gray-400">{formatBytes(file.size)}</span>
+                  {#if publishingDriveFile === file.id}
+                    <Loader2 class="w-3.5 h-3.5 text-gray-400 animate-spin" />
+                  {/if}
+                </div>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
 
       <!-- Duration -->
       <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mt-4 mb-1.5">
