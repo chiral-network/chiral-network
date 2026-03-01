@@ -393,8 +393,8 @@
           if (!agreement) return;
 
           try {
-            // Register as seeder for this file
-            await invoke('register_shared_file', {
+            // Register as seeder and publish to DHT so other peers can find us
+            await invoke('republish_shared_file', {
               fileHash,
               filePath,
               fileName,
