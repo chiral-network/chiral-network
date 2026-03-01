@@ -220,16 +220,20 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the proposer of the response via echo protocol
+      // Notify the proposer of the response via echo protocol (best-effort)
       const message = JSON.stringify({
         type: 'hosting_response',
         agreementId,
         status: agreement.status,
       });
-      await invoke('echo_peer', {
-        peerId: agreement.clientPeerId,
-        payload: Array.from(new TextEncoder().encode(message)),
-      });
+      try {
+        await invoke('echo_peer', {
+          peerId: agreement.clientPeerId,
+          payload: Array.from(new TextEncoder().encode(message)),
+        });
+      } catch {
+        // Proposer is offline — they'll see the updated status when they load agreements from DHT
+      }
     }
 
     return agreement;
@@ -330,7 +334,7 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the other party via echo
+      // Notify the other party via echo (best-effort — they'll see it on next load if offline)
       const otherPeerId = myPeerId === agreement.clientPeerId
         ? agreement.hostPeerId
         : agreement.clientPeerId;
@@ -338,10 +342,14 @@ class HostingService {
         type: 'hosting_cancel_request',
         agreementId,
       });
-      await invoke('echo_peer', {
-        peerId: otherPeerId,
-        payload: Array.from(new TextEncoder().encode(message)),
-      });
+      try {
+        await invoke('echo_peer', {
+          peerId: otherPeerId,
+          payload: Array.from(new TextEncoder().encode(message)),
+        });
+      } catch {
+        // Other party is offline — they'll see the request when they load agreements from DHT
+      }
     }
   }
 
@@ -361,7 +369,7 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the requester of the decision
+      // Notify the requester of the decision (best-effort)
       const otherPeerId = myPeerId === agreement.clientPeerId
         ? agreement.hostPeerId
         : agreement.clientPeerId;
@@ -370,10 +378,14 @@ class HostingService {
         agreementId,
         approved: approve,
       });
-      await invoke('echo_peer', {
-        peerId: otherPeerId,
-        payload: Array.from(new TextEncoder().encode(message)),
-      });
+      try {
+        await invoke('echo_peer', {
+          peerId: otherPeerId,
+          payload: Array.from(new TextEncoder().encode(message)),
+        });
+      } catch {
+        // Other party is offline — they'll see the updated status when they load agreements from DHT
+      }
     }
   }
 
