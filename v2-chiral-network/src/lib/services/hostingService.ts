@@ -317,17 +317,62 @@ class HostingService {
     }
   }
 
-  /** Cancel a proposed agreement */
-  async cancelAgreement(agreementId: string): Promise<void> {
+  /** Request early cancellation (requires other party's consent) */
+  async requestCancellation(agreementId: string, myPeerId: string): Promise<void> {
     const agreement = await this.getAgreement(agreementId);
     if (!agreement) throw new Error('Agreement not found');
 
-    agreement.status = 'cancelled';
+    agreement.cancelRequestedBy = myPeerId;
 
     if (isTauri()) {
       await invoke('store_hosting_agreement', {
         agreementId,
         agreementJson: JSON.stringify(agreement),
+      });
+
+      // Notify the other party via echo
+      const otherPeerId = myPeerId === agreement.clientPeerId
+        ? agreement.hostPeerId
+        : agreement.clientPeerId;
+      const message = JSON.stringify({
+        type: 'hosting_cancel_request',
+        agreementId,
+      });
+      await invoke('echo_peer', {
+        peerId: otherPeerId,
+        payload: Array.from(new TextEncoder().encode(message)),
+      });
+    }
+  }
+
+  /** Approve or deny a cancellation request from the other party */
+  async respondToCancellation(agreementId: string, approve: boolean, myPeerId: string): Promise<void> {
+    const agreement = await this.getAgreement(agreementId);
+    if (!agreement) throw new Error('Agreement not found');
+
+    if (approve) {
+      agreement.status = 'cancelled';
+    }
+    delete agreement.cancelRequestedBy;
+
+    if (isTauri()) {
+      await invoke('store_hosting_agreement', {
+        agreementId,
+        agreementJson: JSON.stringify(agreement),
+      });
+
+      // Notify the requester of the decision
+      const otherPeerId = myPeerId === agreement.clientPeerId
+        ? agreement.hostPeerId
+        : agreement.clientPeerId;
+      const message = JSON.stringify({
+        type: 'hosting_cancel_response',
+        agreementId,
+        approved: approve,
+      });
+      await invoke('echo_peer', {
+        peerId: otherPeerId,
+        payload: Array.from(new TextEncoder().encode(message)),
       });
     }
   }

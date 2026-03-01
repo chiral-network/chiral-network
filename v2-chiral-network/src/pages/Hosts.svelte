@@ -211,15 +211,36 @@
     }
   }
 
-  async function cancelAgreement(agreementId: string) {
+  async function requestCancellation(agreementId: string) {
+    if (!myPeerId) return;
     try {
-      await hostingService.cancelAgreement(agreementId);
+      await hostingService.requestCancellation(agreementId, myPeerId);
       myAgreements = myAgreements.map((a) =>
-        a.agreementId === agreementId ? { ...a, status: 'cancelled' } : a
+        a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId } : a
       );
-      toasts.show('Agreement cancelled', 'info');
+      toasts.show('Cancellation requested — waiting for other party', 'info');
     } catch (err: any) {
-      toasts.show(`Failed to cancel: ${err.message || err}`, 'error');
+      toasts.show(`Failed to request cancellation: ${err.message || err}`, 'error');
+    }
+  }
+
+  async function respondToCancellation(agreementId: string, approve: boolean) {
+    if (!myPeerId) return;
+    try {
+      await hostingService.respondToCancellation(agreementId, approve, myPeerId);
+      if (approve) {
+        myAgreements = myAgreements.map((a) =>
+          a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
+        );
+        toasts.show('Agreement cancelled', 'info');
+      } else {
+        myAgreements = myAgreements.map((a) =>
+          a.agreementId === agreementId ? { ...a, cancelRequestedBy: undefined } : a
+        );
+        toasts.show('Cancellation denied', 'info');
+      }
+    } catch (err: any) {
+      toasts.show(`Failed: ${err.message || err}`, 'error');
     }
   }
 
@@ -227,6 +248,8 @@
   let unlistenProposal: (() => void) | null = null;
   let unlistenResponse: (() => void) | null = null;
   let unlistenDownloadComplete: (() => void) | null = null;
+  let unlistenCancelRequest: (() => void) | null = null;
+  let unlistenCancelResponse: (() => void) | null = null;
 
   onMount(async () => {
     loadData();
@@ -323,6 +346,37 @@
           }
         },
       );
+
+      // Listen for cancellation requests from the other party
+      unlistenCancelRequest = await listen<{ agreementId: string; fromPeer: string }>(
+        'hosting_cancel_request_received',
+        (event) => {
+          const { agreementId, fromPeer } = event.payload;
+          myAgreements = myAgreements.map((a) =>
+            a.agreementId === agreementId ? { ...a, cancelRequestedBy: fromPeer } : a
+          );
+          toasts.show(`Cancellation requested by ${fromPeer.slice(0, 8)}...`, 'info');
+        },
+      );
+
+      // Listen for cancellation responses (approval/denial)
+      unlistenCancelResponse = await listen<{ agreementId: string; approved: boolean }>(
+        'hosting_cancel_response_received',
+        (event) => {
+          const { agreementId, approved } = event.payload;
+          if (approved) {
+            myAgreements = myAgreements.map((a) =>
+              a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
+            );
+            toasts.show('Cancellation approved — agreement cancelled', 'info');
+          } else {
+            myAgreements = myAgreements.map((a) =>
+              a.agreementId === agreementId ? { ...a, cancelRequestedBy: undefined } : a
+            );
+            toasts.show('Cancellation denied by other party', 'info');
+          }
+        },
+      );
     }
   });
 
@@ -330,6 +384,8 @@
     unlistenProposal?.();
     unlistenResponse?.();
     unlistenDownloadComplete?.();
+    unlistenCancelRequest?.();
+    unlistenCancelResponse?.();
   });
 
   $effect(() => {
@@ -504,12 +560,39 @@
                     </div>
                   </div>
                   <div class="flex items-center gap-2 flex-shrink-0">
-                    {#if agreement.status === 'proposed' && isClient}
+                    {#if agreement.cancelRequestedBy && agreement.cancelRequestedBy !== myPeerId}
+                      <!-- Other party requested cancellation — show approve/deny -->
                       <button
-                        onclick={() => cancelAgreement(agreement.agreementId)}
+                        onclick={() => respondToCancellation(agreement.agreementId, true)}
+                        class="flex items-center gap-1 text-xs px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                      >
+                        <Check class="w-3 h-3" />
+                        Approve Cancel
+                      </button>
+                      <button
+                        onclick={() => respondToCancellation(agreement.agreementId, false)}
+                        class="text-xs px-3 py-1.5 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        Deny
+                      </button>
+                    {:else if agreement.cancelRequestedBy === myPeerId}
+                      <!-- We requested cancellation — waiting for other party -->
+                      <span class="text-xs text-orange-600 dark:text-orange-400 italic">
+                        Cancellation pending...
+                      </span>
+                    {:else if agreement.status === 'proposed' && isClient}
+                      <button
+                        onclick={() => requestCancellation(agreement.agreementId)}
                         class="text-xs px-3 py-1.5 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
                       >
                         Cancel
+                      </button>
+                    {:else if agreement.status === 'accepted' || agreement.status === 'active'}
+                      <button
+                        onclick={() => requestCancellation(agreement.agreementId)}
+                        class="text-xs px-3 py-1.5 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+                      >
+                        Request Cancellation
                       </button>
                     {/if}
                   </div>
