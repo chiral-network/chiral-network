@@ -6,7 +6,7 @@
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
-  import { files, wallet } from '$lib/stores';
+  import { files, wallet, peers } from '$lib/stores';
   import { favorites } from '$lib/stores/favorites';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
@@ -292,6 +292,13 @@
     }
   }
 
+  $: connectedPeerIds = new Set($peers.map((p) => p.id));
+
+  function truncatePeerId(peerId: string): string {
+    if (peerId.length <= 16) return peerId;
+    return `${peerId.slice(0, 8)}...${peerId.slice(-6)}`;
+  }
+
   const seederIds = metadata.seeders?.map((address, index) => ({
     id: `${metadata.fileHash}-${index}`,
     address,
@@ -514,13 +521,35 @@
     <div class="space-y-3">
       {#if metadata.seeders?.length}
         <div class="space-y-2">
-          <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers ({metadata.seeders.length})</p>
+          {#if metadata.uploaderAddress}
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Uploader wallet:</span>
+              <code class="font-mono">{metadata.uploaderAddress.slice(0, 6)}...{metadata.uploaderAddress.slice(-4)}</code>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-5 w-5"
+                on:click={() => { navigator.clipboard.writeText(metadata.uploaderAddress || ''); dispatch('copy', metadata.uploaderAddress || ''); }}
+              >
+                <Copy class="h-3 w-3" />
+              </Button>
+            </div>
+          {/if}
           <div class="space-y-2 max-h-40 overflow-auto pr-1">
             {#each seederIds as seeder, index}
+              {@const isOnline = connectedPeerIds.has(seeder.address)}
               <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden">
-                <div class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
+                <div class="mt-0.5 h-2 w-2 rounded-full flex-shrink-0 {isOnline ? 'bg-emerald-500' : 'bg-gray-400'}"
+                  title={isOnline ? 'Online - connected to you' : 'Offline or not directly connected'}
+                ></div>
                 <div class="space-y-1 flex-1">
-                  <code class="text-xs font-mono break-words block">{seeder.address}</code>
+                  <div class="flex items-center gap-2">
+                    <code class="text-xs font-mono" title={seeder.address}>{truncatePeerId(seeder.address)}</code>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium {isOnline ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'}">
+                      {isOnline ? 'online' : 'offline'}
+                    </span>
+                  </div>
                   <div class="flex items-center gap-1 text-xs text-muted-foreground">
                     <span>Seed #{index + 1}</span>
                   </div>
