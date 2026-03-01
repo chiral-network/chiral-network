@@ -315,8 +315,8 @@
   let unlistenCancelResponse: (() => void) | null = null;
 
   onMount(async () => {
-    // Load agreements (fast, local disk) and hosts (slow, DHT) in parallel
-    loadAgreements();
+    // Load agreements first (sets myPeerId), then hosts in background
+    await loadAgreements();
     loadHosts();
 
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -438,14 +438,22 @@
       // Listen for cancellation requests from the other party
       unlistenCancelRequest = await listen<{ agreementId: string; fromPeer: string; autoCancelled: boolean }>(
         'hosting_cancel_request_received',
-        (event) => {
+        async (event) => {
           const { agreementId, fromPeer, autoCancelled } = event.payload;
           if (autoCancelled) {
-            // Proposed agreement was withdrawn by the proposer — remove from list
+            // Auto-cancelled (proposed withdrawal or mutual cancellation) — clean up
+            const agreement = myAgreements.find((a) => a.agreementId === agreementId);
+            if (agreement && agreement.hostPeerId === myPeerId) {
+              try {
+                await invoke('cleanup_agreement_files', { agreementId });
+              } catch {
+                // Best-effort cleanup
+              }
+            }
             myAgreements = myAgreements.map((a) =>
-              a.agreementId === agreementId ? { ...a, status: 'cancelled' } : a
+              a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
             );
-            toasts.show(`Proposal withdrawn by ${fromPeer.slice(0, 8)}...`, 'info');
+            toasts.show(`Agreement cancelled with ${fromPeer.slice(0, 8)}...`, 'info');
           } else {
             // Accepted/active agreement — show approve/deny buttons
             myAgreements = myAgreements.map((a) =>
