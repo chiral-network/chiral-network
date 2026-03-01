@@ -1211,6 +1211,185 @@ async fn register_shared_file(
     }
 }
 
+/// Re-register a shared file AND update DHT metadata with our peer_id (called on app startup)
+#[tauri::command]
+async fn republish_shared_file(
+    state: tauri::State<'_, AppState>,
+    file_hash: String,
+    file_path: String,
+    file_name: String,
+    file_size: u64,
+    price_chi: Option<String>,
+    wallet_address: Option<String>,
+) -> Result<(), String> {
+    println!("Re-publishing shared file: {} (hash: {})", file_name, file_hash);
+
+    // Verify file still exists
+    if !std::path::Path::new(&file_path).exists() {
+        return Err(format!("File no longer exists: {}", file_path));
+    }
+
+    let price_wei = if let Some(ref price) = price_chi {
+        if price.is_empty() || price == "0" { 0u128 } else { parse_chi_to_wei(price)? }
+    } else {
+        0u128
+    };
+    let wallet_addr = wallet_address.unwrap_or_default();
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        // Step 1: Register in shared_files map (same as register_shared_file)
+        dht.register_shared_file(
+            file_hash.clone(), file_path, file_name.clone(), file_size,
+            price_wei, wallet_addr.clone(),
+        ).await;
+
+        // Step 2: Update DHT metadata with our peer_id
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        if !peer_id.is_empty() {
+            let dht_key = format!("chiral_file_{}", file_hash);
+
+            // Try to read existing metadata and update peer_id
+            let metadata_json = match dht.get_dht_value(dht_key.clone()).await {
+                Ok(Some(json)) => {
+                    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&json) {
+                        if let Some(obj) = val.as_object_mut() {
+                            obj.insert("peerId".to_string(), serde_json::Value::String(peer_id.clone()));
+                        }
+                        serde_json::to_string(&val).ok()
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            // If no existing record, create a fresh one
+            let metadata_json = metadata_json.unwrap_or_else(|| {
+                serde_json::to_string(&FileMetadata {
+                    hash: file_hash.clone(),
+                    file_name: file_name.clone(),
+                    file_size,
+                    protocol: "WebRTC".to_string(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    peer_id: peer_id.clone(),
+                    price_wei: price_wei.to_string(),
+                    wallet_address: wallet_addr.clone(),
+                }).unwrap()
+            });
+
+            let _ = dht.put_dht_value(dht_key, metadata_json).await;
+            println!("✅ Re-published {} to DHT with peer_id {}", file_hash, peer_id);
+        }
+
+        Ok(())
+    } else {
+        println!("DHT not running, file will be registered when DHT starts");
+        Ok(())
+    }
+}
+
+/// Remove our peer_id from all shared file DHT records (called on app shutdown)
+#[tauri::command]
+async fn unpublish_all_shared_files(
+    state: tauri::State<'_, AppState>,
+) -> Result<u32, String> {
+    let dht_guard = state.dht.lock().await;
+    let dht = match dht_guard.as_ref() {
+        Some(d) => d,
+        None => return Ok(0),
+    };
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return Ok(0);
+    }
+
+    let shared = dht.get_shared_files();
+    let file_hashes: Vec<String> = {
+        let map = shared.lock().await;
+        map.keys().cloned().collect()
+    };
+
+    println!("🛑 Unpublishing {} shared files from DHT", file_hashes.len());
+
+    let mut count = 0u32;
+    for file_hash in &file_hashes {
+        let dht_key = format!("chiral_file_{}", file_hash);
+        match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => {
+                if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&json) {
+                    if let Some(obj) = metadata.as_object_mut() {
+                        obj.insert("peerId".to_string(), serde_json::Value::String(String::new()));
+                        if let Ok(updated_json) = serde_json::to_string(&metadata) {
+                            let _ = dht.put_dht_value(dht_key, updated_json).await;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    println!("✅ Unpublished {} files from DHT", count);
+    Ok(count)
+}
+
+/// Get files we're hosting on behalf of other peers (from active agreements)
+#[tauri::command]
+async fn get_active_hosted_files(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let dht_guard = state.dht.lock().await;
+    let my_peer_id = if let Some(dht) = dht_guard.as_ref() {
+        dht.get_peer_id().await.unwrap_or_default()
+    } else {
+        return Ok(vec![]);
+    };
+    drop(dht_guard);
+
+    if my_peer_id.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let dir = agreements_dir()?;
+    let mut hosted_files = Vec::new();
+
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read agreements dir: {e}"))?;
+
+    for entry in entries.flatten() {
+        if let Ok(json) = std::fs::read_to_string(entry.path()) {
+            if let Ok(agreement) = serde_json::from_str::<serde_json::Value>(&json) {
+                let status = agreement.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                let host_peer = agreement.get("hostPeerId").and_then(|v| v.as_str()).unwrap_or("");
+                let agreement_id = agreement.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
+                let client_peer = agreement.get("clientPeerId").and_then(|v| v.as_str()).unwrap_or("");
+                let expires_at = agreement.get("expiresAt").and_then(|v| v.as_u64());
+
+                if (status == "active" || status == "accepted") && host_peer == my_peer_id {
+                    if let Some(hashes) = agreement.get("fileHashes").and_then(|v| v.as_array()) {
+                        for hash in hashes {
+                            if let Some(h) = hash.as_str() {
+                                hosted_files.push(serde_json::json!({
+                                    "fileHash": h,
+                                    "agreementId": agreement_id,
+                                    "clientPeerId": client_peer,
+                                    "expiresAt": expires_at,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(hosted_files)
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TorrentInfo {
@@ -3829,6 +4008,10 @@ pub fn run() {
             store_hosting_agreement,
             get_hosting_agreement,
             list_hosting_agreements,
+            // File lifecycle commands
+            republish_shared_file,
+            unpublish_all_shared_files,
+            get_active_hosted_files,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

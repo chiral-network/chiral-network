@@ -256,6 +256,29 @@
 
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
     if (isTauri) {
+      // Re-register hosted files in DHT on startup
+      try {
+        const hostedEntries = await invoke<{ fileHash: string; agreementId: string; clientPeerId: string }[]>(
+          'get_active_hosted_files'
+        );
+        const downloadDir = await invoke<string>('get_download_directory');
+        for (const entry of hostedEntries) {
+          try {
+            await invoke('republish_shared_file', {
+              fileHash: entry.fileHash,
+              filePath: `${downloadDir}/${entry.fileHash}`,
+              fileName: entry.fileHash,
+              fileSize: 0,
+              priceChi: null,
+              walletAddress: null,
+            });
+          } catch {
+            // File may not exist on disk — skip
+          }
+        }
+      } catch {
+        // Agreements dir may not exist yet
+      }
       // Listen for incoming hosting proposals sent directly via echo protocol
       unlistenProposal = await listen<{ fromPeer: string; agreementJson: string }>(
         'hosting_proposal_received',
@@ -413,6 +436,25 @@
   let activeAgreements = $derived(
     myAgreements.filter((a) => a.status !== 'proposed' || a.clientPeerId === myPeerId)
   );
+
+  // Files we're hosting on behalf of others
+  let hostedFiles = $derived.by(() => {
+    if (!myPeerId) return [];
+    const files: { fileHash: string; agreementId: string; clientPeerId: string; expiresAt?: number }[] = [];
+    for (const agreement of myAgreements) {
+      if (agreement.hostPeerId !== myPeerId) continue;
+      if (agreement.status !== 'active' && agreement.status !== 'accepted') continue;
+      for (const hash of agreement.fileHashes) {
+        files.push({
+          fileHash: hash,
+          agreementId: agreement.agreementId,
+          clientPeerId: agreement.clientPeerId,
+          expiresAt: agreement.expiresAt,
+        });
+      }
+    }
+    return files;
+  });
 </script>
 
 <svelte:head>
@@ -603,6 +645,47 @@
         </div>
       {/if}
     </div>
+
+    <!-- ──────────── Files I'm Hosting ──────────── -->
+    {#if hostedFiles.length > 0}
+      <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="p-2 bg-green-100 dark:bg-green-900 rounded-lg">
+            <HardDrive class="w-5 h-5 text-green-600 dark:text-green-400" />
+          </div>
+          <div>
+            <h2 class="font-semibold text-lg dark:text-white">Files I'm Hosting</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+              {hostedFiles.length} file{hostedFiles.length !== 1 ? 's' : ''} being seeded on behalf of other peers
+            </p>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          {#each hostedFiles as file (file.fileHash + file.agreementId)}
+            <div class="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-100 dark:border-gray-600">
+              <div class="flex items-center gap-3 min-w-0">
+                <FileText class="w-4 h-4 text-gray-400 flex-shrink-0" />
+                <div class="min-w-0">
+                  <p class="text-sm font-mono text-gray-700 dark:text-gray-300 truncate">
+                    {file.fileHash}
+                  </p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">
+                    For {formatPeerId(file.clientPeerId)}
+                    {#if file.expiresAt}
+                      · {timeRemaining(file.expiresAt)} remaining
+                    {/if}
+                  </p>
+                </div>
+              </div>
+              <span class="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 flex-shrink-0">
+                Seeding
+              </span>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     <!-- ──────────── Available Hosts ──────────── -->
     <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
