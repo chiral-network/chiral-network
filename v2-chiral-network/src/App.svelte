@@ -115,6 +115,33 @@
               } catch {
                 // Peer offline — they'll see the status change when they load agreements
               }
+
+              // Add hosted file to Drive "Shared" folder
+              try {
+                const addr = $walletAccount?.address;
+                if (addr) {
+                  const rootItems = await invoke<{ id: string; name: string; itemType: string }[]>(
+                    'drive_list_items', { owner: addr, parentId: null },
+                  );
+                  let sharedFolder = rootItems.find(
+                    (i) => i.name === 'Shared' && i.itemType === 'folder',
+                  );
+                  if (!sharedFolder) {
+                    sharedFolder = await invoke<{ id: string; name: string; itemType: string }>(
+                      'drive_create_folder', { owner: addr, name: 'Shared', parentId: null },
+                    );
+                  }
+                  await invoke('drive_upload_file', {
+                    owner: addr,
+                    filePath: filePath,
+                    parentId: sharedFolder.id,
+                  });
+                  console.log(`✅ Added hosted file ${fileName} to Drive/Shared`);
+                }
+              } catch (driveErr) {
+                console.warn('Failed to add hosted file to Drive:', driveErr);
+              }
+
               break;
             }
           }
