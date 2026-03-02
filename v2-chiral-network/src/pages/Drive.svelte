@@ -36,6 +36,7 @@
   let moveItem = $state<DriveItem | null>(null);
   let renamingId = $state<string | null>(null);
   let renameValue = $state('');
+  let deleteConfirmItem = $state<DriveItem | null>(null);
 
   // Drag and drop
   let isDragging = $state(false);
@@ -268,10 +269,19 @@
   }
 
   // Delete
-  async function handleDelete(item: DriveItem) {
-    if (confirm(`Delete "${item.name}"? ${item.type === 'folder' ? 'This will delete all contents.' : 'This will remove it from your Drive.'}`)) {
+  function handleDelete(item: DriveItem) {
+    deleteConfirmItem = item;
+  }
+
+  async function confirmDelete() {
+    if (!deleteConfirmItem) return;
+    const item = deleteConfirmItem;
+    deleteConfirmItem = null;
+    try {
       await driveStore.deleteItem(item.id);
       toasts.show(`Deleted "${item.name}"`, 'success');
+    } catch (e) {
+      toasts.show(`Failed to delete "${item.name}"`, 'error');
     }
   }
 
@@ -551,4 +561,40 @@
     onMove={handleMoveConfirm}
     onClose={() => moveItem = null}
   />
+{/if}
+
+<!-- Delete confirmation modal -->
+{#if deleteConfirmItem}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    onclick={() => deleteConfirmItem = null}
+    onkeydown={(e) => { if (e.key === 'Escape') deleteConfirmItem = null; }}
+  >
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>
+      <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+        Are you sure you want to delete <strong class="text-gray-900 dark:text-white">"{deleteConfirmItem.name}"</strong>?
+      </p>
+      {#if deleteConfirmItem.type === 'folder'}
+        <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This will delete all contents inside the folder.</p>
+      {:else}
+        <p class="text-sm text-gray-500 dark:text-gray-500 mb-4">This will remove it from your Drive.</p>
+      {/if}
+      <div class="flex justify-end gap-3">
+        <button
+          onclick={() => deleteConfirmItem = null}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+        >Cancel</button>
+        <button
+          onclick={confirmDelete}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition"
+        >Delete</button>
+      </div>
+    </div>
+  </div>
 {/if}
