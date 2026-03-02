@@ -868,7 +868,7 @@ async fn verify_payment_on_chain(
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
-    let local_key = libp2p::identity::Keypair::generate_ed25519();
+    let local_key = load_or_generate_keypair();
     let local_peer_id = PeerId::from(local_key.public());
 
     println!("Local peer ID: {}", local_peer_id);
@@ -996,6 +996,48 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
 /// Path to the failed-peers persistence file.
 fn failed_peers_path() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("chiral-network").join("failed_peers.txt"))
+}
+
+/// Path to the persisted libp2p identity keypair.
+fn identity_key_path() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("chiral-network").join("peer_identity.key"))
+}
+
+/// Load or generate the libp2p Ed25519 keypair.
+/// If a keypair file exists on disk, it is loaded so the PeerId stays
+/// consistent across app restarts.  Otherwise a fresh keypair is generated
+/// and written to disk for future runs.
+fn load_or_generate_keypair() -> libp2p::identity::Keypair {
+    if let Some(path) = identity_key_path() {
+        // Try to load existing key
+        if path.exists() {
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(kp) = libp2p::identity::Keypair::from_protobuf_encoding(&bytes) {
+                    println!("✅ Loaded persisted peer identity from {:?}", path);
+                    return kp;
+                } else {
+                    println!("⚠️ Corrupt peer identity file, generating new keypair");
+                }
+            }
+        }
+
+        // Generate and persist
+        let kp = libp2p::identity::Keypair::generate_ed25519();
+        if let Ok(encoded) = kp.to_protobuf_encoding() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&path, &encoded) {
+                println!("⚠️ Failed to save peer identity: {}", e);
+            } else {
+                println!("✅ Generated and saved new peer identity to {:?}", path);
+            }
+        }
+        kp
+    } else {
+        // No data dir available — ephemeral key only
+        libp2p::identity::Keypair::generate_ed25519()
+    }
 }
 
 /// Load failed peers from disk, discarding entries older than 24 hours.
@@ -1741,10 +1783,16 @@ async fn handle_behaviour_event(
                     println!("⚠️ DHT put replication incomplete for query {:?} (record stored locally): {:?}", id, err);
                 }
                 kad::QueryResult::Bootstrap(Ok(result)) => {
-                    println!("Kademlia bootstrap successful: {:?} peers", result.num_remaining);
+                    println!("Kademlia bootstrap successful: {:?} peers remaining", result.num_remaining);
+                    if result.num_remaining == 0 {
+                        println!("✅ Kademlia bootstrap fully complete — DHT ready");
+                        let _ = app.emit("dht-bootstrap-complete", ());
+                    }
                 }
                 kad::QueryResult::Bootstrap(Err(err)) => {
                     println!("Kademlia bootstrap failed: {:?}", err);
+                    // Emit anyway so auto-reseed isn't blocked forever
+                    let _ = app.emit("dht-bootstrap-complete", ());
                 }
                 _ => {}
             }
