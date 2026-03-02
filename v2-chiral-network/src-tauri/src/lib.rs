@@ -1447,6 +1447,12 @@ async fn unpublish_all_shared_files(
     Ok(count)
 }
 
+/// Force-quit the application process (called after cleanup is done)
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 /// Get files we're hosting on behalf of other peers (from active agreements)
 #[tauri::command]
 async fn get_active_hosted_files(
@@ -4460,6 +4466,8 @@ pub fn run() {
             unpublish_all_shared_files,
             get_active_hosted_files,
             cleanup_agreement_files,
+            // App lifecycle
+            exit_app,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

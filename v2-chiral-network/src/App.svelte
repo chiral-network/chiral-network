@@ -53,7 +53,10 @@
       const { listen } = await import('@tauri-apps/api/event');
 
       // --- Graceful close: cleanup DHT, then force-close the window ---
+      let isClosing = false;
       getCurrentWindow().onCloseRequested(async (event) => {
+        if (isClosing) return; // guard against re-entrant calls
+        isClosing = true;
         event.preventDefault(); // take control of the close sequence
         try {
           await Promise.race([
@@ -63,7 +66,9 @@
         } catch {
           // DHT may already be stopped or timed out — proceed with close
         }
-        await getCurrentWindow().destroy(); // force-close window (bypasses onCloseRequested)
+        // Use backend exit_app command which calls AppHandle::exit(0)
+        // This triggers RunEvent::Exit for Geth cleanup and fully terminates the process.
+        await invoke('exit_app');
       });
 
       // Global listener: when a file download completes, check if it belongs
