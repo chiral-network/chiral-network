@@ -4372,3 +4372,344 @@ pub fn run() {
             }
         });
 }
+
+#[cfg(test)]
+mod multi_seeder_tests {
+    use super::*;
+
+    // --- Serialization / Deserialization ---
+
+    #[test]
+    fn seeder_info_roundtrip() {
+        let seeder = SeederInfo {
+            peer_id: "12D3KooWTest1".to_string(),
+            price_wei: "1000000000000000".to_string(),
+            wallet_address: "0xabc123".to_string(),
+        };
+        let json = serde_json::to_string(&seeder).unwrap();
+        assert!(json.contains("peerId"));      // camelCase
+        assert!(json.contains("priceWei"));
+        assert!(json.contains("walletAddress"));
+
+        let deserialized: SeederInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.peer_id, "12D3KooWTest1");
+        assert_eq!(deserialized.price_wei, "1000000000000000");
+        assert_eq!(deserialized.wallet_address, "0xabc123");
+    }
+
+    #[test]
+    fn file_metadata_with_seeders_roundtrip() {
+        let metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWPeerA".to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![
+                SeederInfo {
+                    peer_id: "12D3KooWPeerA".to_string(),
+                    price_wei: "0".to_string(),
+                    wallet_address: String::new(),
+                },
+                SeederInfo {
+                    peer_id: "12D3KooWPeerB".to_string(),
+                    price_wei: "5000000000000000".to_string(),
+                    wallet_address: "0xdef456".to_string(),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&metadata).unwrap();
+        let restored: FileMetadata = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.seeders.len(), 2);
+        assert_eq!(restored.seeders[0].peer_id, "12D3KooWPeerA");
+        assert_eq!(restored.seeders[1].peer_id, "12D3KooWPeerB");
+        assert_eq!(restored.seeders[1].price_wei, "5000000000000000");
+        assert_eq!(restored.seeders[1].wallet_address, "0xdef456");
+    }
+
+    // --- Backward Compatibility ---
+
+    #[test]
+    fn legacy_metadata_without_seeders_field_deserializes() {
+        // Old records stored in DHT won't have a "seeders" field
+        let legacy_json = r#"{
+            "hash": "abc123",
+            "fileName": "old_file.txt",
+            "fileSize": 512,
+            "protocol": "WebRTC",
+            "createdAt": 1700000000,
+            "peerId": "12D3KooWLegacy",
+            "priceWei": "1000",
+            "walletAddress": "0xlegacy"
+        }"#;
+
+        let metadata: FileMetadata = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(metadata.peer_id, "12D3KooWLegacy");
+        assert_eq!(metadata.price_wei, "1000");
+        assert_eq!(metadata.wallet_address, "0xlegacy");
+        // seeders should default to empty vec
+        assert!(metadata.seeders.is_empty());
+    }
+
+    #[test]
+    fn legacy_metadata_search_creates_seeder_from_peer_id() {
+        // Simulate what search_file does with legacy records
+        let metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "legacy.txt".to_string(),
+            file_size: 256,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWLegacy".to_string(),
+            price_wei: "2000".to_string(),
+            wallet_address: "0xlegacy".to_string(),
+            seeders: Vec::new(), // empty — old record
+        };
+
+        // This is the logic from search_file:
+        let mut seeders = metadata.seeders;
+        if seeders.is_empty() && !metadata.peer_id.is_empty() {
+            seeders.push(SeederInfo {
+                peer_id: metadata.peer_id,
+                price_wei: metadata.price_wei.clone(),
+                wallet_address: metadata.wallet_address.clone(),
+            });
+        }
+
+        assert_eq!(seeders.len(), 1);
+        assert_eq!(seeders[0].peer_id, "12D3KooWLegacy");
+        assert_eq!(seeders[0].price_wei, "2000");
+        assert_eq!(seeders[0].wallet_address, "0xlegacy");
+    }
+
+    // --- Upsert Logic ---
+
+    #[test]
+    fn upsert_adds_new_seeder() {
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWPeerA".to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![SeederInfo {
+                peer_id: "12D3KooWPeerA".to_string(),
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+            }],
+        };
+
+        let new_peer = "12D3KooWPeerB";
+        let our_seeder = SeederInfo {
+            peer_id: new_peer.to_string(),
+            price_wei: "5000".to_string(),
+            wallet_address: "0xB".to_string(),
+        };
+
+        // Upsert logic from publish_file
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == new_peer) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+
+        assert_eq!(metadata.seeders.len(), 2);
+        assert_eq!(metadata.seeders[1].peer_id, "12D3KooWPeerB");
+        assert_eq!(metadata.seeders[1].price_wei, "5000");
+    }
+
+    #[test]
+    fn upsert_updates_existing_seeder_price() {
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWPeerA".to_string(),
+            price_wei: "1000".to_string(),
+            wallet_address: "0xA".to_string(),
+            seeders: vec![SeederInfo {
+                peer_id: "12D3KooWPeerA".to_string(),
+                price_wei: "1000".to_string(),
+                wallet_address: "0xA".to_string(),
+            }],
+        };
+
+        let peer_id = "12D3KooWPeerA";
+        let new_price = "9999".to_string();
+        let new_wallet = "0xA_new".to_string();
+
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = new_price;
+            existing.wallet_address = new_wallet;
+        } else {
+            unreachable!("should have found existing seeder");
+        }
+
+        assert_eq!(metadata.seeders.len(), 1); // no duplicates
+        assert_eq!(metadata.seeders[0].price_wei, "9999");
+        assert_eq!(metadata.seeders[0].wallet_address, "0xA_new");
+    }
+
+    // --- Unpublish (removal) ---
+
+    #[test]
+    fn unpublish_removes_only_our_peer() {
+        let our_peer = "12D3KooWUs";
+        let other_peer = "12D3KooWOther";
+
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: our_peer.to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![
+                SeederInfo {
+                    peer_id: our_peer.to_string(),
+                    price_wei: "0".to_string(),
+                    wallet_address: String::new(),
+                },
+                SeederInfo {
+                    peer_id: other_peer.to_string(),
+                    price_wei: "3000".to_string(),
+                    wallet_address: "0xOther".to_string(),
+                },
+            ],
+        };
+
+        // Unpublish logic from unpublish_all_shared_files
+        metadata.seeders.retain(|s| s.peer_id != our_peer);
+        if metadata.peer_id == our_peer {
+            metadata.peer_id = String::new();
+        }
+
+        assert_eq!(metadata.seeders.len(), 1);
+        assert_eq!(metadata.seeders[0].peer_id, other_peer);
+        assert_eq!(metadata.seeders[0].price_wei, "3000");
+        assert!(metadata.peer_id.is_empty());
+    }
+
+    #[test]
+    fn unpublish_from_single_seeder_leaves_empty() {
+        let our_peer = "12D3KooWSolo";
+
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: our_peer.to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![SeederInfo {
+                peer_id: our_peer.to_string(),
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+            }],
+        };
+
+        metadata.seeders.retain(|s| s.peer_id != our_peer);
+        if metadata.peer_id == our_peer {
+            metadata.peer_id = String::new();
+        }
+
+        assert!(metadata.seeders.is_empty());
+        assert!(metadata.peer_id.is_empty());
+    }
+
+    // --- Multiple seeders scenario ---
+
+    #[test]
+    fn three_seeders_with_different_prices() {
+        let mut metadata = FileMetadata {
+            hash: "multiseed".to_string(),
+            file_name: "popular.zip".to_string(),
+            file_size: 10_000_000,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: String::new(),
+            price_wei: String::new(),
+            wallet_address: String::new(),
+            seeders: Vec::new(),
+        };
+
+        // Three peers publish in sequence
+        let peers = vec![
+            ("PeerA", "0", ""),
+            ("PeerB", "1000000000000000", "0xB_wallet"),
+            ("PeerC", "5000000000000000", "0xC_wallet"),
+        ];
+
+        for (peer_id, price, wallet) in &peers {
+            let seeder = SeederInfo {
+                peer_id: peer_id.to_string(),
+                price_wei: price.to_string(),
+                wallet_address: wallet.to_string(),
+            };
+            if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == *peer_id) {
+                existing.price_wei = seeder.price_wei;
+                existing.wallet_address = seeder.wallet_address;
+            } else {
+                metadata.seeders.push(seeder);
+            }
+            metadata.peer_id = peer_id.to_string();
+        }
+
+        assert_eq!(metadata.seeders.len(), 3);
+        // Free seeder
+        assert_eq!(metadata.seeders[0].price_wei, "0");
+        // Cheapest paid seeder
+        assert_eq!(metadata.seeders[1].price_wei, "1000000000000000");
+        // Most expensive seeder
+        assert_eq!(metadata.seeders[2].price_wei, "5000000000000000");
+    }
+
+    #[test]
+    fn search_result_serialization_with_seeder_info() {
+        let result = SearchResult {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            seeders: vec![
+                SeederInfo {
+                    peer_id: "PeerA".to_string(),
+                    price_wei: "0".to_string(),
+                    wallet_address: String::new(),
+                },
+                SeederInfo {
+                    peer_id: "PeerB".to_string(),
+                    price_wei: "5000".to_string(),
+                    wallet_address: "0xB".to_string(),
+                },
+            ],
+            created_at: 1700000000,
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        // Verify it serializes as array of objects (not strings)
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let seeders = parsed["seeders"].as_array().unwrap();
+        assert_eq!(seeders.len(), 2);
+        assert_eq!(seeders[0]["peerId"], "PeerA");
+        assert_eq!(seeders[1]["peerId"], "PeerB");
+        assert_eq!(seeders[1]["priceWei"], "5000");
+        assert_eq!(seeders[1]["walletAddress"], "0xB");
+    }
+}
