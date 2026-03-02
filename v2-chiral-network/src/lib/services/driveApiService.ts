@@ -33,6 +33,11 @@ export interface DriveItem {
   starred: boolean;
   storagePath?: string;
   isPublic?: boolean;
+  // Seeding metadata
+  merkleRoot?: string;
+  protocol?: string;
+  priceChi?: string;
+  seeding?: boolean;
 }
 
 export interface ShareLink {
@@ -78,6 +83,10 @@ function convertItem(raw: any): DriveItem {
     starred: raw.starred ?? false,
     storagePath: raw.storage_path ?? raw.storagePath ?? undefined,
     isPublic: raw.is_public ?? raw.isPublic ?? true,
+    merkleRoot: raw.merkle_root ?? raw.merkleRoot ?? undefined,
+    protocol: raw.protocol ?? undefined,
+    priceChi: raw.price_chi ?? raw.priceChi ?? undefined,
+    seeding: raw.seeding ?? false,
   };
 }
 

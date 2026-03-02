@@ -14,6 +14,11 @@ export interface DriveItem {
   starred: boolean;
   shared: boolean;
   isPublic: boolean;
+  // Seeding metadata
+  merkleRoot?: string;
+  protocol?: 'WebRTC' | 'BitTorrent';
+  priceChi?: string;
+  seeding?: boolean;
 }
 
 export interface DriveManifest {
@@ -37,6 +42,10 @@ function fromApi(item: ApiDriveItem): DriveItem {
     starred: item.starred,
     shared: false, // will be updated from shares
     isPublic: item.isPublic ?? true,
+    merkleRoot: item.merkleRoot,
+    protocol: (item.protocol as 'WebRTC' | 'BitTorrent') || undefined,
+    priceChi: item.priceChi,
+    seeding: item.seeding ?? false,
   };
 }
 
@@ -342,6 +351,79 @@ function createDriveStore() {
 
     getShareUrl(token: string): string {
       return driveApi.getShareUrl(token);
+    },
+
+    /** Publish a Drive file to the P2P network (DHT seeding) */
+    async seedFile(
+      itemId: string,
+      protocol: 'WebRTC' | 'BitTorrent',
+      priceChi?: string,
+    ): Promise<DriveItem | null> {
+      const owner = syncOwner();
+      if (!owner) return null;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const walletAddr = priceChi && priceChi !== '0' ? owner : undefined;
+        const raw = await invoke('publish_drive_file', {
+          owner,
+          itemId,
+          protocol,
+          priceChi: priceChi || null,
+          walletAddress: walletAddr ?? null,
+        });
+        const converted = fromApi(raw as any);
+        update(m => {
+          const idx = m.items.findIndex(i => i.id === itemId);
+          if (idx >= 0) {
+            converted.shared = m.items[idx].shared;
+            m.items[idx] = converted;
+          }
+          return m;
+        });
+        return converted;
+      } catch (e) {
+        console.error('Failed to seed file:', e);
+        return null;
+      }
+    },
+
+    /** Stop seeding a file on the P2P network */
+    async stopSeeding(itemId: string): Promise<void> {
+      const owner = syncOwner();
+      if (!owner) return;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const raw = await invoke('drive_stop_seeding', { owner, itemId });
+        const converted = fromApi(raw as any);
+        update(m => {
+          const idx = m.items.findIndex(i => i.id === itemId);
+          if (idx >= 0) {
+            converted.shared = m.items[idx].shared;
+            m.items[idx] = converted;
+          }
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to stop seeding:', e);
+      }
+    },
+
+    /** Export a .torrent file for a seeded Drive file */
+    async exportTorrent(itemId: string): Promise<string | null> {
+      const owner = syncOwner();
+      if (!owner) return null;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        return await invoke<string>('drive_export_torrent', { owner, itemId });
+      } catch (e) {
+        console.error('Failed to export torrent:', e);
+        return null;
+      }
+    },
+
+    /** Get all items currently being seeded */
+    getSeedingItems(manifest: DriveManifest): DriveItem[] {
+      return manifest.items.filter(i => i.seeding);
     },
   };
 }

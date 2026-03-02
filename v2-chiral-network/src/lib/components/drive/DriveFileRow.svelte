@@ -51,6 +51,12 @@
           <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
         {/if}
       {/if}
+      {#if item.seeding}
+        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 shrink-0">
+          <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+          Seeding
+        </span>
+      {/if}
     </div>
   </td>
   <td class="py-2.5 px-3 text-sm text-gray-500 dark:text-gray-400">
