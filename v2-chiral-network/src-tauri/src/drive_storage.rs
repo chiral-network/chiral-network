@@ -29,6 +29,21 @@ pub struct DriveItem {
     /// When false, all share links for this item are blocked.
     #[serde(default = "default_true")]
     pub is_public: bool,
+
+    // ── Seeding metadata (optional, only set for files published to DHT) ──
+
+    /// SHA-256 Merkle root from DHT publishing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merkle_root: Option<String>,
+    /// Transfer protocol: "WebRTC" or "BitTorrent".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Price in CHI tokens (as string, "0" = free).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_chi: Option<String>,
+    /// Whether the file is actively being seeded on the P2P network.
+    #[serde(default)]
+    pub seeding: bool,
 }
 
 fn default_true() -> bool {
@@ -217,6 +232,10 @@ mod tests {
                 storage_path: None,
                 owner: "test-owner".into(),
                 is_public: true,
+                merkle_root: None,
+                protocol: None,
+                price_chi: None,
+                seeding: false,
             },
             DriveItem {
                 id: "child1".into(),
@@ -231,6 +250,10 @@ mod tests {
                 storage_path: None,
                 owner: "test-owner".into(),
                 is_public: true,
+                merkle_root: None,
+                protocol: None,
+                price_chi: None,
+                seeding: false,
             },
             DriveItem {
                 id: "subfolder".into(),
@@ -245,6 +268,10 @@ mod tests {
                 storage_path: None,
                 owner: "test-owner".into(),
                 is_public: true,
+                merkle_root: None,
+                protocol: None,
+                price_chi: None,
+                seeding: false,
             },
             DriveItem {
                 id: "grandchild".into(),
@@ -259,6 +286,10 @@ mod tests {
                 storage_path: None,
                 owner: "test-owner".into(),
                 is_public: true,
+                merkle_root: None,
+                protocol: None,
+                price_chi: None,
+                seeding: false,
             },
         ];
         let desc = collect_descendants("root", &items);

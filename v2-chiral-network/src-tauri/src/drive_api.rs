@@ -167,6 +167,10 @@ async fn create_folder(
         storage_path: None,
         owner,
         is_public: true,
+        merkle_root: None,
+        protocol: None,
+        price_chi: None,
+        seeding: false,
     };
     {
         let mut m = state.manifest.write().await;
@@ -274,6 +278,10 @@ async fn upload_file(
         storage_path: Some(storage_name),
         owner,
         is_public: true,
+        merkle_root: None,
+        protocol: None,
+        price_chi: None,
+        seeding: false,
     };
 
     {

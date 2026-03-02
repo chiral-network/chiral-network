@@ -66,5 +66,14 @@
     {#if item.type === 'file' && item.size}
       <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{formatSize(item.size)}</p>
     {/if}
+    {#if item.seeding}
+      <div class="flex items-center justify-center gap-1 mt-1">
+        <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+        <span class="text-[10px] text-green-600 dark:text-green-400 font-medium">Seeding</span>
+        {#if item.protocol}
+          <span class="text-[10px] text-gray-400">({item.protocol})</span>
+        {/if}
+      </div>
+    {/if}
   </div>
 </div>

@@ -3,7 +3,7 @@
   import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import { setLocalDriveServer } from '$lib/services/driveApiService';
-  import { walletAccount } from '$lib/stores';
+  import { walletAccount, networkConnected } from '$lib/stores';
 
   // Track whether initialization is complete (prevents wallet subscription from firing too early)
   let initialized = false;
@@ -16,6 +16,7 @@
   import DriveContextMenu from '$lib/components/drive/DriveContextMenu.svelte';
   import DriveShareModal from '$lib/components/drive/DriveShareModal.svelte';
   import DriveMoveModal from '$lib/components/drive/DriveMoveModal.svelte';
+  import DriveSeedingPanel from '$lib/components/drive/DriveSeedingPanel.svelte';
 
   let manifest = $state<DriveManifest>({ version: 1, items: [], shares: [], lastModified: 0 });
   let currentFolderId = $state<string | null>(null);
@@ -38,6 +39,12 @@
   let renameValue = $state('');
   let deleteConfirmItem = $state<DriveItem | null>(null);
 
+  // Tab state
+  let activeTab = $state<'files' | 'seeding'>('files');
+
+  // Seeding count for tab badge
+  const seedingCount = $derived(driveStore.getSeedingItems(manifest).length);
+
   // Drag and drop
   let isDragging = $state(false);
 
@@ -56,6 +63,56 @@
   });
   onDestroy(unsubWallet);
 
+  /** Migrate chiral_upload_history from the old Upload page into Drive items */
+  async function migrateUploadHistory() {
+    const UPLOAD_HISTORY_KEY = 'chiral_upload_history';
+    const raw = localStorage.getItem(UPLOAD_HISTORY_KEY);
+    if (!raw) return;
+
+    let entries: any[];
+    try {
+      entries = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!Array.isArray(entries) || entries.length === 0) return;
+
+    let migrated = 0;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const owner = $walletAccount?.address ?? '';
+      if (!owner) return; // No wallet — can't migrate
+
+      for (const entry of entries) {
+        try {
+          // Upload to Drive storage (copies file to local Drive directory)
+          const driveItem = await driveStore.uploadFile(entry.filePath, null);
+          if (!driveItem) continue;
+
+          // If the entry had a merkle hash, seed it to the network
+          if (entry.hash) {
+            await driveStore.seedFile(
+              driveItem.id,
+              (entry.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC',
+              entry.priceChi && entry.priceChi !== '0' ? entry.priceChi : undefined,
+            );
+          }
+          migrated++;
+        } catch {
+          // Skip files that can't be migrated (e.g. file moved/deleted)
+        }
+      }
+
+      // Remove old history after migration
+      localStorage.removeItem(UPLOAD_HISTORY_KEY);
+      if (migrated > 0) {
+        toasts.show(`Migrated ${migrated} seeded file${migrated > 1 ? 's' : ''} to Drive`, 'success');
+      }
+    } catch {
+      // Migration failed — keep localStorage for next attempt
+    }
+  }
+
   onMount(async () => {
     // Init local Drive server URL (Tauri only — used as fallback for downloads)
     try {
@@ -69,6 +126,9 @@
     const saved = localStorage.getItem('drive-view-mode');
     if (saved === 'list' || saved === 'grid') viewMode = saved;
     initialized = true;
+
+    // Migrate chiral_upload_history from old Upload page into Drive
+    await migrateUploadHistory();
     await loadCurrentFolder();
   });
 
@@ -351,6 +411,140 @@
     }
   }
 
+  // --- Seeding actions (from context menu or seeding panel) ---
+
+  async function handleSeedToNetwork(item: DriveItem) {
+    if (!$networkConnected) {
+      toasts.show('Please connect to the network first', 'error');
+      return;
+    }
+    const result = await driveStore.seedFile(item.id, 'WebRTC');
+    if (result) {
+      toasts.show(`Now seeding "${item.name}"`, 'success');
+    } else {
+      toasts.show(`Failed to seed "${item.name}"`, 'error');
+    }
+  }
+
+  async function handleStopSeeding(item: DriveItem) {
+    await driveStore.stopSeeding(item.id);
+    toasts.show(`Stopped seeding "${item.name}"`, 'info');
+  }
+
+  async function handleCopyMerkleHash(item: DriveItem) {
+    if (!item.merkleRoot) return;
+    try {
+      await navigator.clipboard.writeText(item.merkleRoot);
+      toasts.show('Hash copied to clipboard', 'success');
+    } catch {
+      toasts.show('Failed to copy hash', 'error');
+    }
+  }
+
+  async function handleCopyMagnetLink(item: DriveItem) {
+    if (!item.merkleRoot) return;
+    const link = `magnet:?xt=urn:btih:${item.merkleRoot}&dn=${encodeURIComponent(item.name)}&xl=${item.size || 0}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      toasts.show('Magnet link copied to clipboard', 'success');
+    } catch {
+      toasts.show('Failed to copy magnet link', 'error');
+    }
+  }
+
+  /** Called from DriveSeedingPanel "Add Files to Seed" — opens file picker, uploads to Drive, then seeds */
+  async function handleAddFilesToSeed(protocol: 'WebRTC' | 'BitTorrent', priceChi: string) {
+    if (!$networkConnected) {
+      toasts.show('Please connect to the network first', 'error');
+      return;
+    }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const paths: string[] | null = await invoke('open_file_dialog', { multiple: true });
+      if (!paths || paths.length === 0) return;
+      uploading = true;
+      let count = 0;
+      for (const path of paths) {
+        // Upload to Drive storage first
+        const driveItem = await driveStore.uploadFile(path, currentFolderId);
+        if (driveItem) {
+          // Then publish to DHT for seeding
+          const result = await driveStore.seedFile(driveItem.id, protocol, priceChi || undefined);
+          if (result) count++;
+        }
+      }
+      if (count > 0) {
+        toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${protocol}`, 'success');
+      }
+    } catch (e) {
+      toasts.show('Failed to add files: ' + (e as Error).message, 'error');
+    } finally {
+      uploading = false;
+    }
+  }
+
+  // Tauri native drag-drop support (only for seeding tab)
+  let unlistenDragDrop: (() => void) | null = null;
+  onMount(async () => {
+    const isTauriEnv = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    if (!isTauriEnv) return;
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const appWindow = getCurrentWindow();
+      const unlistenFn = await appWindow.onDragDropEvent(async (event: any) => {
+        if (event.payload.type === 'drop' && event.payload.paths?.length > 0) {
+          isDragging = false;
+          if (activeTab === 'seeding') {
+            // Seed mode: upload + publish to DHT
+            if (!$networkConnected) {
+              toasts.show('Please connect to the network first', 'error');
+              return;
+            }
+            uploading = true;
+            let count = 0;
+            try {
+              for (const path of event.payload.paths) {
+                const driveItem = await driveStore.uploadFile(path as string, currentFolderId);
+                if (driveItem) {
+                  const result = await driveStore.seedFile(driveItem.id, 'WebRTC');
+                  if (result) count++;
+                }
+              }
+              if (count > 0) toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding`, 'success');
+            } catch (e) {
+              toasts.show('Failed: ' + (e as Error).message, 'error');
+            } finally {
+              uploading = false;
+            }
+          } else {
+            // Files mode: upload to Drive only
+            uploading = true;
+            let count = 0;
+            try {
+              for (const path of event.payload.paths) {
+                const result = await driveStore.uploadFile(path as string, currentFolderId);
+                if (result) count++;
+              }
+              if (count > 0) toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+            } catch (e) {
+              toasts.show('Upload failed: ' + (e as Error).message, 'error');
+            } finally {
+              uploading = false;
+            }
+          }
+        } else if (event.payload.type === 'enter') {
+          isDragging = true;
+        } else if (event.payload.type === 'leave') {
+          isDragging = false;
+        }
+      });
+      unlistenDragDrop = unlistenFn;
+    } catch {
+      // Not Tauri
+    }
+  });
+  onDestroy(() => { unlistenDragDrop?.(); });
+
   function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -389,6 +583,37 @@
     onSearchChange={(q) => searchQuery = q}
   />
 
+  <!-- Tab bar -->
+  <div class="flex border-b border-gray-200 dark:border-gray-700">
+    <button
+      onclick={() => activeTab = 'files'}
+      class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px
+        {activeTab === 'files'
+          ? 'text-blue-600 dark:text-blue-400 border-blue-600 dark:border-blue-400'
+          : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
+    >
+      All Files
+    </button>
+    <button
+      onclick={() => activeTab = 'seeding'}
+      class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px flex items-center gap-1.5
+        {activeTab === 'seeding'
+          ? 'text-blue-600 dark:text-blue-400 border-blue-600 dark:border-blue-400'
+          : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
+    >
+      Seeding
+      {#if seedingCount > 0}
+        <span class="px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+          {seedingCount}
+        </span>
+      {/if}
+    </button>
+  </div>
+
+  {#if activeTab === 'seeding'}
+    <!-- Seeding tab -->
+    <DriveSeedingPanel {manifest} onAddFiles={handleAddFilesToSeed} />
+  {:else}
   <!-- Breadcrumb -->
   {#if !searchQuery}
     <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
@@ -528,6 +753,7 @@
       </table>
     </div>
   {/if}
+  {/if}
 </div>
 
 <!-- Context menu -->
@@ -545,6 +771,10 @@
     onToggleStar={handleToggleStar}
     onToggleVisibility={handleToggleVisibility}
     onDelete={handleDelete}
+    onSeed={handleSeedToNetwork}
+    onStopSeed={handleStopSeeding}
+    onCopyHash={handleCopyMerkleHash}
+    onCopyMagnet={handleCopyMagnetLink}
   />
 {/if}
 

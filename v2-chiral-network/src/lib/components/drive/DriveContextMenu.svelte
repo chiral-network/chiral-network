@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderInput, Pencil, Star, StarOff, Share2, Link, Download, Trash2, Eye, EyeOff } from 'lucide-svelte';
+  import { FolderInput, Pencil, Star, StarOff, Share2, Link, Download, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2 } from 'lucide-svelte';
   import type { DriveItem } from '$lib/stores/driveStore';
 
   let {
@@ -15,6 +15,10 @@
     onToggleStar,
     onToggleVisibility,
     onDelete,
+    onSeed,
+    onStopSeed,
+    onCopyHash,
+    onCopyMagnet,
   }: {
     item: DriveItem;
     x: number;
@@ -28,6 +32,10 @@
     onToggleStar: (item: DriveItem) => void;
     onToggleVisibility: (item: DriveItem) => void;
     onDelete: (item: DriveItem) => void;
+    onSeed?: (item: DriveItem) => void;
+    onStopSeed?: (item: DriveItem) => void;
+    onCopyHash?: (item: DriveItem) => void;
+    onCopyMagnet?: (item: DriveItem) => void;
   } = $props();
 
   function action(fn: (item: DriveItem) => void) {
@@ -48,6 +56,19 @@
       : []),
     { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
     { label: 'Share...', icon: Share2, action: action(onShare) },
+    // Seeding actions
+    ...(item.type === 'file' && !item.seeding && onSeed
+      ? [{ label: 'Seed to Network', icon: Globe, action: action(onSeed) }]
+      : []),
+    ...(item.seeding && onStopSeed
+      ? [{ label: 'Stop Seeding', icon: StopCircle, action: action(onStopSeed) }]
+      : []),
+    ...(item.merkleRoot && onCopyHash
+      ? [{ label: 'Copy Merkle Hash', icon: Copy, action: action(onCopyHash) }]
+      : []),
+    ...(item.merkleRoot && onCopyMagnet
+      ? [{ label: 'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
+      : []),
     ...(item.shared
       ? [{ label: item.isPublic ? 'Make Private' : 'Make Public', icon: item.isPublic ? EyeOff : Eye, action: action(onToggleVisibility) }]
       : []),

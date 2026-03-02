@@ -3650,6 +3650,10 @@ async fn drive_create_folder(
         storage_path: None,
         owner,
         is_public: true,
+        merkle_root: None,
+        protocol: None,
+        price_chi: None,
+        seeding: false,
     };
     {
         let mut m = state.drive_state.manifest.write().await;
@@ -3703,6 +3707,10 @@ async fn drive_upload_file(
         storage_path: Some(storage_name),
         owner,
         is_public: true,
+        merkle_root: None,
+        protocol: None,
+        price_chi: None,
+        seeding: false,
     };
     {
         let mut m = state.drive_state.manifest.write().await;
@@ -3892,7 +3900,10 @@ async fn publish_drive_file(
     state: tauri::State<'_, AppState>,
     owner: String,
     item_id: String,
-) -> Result<String, String> {
+    protocol: Option<String>,
+    price_chi: Option<String>,
+    wallet_address: Option<String>,
+) -> Result<ds::DriveItem, String> {
     if owner.is_empty() {
         return Err("owner required".into());
     }
@@ -3927,7 +3938,20 @@ async fn publish_drive_file(
     let hash = hasher.finalize();
     let file_hash = hex::encode(hash);
 
-    println!("[DRIVE] Publishing drive file to network: {} (hash: {})", file_name, file_hash);
+    let proto = protocol.unwrap_or_else(|| "WebRTC".to_string());
+
+    println!("[DRIVE] Publishing drive file to network: {} (hash: {}, protocol: {})", file_name, file_hash, proto);
+
+    // Parse price from CHI to wei
+    let price_wei_val = if let Some(ref price) = price_chi {
+        if price.is_empty() || price == "0" { 0u128 } else { parse_chi_to_wei(price)? }
+    } else {
+        0u128
+    };
+    let wallet_addr = wallet_address.unwrap_or_default();
+    if price_wei_val > 0 && wallet_addr.is_empty() {
+        return Err("Wallet address is required when setting a file price".to_string());
+    }
 
     // Store file data in memory for serving to peers
     {
@@ -3945,28 +3969,28 @@ async fn publish_drive_file(
             full_path_str,
             file_name.clone(),
             actual_size,
-            0u128,
-            String::new(),
+            price_wei_val,
+            wallet_addr.clone(),
         ).await;
 
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
-            price_wei: "0".to_string(),
-            wallet_address: String::new(),
+            price_wei: price_wei_val.to_string(),
+            wallet_address: wallet_addr,
         };
 
         let dht_key = format!("chiral_file_{}", file_hash);
         let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
             Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
                 hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
-                protocol: "WebRTC".to_string(),
+                protocol: proto.clone(),
                 created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
                 seeders: Vec::new(),
             }),
             _ => FileMetadata {
                 hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
-                protocol: "WebRTC".to_string(),
+                protocol: proto.clone(),
                 created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
                 peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
                 seeders: Vec::new(),
@@ -3980,13 +4004,110 @@ async fn publish_drive_file(
             metadata.seeders.push(our_seeder);
         }
         metadata.peer_id = peer_id;
+        metadata.price_wei = price_wei_val.to_string();
 
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         dht.put_dht_value(dht_key, metadata_json).await?;
     }
 
-    Ok(file_hash)
+    // Update the Drive manifest with seeding metadata
+    let updated_item = {
+        let mut m = state.drive_state.manifest.write().await;
+        let item = m.items.iter_mut()
+            .find(|i| i.id == item_id)
+            .ok_or("Drive item not found in manifest")?;
+        item.merkle_root = Some(file_hash);
+        item.protocol = Some(proto);
+        item.price_chi = price_chi;
+        item.seeding = true;
+        item.modified_at = ds::now_secs();
+        let cloned = item.clone();
+        ds::save_manifest(&m);
+        cloned
+    };
+
+    Ok(updated_item)
+}
+
+#[tauri::command]
+async fn drive_stop_seeding(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<ds::DriveItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    // Look up the Drive item
+    let merkle_root = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m.items.iter()
+            .find(|i| i.id == item_id && i.owner == owner)
+            .ok_or("Drive item not found")?;
+        item.merkle_root.clone()
+    };
+
+    // Unregister from DHT shared files
+    if let Some(ref hash) = merkle_root {
+        let dht_guard = state.dht.lock().await;
+        if let Some(dht) = dht_guard.as_ref() {
+            dht.unregister_shared_file(hash).await;
+        }
+        // Remove from in-memory file storage
+        let mut storage = state.file_storage.lock().await;
+        storage.remove(hash);
+    }
+
+    // Update manifest
+    let updated_item = {
+        let mut m = state.drive_state.manifest.write().await;
+        let item = m.items.iter_mut()
+            .find(|i| i.id == item_id)
+            .ok_or("Drive item not found in manifest")?;
+        item.seeding = false;
+        item.modified_at = ds::now_secs();
+        let cloned = item.clone();
+        ds::save_manifest(&m);
+        cloned
+    };
+
+    Ok(updated_item)
+}
+
+#[tauri::command]
+async fn drive_export_torrent(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<String, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    let (file_name, file_size, merkle_root, storage_path) = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m.items.iter()
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
+            .ok_or("Drive file not found")?;
+        let hash = item.merkle_root.as_ref().ok_or("File has not been published to network")?;
+        let sp = item.storage_path.as_ref().ok_or("File has no storage path")?;
+        (item.name.clone(), item.size.unwrap_or(0), hash.clone(), sp.clone())
+    };
+
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
+    let full_path = files_dir.join(&storage_path).to_string_lossy().to_string();
+
+    // Delegate to existing export_torrent_file logic
+    let result = export_torrent_file(
+        merkle_root,
+        file_name,
+        file_size,
+        full_path,
+    ).await?;
+
+    Ok(result.path)
 }
 
 // ---------------------------------------------------------------------------
@@ -4323,6 +4444,8 @@ pub fn run() {
             drive_list_shares,
             drive_toggle_visibility,
             publish_drive_file,
+            drive_stop_seeding,
+            drive_export_torrent,
             // Hosting marketplace commands
             publish_host_advertisement,
             unpublish_host_advertisement,

@@ -11,7 +11,6 @@
   import Toast from '$lib/components/Toast.svelte';
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
-  import UploadPage from './pages/Upload.svelte';
   import ChiralDropPage from './pages/ChiralDrop.svelte';
   import AccountPage from './pages/Account.svelte';
   import NetworkPage from './pages/Network.svelte';
@@ -203,7 +202,34 @@
       // localStorage parse error — skip
     }
 
-    // 2. Re-register hosted files from active agreements
+    // 2. Re-register Drive files that were being seeded
+    try {
+      const addr = $walletAccount?.address;
+      if (addr) {
+        const driveItems = await invoke<any[]>('drive_list_items', { owner: addr, parentId: null });
+        let count = 0;
+        for (const item of driveItems) {
+          if (!item.seeding || !item.merkle_root) continue;
+          try {
+            await invoke('publish_drive_file', {
+              owner: addr,
+              itemId: item.id,
+              protocol: item.protocol || null,
+              priceChi: item.price_chi || null,
+              walletAddress: item.price_chi && item.price_chi !== '0' ? addr : null,
+            });
+            count++;
+          } catch {
+            // File may no longer exist — skip
+          }
+        }
+        if (count > 0) console.log(`✅ Auto-reseeded ${count} Drive file(s)`);
+      }
+    } catch {
+      // Drive manifest may not exist yet — skip
+    }
+
+    // 3. Re-register hosted files from active agreements
     try {
       const hostedEntries = await invoke<{ fileHash: string; agreementId: string; clientPeerId: string }[]>(
         'get_active_hosted_files'
@@ -237,10 +263,6 @@
     {
       path: '/download',
       component: DownloadPage
-    },
-    {
-      path: '/upload',
-      component: UploadPage
     },
     {
       path: '/chiraldrop',
