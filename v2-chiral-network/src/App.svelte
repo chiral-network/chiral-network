@@ -53,16 +53,18 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const { listen } = await import('@tauri-apps/api/event');
 
-      // --- Fix: Timeout on close so the app doesn't hang ---
-      getCurrentWindow().onCloseRequested(async () => {
+      // --- Graceful close: cleanup DHT, then force-close the window ---
+      getCurrentWindow().onCloseRequested(async (event) => {
+        event.preventDefault(); // take control of the close sequence
         try {
           await Promise.race([
             invoke('unpublish_all_shared_files'),
             new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
           ]);
         } catch {
-          // DHT may already be stopped or timed out — let the window close
+          // DHT may already be stopped or timed out — proceed with close
         }
+        await getCurrentWindow().destroy(); // force-close window (bypasses onCloseRequested)
       });
 
       // Global listener: when a file download completes, check if it belongs
@@ -153,16 +155,18 @@
     }
   });
 
-  // Auto-reseed when DHT connects — watches $networkConnected store.
-  // Runs once when DHT connects, regardless of which page is mounted.
-  let hasAutoReseeded = false;
-  $effect(() => {
-    if ($networkConnected && !hasAutoReseeded) {
-      hasAutoReseeded = true;
-      autoReseedOnStartup();
-    }
-    if (!$networkConnected) {
-      hasAutoReseeded = false;
+  // Auto-reseed AFTER Kademlia bootstrap completes, so DHT puts propagate.
+  // The Rust backend emits "dht-bootstrap-complete" once bootstrap finishes.
+  onMount(async () => {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      const { listen } = await import('@tauri-apps/api/event');
+      let hasAutoReseeded = false;
+      await listen('dht-bootstrap-complete', () => {
+        if (!hasAutoReseeded) {
+          hasAutoReseeded = true;
+          autoReseedOnStartup();
+        }
+      });
     }
   });
 
