@@ -46,17 +46,22 @@
 
   // Unpublish shared files from DHT when the window is closing
   // + Auto-register hosted files as seeded when downloads complete
+  // + Auto-reseed uploaded files and hosted files on startup
   onMount(async () => {
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const { invoke } = await import('@tauri-apps/api/core');
       const { listen } = await import('@tauri-apps/api/event');
 
+      // --- Fix: Timeout on close so the app doesn't hang ---
       getCurrentWindow().onCloseRequested(async () => {
         try {
-          await invoke('unpublish_all_shared_files');
+          await Promise.race([
+            invoke('unpublish_all_shared_files'),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+          ]);
         } catch {
-          // DHT may already be stopped — let the window close
+          // DHT may already be stopped or timed out — let the window close
         }
       });
 
@@ -117,8 +122,85 @@
           // Non-hosting download or error — ignore silently
         }
       });
+
     }
   });
+
+  // Auto-reseed when DHT connects — watches $networkConnected store.
+  // Runs once when DHT connects, regardless of which page is mounted.
+  let hasAutoReseeded = false;
+  $effect(() => {
+    if ($networkConnected && !hasAutoReseeded) {
+      hasAutoReseeded = true;
+      autoReseedOnStartup();
+    }
+    if (!$networkConnected) {
+      hasAutoReseeded = false;
+    }
+  });
+
+  async function autoReseedOnStartup() {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    const { invoke } = await import('@tauri-apps/api/core');
+
+    // 1. Re-register uploaded files from localStorage
+    try {
+      const stored = localStorage.getItem('chiral_upload_history');
+      if (stored) {
+        const files = JSON.parse(stored) as Array<{
+          hash: string; filePath: string; name: string; size: number; priceChi?: string;
+        }>;
+        let count = 0;
+        for (const file of files) {
+          try {
+            await invoke('republish_shared_file', {
+              fileHash: file.hash,
+              filePath: file.filePath,
+              fileName: file.name,
+              fileSize: file.size,
+              priceChi: file.priceChi && file.priceChi !== '0' ? file.priceChi : null,
+              walletAddress: file.priceChi && file.priceChi !== '0' ? $walletAccount?.address : null,
+            });
+            count++;
+          } catch {
+            // File may no longer exist on disk — skip
+          }
+        }
+        if (count > 0) console.log(`✅ Auto-reseeded ${count} uploaded file(s)`);
+      }
+    } catch {
+      // localStorage parse error — skip
+    }
+
+    // 2. Re-register hosted files from active agreements
+    try {
+      const hostedEntries = await invoke<{ fileHash: string; agreementId: string; clientPeerId: string }[]>(
+        'get_active_hosted_files'
+      );
+      if (hostedEntries.length > 0) {
+        const downloadDir = await invoke<string>('get_download_directory');
+        let count = 0;
+        for (const entry of hostedEntries) {
+          try {
+            await invoke('republish_shared_file', {
+              fileHash: entry.fileHash,
+              filePath: `${downloadDir}/${entry.fileHash}`,
+              fileName: entry.fileHash,
+              fileSize: 0,
+              priceChi: null,
+              walletAddress: null,
+            });
+            count++;
+          } catch {
+            // File may not exist on disk — skip
+          }
+        }
+        if (count > 0) console.log(`✅ Auto-reseeded ${count} hosted file(s)`);
+      }
+    } catch {
+      // Agreements dir may not exist yet — skip
+    }
+  }
 
   const authenticatedRoutes: RouteConfig[] = [
     {
