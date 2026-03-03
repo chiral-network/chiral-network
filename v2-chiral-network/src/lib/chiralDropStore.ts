@@ -127,7 +127,11 @@ walletAccount.subscribe(async (wallet) => {
 
 // Helper functions
 export function addPendingTransfer(transfer: FileTransfer) {
-  pendingTransfers.update((transfers) => [...transfers, transfer]);
+  pendingTransfers.update((transfers) => {
+    // Prevent duplicate entries (same event can fire twice)
+    if (transfers.some((t) => t.id === transfer.id)) return transfers;
+    return [...transfers, transfer];
+  });
 }
 
 export function updateTransferStatus(id: string, status: FileTransfer['status'], progress?: number) {

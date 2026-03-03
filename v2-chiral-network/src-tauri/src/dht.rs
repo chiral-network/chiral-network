@@ -13,7 +13,7 @@ use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 use std::str::FromStr;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use sha2::{Sha256, Digest};
 use std::io::{Read as _, Seek as _, SeekFrom};
@@ -201,6 +201,13 @@ pub struct PingRequest(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PingResponse(pub String);
 
+// Echo protocol messages (arbitrary payload delivery)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoRequest(pub Vec<u8>);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EchoResponse(pub Vec<u8>);
+
 // File transfer protocol messages (for direct file push / ChiralDrop)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileTransferRequest {
@@ -324,6 +331,11 @@ enum SwarmCommand {
         peer_id: PeerId,
         response_tx: tokio::sync::oneshot::Sender<bool>,
     },
+    Echo {
+        peer_id: PeerId,
+        payload: Vec<u8>,
+        response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    },
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -373,6 +385,7 @@ struct DhtBehaviour {
     ping_protocol: request_response::cbor::Behaviour<PingRequest, PingResponse>,
     file_transfer: cbor_codec::Behaviour<FileTransferRequest, FileTransferResponse>,
     file_request: cbor_codec::Behaviour<ChunkRequest, ChunkResponse>,
+    echo_protocol: request_response::cbor::Behaviour<EchoRequest, EchoResponse>,
 }
 
 /// Map of file hash -> file path for files we're seeding
@@ -728,6 +741,23 @@ impl DhtService {
         }
     }
 
+    /// Send an echo message to a peer and wait for the response
+    pub async fn echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            tx.send(SwarmCommand::Echo {
+                peer_id: peer_id_parsed,
+                payload,
+                response_tx,
+            }).map_err(|e| e.to_string())?;
+            response_rx.await.map_err(|e| e.to_string())?
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
     /// Request a file from a remote peer by hash (initiates chunked transfer)
     pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
@@ -838,7 +868,7 @@ async fn verify_payment_on_chain(
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
-    let local_key = libp2p::identity::Keypair::generate_ed25519();
+    let local_key = load_or_generate_keypair();
     let local_peer_id = PeerId::from(local_key.public());
 
     println!("Local peer ID: {}", local_peer_id);
@@ -890,6 +920,11 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         request_response::Config::default(),
     );
 
+    let echo_protocol = request_response::cbor::Behaviour::new(
+        [(StreamProtocol::new("/chiral/echo/1.0.0"), request_response::ProtocolSupport::Full)],
+        request_response::Config::default(),
+    );
+
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
         .with_tokio()
         .with_tcp(
@@ -913,6 +948,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
                 ping_protocol,
                 file_transfer,
                 file_request,
+                echo_protocol,
             }
         })?
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
@@ -957,6 +993,96 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     Ok((swarm, local_peer_id.to_string()))
 }
 
+/// Path to the failed-peers persistence file.
+fn failed_peers_path() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("chiral-network").join("failed_peers.txt"))
+}
+
+/// Path to the persisted libp2p identity keypair.
+fn identity_key_path() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("chiral-network").join("peer_identity.key"))
+}
+
+/// Load or generate the libp2p Ed25519 keypair.
+/// If a keypair file exists on disk, it is loaded so the PeerId stays
+/// consistent across app restarts.  Otherwise a fresh keypair is generated
+/// and written to disk for future runs.
+fn load_or_generate_keypair() -> libp2p::identity::Keypair {
+    if let Some(path) = identity_key_path() {
+        // Try to load existing key
+        if path.exists() {
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(kp) = libp2p::identity::Keypair::from_protobuf_encoding(&bytes) {
+                    println!("✅ Loaded persisted peer identity from {:?}", path);
+                    return kp;
+                } else {
+                    println!("⚠️ Corrupt peer identity file, generating new keypair");
+                }
+            }
+        }
+
+        // Generate and persist
+        let kp = libp2p::identity::Keypair::generate_ed25519();
+        if let Ok(encoded) = kp.to_protobuf_encoding() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&path, &encoded) {
+                println!("⚠️ Failed to save peer identity: {}", e);
+            } else {
+                println!("✅ Generated and saved new peer identity to {:?}", path);
+            }
+        }
+        kp
+    } else {
+        // No data dir available — ephemeral key only
+        libp2p::identity::Keypair::generate_ed25519()
+    }
+}
+
+/// Load failed peers from disk, discarding entries older than 24 hours.
+fn load_failed_peers() -> HashSet<PeerId> {
+    let mut set = HashSet::new();
+    let Some(path) = failed_peers_path() else { return set };
+    let Ok(contents) = std::fs::read_to_string(&path) else { return set };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let cutoff = now.saturating_sub(24 * 3600);
+    for line in contents.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() == 2 {
+            if let Ok(ts) = parts[1].parse::<u64>() {
+                if ts >= cutoff {
+                    if let Ok(pid) = PeerId::from_str(parts[0]) {
+                        set.insert(pid);
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Save the current failed peers set to disk.
+fn save_failed_peers(failed: &HashSet<PeerId>) {
+    let Some(path) = failed_peers_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let contents: String = failed
+        .iter()
+        .map(|pid| format!("{}\t{}", pid, now))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let _ = std::fs::write(&path, contents);
+}
+
 async fn event_loop(
     mut swarm: Swarm<DhtBehaviour>,
     peers: Arc<Mutex<Vec<PeerInfo>>>,
@@ -972,6 +1098,10 @@ async fn event_loop(
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
+    // Accumulate all FoundRecord results for a GET query before resolving.
+    // Without this, the first FoundRecord (often from local stale MemoryStore)
+    // would resolve the query, ignoring more up-to-date remote records.
+    let mut pending_get_results: HashMap<kad::QueryId, Vec<String>> = HashMap::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
     // File requests deferred until relay circuit is established.
@@ -980,6 +1110,14 @@ async fn event_loop(
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    // Pending echo responses
+    let mut pending_echo: HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>> = HashMap::new();
+    // Peers that have failed to connect — prevents re-adding via mDNS/Identify.
+    // Persisted to disk with 24h expiry so restarts don't re-try known-bad peers.
+    let mut failed_peers: HashSet<PeerId> = load_failed_peers();
+    if !failed_peers.is_empty() {
+        println!("Loaded {} previously-failed peers from disk", failed_peers.len());
+    }
     // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
     // to prevent Kademlia from racing the relay client for the bootstrap connection.
     // A timer fallback ensures bootstrap happens even if relay reservation never completes.
@@ -1023,7 +1161,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &mut pending_get_results, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers, &mut pending_echo).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         // Check if this is a relay circuit address
@@ -1049,6 +1187,11 @@ async fn event_loop(
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         println!("Connection established with {:?}", peer_id);
+
+                        // Peer is reachable — remove from failed set
+                        if failed_peers.remove(&peer_id) {
+                            save_failed_peers(&failed_peers);
+                        }
 
                         // Send any file requests that were waiting for this connection
                         if let Some(pending) = pending_file_requests.remove(&peer_id) {
@@ -1112,9 +1255,15 @@ async fn event_loop(
                             let _ = app.emit("peer-discovered", peers_guard.clone());
                         }
                     }
-                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                    SwarmEvent::OutgoingConnectionError { peer_id, .. } => {
                         if let Some(peer) = peer_id {
-                            println!("Failed to connect to {:?}: {:?}", peer, error);
+                            // Only log the first failure per peer (suppress repeated noise)
+                            let is_new_failure = failed_peers.insert(peer);
+                            if is_new_failure {
+                                println!("Failed to connect to {:?} — evicting from routing table", peer);
+                                swarm.behaviour_mut().kad.remove_peer(&peer);
+                                save_failed_peers(&failed_peers);
+                            }
 
                             // Fail any deferred file requests for this peer
                             if let Some(pending) = pending_file_requests.remove(&peer) {
@@ -1269,6 +1418,10 @@ async fn event_loop(
                         let is_connected = swarm.is_connected(&peer_id);
                         let _ = response_tx.send(is_connected);
                     }
+                    SwarmCommand::Echo { peer_id, payload, response_tx } => {
+                        let req_id = swarm.behaviour_mut().echo_protocol.send_request(&peer_id, EchoRequest(payload));
+                        pending_echo.insert(req_id, response_tx);
+                    }
                     SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
 
@@ -1349,12 +1502,15 @@ async fn handle_behaviour_event(
     swarm: &mut Swarm<DhtBehaviour>,
     file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
+    pending_get_results: &mut HashMap<kad::QueryId, Vec<String>>,
     shared_files: &SharedFilesMap,
     download_tiers: &DownloadTiersMap,
     download_directory: &DownloadDirectoryRef,
     active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
     download_credentials: &DownloadCredentialsMap,
+    failed_peers: &HashSet<PeerId>,
+    pending_echo: &mut HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -1365,12 +1521,17 @@ async fn handle_behaviour_event(
                 .as_millis() as i64;
             
             for (peer_id, multiaddr) in list {
+                // Skip peers that previously failed to connect
+                if failed_peers.contains(&peer_id) {
+                    continue;
+                }
+
                 let peer_id_str = peer_id.to_string();
                 println!("Discovered peer: {}", peer_id_str);
-                
+
                 // Add peer to Kademlia routing table
                 swarm.behaviour_mut().kad.add_address(&peer_id, multiaddr.clone());
-                
+
                 // Check if peer already exists
                 if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
                     existing.last_seen = now;
@@ -1387,12 +1548,7 @@ async fn handle_behaviour_event(
                     peers_guard.push(peer_info);
                 }
             }
-            
-            // Bootstrap Kademlia when we have peers
-            if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-                println!("Kademlia bootstrap error: {:?}", e);
-            }
-            
+
             // Emit event to frontend
             let _ = app.emit("peer-discovered", peers_guard.clone());
         }
@@ -1401,6 +1557,7 @@ async fn handle_behaviour_event(
             for (peer_id, _) in list {
                 let peer_id_str = peer_id.to_string();
                 peers_guard.retain(|p| p.id != peer_id_str);
+                swarm.behaviour_mut().kad.remove_peer(&peer_id);
                 println!("Peer expired: {}", peer_id_str);
             }
         }
@@ -1435,26 +1592,212 @@ async fn handle_behaviour_event(
                 _ => {}
             }
         }
+        DhtBehaviourEvent::EchoProtocol(event) => {
+            use request_response::Event;
+            match event {
+                Event::Message { peer, message } => {
+                    match message {
+                        request_response::Message::Request { request, channel, .. } => {
+                            let EchoRequest(data) = request;
+
+                            // Check for typed JSON messages (hosting proposals, etc.)
+                            if let Ok(json_str) = std::str::from_utf8(&data) {
+                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                    match parsed.get("type").and_then(|v| v.as_str()) {
+                                        Some("hosting_proposal") => {
+                                            if let Some(agreement) = parsed.get("agreement") {
+                                                println!("📋 Received hosting proposal from peer {}", peer);
+                                                // Save to disk immediately
+                                                if let Some(id) = agreement.get("agreementId").and_then(|v| v.as_str()) {
+                                                    if let Some(data_dir) = dirs::data_dir() {
+                                                        let dir = data_dir.join("chiral-network").join("agreements");
+                                                        let _ = std::fs::create_dir_all(&dir);
+                                                        let _ = std::fs::write(dir.join(format!("{}.json", id)), agreement.to_string());
+                                                    }
+                                                }
+                                                let _ = app.emit("hosting_proposal_received", serde_json::json!({
+                                                    "fromPeer": peer.to_string(),
+                                                    "agreementJson": agreement.to_string(),
+                                                }));
+                                            }
+                                        }
+                                        Some("hosting_response") => {
+                                            let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
+                                            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                                            println!("📋 Received hosting response for agreement {}: {}", agreement_id, status);
+
+                                            // Update agreement on disk
+                                            if !agreement_id.is_empty() {
+                                                if let Some(data_dir) = dirs::data_dir() {
+                                                    let dir = data_dir.join("chiral-network").join("agreements");
+                                                    let path = dir.join(format!("{}.json", agreement_id));
+                                                    if let Ok(contents) = std::fs::read_to_string(&path) {
+                                                        if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
+                                                            if let Some(obj) = ag.as_object_mut() {
+                                                                obj.insert("status".to_string(), serde_json::Value::String(status.to_string()));
+                                                                let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            let _ = app.emit("hosting_response_received", serde_json::json!({
+                                                "agreementId": agreement_id,
+                                                "status": status,
+                                            }));
+                                        }
+                                        Some("hosting_cancel_request") => {
+                                            let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
+                                            println!("📋 Received cancellation request for agreement {} from peer {}", agreement_id, peer);
+
+                                            if !agreement_id.is_empty() {
+                                                if let Some(data_dir) = dirs::data_dir() {
+                                                    let dir = data_dir.join("chiral-network").join("agreements");
+                                                    let path = dir.join(format!("{}.json", agreement_id));
+                                                    if let Ok(contents) = std::fs::read_to_string(&path) {
+                                                        if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
+                                                            if let Some(obj) = ag.as_object_mut() {
+                                                                let current_status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                if current_status == "proposed" {
+                                                                    // Proposed agreements: auto-cancel (proposer is withdrawing)
+                                                                    obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
+                                                                    let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                    let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                        "agreementId": agreement_id,
+                                                                        "fromPeer": peer.to_string(),
+                                                                        "autoCancelled": true,
+                                                                    }));
+                                                                } else {
+                                                                    // Check if we already requested cancellation too
+                                                                    let already_requested = obj.get("cancelRequestedBy")
+                                                                        .and_then(|v| v.as_str())
+                                                                        .map(|v| !v.is_empty())
+                                                                        .unwrap_or(false);
+
+                                                                    if already_requested {
+                                                                        // Both sides want to cancel — auto-approve
+                                                                        obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
+                                                                        obj.remove("cancelRequestedBy");
+                                                                        let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                        let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                            "agreementId": agreement_id,
+                                                                            "fromPeer": peer.to_string(),
+                                                                            "autoCancelled": true,
+                                                                        }));
+                                                                    } else {
+                                                                        // Only other party wants to cancel — needs our consent
+                                                                        obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
+                                                                        let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                        let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                            "agreementId": agreement_id,
+                                                                            "fromPeer": peer.to_string(),
+                                                                            "autoCancelled": false,
+                                                                        }));
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Some("hosting_cancel_response") => {
+                                            let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
+                                            let approved = parsed.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
+                                            println!("📋 Received cancellation response for agreement {}: approved={}", agreement_id, approved);
+
+                                            // Update agreement on disk
+                                            if !agreement_id.is_empty() {
+                                                if let Some(data_dir) = dirs::data_dir() {
+                                                    let dir = data_dir.join("chiral-network").join("agreements");
+                                                    let path = dir.join(format!("{}.json", agreement_id));
+                                                    if let Ok(contents) = std::fs::read_to_string(&path) {
+                                                        if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
+                                                            if let Some(obj) = ag.as_object_mut() {
+                                                                if approved {
+                                                                    obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
+                                                                }
+                                                                obj.remove("cancelRequestedBy");
+                                                                let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            let _ = app.emit("hosting_cancel_response_received", serde_json::json!({
+                                                "agreementId": agreement_id,
+                                                "approved": approved,
+                                            }));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+
+                            // Echo the data back
+                            let _ = swarm.behaviour_mut().echo_protocol.send_response(channel, EchoResponse(data));
+                        }
+                        request_response::Message::Response { request_id, response } => {
+                            if let Some(tx) = pending_echo.remove(&request_id) {
+                                let EchoResponse(data) = response;
+                                let _ = tx.send(Ok(data));
+                            }
+                        }
+                    }
+                }
+                Event::OutboundFailure { request_id, error, .. } => {
+                    if let Some(tx) = pending_echo.remove(&request_id) {
+                        let _ = tx.send(Err(format!("Echo failed: {:?}", error)));
+                    }
+                }
+                _ => {}
+            }
+        }
         DhtBehaviourEvent::Kad(kad::Event::OutboundQueryProgressed { id, result, .. }) => {
             match result {
                 kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))) => {
                     let key_bytes = record.record.key.as_ref();
                     let key_str = String::from_utf8_lossy(key_bytes);
-                    println!("DHT get successful for query {:?}, key: {}", id, key_str);
+                    let source = if record.peer.is_some() { "remote" } else { "local" };
+                    println!("DHT get: found {} record for query {:?}, key: {}", source, id, key_str);
                     let value = String::from_utf8(record.record.value.clone())
                         .unwrap_or_else(|_| String::new());
                     println!("DHT record value length: {} bytes", value.len());
-                    if let Some(tx) = pending_get_queries.remove(&id) {
-                        let _ = tx.send(Ok(Some(value)));
-                    }
+                    // Accumulate — don't resolve yet. We wait for FinishedWithNoAdditionalRecord
+                    // so we see ALL copies (local + remote) and pick the most up-to-date one.
+                    pending_get_results.entry(id).or_default().push(value);
                 }
                 kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })) => {
-                    println!("DHT get finished with no additional records for query {:?}", id);
+                    println!("DHT get finished for query {:?}", id);
+                    if let Some(tx) = pending_get_queries.remove(&id) {
+                        let results = pending_get_results.remove(&id).unwrap_or_default();
+                        if results.is_empty() {
+                            let _ = tx.send(Ok(None));
+                        } else {
+                            // Pick the longest record as "best" — records with more seeders
+                            // are longer, so this resolves stale-local-copy vs fresh-remote.
+                            let best = results.into_iter().max_by_key(|r: &String| r.len()).unwrap();
+                            let _ = tx.send(Ok(Some(best)));
+                        }
+                    } else {
+                        pending_get_results.remove(&id);
+                    }
                 }
                 kad::QueryResult::GetRecord(Err(err)) => {
                     println!("DHT get failed for query {:?}: {:?}", id, err);
                     if let Some(tx) = pending_get_queries.remove(&id) {
-                        let _ = tx.send(Ok(None));
+                        // Some records may have been found before the error (e.g. QuorumFailed)
+                        let results = pending_get_results.remove(&id).unwrap_or_default();
+                        if results.is_empty() {
+                            let _ = tx.send(Ok(None));
+                        } else {
+                            let best = results.into_iter().max_by_key(|r: &String| r.len()).unwrap();
+                            let _ = tx.send(Ok(Some(best)));
+                        }
+                    } else {
+                        pending_get_results.remove(&id);
                     }
                 }
                 kad::QueryResult::PutRecord(Ok(ok)) => {
@@ -1463,22 +1806,33 @@ async fn handle_behaviour_event(
                     println!("DHT put successful for query {:?}, key: {}", id, key_str);
                 }
                 kad::QueryResult::PutRecord(Err(err)) => {
-                    println!("DHT put failed for query {:?}: {:?}", id, err);
+                    // Record is already stored locally — replication to remote peers
+                    // was incomplete, which is expected in sparse networks.
+                    println!("⚠️ DHT put replication incomplete for query {:?} (record stored locally): {:?}", id, err);
                 }
                 kad::QueryResult::Bootstrap(Ok(result)) => {
-                    println!("Kademlia bootstrap successful: {:?} peers", result.num_remaining);
+                    println!("Kademlia bootstrap successful: {:?} peers remaining", result.num_remaining);
+                    if result.num_remaining == 0 {
+                        println!("✅ Kademlia bootstrap fully complete — DHT ready");
+                        let _ = app.emit("dht-bootstrap-complete", ());
+                    }
                 }
                 kad::QueryResult::Bootstrap(Err(err)) => {
                     println!("Kademlia bootstrap failed: {:?}", err);
+                    // Emit anyway so auto-reseed isn't blocked forever
+                    let _ = app.emit("dht-bootstrap-complete", ());
                 }
                 _ => {}
             }
         }
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
             println!("Identified peer {}: protocol={}, addrs={:?}", peer_id, info.protocol_version, info.listen_addrs);
-            // Add all listen addresses to Kademlia so peers can discover each other
-            for addr in &info.listen_addrs {
-                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+            // Skip peers that previously failed to connect
+            if !failed_peers.contains(&peer_id) {
+                // Add all listen addresses to Kademlia so peers can discover each other
+                for addr in &info.listen_addrs {
+                    swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                }
             }
         }
         DhtBehaviourEvent::Identify(_) => {}
@@ -1824,7 +2178,7 @@ async fn handle_behaviour_event(
                                     // Get speed tier
                                     let tier = {
                                         let tiers = download_tiers.lock().await;
-                                        tiers.get(&request_id).cloned().unwrap_or(SpeedTier::Free)
+                                        tiers.get(&request_id).cloned().unwrap_or(SpeedTier::Standard)
                                     };
 
                                     // Determine output path

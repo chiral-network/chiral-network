@@ -29,8 +29,10 @@
     File as FileIcon,
     UserPlus,
     X,
-    Trash2
+    Trash2,
+    Star
   } from 'lucide-svelte';
+  import AccountReputation from '$lib/components/AccountReputation.svelte';
   import { logger } from '$lib/logger';
   const log = logger('Account');
 
@@ -927,6 +929,20 @@
           {/each}
         </div>
       {/if}
+    </div>
+
+    <!-- My Reputation -->
+    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
+          <Star class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
+        </div>
+        <div>
+          <h3 class="font-semibold dark:text-white">My Reputation</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Ratings from users who downloaded your files</p>
+        </div>
+      </div>
+      <AccountReputation />
     </div>
 
   {:else}

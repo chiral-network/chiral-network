@@ -472,6 +472,10 @@ pub enum DhtEvent {
         from_peer: String,
         payload: serde_json::Value,
     },
+    HostingProposalReceived {
+        from_peer: String,
+        agreement_json: String,
+    },
     RelayReservation {
         relay_peer_id: String,
         renewal: bool,
@@ -2844,18 +2848,29 @@ async fn run_dht_node(
                                                     }).await;
                                                     let EchoRequest(data) = request;
 
-                                                    // Check if this is a payment notification
+                                                    // Check if this is a typed message (payment notification, hosting proposal, etc.)
                                                     if let Ok(json_str) = std::str::from_utf8(&data) {
                                                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                                            if parsed.get("type").and_then(|v| v.as_str()) == Some("payment_notification") {
-                                                                // This is a payment notification, emit special event
-                                                                if let Some(payload) = parsed.get("payload") {
-                                                                    info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
-                                                                    let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
-                                                                        from_peer: peer.to_string(),
-                                                                        payload: payload.clone(),
-                                                                    }).await;
+                                                            match parsed.get("type").and_then(|v| v.as_str()) {
+                                                                Some("payment_notification") => {
+                                                                    if let Some(payload) = parsed.get("payload") {
+                                                                        info!("💰 Received payment notification from peer {}: {:?}", peer, payload);
+                                                                        let _ = event_tx.send(DhtEvent::PaymentNotificationReceived {
+                                                                            from_peer: peer.to_string(),
+                                                                            payload: payload.clone(),
+                                                                        }).await;
+                                                                    }
                                                                 }
+                                                                Some("hosting_proposal") => {
+                                                                    if let Some(agreement) = parsed.get("agreement") {
+                                                                        info!("📋 Received hosting proposal from peer {}", peer);
+                                                                        let _ = event_tx.send(DhtEvent::HostingProposalReceived {
+                                                                            from_peer: peer.to_string(),
+                                                                            agreement_json: agreement.to_string(),
+                                                                        }).await;
+                                                                    }
+                                                                }
+                                                                _ => {}
                                                             }
                                                         }
                                                     }

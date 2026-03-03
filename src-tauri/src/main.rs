@@ -1912,6 +1912,26 @@ async fn start_dht_node(
                             println!("✅ Payment notification forwarded to frontend with transaction_hash and downloader_peer_id");
                         }
                     }
+                    DhtEvent::HostingProposalReceived { from_peer, agreement_json } => {
+                        println!("📋 Hosting proposal received from peer {}", from_peer);
+
+                        // Persist to local disk so it survives regardless of which page is open
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&agreement_json) {
+                            if let Some(id) = parsed.get("agreementId").and_then(|v| v.as_str()) {
+                                if let Some(data_dir) = dirs::data_dir() {
+                                    let dir = data_dir.join("chiral-network").join("agreements");
+                                    let _ = std::fs::create_dir_all(&dir);
+                                    let _ = std::fs::write(dir.join(format!("{}.json", id)), &agreement_json);
+                                }
+                            }
+                        }
+
+                        let payload = serde_json::json!({
+                            "fromPeer": from_peer,
+                            "agreementJson": agreement_json,
+                        });
+                        let _ = app_handle.emit("hosting_proposal_received", payload);
+                    }
                     DhtEvent::RelayReservation { relay_peer_id, renewal } => {
                         let payload = serde_json::json!({
                             "relayPeerId": relay_peer_id,
@@ -2386,6 +2406,9 @@ async fn get_dht_events(state: State<'_, AppState>) -> Result<Vec<String>, Strin
                 }
                 DhtEvent::PaymentNotificationReceived { from_peer, payload } => {
                     format!("payment_notification_received:{}:{:?}", from_peer, payload)
+                }
+                DhtEvent::HostingProposalReceived { from_peer, .. } => {
+                    format!("hosting_proposal_received:{}", from_peer)
                 }
                 DhtEvent::ReputationEvent {
                     peer_id,
@@ -10900,6 +10923,22 @@ async fn pump_dht_events(
                     {
                         let _ = app_handle.emit("seeder_payment_received", &notification);
                     }
+                }
+                DhtEvent::HostingProposalReceived { from_peer, agreement_json } => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&agreement_json) {
+                        if let Some(id) = parsed.get("agreementId").and_then(|v| v.as_str()) {
+                            if let Some(data_dir) = dirs::data_dir() {
+                                let dir = data_dir.join("chiral-network").join("agreements");
+                                let _ = std::fs::create_dir_all(&dir);
+                                let _ = std::fs::write(dir.join(format!("{}.json", id)), &agreement_json);
+                            }
+                        }
+                    }
+                    let payload = serde_json::json!({
+                        "fromPeer": from_peer,
+                        "agreementJson": agreement_json,
+                    });
+                    let _ = app_handle.emit("hosting_proposal_received", payload);
                 }
                 _ => {}
             }
