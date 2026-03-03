@@ -47,6 +47,58 @@ pub struct AppState {
     pub tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
 }
 
+/// Cleanup DHT seeder entries and host advertisement on shutdown.
+/// Called from both the Tauri close handler and the SIGINT signal handler.
+async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) {
+    let dht_guard = dht_arc.lock().await;
+    let dht = match dht_guard.as_ref() {
+        Some(d) => d,
+        None => return,
+    };
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return;
+    }
+
+    // 1. Remove our peer_id from all shared file DHT records
+    let shared = dht.get_shared_files();
+    let file_hashes: Vec<String> = {
+        let map = shared.lock().await;
+        map.keys().cloned().collect()
+    };
+    println!("🛑 Unpublishing {} shared files from DHT", file_hashes.len());
+    let mut count = 0u32;
+    for file_hash in &file_hashes {
+        let dht_key = format!("chiral_file_{}", file_hash);
+        if let Ok(Some(json)) = dht.get_dht_value(dht_key.clone()).await {
+            if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
+                metadata.seeders.retain(|s| s.peer_id != peer_id);
+                if metadata.peer_id == peer_id {
+                    metadata.peer_id = String::new();
+                }
+                if let Ok(updated_json) = serde_json::to_string(&metadata) {
+                    let _ = dht.put_dht_value(dht_key, updated_json).await;
+                    count += 1;
+                }
+            }
+        }
+    }
+    println!("✅ Unpublished {} files from DHT", count);
+
+    // 2. Remove our host advertisement from the registry
+    let registry_key = "chiral_host_registry".to_string();
+    if let Ok(Some(json)) = dht.get_dht_value(registry_key.clone()).await {
+        let mut registry: Vec<HostRegistryEntry> =
+            serde_json::from_str(&json).unwrap_or_default();
+        registry.retain(|e| e.peer_id != peer_id);
+        if let Ok(registry_json) = serde_json::to_string(&registry) {
+            let _ = dht.put_dht_value(registry_key, registry_json).await;
+        }
+    }
+    println!("✅ Unpublished host advertisement from DHT");
+}
+
 #[tauri::command]
 async fn start_dht(
     app: tauri::AppHandle,
@@ -4272,8 +4324,12 @@ pub fn run() {
     let geth_for_signal = geth.clone();
     let geth_for_exit = geth.clone();
 
-    // Spawn a background task to stop Geth on SIGINT (Ctrl+C) or SIGTERM
-    // This prevents orphaned Geth processes when the app is killed
+    // Create DHT Arc before signal handler so it can be shared
+    let dht_arc: Arc<Mutex<Option<Arc<DhtService>>>> = Arc::new(Mutex::new(None));
+    let dht_for_signal = dht_arc.clone();
+
+    // Spawn a background task to stop Geth + cleanup DHT on SIGINT (Ctrl+C) or SIGTERM
+    // This prevents orphaned Geth processes and stale DHT entries when the app is killed
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -4287,12 +4343,20 @@ pub fn run() {
                 let mut sigterm = signal(SignalKind::terminate()).unwrap();
                 tokio::select! {
                     _ = sigint.recv() => {
-                        println!("🛑 SIGINT received — stopping Geth before exit");
+                        println!("🛑 SIGINT received — cleaning up before exit");
                     }
                     _ = sigterm.recv() => {
-                        println!("🛑 SIGTERM received — stopping Geth before exit");
+                        println!("🛑 SIGTERM received — cleaning up before exit");
                     }
                 }
+
+                // Cleanup DHT: unpublish shared files + host advertisement
+                // Use tokio::time::timeout to avoid hanging if DHT is unresponsive
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    cleanup_dht_on_shutdown(&dht_for_signal),
+                ).await;
+
                 // Use try_lock to avoid deadlock with the main thread
                 match geth_for_signal.try_lock() {
                     Ok(mut geth) => {
@@ -4320,7 +4384,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
-            dht: Arc::new(Mutex::new(None)),
+            dht: dht_arc,
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth,
