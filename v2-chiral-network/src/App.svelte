@@ -143,8 +143,9 @@
                     owner: addr,
                     filePath: filePath,
                     parentId: sharedFolder.id,
+                    merkleRoot: fileHash,
                   });
-                  console.log(`✅ Added hosted file ${fileName} to Drive/Shared`);
+                  console.log(`✅ Added hosted file ${fileHash} to Drive/Shared`);
                 }
               } catch (driveErr) {
                 console.warn('Failed to add hosted file to Drive:', driveErr);
