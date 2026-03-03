@@ -3773,6 +3773,7 @@ async fn drive_upload_file(
     owner: String,
     file_path: String,
     parent_id: Option<String>,
+    merkle_root: Option<String>,
 ) -> Result<DsItem, String> {
     if owner.is_empty() {
         return Err("owner required".into());
@@ -3811,7 +3812,7 @@ async fn drive_upload_file(
         storage_path: Some(storage_name),
         owner,
         is_public: true,
-        merkle_root: None,
+        merkle_root,
         protocol: None,
         price_chi: None,
         seeding: false,
