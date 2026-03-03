@@ -6,12 +6,14 @@
   import { createEventDispatcher, onMount } from 'svelte';
   import { dhtService, type FileMetadata } from '$lib/dht';
   import { formatRelativeTime, toHumanReadableSize } from '$lib/utils';
-  import { files, wallet } from '$lib/stores';
+  import { files, wallet, peers } from '$lib/stores';
   import { favorites } from '$lib/stores/favorites';
   import { get } from 'svelte/store';
   import { t } from 'svelte-i18n';
   import { showToast } from '$lib/toast';
   import { paymentService } from '$lib/services/paymentService';
+  import PeerSelectionService from '$lib/services/peerSelectionService';
+  import { ReputationStore } from '$lib/reputationStore';
 
   type TranslateParams = { values?: Record<string, unknown>; default?: string };
   const tr = (key: string, params?: TranslateParams): string =>
@@ -166,7 +168,11 @@
     const allSeeders = [...new Set([...freshSeeders, ...webrtcSeeders])];
     metadata.seeders = allSeeders;
 
-    // Note: manual seeder selection was for demo purposes; now using intelligent peer selection
+    // Reload reputations for any new seeders
+    const missing = allSeeders.filter(s => !seederMetrics.has(s));
+    if (missing.length > 0) {
+      loadSeederReputations(missing);
+    }
 
     proceedWithDownload();
 
@@ -201,8 +207,13 @@
     // Just dispatch the download event - let Download.svelte handle starting the actual download
     // This ensures the file is added to the store before chunks start arriving
     const copy = structuredClone(metadata);
-    copy.seeders = [copy.seeders[selectedSeederIndex?selectedSeederIndex:0]];
-    dispatch("download", metadata);
+    // Put the selected seeder first so downstream gets user's preference
+    const selectedIdx = selectedSeederIndex ?? 0;
+    if (selectedIdx > 0 && selectedIdx < copy.seeders.length) {
+      const selected = copy.seeders.splice(selectedIdx, 1)[0];
+      copy.seeders.unshift(selected);
+    }
+    dispatch("download", copy);
   }
 
   async function confirmPayment() {
@@ -292,7 +303,58 @@
     }
   }
 
-  const seederIds = metadata.seeders?.map((address, index) => ({
+  $: connectedPeerIds = new Set($peers.map((p) => p.id));
+
+  function truncatePeerId(peerId: string): string {
+    if (peerId.length <= 16) return peerId;
+    return `${peerId.slice(0, 8)}...${peerId.slice(-6)}`;
+  }
+
+  // Reputation data per seeder
+  let seederMetrics: Map<string, { score: number; trustLevel: string; stars: number }> = new Map();
+  let metricsLoading = true;
+
+  function getTrustLevel(score: number): string {
+    if (score >= 0.8) return 'Trusted';
+    if (score >= 0.6) return 'High';
+    if (score >= 0.4) return 'Medium';
+    return 'Low';
+  }
+
+  function getTrustBadgeClasses(level: string): string {
+    switch (level) {
+      case 'Trusted': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
+      case 'High': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
+      case 'Medium': return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400';
+      default: return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+    }
+  }
+
+  async function loadSeederReputations(seeders: string[]) {
+    try {
+      const allMetrics = await PeerSelectionService.getPeerMetrics();
+      const rep = ReputationStore.getInstance();
+      for (const seederId of seeders) {
+        const metrics = allMetrics.find(m => m.peer_id === seederId);
+        const score = metrics
+          ? PeerSelectionService.compositeScoreFromMetrics(metrics)
+          : rep.composite(seederId);
+        seederMetrics.set(seederId, { score, stars: score * 5, trustLevel: getTrustLevel(score) });
+      }
+      seederMetrics = seederMetrics;
+    } catch {
+      const rep = ReputationStore.getInstance();
+      for (const seederId of seeders) {
+        const score = rep.composite(seederId);
+        seederMetrics.set(seederId, { score, stars: score * 5, trustLevel: getTrustLevel(score) });
+      }
+      seederMetrics = seederMetrics;
+    } finally {
+      metricsLoading = false;
+    }
+  }
+
+  $: seederIds = metadata.seeders?.map((address, index) => ({
     id: `${metadata.fileHash}-${index}`,
     address,
   })) ?? [];
@@ -346,6 +408,13 @@
       checkingBalance = false;
       canAfford = true;
       currentPrice = 0;
+    }
+
+    // Fetch reputation data for seeders
+    if (metadata.seeders && metadata.seeders.length > 0) {
+      loadSeederReputations(metadata.seeders);
+    } else {
+      metricsLoading = false;
     }
   });
 </script>
@@ -514,27 +583,78 @@
     <div class="space-y-3">
       {#if metadata.seeders?.length}
         <div class="space-y-2">
-          <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers</p>
-          <div class="space-y-2 max-h-40 overflow-auto pr-1">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">Available peers ({metadata.seeders.length})</p>
+          {#if metadata.uploaderAddress}
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>Uploader wallet:</span>
+              <code class="font-mono">{metadata.uploaderAddress.slice(0, 6)}...{metadata.uploaderAddress.slice(-4)}</code>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-5 w-5"
+                on:click={() => { navigator.clipboard.writeText(metadata.uploaderAddress || ''); dispatch('copy', metadata.uploaderAddress || ''); }}
+              >
+                <Copy class="h-3 w-3" />
+              </Button>
+            </div>
+          {/if}
+          <div class="space-y-2 max-h-48 overflow-auto pr-1">
             {#each seederIds as seeder, index}
-              <div class="flex items-start gap-2 rounded-md border border-border/50 bg-muted/40 p-2 overflow-hidden">
-                <div class="mt-0.5 h-2 w-2 rounded-full bg-emerald-500 flex-shrink-0"></div>
-                <div class="space-y-1 flex-1">
-                  <code class="text-xs font-mono break-words block">{seeder.address}</code>
-                  <div class="flex items-center gap-1 text-xs text-muted-foreground">
-                    <span>Seed #{index + 1}</span>
+              {@const isOnline = connectedPeerIds.has(seeder.address)}
+              {@const repData = seederMetrics.get(seeder.address)}
+              <button
+                type="button"
+                class="w-full text-left flex items-start gap-2 rounded-md border p-2 overflow-hidden transition-colors cursor-pointer
+                  {selectedSeederIndex === index
+                    ? 'border-blue-500/70 bg-blue-500/10 ring-1 ring-blue-500/30'
+                    : 'border-border/50 bg-muted/40 hover:border-blue-300 hover:bg-blue-500/5'}"
+                on:click={() => { selectedSeederIndex = index; }}
+                title="Click to select this seeder for download"
+              >
+                <div class="mt-1 flex-shrink-0">
+                  <div class="h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center
+                    {selectedSeederIndex === index ? 'border-blue-500' : 'border-gray-400'}">
+                    {#if selectedSeederIndex === index}
+                      <div class="h-1.5 w-1.5 rounded-full bg-blue-500"></div>
+                    {/if}
+                  </div>
+                </div>
+                <div class="mt-0.5 h-2 w-2 rounded-full flex-shrink-0 {isOnline ? 'bg-emerald-500' : 'bg-gray-400'}"
+                  title={isOnline ? 'Online - connected to you' : 'Offline or not directly connected'}
+                ></div>
+                <div class="space-y-1 flex-1 min-w-0">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <code class="text-xs font-mono" title={seeder.address}>{truncatePeerId(seeder.address)}</code>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium {isOnline ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'}">
+                      {isOnline ? 'online' : 'offline'}
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-2 text-xs">
+                    {#if metricsLoading}
+                      <span class="text-muted-foreground animate-pulse">Loading reputation...</span>
+                    {:else if repData}
+                      <span class="text-yellow-500 flex items-center gap-0.5" title="{repData.stars.toFixed(1)}/5.0 reputation score">
+                        <Star class="h-3 w-3 fill-current" />
+                        <span class="text-[11px] font-medium">{repData.stars.toFixed(1)}</span>
+                      </span>
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium {getTrustBadgeClasses(repData.trustLevel)}">
+                        {repData.trustLevel}
+                      </span>
+                    {:else}
+                      <span class="text-muted-foreground">No reputation data</span>
+                    {/if}
                   </div>
                 </div>
                 <Button
                   variant="ghost"
                   size="icon"
-                  class="h-7 w-7"
-                  on:click={() => copySeeder(seeder.address, index)}
+                  class="h-7 w-7 flex-shrink-0"
+                  on:click={(e) => { e.stopPropagation(); copySeeder(seeder.address, index); }}
                 >
                   <Copy class="h-3.5 w-3.5" />
                   <span class="sr-only">Copy seeder address</span>
                 </Button>
-              </div>
+              </button>
             {/each}
           </div>
         </div>
@@ -557,7 +677,21 @@
       {:else if !canAfford && currentPrice && currentPrice > 0}
         <span class="text-red-600 font-semibold">Insufficient balance to download this file</span>
       {:else if metadata.seeders?.length}
-        {metadata.seeders.length > 1 ? '' : 'Single seeder available.'}
+        {#if metadata.seeders.length > 1}
+          {@const selAddr = metadata.seeders[selectedSeederIndex ?? 0]}
+          {@const selRep = seederMetrics.get(selAddr)}
+          <span>
+            Downloading from: <code class="font-mono text-xs">{truncatePeerId(selAddr)}</code>
+            {#if selRep}
+              <span class="text-yellow-500 ml-1 inline-flex items-center gap-0.5">
+                <Star class="h-3 w-3 fill-current inline" />
+                {selRep.stars.toFixed(1)}
+              </span>
+            {/if}
+          </span>
+        {:else}
+          Single seeder available.
+        {/if}
       {:else}
         Waiting for peers to announce this file.
       {/if}

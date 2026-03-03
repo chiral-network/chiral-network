@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { settings, isDarkMode, type ThemeMode, type NotificationSettings, type ColorTheme, type NavStyle } from '$lib/stores';
+  import { settings, isDarkMode, walletAccount, type ThemeMode, type NotificationSettings, type ColorTheme, type NavStyle } from '$lib/stores';
   import { availableThemes } from '$lib/services/colorThemeService';
   import { toasts } from '$lib/toastStore';
   import {
@@ -16,8 +16,11 @@
     FolderOpen,
     HardDrive,
     X,
-    Bell
+    Bell,
+    Users
   } from 'lucide-svelte';
+  import { hostingService } from '$lib/services/hostingService';
+  import { get } from 'svelte/store';
 
   let isTauri = $state(false);
   let displayDownloadDir = $state('');
@@ -118,6 +121,80 @@
     { key: 'networkStatus', label: 'Network Status', description: 'Connection and disconnection events' },
     { key: 'fileShared', label: 'File Shared', description: 'When someone starts downloading your shared file' }
   ];
+
+  // ── Hosting config ──
+  let hostingPublishing = $state(false);
+
+  function toggleHosting() {
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        enabled: !s.hostingConfig.enabled
+      }
+    }));
+  }
+
+  function updateHostingMaxStorage(gb: number) {
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        maxStorageBytes: gb * 1024 * 1024 * 1024
+      }
+    }));
+  }
+
+  function updateHostingPrice(chi: number) {
+    const wei = BigInt(Math.round(chi * 1e18)).toString();
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        pricePerMbPerDayWei: wei
+      }
+    }));
+  }
+
+  function updateHostingDeposit(chi: number) {
+    const wei = BigInt(Math.round(chi * 1e18)).toString();
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        minDepositWei: wei
+      }
+    }));
+  }
+
+  async function publishHosting() {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) {
+      toasts.show('Connect your wallet first', 'error');
+      return;
+    }
+    hostingPublishing = true;
+    try {
+      await hostingService.publishHostAdvertisement($settings.hostingConfig, wallet.address);
+      toasts.show('Host advertisement published to network', 'success');
+    } catch (err: any) {
+      toasts.show(`Failed to publish: ${err.message || err}`, 'error');
+    } finally {
+      hostingPublishing = false;
+    }
+  }
+
+  async function unpublishHosting() {
+    hostingPublishing = true;
+    try {
+      await hostingService.unpublishHostAdvertisement();
+      toasts.show('Host advertisement removed', 'info');
+    } catch (err: any) {
+      toasts.show(`Failed to unpublish: ${err.message || err}`, 'error');
+    } finally {
+      hostingPublishing = false;
+    }
+  }
 
   function resetSettings() {
     settings.reset();
@@ -361,6 +438,123 @@
         </button>
       {/each}
     </div>
+  </div>
+
+  <!-- Hosting Marketplace Section -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <div class="flex items-center gap-3 mb-4">
+      <div class="p-2 bg-purple-100 dark:bg-purple-900 rounded-lg">
+        <Users class="w-5 h-5 text-purple-600 dark:text-purple-400" />
+      </div>
+      <div>
+        <h2 class="font-semibold text-lg dark:text-white">Hosting Marketplace</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Offer your storage to other peers in exchange for CHI</p>
+      </div>
+    </div>
+
+    <!-- Enable hosting toggle -->
+    <div class="flex items-center justify-between py-3">
+      <div>
+        <p class="font-medium text-gray-900 dark:text-white">Enable hosting for other clients</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Allow other peers to store files on your machine</p>
+      </div>
+      <button
+        onclick={toggleHosting}
+        class="relative w-12 h-6 rounded-full transition-colors
+          {$settings.hostingConfig?.enabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+        role="switch"
+        aria-checked={$settings.hostingConfig?.enabled ?? false}
+        aria-label="Toggle hosting"
+      >
+        <span
+          class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
+            {$settings.hostingConfig?.enabled ? 'translate-x-6' : 'translate-x-0'}"
+        ></span>
+      </button>
+    </div>
+
+    {#if $settings.hostingConfig?.enabled}
+      <div class="mt-4 space-y-4 border-t border-gray-200 dark:border-gray-700 pt-4">
+        <!-- Max Storage -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Maximum Storage to Offer
+          </label>
+          <div class="flex items-center gap-3">
+            <input
+              type="number"
+              min="1"
+              max="10000"
+              step="1"
+              value={Math.round(($settings.hostingConfig?.maxStorageBytes ?? 10737418240) / (1024 * 1024 * 1024))}
+              oninput={(e) => updateHostingMaxStorage(Number(e.currentTarget.value) || 1)}
+              class="w-24 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
+            />
+            <span class="text-sm text-gray-500 dark:text-gray-400">GB</span>
+          </div>
+        </div>
+
+        <!-- Price per MB/day -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Price per MB / Day
+          </label>
+          <div class="flex items-center gap-3">
+            <input
+              type="number"
+              min="0.000001"
+              max="100"
+              step="0.001"
+              value={Number(BigInt($settings.hostingConfig?.pricePerMbPerDayWei ?? '1000000000000000')) / 1e18}
+              oninput={(e) => updateHostingPrice(Number(e.currentTarget.value) || 0.001)}
+              class="w-32 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
+            />
+            <span class="text-sm text-gray-500 dark:text-gray-400">CHI</span>
+          </div>
+        </div>
+
+        <!-- Minimum Deposit -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Minimum Deposit Required
+          </label>
+          <div class="flex items-center gap-3">
+            <input
+              type="number"
+              min="0.01"
+              max="1000"
+              step="0.01"
+              value={Number(BigInt($settings.hostingConfig?.minDepositWei ?? '100000000000000000')) / 1e18}
+              oninput={(e) => updateHostingDeposit(Number(e.currentTarget.value) || 0.1)}
+              class="w-32 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
+            />
+            <span class="text-sm text-gray-500 dark:text-gray-400">CHI</span>
+          </div>
+        </div>
+
+        <!-- Publish / Unpublish button -->
+        <div class="flex gap-3 pt-2">
+          <button
+            onclick={publishHosting}
+            disabled={hostingPublishing}
+            class="flex items-center gap-2 px-4 py-2 text-sm bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50"
+          >
+            {#if hostingPublishing}
+              Publishing...
+            {:else}
+              Publish to Network
+            {/if}
+          </button>
+          <button
+            onclick={unpublishHosting}
+            disabled={hostingPublishing}
+            class="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+          >
+            Unpublish
+          </button>
+        </div>
+      </div>
+    {/if}
   </div>
 
   <!-- Reset Section -->

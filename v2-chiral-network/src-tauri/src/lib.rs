@@ -1,8 +1,15 @@
 mod dht;
+pub mod drive_api;
+pub mod drive_storage;
+pub mod rating_api;
+pub mod rating_storage;
+pub mod relay_share_proxy;
 mod encryption;
 mod file_transfer;
 mod geth;
 mod geth_bootstrap;
+pub mod hosting;
+pub mod hosting_server;
 mod speed_tiers;
 
 use dht::DhtService;
@@ -30,6 +37,66 @@ pub struct AppState {
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
     pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
     pub download_credentials: dht::DownloadCredentialsMap, // request_id -> wallet credentials for file payment
+    // Hosting & Drive
+    pub hosting_server_state: Arc<hosting_server::HostingServerState>,
+    pub hosting_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>,
+    pub hosting_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    pub drive_state: Arc<drive_api::DriveState>,
+    /// Active WebSocket tunnel tasks keyed by resource key (e.g. "site:abc123").
+    /// Dropping the AbortHandle cancels the tunnel task.
+    pub tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
+}
+
+/// Cleanup DHT seeder entries and host advertisement on shutdown.
+/// Called from both the Tauri close handler and the SIGINT signal handler.
+async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) {
+    let dht_guard = dht_arc.lock().await;
+    let dht = match dht_guard.as_ref() {
+        Some(d) => d,
+        None => return,
+    };
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return;
+    }
+
+    // 1. Remove our peer_id from all shared file DHT records
+    let shared = dht.get_shared_files();
+    let file_hashes: Vec<String> = {
+        let map = shared.lock().await;
+        map.keys().cloned().collect()
+    };
+    println!("🛑 Unpublishing {} shared files from DHT", file_hashes.len());
+    let mut count = 0u32;
+    for file_hash in &file_hashes {
+        let dht_key = format!("chiral_file_{}", file_hash);
+        if let Ok(Some(json)) = dht.get_dht_value(dht_key.clone()).await {
+            if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
+                metadata.seeders.retain(|s| s.peer_id != peer_id);
+                if metadata.peer_id == peer_id {
+                    metadata.peer_id = String::new();
+                }
+                if let Ok(updated_json) = serde_json::to_string(&metadata) {
+                    let _ = dht.put_dht_value(dht_key, updated_json).await;
+                    count += 1;
+                }
+            }
+        }
+    }
+    println!("✅ Unpublished {} files from DHT", count);
+
+    // 2. Remove our host advertisement from the registry
+    let registry_key = "chiral_host_registry".to_string();
+    if let Ok(Some(json)) = dht.get_dht_value(registry_key.clone()).await {
+        let mut registry: Vec<HostRegistryEntry> =
+            serde_json::from_str(&json).unwrap_or_default();
+        registry.retain(|e| e.peer_id != peer_id);
+        if let Ok(registry_json) = serde_json::to_string(&registry) {
+            let _ = dht.put_dht_value(registry_key, registry_json).await;
+        }
+    }
+    println!("✅ Unpublished host advertisement from DHT");
 }
 
 #[tauri::command]
@@ -120,6 +187,19 @@ async fn get_peer_id(state: tauri::State<'_, AppState>) -> Result<Option<String>
     } else {
         Ok(None)
     }
+}
+
+#[tauri::command]
+async fn echo_peer(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+    payload: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    let dht_guard = state.dht.lock().await;
+    let dht = dht_guard
+        .as_ref()
+        .ok_or_else(|| "DHT not running".to_string())?;
+    dht.echo(peer_id, payload).await
 }
 
 #[tauri::command]
@@ -250,6 +330,209 @@ async fn get_dht_value(
     } else {
         Err("DHT not running".to_string())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Hosting marketplace commands
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct HostRegistryEntry {
+    #[serde(rename = "peerId")]
+    peer_id: String,
+    #[serde(rename = "walletAddress")]
+    wallet_address: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: u64,
+}
+
+#[tauri::command]
+async fn publish_host_advertisement(
+    state: tauri::State<'_, AppState>,
+    advertisement_json: String,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.ok_or("Peer ID not available")?;
+
+        // Parse advertisement to extract wallet address, inject peer_id
+        let mut ad: serde_json::Value = serde_json::from_str(&advertisement_json)
+            .map_err(|e| format!("Invalid advertisement JSON: {}", e))?;
+        ad["peerId"] = serde_json::Value::String(peer_id.clone());
+        let ad_json = serde_json::to_string(&ad)
+            .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
+
+        let wallet_address = ad["walletAddress"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        // Store individual advertisement
+        let host_key = format!("chiral_host_{}", peer_id);
+        dht.put_dht_value(host_key, ad_json).await?;
+
+        // Update registry (read-modify-write)
+        let registry_key = "chiral_host_registry".to_string();
+        let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
+            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        // Remove existing entry for this peer, add fresh one
+        registry.retain(|e| e.peer_id != peer_id);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        registry.push(HostRegistryEntry {
+            peer_id,
+            wallet_address,
+            updated_at: now,
+        });
+
+        let registry_json = serde_json::to_string(&registry)
+            .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+        dht.put_dht_value(registry_key, registry_json).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn unpublish_host_advertisement(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.ok_or("Peer ID not available")?;
+
+        // Remove from registry
+        let registry_key = "chiral_host_registry".to_string();
+        let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
+            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        registry.retain(|e| e.peer_id != peer_id);
+
+        let registry_json = serde_json::to_string(&registry)
+            .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+        dht.put_dht_value(registry_key, registry_json).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_host_registry(
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let registry_key = "chiral_host_registry".to_string();
+        match dht.get_dht_value(registry_key).await {
+            Ok(Some(json)) => Ok(json),
+            Ok(None) => Ok("[]".to_string()),
+            Err(e) => Err(e),
+        }
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_host_advertisement(
+    state: tauri::State<'_, AppState>,
+    peer_id: String,
+) -> Result<Option<String>, String> {
+    let dht_guard = state.dht.lock().await;
+
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_host_{}", peer_id);
+        dht.get_dht_value(key).await
+    } else {
+        Err("DHT not running".to_string())
+    }
+}
+
+fn agreements_dir() -> Result<std::path::PathBuf, String> {
+    let dir = dirs::data_dir()
+        .ok_or("Could not find data directory")?
+        .join("chiral-network")
+        .join("agreements");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create agreements dir: {e}"))?;
+    }
+    Ok(dir)
+}
+
+#[tauri::command]
+async fn store_hosting_agreement(
+    state: tauri::State<'_, AppState>,
+    agreement_id: String,
+    agreement_json: String,
+) -> Result<(), String> {
+    // Save locally on disk
+    let path = agreements_dir()?.join(format!("{}.json", agreement_id));
+    std::fs::write(&path, &agreement_json)
+        .map_err(|e| format!("Failed to write agreement to disk: {e}"))?;
+
+    // Also store in DHT for the other party
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_agreement_{}", agreement_id);
+        let _ = dht.put_dht_value(key, agreement_json).await;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_hosting_agreement(
+    state: tauri::State<'_, AppState>,
+    agreement_id: String,
+) -> Result<Option<String>, String> {
+    // Try local disk first
+    let path = agreements_dir()?.join(format!("{}.json", agreement_id));
+    if path.exists() {
+        let json = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read agreement: {e}"))?;
+        return Ok(Some(json));
+    }
+
+    // Fall back to DHT
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let key = format!("chiral_agreement_{}", agreement_id);
+        let result = dht.get_dht_value(key).await?;
+        // If found in DHT, cache locally
+        if let Some(ref json) = result {
+            let _ = std::fs::write(&path, json);
+        }
+        Ok(result)
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn list_hosting_agreements() -> Result<Vec<String>, String> {
+    let dir = agreements_dir()?;
+    let mut ids = Vec::new();
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read agreements dir: {e}"))?;
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if let Some(id) = name.strip_suffix(".json") {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    Ok(ids)
 }
 
 // File operations for Upload/Download pages
@@ -384,6 +667,17 @@ struct PublishResult {
     merkle_root: String,
 }
 
+/// Per-seeder info stored in DHT file metadata
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SeederInfo {
+    peer_id: String,
+    #[serde(default)]
+    price_wei: String,
+    #[serde(default)]
+    wallet_address: String,
+}
+
 /// File metadata stored in DHT
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -393,11 +687,16 @@ struct FileMetadata {
     file_size: u64,
     protocol: String,
     created_at: u64,
+    /// Legacy single-seeder field — kept for backward compat with old DHT records
+    #[serde(default)]
     peer_id: String,
     #[serde(default)]
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
+    /// Multi-seeder list — each seeder has their own price and wallet
+    #[serde(default)]
+    seeders: Vec<SeederInfo>,
 }
 
 #[tauri::command]
@@ -461,30 +760,64 @@ async fn publish_file(
             wallet_addr.clone(),
         ).await;
 
-        // Create file metadata
-        let metadata = FileMetadata {
-            hash: merkle_root.clone(),
-            file_name: file_name.clone(),
-            file_size,
-            protocol: protocol.unwrap_or_else(|| "WebRTC".to_string()),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+        // Build our seeder entry
+        let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
         };
 
-        // Serialize metadata to JSON
+        // Read-modify-write: preserve existing seeders from other peers
+        let dht_key = format!("chiral_file_{}", merkle_root);
+        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => {
+                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                    hash: merkle_root.clone(),
+                    file_name: file_name.clone(),
+                    file_size,
+                    protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                })
+            }
+            _ => FileMetadata {
+                hash: merkle_root.clone(),
+                file_name: file_name.clone(),
+                file_size,
+                protocol: protocol.unwrap_or_else(|| "WebRTC".to_string()),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        // Upsert our seeder entry (add or update by peer_id)
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        // Update legacy fields for backward compat
+        metadata.peer_id = peer_id.clone();
+        metadata.price_wei = price_wei_val.to_string();
+        metadata.wallet_address = metadata.seeders.iter()
+            .find(|s| s.peer_id == peer_id).map(|s| s.wallet_address.clone())
+            .unwrap_or_default();
+
+        // Serialize and store in DHT
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-
-        // Store metadata in DHT using the hash as key
-        let dht_key = format!("chiral_file_{}", merkle_root);
         dht.put_dht_value(dht_key, metadata_json).await?;
 
-        println!("File metadata published to DHT: {}", merkle_root);
+        println!("File metadata published to DHT: {} ({} seeders)", merkle_root, metadata.seeders.len());
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -550,28 +883,63 @@ async fn publish_file_data(
             wallet_addr.clone(),
         ).await;
 
-        // Create file metadata
-        let metadata = FileMetadata {
-            hash: merkle_root.clone(),
-            file_name: file_name.clone(),
-            file_size,
-            protocol: "WebRTC".to_string(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+        // Build our seeder entry
+        let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
         };
 
+        // Read-modify-write: preserve existing seeders from other peers
+        let dht_key = format!("chiral_file_{}", merkle_root);
+        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => {
+                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                    hash: merkle_root.clone(),
+                    file_name: file_name.clone(),
+                    file_size,
+                    protocol: "WebRTC".to_string(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                })
+            }
+            _ => FileMetadata {
+                hash: merkle_root.clone(),
+                file_name: file_name.clone(),
+                file_size,
+                protocol: "WebRTC".to_string(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        // Upsert our seeder entry
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        metadata.peer_id = peer_id.clone();
+        metadata.price_wei = price_wei_val.to_string();
+        metadata.wallet_address = metadata.seeders.iter()
+            .find(|s| s.peer_id == peer_id).map(|s| s.wallet_address.clone())
+            .unwrap_or_default();
+
         // Serialize and store in DHT
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        let dht_key = format!("chiral_file_{}", merkle_root);
         dht.put_dht_value(dht_key, metadata_json).await?;
 
-        println!("File data published to DHT: {}", merkle_root);
+        println!("File data published to DHT: {} ({} seeders)", merkle_root, metadata.seeders.len());
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -585,7 +953,7 @@ struct SearchResult {
     hash: String,
     file_name: String,
     file_size: u64,
-    seeders: Vec<String>,
+    seeders: Vec<SeederInfo>,
     created_at: u64,
     price_wei: String,
     wallet_address: String,
@@ -613,10 +981,15 @@ async fn search_file(
 
                 println!("Found file in DHT: {} ({})", metadata.file_name, metadata.hash);
 
-                // Build result with seeder info
-                let mut seeders = Vec::new();
-                if !metadata.peer_id.is_empty() {
-                    seeders.push(metadata.peer_id);
+                // Build seeder list: use seeders vec if present, fall back to legacy peer_id
+                let mut seeders = metadata.seeders;
+                if seeders.is_empty() && !metadata.peer_id.is_empty() {
+                    // Legacy record: single peer_id with file-level price/wallet
+                    seeders.push(SeederInfo {
+                        peer_id: metadata.peer_id,
+                        price_wei: metadata.price_wei.clone(),
+                        wallet_address: metadata.wallet_address.clone(),
+                    });
                 }
 
                 Ok(Some(SearchResult {
@@ -832,7 +1205,7 @@ async fn start_download(
 
         // Check which seeders are actually reachable before attempting download
         let mut reachable_seeders = Vec::new();
-        let mut offline_count = 0;
+        let mut offline_seeders = Vec::new();
 
         for seeder in &seeders {
             match dht.is_peer_connected(seeder).await {
@@ -841,21 +1214,21 @@ async fn start_download(
                     reachable_seeders.push(seeder.clone());
                 }
                 Ok(false) => {
-                    println!("⚠️ Seeder {} is not currently connected", seeder);
-                    // Still include them — the swarm RequestFile handler will attempt to dial
-                    reachable_seeders.push(seeder.clone());
-                    offline_count += 1;
+                    println!("⚠️ Seeder {} is not currently connected — skipping", seeder);
+                    offline_seeders.push(seeder.clone());
                 }
                 Err(e) => {
-                    println!("❌ Failed to check seeder {} connectivity: {}", seeder, e);
-                    offline_count += 1;
-                    reachable_seeders.push(seeder.clone());
+                    println!("❌ Failed to check seeder {} connectivity: {} — skipping", seeder, e);
+                    offline_seeders.push(seeder.clone());
                 }
             }
         }
 
-        if offline_count == seeders.len() {
-            println!("⚠️ All {} seeders appear to be offline, will attempt dial anyway", seeders.len());
+        let had_offline = !offline_seeders.is_empty();
+        if reachable_seeders.is_empty() {
+            // No connected seeders — try dialing offline seeders as last resort
+            println!("⚠️ No connected seeders, attempting to dial {} offline seeder(s)", offline_seeders.len());
+            reachable_seeders = offline_seeders;
         }
 
         // Try each seeder until one succeeds
@@ -889,7 +1262,7 @@ async fn start_download(
                 let mut tiers = state.download_tiers.lock().await;
                 tiers.remove(&request_id);
             }
-            let error_msg = if offline_count > 0 {
+            let error_msg = if had_offline {
                 format!("All {} seeder(s) are offline or unreachable. The file owner may have disconnected.", seeders.len())
             } else {
                 format!("No seeder could provide the file: {}", last_error)
@@ -978,6 +1351,293 @@ async fn register_shared_file(
         println!("DHT not running, file will be registered when DHT starts");
         Ok(())
     }
+}
+
+/// Re-register a shared file AND update DHT metadata with our peer_id (called on app startup)
+#[tauri::command]
+async fn republish_shared_file(
+    state: tauri::State<'_, AppState>,
+    file_hash: String,
+    file_path: String,
+    file_name: String,
+    file_size: u64,
+    price_chi: Option<String>,
+    wallet_address: Option<String>,
+) -> Result<(), String> {
+    println!("Re-publishing shared file: {} (hash: {})", file_name, file_hash);
+
+    // Verify file still exists
+    if !std::path::Path::new(&file_path).exists() {
+        return Err(format!("File no longer exists: {}", file_path));
+    }
+
+    let price_wei = if let Some(ref price) = price_chi {
+        if price.is_empty() || price == "0" { 0u128 } else { parse_chi_to_wei(price)? }
+    } else {
+        0u128
+    };
+    let wallet_addr = wallet_address.unwrap_or_default();
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        // Step 1: Register in shared_files map (same as register_shared_file)
+        dht.register_shared_file(
+            file_hash.clone(), file_path, file_name.clone(), file_size,
+            price_wei, wallet_addr.clone(),
+        ).await;
+
+        // Step 2: Update DHT metadata — add ourselves to seeders list
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        if !peer_id.is_empty() {
+            let dht_key = format!("chiral_file_{}", file_hash);
+
+            let our_seeder = SeederInfo {
+                peer_id: peer_id.clone(),
+                price_wei: price_wei.to_string(),
+                wallet_address: wallet_addr.clone(),
+            };
+
+            // Read existing metadata or create fresh
+            let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+                Ok(Some(json)) => {
+                    serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                        hash: file_hash.clone(),
+                        file_name: file_name.clone(),
+                        file_size,
+                        protocol: "WebRTC".to_string(),
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                        peer_id: String::new(),
+                        price_wei: String::new(),
+                        wallet_address: String::new(),
+                        seeders: Vec::new(),
+                    })
+                }
+                _ => FileMetadata {
+                    hash: file_hash.clone(),
+                    file_name: file_name.clone(),
+                    file_size,
+                    protocol: "WebRTC".to_string(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                },
+            };
+
+            // Upsert our seeder entry
+            if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+                existing.price_wei = our_seeder.price_wei;
+                existing.wallet_address = our_seeder.wallet_address;
+            } else {
+                metadata.seeders.push(our_seeder);
+            }
+            metadata.peer_id = peer_id.clone();
+
+            let metadata_json = serde_json::to_string(&metadata)
+                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            let _ = dht.put_dht_value(dht_key, metadata_json).await;
+            println!("✅ Re-published {} to DHT with peer_id {} ({} seeders)", file_hash, peer_id, metadata.seeders.len());
+        }
+
+        Ok(())
+    } else {
+        println!("DHT not running, file will be registered when DHT starts");
+        Ok(())
+    }
+}
+
+/// Remove our peer_id from all shared file DHT records (called on app shutdown)
+#[tauri::command]
+async fn unpublish_all_shared_files(
+    state: tauri::State<'_, AppState>,
+) -> Result<u32, String> {
+    let dht_guard = state.dht.lock().await;
+    let dht = match dht_guard.as_ref() {
+        Some(d) => d,
+        None => return Ok(0),
+    };
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return Ok(0);
+    }
+
+    let shared = dht.get_shared_files();
+    let file_hashes: Vec<String> = {
+        let map = shared.lock().await;
+        map.keys().cloned().collect()
+    };
+
+    println!("🛑 Unpublishing {} shared files from DHT", file_hashes.len());
+
+    let mut count = 0u32;
+    for file_hash in &file_hashes {
+        let dht_key = format!("chiral_file_{}", file_hash);
+        match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => {
+                if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
+                    // Remove our peer_id from seeders list (preserve other seeders)
+                    metadata.seeders.retain(|s| s.peer_id != peer_id);
+                    // Clear legacy peer_id if it was us
+                    if metadata.peer_id == peer_id {
+                        metadata.peer_id = String::new();
+                    }
+                    if let Ok(updated_json) = serde_json::to_string(&metadata) {
+                        let _ = dht.put_dht_value(dht_key, updated_json).await;
+                        count += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    println!("✅ Unpublished {} files from DHT (removed our seeder entry)", count);
+    Ok(count)
+}
+
+/// Force-quit the application process (called after cleanup is done)
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+/// Get files we're hosting on behalf of other peers (from active agreements)
+#[tauri::command]
+async fn get_active_hosted_files(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let dht_guard = state.dht.lock().await;
+    let my_peer_id = if let Some(dht) = dht_guard.as_ref() {
+        dht.get_peer_id().await.unwrap_or_default()
+    } else {
+        return Ok(vec![]);
+    };
+    drop(dht_guard);
+
+    if my_peer_id.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let dir = agreements_dir()?;
+    let mut hosted_files = Vec::new();
+
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Failed to read agreements dir: {e}"))?;
+
+    for entry in entries.flatten() {
+        if let Ok(json) = std::fs::read_to_string(entry.path()) {
+            if let Ok(agreement) = serde_json::from_str::<serde_json::Value>(&json) {
+                let status = agreement.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                let host_peer = agreement.get("hostPeerId").and_then(|v| v.as_str()).unwrap_or("");
+                let agreement_id = agreement.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
+                let client_peer = agreement.get("clientPeerId").and_then(|v| v.as_str()).unwrap_or("");
+                let expires_at = agreement.get("expiresAt").and_then(|v| v.as_u64());
+
+                if (status == "active" || status == "accepted") && host_peer == my_peer_id {
+                    if let Some(hashes) = agreement.get("fileHashes").and_then(|v| v.as_array()) {
+                        for hash in hashes {
+                            if let Some(h) = hash.as_str() {
+                                hosted_files.push(serde_json::json!({
+                                    "fileHash": h,
+                                    "agreementId": agreement_id,
+                                    "clientPeerId": client_peer,
+                                    "expiresAt": expires_at,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(hosted_files)
+}
+
+/// Clean up files for a cancelled hosting agreement: unregister from DHT, remove from cache, delete from disk.
+#[tauri::command]
+async fn cleanup_agreement_files(
+    state: tauri::State<'_, AppState>,
+    agreement_id: String,
+) -> Result<(), String> {
+    let dir = agreements_dir()?;
+    let path = dir.join(format!("{}.json", agreement_id));
+    let json = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read agreement: {e}"))?;
+    let agreement: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| format!("Failed to parse agreement: {e}"))?;
+
+    let file_hashes: Vec<String> = agreement
+        .get("fileHashes")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+
+    if file_hashes.is_empty() {
+        return Ok(());
+    }
+
+    // Get download directory for file deletion
+    let download_dir = {
+        let dir_lock = state.download_directory.lock().await;
+        dir_lock
+            .clone()
+            .unwrap_or_else(|| {
+                dirs::download_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            })
+    };
+
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let shared = dht.get_shared_files();
+        for file_hash in &file_hashes {
+            // Remove from SharedFilesMap
+            {
+                let mut map = shared.lock().await;
+                map.remove(file_hash);
+            }
+
+            // Clear peer_id in DHT record
+            let dht_key = format!("chiral_file_{}", file_hash);
+            if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
+                if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
+                    if let Some(obj) = metadata.as_object_mut() {
+                        obj.insert("peerId".to_string(), serde_json::Value::String(String::new()));
+                        if let Ok(updated) = serde_json::to_string(&metadata) {
+                            let _ = dht.put_dht_value(dht_key, updated).await;
+                        }
+                    }
+                }
+            }
+
+            println!("🗑️ Cleaned up hosted file: {}", file_hash);
+        }
+    }
+
+    // Remove from in-memory file storage
+    {
+        let mut storage = state.file_storage.lock().await;
+        for file_hash in &file_hashes {
+            storage.remove(file_hash);
+        }
+    }
+
+    // Delete files from download directory
+    for file_hash in &file_hashes {
+        let file_path = std::path::Path::new(&download_dir).join(file_hash);
+        if file_path.exists() {
+            let _ = std::fs::remove_file(&file_path);
+            println!("🗑️ Deleted hosted file from disk: {}", file_hash);
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2312,6 +2972,38 @@ async fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Show a Drive item in the system file manager
+#[tauri::command]
+async fn show_drive_item_in_folder(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<(), String> {
+    let manifest = ds::load_manifest();
+    let item = manifest
+        .items
+        .iter()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .ok_or("Item not found")?;
+
+    let path = if item.item_type == "folder" {
+        // For folders, open the Drive files directory
+        ds::drive_files_dir().ok_or("Cannot determine storage directory")?
+    } else {
+        let storage = item.storage_path.as_ref().ok_or("No storage path for this item")?;
+        ds::drive_files_dir()
+            .ok_or("Cannot determine storage directory")?
+            .join(storage)
+    };
+
+    if !path.exists() {
+        return Err(format!("File not found on disk: {}", path.display()));
+    }
+
+    let path_str = path.to_string_lossy().to_string();
+    show_in_folder(path_str).await
+}
+
 // ============================================================================
 // Geth Commands
 // ============================================================================
@@ -2556,14 +3248,1103 @@ async fn lookup_encryption_key(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hosting commands
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostingServerStatus {
+    running: bool,
+    address: Option<String>,
+}
+
+#[tauri::command]
+async fn create_hosted_site(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    file_paths: Vec<String>,
+) -> Result<hosting::HostedSite, String> {
+    let site_id = hosting::generate_site_id();
+    let base = hosting::sites_base_dir()
+        .ok_or_else(|| "Cannot determine data directory".to_string())?;
+    let site_dir = base.join(&site_id);
+    std::fs::create_dir_all(&site_dir).map_err(|e| format!("Failed to create site dir: {}", e))?;
+
+    let mut site_files = Vec::new();
+
+    for src_path_str in &file_paths {
+        let src = std::path::Path::new(src_path_str);
+        if !src.exists() {
+            // Clean up on error
+            let _ = std::fs::remove_dir_all(&site_dir);
+            return Err(format!("File not found: {}", src_path_str));
+        }
+        let file_name = src
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| format!("Invalid file name: {}", src_path_str))?;
+
+        let dest = site_dir.join(file_name);
+        std::fs::copy(src, &dest)
+            .map_err(|e| format!("Failed to copy {}: {}", file_name, e))?;
+
+        let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+        site_files.push(hosting::SiteFile {
+            path: file_name.to_string(),
+            size,
+        });
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let site = hosting::HostedSite {
+        id: site_id,
+        name,
+        directory: site_dir.to_string_lossy().into_owned(),
+        created_at: now,
+        files: site_files,
+        relay_url: None,
+    };
+
+    // Persist to disk
+    let mut all_sites = hosting::load_sites();
+    all_sites.push(site.clone());
+    hosting::save_sites(&all_sites);
+
+    // Register with the running server
+    state.hosting_server_state.register_site(site.clone()).await;
+
+    println!("Created hosted site: {} ({})", site.name, site.id);
+    Ok(site)
+}
+
+#[tauri::command]
+async fn list_hosted_sites(
+    _state: tauri::State<'_, AppState>,
+) -> Result<Vec<hosting::HostedSite>, String> {
+    Ok(hosting::load_sites())
+}
+
+#[tauri::command]
+async fn delete_hosted_site(
+    state: tauri::State<'_, AppState>,
+    site_id: String,
+) -> Result<(), String> {
+    let mut all_sites = hosting::load_sites();
+    let before_len = all_sites.len();
+    all_sites.retain(|s| s.id != site_id);
+    if all_sites.len() == before_len {
+        return Err(format!("Site not found: {}", site_id));
+    }
+    hosting::save_sites(&all_sites);
+
+    // Remove files from disk
+    if let Some(base) = hosting::sites_base_dir() {
+        let site_dir = base.join(&site_id);
+        if site_dir.exists() {
+            let _ = std::fs::remove_dir_all(&site_dir);
+        }
+    }
+
+    // Unregister from server
+    state.hosting_server_state.unregister_site(&site_id).await;
+
+    println!("Deleted hosted site: {}", site_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_hosting_server(
+    state: tauri::State<'_, AppState>,
+    port: u16,
+) -> Result<String, String> {
+    // Check if already running
+    {
+        let addr = state.hosting_server_addr.lock().await;
+        if addr.is_some() {
+            return Err("Hosting server is already running".to_string());
+        }
+    }
+
+    // Load sites into server state
+    state.hosting_server_state.load_from_disk().await;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    let bound_addr = hosting_server::start_server(
+        Arc::clone(&state.hosting_server_state),
+        port,
+        rx,
+    )
+    .await?;
+
+    *state.hosting_server_addr.lock().await = Some(bound_addr);
+    *state.hosting_server_shutdown.lock().await = Some(tx);
+
+    Ok(bound_addr.to_string())
+}
+
+#[tauri::command]
+async fn stop_hosting_server(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let shutdown_tx = state.hosting_server_shutdown.lock().await.take();
+    if let Some(tx) = shutdown_tx {
+        let _ = tx.send(());
+    }
+    *state.hosting_server_addr.lock().await = None;
+    println!("Hosting server stopped");
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_hosting_server_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<HostingServerStatus, String> {
+    let addr = state.hosting_server_addr.lock().await;
+    Ok(HostingServerStatus {
+        running: addr.is_some(),
+        address: addr.map(|a| a.to_string()),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket tunnel to relay (NAT traversal for hosting/drive proxy)
+// ---------------------------------------------------------------------------
+
+/// Spawn a background task that maintains a WebSocket tunnel to the relay.
+/// The relay forwards incoming visitor HTTP requests through this tunnel.
+/// Returns the AbortHandle so the tunnel can be cancelled on unpublish.
+fn spawn_relay_tunnel(
+    relay_base: String,
+    resource_type: String,
+    resource_id: String,
+    local_origin: String,
+) -> tokio::task::AbortHandle {
+    use futures_util::StreamExt;
+    // Fix 0.0.0.0 — it's not a valid destination address for clients
+    let local_origin = local_origin
+        .replace("://0.0.0.0:", "://127.0.0.1:")
+        .replace("://0.0.0.0/", "://127.0.0.1/");
+    let handle = tokio::spawn(async move {
+        loop {
+            let ws_url = format!(
+                "{}/api/tunnel/ws?type={}&id={}",
+                relay_base.replace("http://", "ws://").replace("https://", "wss://"),
+                resource_type,
+                resource_id
+            );
+            println!(
+                "[TUNNEL] Connecting to {} for {}:{}",
+                ws_url, resource_type, resource_id
+            );
+
+            match tokio_tungstenite::connect_async(&ws_url).await {
+                Ok((ws_stream, _)) => {
+                    println!(
+                        "[TUNNEL] Connected for {}:{}",
+                        resource_type, resource_id
+                    );
+                    let (mut ws_tx, mut ws_rx) = futures_util::StreamExt::split(ws_stream);
+
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(30))
+                        .build()
+                        .unwrap_or_default();
+                    let local = local_origin.clone();
+
+                    while let Some(Ok(msg)) = ws_rx.next().await {
+                        match msg {
+                            tokio_tungstenite::tungstenite::Message::Text(text) => {
+                                // Parse the tunnel request from the relay
+                                #[derive(serde::Deserialize)]
+                                struct TunnelReq {
+                                    id: String,
+                                    path: String,
+                                }
+                                let req: TunnelReq = match serde_json::from_str(&text) {
+                                    Ok(r) => r,
+                                    Err(_) => continue,
+                                };
+
+                                // Fetch from local server
+                                let target = format!("{}{}", local, req.path);
+                                let (status, headers, body_bytes): (u16, HashMap<String, String>, Vec<u8>) =
+                                    match client.get(&target).send().await {
+                                        Ok(resp) => {
+                                            let st = resp.status().as_u16();
+                                            let mut hdr = HashMap::<String, String>::new();
+                                            for (k, v) in resp.headers() {
+                                                if let Ok(vs) = v.to_str() {
+                                                    hdr.insert(k.to_string(), vs.to_string());
+                                                }
+                                            }
+                                            let bytes = resp.bytes().await.unwrap_or_default().to_vec();
+                                            (st, hdr, bytes)
+                                        }
+                                        Err(_) => {
+                                            (502, HashMap::new(), b"Local server error".to_vec())
+                                        }
+                                    };
+
+                                // Send response back through the tunnel
+                                use base64::Engine;
+                                let resp_json = serde_json::json!({
+                                    "id": req.id,
+                                    "status": status,
+                                    "headers": headers,
+                                    "body": base64::engine::general_purpose::STANDARD.encode(&body_bytes),
+                                });
+                                let msg = tokio_tungstenite::tungstenite::Message::Text(
+                                    resp_json.to_string(),
+                                );
+                                if futures_util::SinkExt::send(&mut ws_tx, msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            tokio_tungstenite::tungstenite::Message::Ping(data) => {
+                                let _ = futures_util::SinkExt::send(
+                                    &mut ws_tx,
+                                    tokio_tungstenite::tungstenite::Message::Pong(data),
+                                )
+                                .await;
+                            }
+                            tokio_tungstenite::tungstenite::Message::Close(_) => break,
+                            _ => {}
+                        }
+                    }
+                    println!(
+                        "[TUNNEL] Disconnected from relay for {}:{}",
+                        resource_type, resource_id
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "[TUNNEL] Failed to connect for {}:{}: {}",
+                        resource_type, resource_id, e
+                    );
+                }
+            }
+
+            // Reconnect after a short delay
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+    handle.abort_handle()
+}
+
+#[tauri::command]
+async fn publish_site_to_relay(
+    state: tauri::State<'_, AppState>,
+    site_id: String,
+    relay_url: String,
+) -> Result<String, String> {
+    // Find the site in local metadata
+    let mut all_sites = hosting::load_sites();
+    let _site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+
+    // Get local server origin URL
+    let origin = state
+        .hosting_server_addr
+        .lock()
+        .await
+        .map(|a| format!("http://{}", a))
+        .ok_or("Local server not running")?;
+
+    // Register site origin with relay (no file upload — relay will proxy)
+    let relay_base = relay_url.trim_end_matches('/');
+    let url = format!("{}/api/sites/relay-register", relay_base);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "site_id": site_id,
+            "origin_url": origin,
+            "owner_wallet": "",
+        }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to register site with relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay returned {}: {}", status, text));
+    }
+
+    // Build the public URL
+    let public_url = format!("{}/sites/{}/", relay_base, site_id);
+
+    // Update local metadata with the relay URL
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.relay_url = Some(public_url.clone());
+    }
+    hosting::save_sites(&all_sites);
+
+    // Start WebSocket tunnel to relay for NAT traversal
+    // Use localhost for the tunnel's local fetch (origin may be 0.0.0.0 which isn't routable)
+    let local_for_tunnel = state
+        .hosting_server_addr
+        .lock()
+        .await
+        .map(|a| format!("http://127.0.0.1:{}", a.port()))
+        .ok_or("Local server not running")?;
+    let tunnel_key = format!("site:{}", site_id);
+    let abort_handle = spawn_relay_tunnel(
+        relay_base.to_string(),
+        "site".to_string(),
+        site_id.clone(),
+        local_for_tunnel,
+    );
+    state
+        .tunnel_handles
+        .lock()
+        .await
+        .insert(tunnel_key, abort_handle);
+
+    println!(
+        "[HOSTING] Published site {} to relay: {}",
+        site_id, public_url
+    );
+    Ok(public_url)
+}
+
+#[tauri::command]
+async fn unpublish_site_from_relay(
+    state: tauri::State<'_, AppState>,
+    site_id: String,
+) -> Result<(), String> {
+    let mut all_sites = hosting::load_sites();
+    let site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+
+    let relay_url = site
+        .relay_url
+        .as_ref()
+        .ok_or_else(|| "Site is not published to a relay".to_string())?;
+
+    // Extract the relay base URL from the full site URL
+    // e.g. "http://130.245.173.73:8080/sites/abc12345/" -> "http://130.245.173.73:8080"
+    let relay_base = relay_url
+        .find("/sites/")
+        .map(|pos| &relay_url[..pos])
+        .ok_or_else(|| "Invalid relay URL format".to_string())?;
+
+    let url = format!("{}/api/sites/relay-register/{}", relay_base, site_id);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .delete(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay returned {}: {}", status, text));
+    }
+
+    // Cancel the WebSocket tunnel
+    let tunnel_key = format!("site:{}", site_id);
+    if let Some(handle) = state.tunnel_handles.lock().await.remove(&tunnel_key) {
+        handle.abort();
+    }
+
+    // Clear relay URL from local metadata
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.relay_url = None;
+    }
+    hosting::save_sites(&all_sites);
+
+    println!("[HOSTING] Unpublished site {} from relay", site_id);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Drive CRUD commands (via Tauri invoke, bypasses browser HTTP restrictions)
+// ---------------------------------------------------------------------------
+
+use crate::drive_storage::{
+    self as ds, DriveItem as DsItem, ShareLink as DsShareLink,
+};
+
+#[tauri::command]
+async fn drive_list_items(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    parent_id: Option<String>,
+) -> Result<Vec<DsItem>, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let m = state.drive_state.manifest.read().await;
+    let parent = parent_id.as_deref();
+    let mut items: Vec<DsItem> = m
+        .items
+        .iter()
+        .filter(|i| i.parent_id.as_deref() == parent && i.owner == owner)
+        .cloned()
+        .collect();
+    items.sort_by(|a, b| {
+        if a.item_type != b.item_type {
+            if a.item_type == "folder" {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            }
+        } else {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
+        }
+    });
+    Ok(items)
+}
+
+/// List ALL Drive items for an owner (flat, ignoring folder hierarchy).
+/// Used by hosted-file cleanup to find files regardless of which folder they're in.
+#[tauri::command]
+async fn drive_list_all_items(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+) -> Result<Vec<DsItem>, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let m = state.drive_state.manifest.read().await;
+    Ok(m.items.iter().filter(|i| i.owner == owner).cloned().collect())
+}
+
+#[tauri::command]
+async fn drive_create_folder(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    name: String,
+    parent_id: Option<String>,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    if name.is_empty() || name.len() > 255 {
+        return Err("Invalid folder name".into());
+    }
+    let item = DsItem {
+        id: ds::generate_id(),
+        name,
+        item_type: "folder".into(),
+        parent_id,
+        size: None,
+        mime_type: None,
+        created_at: ds::now_secs(),
+        modified_at: ds::now_secs(),
+        starred: false,
+        storage_path: None,
+        owner,
+        is_public: true,
+        merkle_root: None,
+        protocol: None,
+        price_chi: None,
+        seeding: false,
+    };
+    {
+        let mut m = state.drive_state.manifest.write().await;
+        m.items.push(item.clone());
+    }
+    state.drive_state.persist().await;
+    Ok(item)
+}
+
+#[tauri::command]
+async fn drive_upload_file(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    file_path: String,
+    parent_id: Option<String>,
+    merkle_root: Option<String>,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let src = std::path::Path::new(&file_path);
+    let file_name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Invalid file path")?
+        .to_string();
+    let data = std::fs::read(src).map_err(|e| format!("Failed to read file: {}", e))?;
+
+    if data.len() > 500 * 1024 * 1024 {
+        return Err("File exceeds 500 MB limit".into());
+    }
+
+    let item_id = ds::generate_id();
+    let storage_name = format!("{}_{}", item_id, file_name);
+    let mime = ds::mime_from_name(&file_name);
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine storage directory")?;
+    std::fs::create_dir_all(&files_dir)
+        .map_err(|e| format!("Failed to create storage dir: {}", e))?;
+    let dest = files_dir.join(&storage_name);
+    std::fs::write(&dest, &data).map_err(|e| format!("Failed to write file: {}", e))?;
+
+    let item = DsItem {
+        id: item_id,
+        name: file_name.clone(),
+        item_type: "file".into(),
+        parent_id,
+        size: Some(data.len() as u64),
+        mime_type: Some(mime),
+        created_at: ds::now_secs(),
+        modified_at: ds::now_secs(),
+        starred: false,
+        storage_path: Some(storage_name),
+        owner,
+        is_public: true,
+        merkle_root,
+        protocol: None,
+        price_chi: None,
+        seeding: false,
+    };
+    {
+        let mut m = state.drive_state.manifest.write().await;
+        m.items.push(item.clone());
+    }
+    state.drive_state.persist().await;
+    println!("[DRIVE] Uploaded file: {} ({} bytes)", file_name, data.len());
+    Ok(item)
+}
+
+#[tauri::command]
+async fn drive_update_item(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+    name: Option<String>,
+    parent_id: Option<String>,
+    starred: Option<bool>,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    let item = m
+        .items
+        .iter_mut()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .ok_or("Item not found")?;
+    if let Some(n) = name {
+        if n.is_empty() || n.len() > 255 {
+            return Err("Invalid name".into());
+        }
+        item.name = n;
+    }
+    if let Some(pid) = parent_id {
+        item.parent_id = if pid.is_empty() { None } else { Some(pid) };
+    }
+    if let Some(s) = starred {
+        item.starred = s;
+    }
+    item.modified_at = ds::now_secs();
+    let updated = item.clone();
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(updated)
+}
+
+#[tauri::command]
+async fn drive_delete_item(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<(), String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
+        return Err("Item not found".into());
+    }
+    let to_delete: std::collections::HashSet<String> =
+        ds::collect_descendants(&item_id, &m.items)
+            .into_iter()
+            .collect();
+    if let Some(files_dir) = ds::drive_files_dir() {
+        for id in &to_delete {
+            if let Some(item) = m.items.iter().find(|i| &i.id == id) {
+                if let Some(sp) = &item.storage_path {
+                    let _ = std::fs::remove_file(files_dir.join(sp));
+                }
+            }
+        }
+    }
+    m.items.retain(|i| !to_delete.contains(&i.id));
+    m.shares.retain(|s| !to_delete.contains(&s.item_id));
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn drive_create_share(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+    password: Option<String>,
+    is_public: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
+        return Err("Item not found".into());
+    }
+    let token = ds::generate_share_token();
+    let share = DsShareLink {
+        id: token.clone(),
+        item_id: item_id.clone(),
+        created_at: ds::now_secs(),
+        expires_at: None,
+        password_hash: password.as_deref().map(ds::hash_password),
+        is_public: is_public.unwrap_or(false),
+        download_count: 0,
+    };
+    m.shares.push(share.clone());
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(serde_json::json!({
+        "id": share.id,
+        "itemId": item_id,
+        "url": format!("/drive/{}", share.id),
+        "isPublic": share.is_public,
+        "hasPassword": share.password_hash.is_some(),
+        "createdAt": share.created_at,
+        "downloadCount": 0,
+    }))
+}
+
+#[tauri::command]
+async fn drive_revoke_share(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<(), String> {
+    let mut m = state.drive_state.manifest.write().await;
+    let before = m.shares.len();
+    m.shares.retain(|s| s.id != token);
+    if m.shares.len() == before {
+        return Err("Share not found".into());
+    }
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn drive_list_shares(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let m = state.drive_state.manifest.read().await;
+    let shares: Vec<serde_json::Value> = m
+        .shares
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "itemId": s.item_id,
+                "url": format!("/drive/{}", s.id),
+                "isPublic": s.is_public,
+                "hasPassword": s.password_hash.is_some(),
+                "createdAt": s.created_at,
+                "downloadCount": s.download_count,
+            })
+        })
+        .collect();
+    Ok(shares)
+}
+
+#[tauri::command]
+async fn drive_toggle_visibility(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+    is_public: bool,
+) -> Result<DsItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let mut m = state.drive_state.manifest.write().await;
+    let item = m
+        .items
+        .iter_mut()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .ok_or("Item not found")?;
+    item.is_public = is_public;
+    item.modified_at = ds::now_secs();
+    let updated = item.clone();
+    drop(m);
+    state.drive_state.persist().await;
+    Ok(updated)
+}
+
+/// Publish a Drive file to the P2P network (compute hash, register as shared, publish to DHT).
+/// Returns the SHA-256 file hash so it can be used in hosting proposals.
+#[tauri::command]
+async fn publish_drive_file(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+    protocol: Option<String>,
+    price_chi: Option<String>,
+    wallet_address: Option<String>,
+) -> Result<ds::DriveItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    // Look up the Drive item from the manifest
+    let (file_name, storage_path, _file_size) = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m
+            .items
+            .iter()
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
+            .ok_or("Drive file not found")?;
+        let sp = item.storage_path.as_ref().ok_or("Drive file has no storage path")?;
+        (item.name.clone(), sp.clone(), item.size.unwrap_or(0))
+    };
+
+    // Resolve the full filesystem path
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
+    let full_path = files_dir.join(&storage_path);
+    if !full_path.exists() {
+        return Err("Drive file not found on disk".into());
+    }
+    let full_path_str = full_path.to_string_lossy().to_string();
+
+    // Read file and compute SHA-256 hash
+    let file_data = std::fs::read(&full_path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let actual_size = file_data.len() as u64;
+
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(&file_data);
+    let hash = hasher.finalize();
+    let file_hash = hex::encode(hash);
+
+    let proto = protocol.unwrap_or_else(|| "WebRTC".to_string());
+
+    println!("[DRIVE] Publishing drive file to network: {} (hash: {}, protocol: {})", file_name, file_hash, proto);
+
+    // Parse price from CHI to wei
+    let price_wei_val = if let Some(ref price) = price_chi {
+        if price.is_empty() || price == "0" { 0u128 } else { parse_chi_to_wei(price)? }
+    } else {
+        0u128
+    };
+    let wallet_addr = wallet_address.unwrap_or_default();
+    if price_wei_val > 0 && wallet_addr.is_empty() {
+        return Err("Wallet address is required when setting a file price".to_string());
+    }
+
+    // Store file data in memory for serving to peers
+    {
+        let mut storage = state.file_storage.lock().await;
+        storage.insert(file_hash.clone(), file_data);
+    }
+
+    // Register with DHT and shared files map
+    let dht_guard = state.dht.lock().await;
+    if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+
+        dht.register_shared_file(
+            file_hash.clone(),
+            full_path_str,
+            file_name.clone(),
+            actual_size,
+            price_wei_val,
+            wallet_addr.clone(),
+        ).await;
+
+        let our_seeder = SeederInfo {
+            peer_id: peer_id.clone(),
+            price_wei: price_wei_val.to_string(),
+            wallet_address: wallet_addr,
+        };
+
+        let dht_key = format!("chiral_file_{}", file_hash);
+        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
+                protocol: proto.clone(),
+                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
+                seeders: Vec::new(),
+            }),
+            _ => FileMetadata {
+                hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
+                protocol: proto.clone(),
+                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        metadata.peer_id = peer_id;
+        metadata.price_wei = price_wei_val.to_string();
+
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        dht.put_dht_value(dht_key, metadata_json).await?;
+    }
+
+    // Update the Drive manifest with seeding metadata
+    let updated_item = {
+        let mut m = state.drive_state.manifest.write().await;
+        let item = m.items.iter_mut()
+            .find(|i| i.id == item_id)
+            .ok_or("Drive item not found in manifest")?;
+        item.merkle_root = Some(file_hash);
+        item.protocol = Some(proto);
+        item.price_chi = price_chi;
+        item.seeding = true;
+        item.modified_at = ds::now_secs();
+        let cloned = item.clone();
+        ds::save_manifest(&m);
+        cloned
+    };
+
+    Ok(updated_item)
+}
+
+#[tauri::command]
+async fn drive_stop_seeding(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<ds::DriveItem, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    // Look up the Drive item
+    let merkle_root = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m.items.iter()
+            .find(|i| i.id == item_id && i.owner == owner)
+            .ok_or("Drive item not found")?;
+        item.merkle_root.clone()
+    };
+
+    // Unregister from DHT shared files
+    if let Some(ref hash) = merkle_root {
+        let dht_guard = state.dht.lock().await;
+        if let Some(dht) = dht_guard.as_ref() {
+            dht.unregister_shared_file(hash).await;
+        }
+        // Remove from in-memory file storage
+        let mut storage = state.file_storage.lock().await;
+        storage.remove(hash);
+    }
+
+    // Update manifest
+    let updated_item = {
+        let mut m = state.drive_state.manifest.write().await;
+        let item = m.items.iter_mut()
+            .find(|i| i.id == item_id)
+            .ok_or("Drive item not found in manifest")?;
+        item.seeding = false;
+        item.modified_at = ds::now_secs();
+        let cloned = item.clone();
+        ds::save_manifest(&m);
+        cloned
+    };
+
+    Ok(updated_item)
+}
+
+#[tauri::command]
+async fn drive_export_torrent(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<String, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    let (file_name, file_size, merkle_root, storage_path) = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m.items.iter()
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
+            .ok_or("Drive file not found")?;
+        let hash = item.merkle_root.as_ref().ok_or("File has not been published to network")?;
+        let sp = item.storage_path.as_ref().ok_or("File has no storage path")?;
+        (item.name.clone(), item.size.unwrap_or(0), hash.clone(), sp.clone())
+    };
+
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
+    let full_path = files_dir.join(&storage_path).to_string_lossy().to_string();
+
+    // Delegate to existing export_torrent_file logic
+    let result = export_torrent_file(
+        merkle_root,
+        file_name,
+        file_size,
+        full_path,
+    ).await?;
+
+    Ok(result.path)
+}
+
+// ---------------------------------------------------------------------------
+// Drive server & relay commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn get_drive_server_url(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    // The local server starts asynchronously in .setup(). Wait up to 10s for it
+    // to become ready, polling every 100ms, so the frontend doesn't get a null
+    // URL on first mount.
+    for _ in 0..100 {
+        let addr = state.hosting_server_addr.lock().await;
+        if let Some(a) = *addr {
+            // The server binds to 0.0.0.0 which isn't fetchable from a
+            // browser/WebView. Return localhost instead.
+            return Ok(Some(format!("http://localhost:{}", a.port())));
+        }
+        drop(addr);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+async fn publish_drive_share(
+    state: tauri::State<'_, AppState>,
+    share_token: String,
+    relay_url: String,
+    owner_wallet: String,
+) -> Result<(), String> {
+    let origin = state
+        .hosting_server_addr
+        .lock()
+        .await
+        .map(|a| format!("http://{}", a))
+        .ok_or("Local server not running")?;
+
+    let relay_base = relay_url.trim_end_matches('/');
+    let url = format!("{}/api/drive/relay-register", relay_base);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "token": share_token,
+            "origin_url": origin,
+            "owner_wallet": owner_wallet,
+        }))
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to register share with relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay error: {}", text));
+    }
+
+    // Start WebSocket tunnel to relay for NAT traversal
+    let tunnel_key = format!("share:{}", share_token);
+    let abort_handle = spawn_relay_tunnel(
+        relay_base.to_string(),
+        "share".to_string(),
+        share_token.clone(),
+        origin,
+    );
+    state
+        .tunnel_handles
+        .lock()
+        .await
+        .insert(tunnel_key, abort_handle);
+
+    println!(
+        "[DRIVE] Published share token={} to relay {}",
+        share_token, relay_base
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn unpublish_drive_share(
+    state: tauri::State<'_, AppState>,
+    share_token: String,
+    relay_url: String,
+) -> Result<(), String> {
+    let relay_base = relay_url.trim_end_matches('/');
+    let url = format!(
+        "{}/api/drive/relay-register/{}",
+        relay_base, share_token
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .delete(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to unregister share from relay: {}", e))?;
+
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Relay error: {}", text));
+    }
+
+    // Cancel the WebSocket tunnel
+    let tunnel_key = format!("share:{}", share_token);
+    if let Some(handle) = state.tunnel_handles.lock().await.remove(&tunnel_key) {
+        handle.abort();
+    }
+
+    println!(
+        "[DRIVE] Unpublished share token={} from relay",
+        share_token
+    );
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
     let geth_for_signal = geth.clone();
     let geth_for_exit = geth.clone();
 
-    // Spawn a background task to stop Geth on SIGINT (Ctrl+C) or SIGTERM
-    // This prevents orphaned Geth processes when the app is killed
+    // Create DHT Arc before signal handler so it can be shared
+    let dht_arc: Arc<Mutex<Option<Arc<DhtService>>>> = Arc::new(Mutex::new(None));
+    let dht_for_signal = dht_arc.clone();
+
+    // Spawn a background task to stop Geth + cleanup DHT on SIGINT (Ctrl+C) or SIGTERM
+    // This prevents orphaned Geth processes and stale DHT entries when the app is killed
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2577,12 +4358,20 @@ pub fn run() {
                 let mut sigterm = signal(SignalKind::terminate()).unwrap();
                 tokio::select! {
                     _ = sigint.recv() => {
-                        println!("🛑 SIGINT received — stopping Geth before exit");
+                        println!("🛑 SIGINT received — cleaning up before exit");
                     }
                     _ = sigterm.recv() => {
-                        println!("🛑 SIGTERM received — stopping Geth before exit");
+                        println!("🛑 SIGTERM received — cleaning up before exit");
                     }
                 }
+
+                // Cleanup DHT: unpublish shared files + host advertisement
+                // Use tokio::time::timeout to avoid hanging if DHT is unresponsive
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    cleanup_dht_on_shutdown(&dht_for_signal),
+                ).await;
+
                 // Use try_lock to avoid deadlock with the main thread
                 match geth_for_signal.try_lock() {
                     Ok(mut geth) => {
@@ -2610,7 +4399,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
-            dht: Arc::new(Mutex::new(None)),
+            dht: dht_arc,
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth,
@@ -2619,6 +4408,70 @@ pub fn run() {
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
+            // Hosting & Drive
+            hosting_server_state: Arc::new(hosting_server::HostingServerState::new()),
+            hosting_server_addr: Arc::new(Mutex::new(None)),
+            hosting_server_shutdown: Arc::new(Mutex::new(None)),
+            drive_state: Arc::new(drive_api::DriveState::new()),
+            tunnel_handles: Arc::new(Mutex::new(HashMap::new())),
+        })
+        .setup(|app| {
+            use tauri::Manager;
+            // Auto-start local server with Drive routes on port 9419
+            let state = app.state::<AppState>();
+            let hosting: Arc<hosting_server::HostingServerState> =
+                Arc::clone(&state.hosting_server_state);
+            let drive: Arc<drive_api::DriveState> = Arc::clone(&state.drive_state);
+            let addr_store: Arc<Mutex<Option<std::net::SocketAddr>>> =
+                Arc::clone(&state.hosting_server_addr);
+            let shutdown_store: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> =
+                Arc::clone(&state.hosting_server_shutdown);
+            let tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>> =
+                Arc::clone(&state.tunnel_handles);
+            tauri::async_runtime::spawn(async move {
+                hosting.load_from_disk().await;
+                drive.load_from_disk_async().await;
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                // Local server: has drive routes, no relay share proxy
+                match hosting_server::start_gateway_server(
+                    hosting,
+                    Some(drive),
+                    None,
+                    None,
+                    9419,
+                    rx,
+                )
+                .await
+                {
+                    Ok(addr) => {
+                        *addr_store.lock().await = Some(addr);
+                        *shutdown_store.lock().await = Some(tx);
+                        println!("[DRIVE] Local server started on http://{}", addr);
+
+                        // Re-establish tunnels for already-published sites
+                        let local_origin = format!("http://localhost:{}", addr.port());
+                        let relay_base = "http://130.245.173.73:8080";
+                        let sites = hosting::load_sites();
+                        for site in &sites {
+                            if site.relay_url.is_some() {
+                                println!("[TUNNEL] Re-establishing tunnel for site {}", site.id);
+                                let abort = spawn_relay_tunnel(
+                                    relay_base.to_string(),
+                                    "site".to_string(),
+                                    site.id.clone(),
+                                    local_origin.clone(),
+                                );
+                                tunnel_handles
+                                    .lock()
+                                    .await
+                                    .insert(format!("site:{}", site.id), abort);
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("[DRIVE] Failed to start local server: {}", e),
+                }
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             // DHT commands
@@ -2653,6 +4506,7 @@ pub fn run() {
             export_torrent_file,
             open_file,
             show_in_folder,
+            show_drive_item_in_folder,
             // Wallet commands
             get_wallet_balance,
             send_transaction,
@@ -2684,7 +4538,49 @@ pub fn run() {
             decrypt_file_data,
             send_encrypted_file,
             publish_encryption_key,
-            lookup_encryption_key
+            lookup_encryption_key,
+            // Hosting commands
+            create_hosted_site,
+            list_hosted_sites,
+            delete_hosted_site,
+            start_hosting_server,
+            stop_hosting_server,
+            get_hosting_server_status,
+            publish_site_to_relay,
+            unpublish_site_from_relay,
+            // Drive commands
+            get_drive_server_url,
+            publish_drive_share,
+            unpublish_drive_share,
+            drive_list_items,
+            drive_list_all_items,
+            drive_create_folder,
+            drive_upload_file,
+            drive_update_item,
+            drive_delete_item,
+            drive_create_share,
+            drive_revoke_share,
+            drive_list_shares,
+            drive_toggle_visibility,
+            publish_drive_file,
+            drive_stop_seeding,
+            drive_export_torrent,
+            // Hosting marketplace commands
+            publish_host_advertisement,
+            unpublish_host_advertisement,
+            get_host_registry,
+            get_host_advertisement,
+            echo_peer,
+            store_hosting_agreement,
+            get_hosting_agreement,
+            list_hosting_agreements,
+            // File lifecycle commands
+            republish_shared_file,
+            unpublish_all_shared_files,
+            get_active_hosted_files,
+            cleanup_agreement_files,
+            // App lifecycle
+            exit_app,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -2719,4 +4615,345 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod multi_seeder_tests {
+    use super::*;
+
+    // --- Serialization / Deserialization ---
+
+    #[test]
+    fn seeder_info_roundtrip() {
+        let seeder = SeederInfo {
+            peer_id: "12D3KooWTest1".to_string(),
+            price_wei: "1000000000000000".to_string(),
+            wallet_address: "0xabc123".to_string(),
+        };
+        let json = serde_json::to_string(&seeder).unwrap();
+        assert!(json.contains("peerId"));      // camelCase
+        assert!(json.contains("priceWei"));
+        assert!(json.contains("walletAddress"));
+
+        let deserialized: SeederInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.peer_id, "12D3KooWTest1");
+        assert_eq!(deserialized.price_wei, "1000000000000000");
+        assert_eq!(deserialized.wallet_address, "0xabc123");
+    }
+
+    #[test]
+    fn file_metadata_with_seeders_roundtrip() {
+        let metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWPeerA".to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![
+                SeederInfo {
+                    peer_id: "12D3KooWPeerA".to_string(),
+                    price_wei: "0".to_string(),
+                    wallet_address: String::new(),
+                },
+                SeederInfo {
+                    peer_id: "12D3KooWPeerB".to_string(),
+                    price_wei: "5000000000000000".to_string(),
+                    wallet_address: "0xdef456".to_string(),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&metadata).unwrap();
+        let restored: FileMetadata = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.seeders.len(), 2);
+        assert_eq!(restored.seeders[0].peer_id, "12D3KooWPeerA");
+        assert_eq!(restored.seeders[1].peer_id, "12D3KooWPeerB");
+        assert_eq!(restored.seeders[1].price_wei, "5000000000000000");
+        assert_eq!(restored.seeders[1].wallet_address, "0xdef456");
+    }
+
+    // --- Backward Compatibility ---
+
+    #[test]
+    fn legacy_metadata_without_seeders_field_deserializes() {
+        // Old records stored in DHT won't have a "seeders" field
+        let legacy_json = r#"{
+            "hash": "abc123",
+            "fileName": "old_file.txt",
+            "fileSize": 512,
+            "protocol": "WebRTC",
+            "createdAt": 1700000000,
+            "peerId": "12D3KooWLegacy",
+            "priceWei": "1000",
+            "walletAddress": "0xlegacy"
+        }"#;
+
+        let metadata: FileMetadata = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(metadata.peer_id, "12D3KooWLegacy");
+        assert_eq!(metadata.price_wei, "1000");
+        assert_eq!(metadata.wallet_address, "0xlegacy");
+        // seeders should default to empty vec
+        assert!(metadata.seeders.is_empty());
+    }
+
+    #[test]
+    fn legacy_metadata_search_creates_seeder_from_peer_id() {
+        // Simulate what search_file does with legacy records
+        let metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "legacy.txt".to_string(),
+            file_size: 256,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWLegacy".to_string(),
+            price_wei: "2000".to_string(),
+            wallet_address: "0xlegacy".to_string(),
+            seeders: Vec::new(), // empty — old record
+        };
+
+        // This is the logic from search_file:
+        let mut seeders = metadata.seeders;
+        if seeders.is_empty() && !metadata.peer_id.is_empty() {
+            seeders.push(SeederInfo {
+                peer_id: metadata.peer_id,
+                price_wei: metadata.price_wei.clone(),
+                wallet_address: metadata.wallet_address.clone(),
+            });
+        }
+
+        assert_eq!(seeders.len(), 1);
+        assert_eq!(seeders[0].peer_id, "12D3KooWLegacy");
+        assert_eq!(seeders[0].price_wei, "2000");
+        assert_eq!(seeders[0].wallet_address, "0xlegacy");
+    }
+
+    // --- Upsert Logic ---
+
+    #[test]
+    fn upsert_adds_new_seeder() {
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWPeerA".to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![SeederInfo {
+                peer_id: "12D3KooWPeerA".to_string(),
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+            }],
+        };
+
+        let new_peer = "12D3KooWPeerB";
+        let our_seeder = SeederInfo {
+            peer_id: new_peer.to_string(),
+            price_wei: "5000".to_string(),
+            wallet_address: "0xB".to_string(),
+        };
+
+        // Upsert logic from publish_file
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == new_peer) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+
+        assert_eq!(metadata.seeders.len(), 2);
+        assert_eq!(metadata.seeders[1].peer_id, "12D3KooWPeerB");
+        assert_eq!(metadata.seeders[1].price_wei, "5000");
+    }
+
+    #[test]
+    fn upsert_updates_existing_seeder_price() {
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: "12D3KooWPeerA".to_string(),
+            price_wei: "1000".to_string(),
+            wallet_address: "0xA".to_string(),
+            seeders: vec![SeederInfo {
+                peer_id: "12D3KooWPeerA".to_string(),
+                price_wei: "1000".to_string(),
+                wallet_address: "0xA".to_string(),
+            }],
+        };
+
+        let peer_id = "12D3KooWPeerA";
+        let new_price = "9999".to_string();
+        let new_wallet = "0xA_new".to_string();
+
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = new_price;
+            existing.wallet_address = new_wallet;
+        } else {
+            unreachable!("should have found existing seeder");
+        }
+
+        assert_eq!(metadata.seeders.len(), 1); // no duplicates
+        assert_eq!(metadata.seeders[0].price_wei, "9999");
+        assert_eq!(metadata.seeders[0].wallet_address, "0xA_new");
+    }
+
+    // --- Unpublish (removal) ---
+
+    #[test]
+    fn unpublish_removes_only_our_peer() {
+        let our_peer = "12D3KooWUs";
+        let other_peer = "12D3KooWOther";
+
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: our_peer.to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![
+                SeederInfo {
+                    peer_id: our_peer.to_string(),
+                    price_wei: "0".to_string(),
+                    wallet_address: String::new(),
+                },
+                SeederInfo {
+                    peer_id: other_peer.to_string(),
+                    price_wei: "3000".to_string(),
+                    wallet_address: "0xOther".to_string(),
+                },
+            ],
+        };
+
+        // Unpublish logic from unpublish_all_shared_files
+        metadata.seeders.retain(|s| s.peer_id != our_peer);
+        if metadata.peer_id == our_peer {
+            metadata.peer_id = String::new();
+        }
+
+        assert_eq!(metadata.seeders.len(), 1);
+        assert_eq!(metadata.seeders[0].peer_id, other_peer);
+        assert_eq!(metadata.seeders[0].price_wei, "3000");
+        assert!(metadata.peer_id.is_empty());
+    }
+
+    #[test]
+    fn unpublish_from_single_seeder_leaves_empty() {
+        let our_peer = "12D3KooWSolo";
+
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: our_peer.to_string(),
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+            seeders: vec![SeederInfo {
+                peer_id: our_peer.to_string(),
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+            }],
+        };
+
+        metadata.seeders.retain(|s| s.peer_id != our_peer);
+        if metadata.peer_id == our_peer {
+            metadata.peer_id = String::new();
+        }
+
+        assert!(metadata.seeders.is_empty());
+        assert!(metadata.peer_id.is_empty());
+    }
+
+    // --- Multiple seeders scenario ---
+
+    #[test]
+    fn three_seeders_with_different_prices() {
+        let mut metadata = FileMetadata {
+            hash: "multiseed".to_string(),
+            file_name: "popular.zip".to_string(),
+            file_size: 10_000_000,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            peer_id: String::new(),
+            price_wei: String::new(),
+            wallet_address: String::new(),
+            seeders: Vec::new(),
+        };
+
+        // Three peers publish in sequence
+        let peers = vec![
+            ("PeerA", "0", ""),
+            ("PeerB", "1000000000000000", "0xB_wallet"),
+            ("PeerC", "5000000000000000", "0xC_wallet"),
+        ];
+
+        for (peer_id, price, wallet) in &peers {
+            let seeder = SeederInfo {
+                peer_id: peer_id.to_string(),
+                price_wei: price.to_string(),
+                wallet_address: wallet.to_string(),
+            };
+            if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == *peer_id) {
+                existing.price_wei = seeder.price_wei;
+                existing.wallet_address = seeder.wallet_address;
+            } else {
+                metadata.seeders.push(seeder);
+            }
+            metadata.peer_id = peer_id.to_string();
+        }
+
+        assert_eq!(metadata.seeders.len(), 3);
+        // Free seeder
+        assert_eq!(metadata.seeders[0].price_wei, "0");
+        // Cheapest paid seeder
+        assert_eq!(metadata.seeders[1].price_wei, "1000000000000000");
+        // Most expensive seeder
+        assert_eq!(metadata.seeders[2].price_wei, "5000000000000000");
+    }
+
+    #[test]
+    fn search_result_serialization_with_seeder_info() {
+        let result = SearchResult {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            seeders: vec![
+                SeederInfo {
+                    peer_id: "PeerA".to_string(),
+                    price_wei: "0".to_string(),
+                    wallet_address: String::new(),
+                },
+                SeederInfo {
+                    peer_id: "PeerB".to_string(),
+                    price_wei: "5000".to_string(),
+                    wallet_address: "0xB".to_string(),
+                },
+            ],
+            created_at: 1700000000,
+            price_wei: "0".to_string(),
+            wallet_address: String::new(),
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        // Verify it serializes as array of objects (not strings)
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let seeders = parsed["seeders"].as_array().unwrap();
+        assert_eq!(seeders.len(), 2);
+        assert_eq!(seeders[0]["peerId"], "PeerA");
+        assert_eq!(seeders[1]["peerId"], "PeerB");
+        assert_eq!(seeders[1]["priceWei"], "5000");
+        assert_eq!(seeders[1]["walletAddress"], "0xB");
+    }
 }
