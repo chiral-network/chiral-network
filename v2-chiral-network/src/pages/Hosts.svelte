@@ -81,29 +81,23 @@
     }
   }
 
-  /** Delete hosted files from Drive "Shared" folder when agreement is cancelled */
+  /** Delete hosted files from Drive when agreement is cancelled.
+   *  Searches ALL Drive items (not just "Shared" folder) so files are
+   *  cleaned up regardless of where they were stored. */
   async function cleanupDriveSharedFiles(agreementId: string) {
     const wallet = get(walletAccount);
     if (!wallet?.address) return;
     const agreement = myAgreements.find((a) => a.agreementId === agreementId);
     if (!agreement?.fileHashes?.length) return;
     try {
-      const rootItems = await invoke<{ id: string; name: string; itemType: string }[]>(
-        'drive_list_items', { owner: wallet.address, parentId: null },
+      const allItems = await invoke<{ id: string; name: string; itemType: string; merkleRoot?: string; parentId?: string | null }[]>(
+        'drive_list_all_items', { owner: wallet.address },
       );
-      const sharedFolder = rootItems.find(
-        (i) => i.name === 'Shared' && i.itemType === 'folder',
-      );
-      if (!sharedFolder) return;
-      const sharedItems = await invoke<{ id: string; name: string; merkleRoot?: string }[]>(
-        'drive_list_items', { owner: wallet.address, parentId: sharedFolder.id },
-      );
-      // Match by file name (fileName = fileHash in fulfillAgreement) or by merkleRoot
       const hashSet = new Set(agreement.fileHashes);
-      for (const item of sharedItems) {
-        if (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot))) {
+      for (const item of allItems) {
+        if (item.itemType === 'file' && (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot)))) {
           await invoke('drive_delete_item', { owner: wallet.address, itemId: item.id });
-          console.log(`🗑️ Removed hosted file ${item.name} from Drive/Shared`);
+          console.log(`🗑️ Removed hosted file ${item.name} from Drive`);
         }
       }
     } catch (err) {
@@ -325,12 +319,8 @@
         // Clean up hosted files if we're the host
         const agreement = myAgreements.find((a) => a.agreementId === agreementId);
         if (agreement && agreement.hostPeerId === myPeerId) {
-          try {
-            await invoke('cleanup_agreement_files', { agreementId });
-            await cleanupDriveSharedFiles(agreementId);
-          } catch {
-            // Best-effort cleanup
-          }
+          try { await invoke('cleanup_agreement_files', { agreementId }); } catch { /* best-effort */ }
+          try { await cleanupDriveSharedFiles(agreementId); } catch { /* best-effort */ }
         }
         myAgreements = myAgreements.map((a) =>
           a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
@@ -448,12 +438,8 @@
             // Auto-cancelled (proposed withdrawal or mutual cancellation) — clean up
             const agreement = myAgreements.find((a) => a.agreementId === agreementId);
             if (agreement && agreement.hostPeerId === myPeerId) {
-              try {
-                await invoke('cleanup_agreement_files', { agreementId });
-                await cleanupDriveSharedFiles(agreementId);
-              } catch {
-                // Best-effort cleanup
-              }
+              try { await invoke('cleanup_agreement_files', { agreementId }); } catch { /* best-effort */ }
+              try { await cleanupDriveSharedFiles(agreementId); } catch { /* best-effort */ }
             }
             myAgreements = myAgreements.map((a) =>
               a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
@@ -478,12 +464,8 @@
             // Clean up hosted files if we're the host
             const agreement = myAgreements.find((a) => a.agreementId === agreementId);
             if (agreement && agreement.hostPeerId === myPeerId) {
-              try {
-                await invoke('cleanup_agreement_files', { agreementId });
-                await cleanupDriveSharedFiles(agreementId);
-              } catch {
-                // Best-effort cleanup
-              }
+              try { await invoke('cleanup_agreement_files', { agreementId }); } catch { /* best-effort */ }
+              try { await cleanupDriveSharedFiles(agreementId); } catch { /* best-effort */ }
             }
             myAgreements = myAgreements.map((a) =>
               a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
