@@ -214,7 +214,7 @@ describe('Download Flow Simulation', () => {
     });
 
     it('should format zero cost', () => {
-      expect(formatCost(0)).toBe('0 CHI');
+      expect(formatCost(0)).toBe('Free');
     });
   });
 

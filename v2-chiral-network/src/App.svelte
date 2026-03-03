@@ -60,7 +60,10 @@
         event.preventDefault(); // take control of the close sequence
         try {
           await Promise.race([
-            invoke('unpublish_all_shared_files'),
+            Promise.all([
+              invoke('unpublish_all_shared_files'),
+              invoke('unpublish_host_advertisement').catch(() => {}),
+            ]),
             new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
           ]);
         } catch {
@@ -262,6 +265,21 @@
       }
     } catch {
       // Agreements dir may not exist yet — skip
+    }
+
+    // 4. Auto-publish hosting marketplace if enabled in settings
+    try {
+      const currentSettings = $settings;
+      if (currentSettings.hostingConfig?.enabled) {
+        const addr = $walletAccount?.address;
+        if (addr) {
+          const { hostingService } = await import('$lib/services/hostingService');
+          await hostingService.publishHostAdvertisement(currentSettings.hostingConfig, addr);
+          console.log('✅ Auto-published hosting marketplace advertisement');
+        }
+      }
+    } catch {
+      // Hosting publish may fail if DHT not ready — skip
     }
   }
 

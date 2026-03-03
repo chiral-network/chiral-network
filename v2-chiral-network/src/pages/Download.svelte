@@ -179,10 +179,10 @@
 
   // Format wei price as CHI string
   function formatPriceWei(weiStr: string): string {
-    if (!weiStr || weiStr === '0') return '0 CHI';
+    if (!weiStr || weiStr === '0') return 'Free';
     try {
       const wei = BigInt(weiStr);
-      if (wei === 0n) return '0 CHI';
+      if (wei === 0n) return 'Free';
       const whole = wei / 1_000_000_000_000_000_000n;
       const frac = wei % 1_000_000_000_000_000_000n;
       if (frac === 0n) return `${whole} CHI`;
@@ -190,7 +190,7 @@
       const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) : fracStr;
       return `${whole}.${decimals} CHI`;
     } catch {
-      return '0 CHI';
+      return 'Free';
     }
   }
 

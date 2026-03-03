@@ -50,7 +50,7 @@ export function calculateCost(tier: SpeedTier, fileSizeBytes: number): number {
 
 /** Format a CHI cost for display */
 export function formatCost(costChi: number): string {
-  if (costChi === 0) return '0 CHI';
+  if (costChi === 0) return 'Free';
   if (costChi < 0.000001) return '< 0.000001 CHI';
   return `${costChi.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} CHI`;
 }

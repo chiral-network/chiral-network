@@ -107,8 +107,8 @@ describe('speedTiers', () => {
   });
 
   describe('formatCost', () => {
-    it('should return "0 CHI" for zero cost', () => {
-      expect(formatCost(0)).toBe('0 CHI');
+    it('should return "Free" for zero cost', () => {
+      expect(formatCost(0)).toBe('Free');
     });
 
     it('should return "< 0.000001 CHI" for very tiny amounts', () => {
