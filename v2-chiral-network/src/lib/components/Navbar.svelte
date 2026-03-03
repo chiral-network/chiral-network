@@ -25,15 +25,15 @@
   const navItems = [
     { path: '/download', label: 'Download', icon: Download },
     { path: '/drive', label: 'Drive', icon: HardDrive },
-    { path: '/chiraldrop', label: 'ChiralDrop', icon: Send },
     { path: '/account', label: 'Account', icon: Wallet },
-    { path: '/network', label: 'Network', icon: Globe },
-    { path: '/mining', label: 'Mining', icon: Pickaxe },
+    { path: '/hosts', label: 'Hosts', icon: Users },
     { path: '/hosting', label: 'Hosting', icon: Server },
     { path: '/reputation', label: 'Reputation', icon: Star },
-    { path: '/hosts', label: 'Hosts', icon: Users },
+    { path: '/network', label: 'Network', icon: Globe },
+    { path: '/settings', label: 'Settings', icon: Settings },
+    { path: '/chiraldrop', label: 'ChiralDrop', icon: Send },
     { path: '/diagnostics', label: 'Diagnostics', icon: Bug },
-    { path: '/settings', label: 'Settings', icon: Settings }
+    { path: '/mining', label: 'Mining', icon: Pickaxe },
   ];
 
   const visibleItems = navItems.slice(0, MAX_VISIBLE);

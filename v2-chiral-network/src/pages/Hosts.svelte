@@ -127,11 +127,11 @@
   function formatWeiAsChi(wei: string): string {
     try {
       const value = Number(BigInt(wei)) / 1e18;
-      if (value === 0) return '0 CHI';
+      if (value === 0) return 'Free';
       if (value < 0.000001) return '< 0.000001 CHI';
       return `${parseFloat(value.toFixed(6))} CHI`;
     } catch {
-      return '0 CHI';
+      return 'Free';
     }
   }
 
