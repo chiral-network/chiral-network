@@ -441,6 +441,17 @@
     }
   }
 
+  async function handleShowInExplorer(item: DriveItem) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const addr = $walletAccount?.address;
+      if (!addr) return;
+      await invoke('show_drive_item_in_folder', { owner: addr, itemId: item.id });
+    } catch (e) {
+      toasts.show(`Failed to open file explorer: ${(e as Error).message || e}`, 'error');
+    }
+  }
+
   async function handleCopyMagnetLink(item: DriveItem) {
     if (!item.merkleRoot) return;
     const link = `magnet:?xt=urn:btih:${item.merkleRoot}&dn=${encodeURIComponent(item.name)}&xl=${item.size || 0}`;
@@ -775,6 +786,7 @@
     onStopSeed={handleStopSeeding}
     onCopyHash={handleCopyMerkleHash}
     onCopyMagnet={handleCopyMagnetLink}
+    onShowInExplorer={handleShowInExplorer}
   />
 {/if}
 
