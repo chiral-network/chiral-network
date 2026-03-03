@@ -19,6 +19,7 @@
     onStopSeed,
     onCopyHash,
     onCopyMagnet,
+    onShowInExplorer,
   }: {
     item: DriveItem;
     x: number;
