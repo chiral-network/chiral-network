@@ -626,6 +626,20 @@
 
     isProcessingPayment = totalCost > 0;
 
+    // Move any previous completed/failed/cancelled downloads of this hash to history
+    // so event listeners (which match by hash) only update the new card.
+    const staleEntries = downloads.filter(
+      d => d.hash === result.hash && ['completed', 'failed', 'cancelled'].includes(d.status)
+    );
+    for (const entry of staleEntries) {
+      addToDownloadHistory(entry);
+    }
+    if (staleEntries.length > 0) {
+      downloads = downloads.filter(
+        d => !(d.hash === result.hash && ['completed', 'failed', 'cancelled'].includes(d.status))
+      );
+    }
+
     const newDownload: DownloadItem = {
       id: `download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       hash: result.hash,
@@ -782,9 +796,9 @@
         log.info('Download complete:', event.payload);
         const { fileHash, fileName, filePath, fileSize } = event.payload;
 
-        // Update the download status
+        // Update the download status — only target the actively downloading entry
         downloads = downloads.map(d => {
-          if (d.hash === fileHash) {
+          if (d.hash === fileHash && d.status === 'downloading') {
             return {
               ...d,
               status: 'completed' as const,
@@ -818,9 +832,9 @@
         log.error('Download failed:', event.payload);
         const { fileHash, error } = event.payload;
 
-        // Update the download status
+        // Update the download status — only target the actively downloading entry
         downloads = downloads.map(d => {
-          if (d.hash === fileHash) {
+          if (d.hash === fileHash && d.status === 'downloading') {
             return {
               ...d,
               status: 'failed' as const
@@ -846,7 +860,7 @@
         const { requestId, fileHash, bytesWritten, totalBytes, speedBps, progress } = event.payload;
 
         downloads = downloads.map(d => {
-          if (d.hash === fileHash || d.id === requestId) {
+          if ((d.hash === fileHash || d.id === requestId) && d.status === 'downloading') {
             return {
               ...d,
               progress,
@@ -872,7 +886,7 @@
         log.info('Processing seeder payment:', event.payload);
 
         downloads = downloads.map(d => {
-          if (d.hash === fileHash) {
+          if (d.hash === fileHash && d.status === 'downloading') {
             return { ...d, speed: `Paying seeder ${formatPriceWei(priceWei)}...` };
           }
           return d;
@@ -893,7 +907,7 @@
 
         // Store balance data on the active download so it transfers to history
         downloads = downloads.map(d => {
-          if (d.hash === fileHash) {
+          if (d.hash === fileHash && d.status === 'downloading') {
             return { ...d, balanceBefore, balanceAfter };
           }
           return d;
