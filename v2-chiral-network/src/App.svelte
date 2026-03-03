@@ -208,20 +208,21 @@
     }
 
     // 2. Re-register Drive files that were being seeded
+    // Note: Rust struct uses #[serde(rename_all = "camelCase")] so fields are camelCase
     try {
       const addr = $walletAccount?.address;
       if (addr) {
         const driveItems = await invoke<any[]>('drive_list_items', { owner: addr, parentId: null });
         let count = 0;
         for (const item of driveItems) {
-          if (!item.seeding || !item.merkle_root) continue;
+          if (!item.seeding || !item.merkleRoot) continue;
           try {
             await invoke('publish_drive_file', {
               owner: addr,
               itemId: item.id,
               protocol: item.protocol || null,
-              priceChi: item.price_chi || null,
-              walletAddress: item.price_chi && item.price_chi !== '0' ? addr : null,
+              priceChi: item.priceChi || null,
+              walletAddress: item.priceChi && item.priceChi !== '0' ? addr : null,
             });
             count++;
           } catch {

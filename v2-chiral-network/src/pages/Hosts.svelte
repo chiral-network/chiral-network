@@ -58,7 +58,16 @@
     if (!wallet?.address) return;
     publishingDriveFile = fileId;
     try {
-      const hash = await invoke<string>('publish_drive_file', { owner: wallet.address, itemId: fileId });
+      // publish_drive_file returns a full DriveItem object (not a string)
+      const item = await invoke<{ merkleRoot?: string }>('publish_drive_file', {
+        owner: wallet.address, itemId: fileId,
+        protocol: null, priceChi: null, walletAddress: null,
+      });
+      const hash = item.merkleRoot;
+      if (!hash) {
+        toasts.show(`${fileName} has no file hash — publish failed`, 'error');
+        return;
+      }
       // Add hash to proposal (avoid duplicates)
       const existing = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
       if (!existing.includes(hash)) {
