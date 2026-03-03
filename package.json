@@ -1,84 +1,43 @@
 {
   "name": "chiral-network",
   "private": true,
-  "version": "0.1.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "check": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
     "build": "vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
-    "test": "vitest run --exclude tests/e2e/** --exclude tests/**/*.spec.ts",
+    "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "vitest run tests/e2e/ --exclude tests/e2e/real-network.test.ts --reporter=verbose",
-    "test:e2e:pretty": "vitest run tests/e2e/ --exclude tests/e2e/real-network.test.ts",
-    "test:e2e:real": "vitest run tests/e2e/real-network.test.ts --no-coverage --reporter=verbose",
-    "test:e2e:real:uploader": "cross-env E2E_CROSS_MACHINE=true E2E_NODE_ROLE=uploader vitest run tests/e2e/real-network.test.ts --reporter=verbose",
-    "test:e2e:real:downloader": "cross-env E2E_CROSS_MACHINE=true E2E_NODE_ROLE=downloader vitest run tests/e2e/real-network.test.ts --reporter=verbose",
-    "test:tauri:pool": "node scripts/tauri/minepool-wd.mjs",
-    "signaling-server": "node src/lib/services/server/signalingServer.js"
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@mateothegreat/svelte5-router": "^2.16.19",
-    "@noble/curves": "^1.2.0",
     "@noble/hashes": "^2.0.1",
     "@tauri-apps/api": "^2.9.0",
-    "@tauri-apps/plugin-dialog": "^2.6.0",
-    "@tauri-apps/plugin-fs": "^2.4.2",
-    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.3.1",
-    "@tauri-apps/plugin-store": "^2.4.0",
+    "@types/qrcode": "^1.5.6",
     "clsx": "^2.1.1",
-    "ethers": "^6.13.0",
-    "html5-qrcode": "^2.3.8",
-    "jsdom": "^27.2.0",
-    "lucide-svelte": "^0.468.0",
+    "ethers": "^6.16.0",
+    "lucide-svelte": "^0.563.0",
     "qrcode": "^1.5.4",
-    "svelte-i18n": "^4.0.1",
-    "svelte-sonner": "^0.3.19",
-    "tailwind-merge": "^2.5.5",
-    "ws": "^8.18.3"
+    "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
-    "@playwright/test": "^1.45.3",
     "@sveltejs/vite-plugin-svelte": "^6.2.0",
     "@tauri-apps/cli": "^2.1.0",
     "@tsconfig/svelte": "^5.0.4",
     "@types/node": "^22.10.2",
-    "@typescript-eslint/eslint-plugin": "^8.45.0",
-    "@typescript-eslint/parser": "^8.45.0",
     "autoprefixer": "^10.4.20",
-    "browserslist": "^4.28.1",
-    "cross-env": "^10.1.0",
-    "eslint": "^9.36.0",
-    "eslint-plugin-svelte": "^3.12.4",
+    "jsdom": "^28.0.0",
     "postcss": "^8.4.49",
-    "prettier": "^3.6.2",
-    "prettier-plugin-svelte": "^3.4.0",
     "svelte": "^5.38.6",
     "svelte-check": "^4.3.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.0",
     "vite": "^7.1.4",
-    "vitest": "^2.1.8"
-  },
-  "description": "Chiral Network is a BitTorrent-like decentralized file sharing application designed for legitimate personal and organizational use. Built with Svelte, TypeScript, and Tauri, it provides a modern desktop experience for peer-to-peer file sharing focused on privacy, security, and efficient data distribution. The platform operates on a continuous seeding model where files are instantly available to the network once added, similar to BitTorrent's architecture.",
-  "main": "postcss.config.js",
-  "directories": {
-    "doc": "docs"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Aery1e/chiral-network.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/Aery1e/chiral-network/issues"
-  },
-  "homepage": "https://github.com/Aery1e/chiral-network#readme"
+    "vitest": "^4.0.18"
+  }
 }
