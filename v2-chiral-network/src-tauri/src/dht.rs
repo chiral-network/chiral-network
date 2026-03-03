@@ -1098,6 +1098,10 @@ async fn event_loop(
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
+    // Accumulate all FoundRecord results for a GET query before resolving.
+    // Without this, the first FoundRecord (often from local stale MemoryStore)
+    // would resolve the query, ignoring more up-to-date remote records.
+    let mut pending_get_results: HashMap<kad::QueryId, Vec<String>> = HashMap::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
     // File requests deferred until relay circuit is established.
@@ -1157,7 +1161,7 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers, &mut pending_echo).await;
+                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &mut pending_get_results, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers, &mut pending_echo).await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         // Check if this is a relay circuit address
@@ -1498,6 +1502,7 @@ async fn handle_behaviour_event(
     swarm: &mut Swarm<DhtBehaviour>,
     file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
+    pending_get_results: &mut HashMap<kad::QueryId, Vec<String>>,
     shared_files: &SharedFilesMap,
     download_tiers: &DownloadTiersMap,
     download_directory: &DownloadDirectoryRef,
@@ -1755,21 +1760,44 @@ async fn handle_behaviour_event(
                 kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))) => {
                     let key_bytes = record.record.key.as_ref();
                     let key_str = String::from_utf8_lossy(key_bytes);
-                    println!("DHT get successful for query {:?}, key: {}", id, key_str);
+                    let source = if record.peer.is_some() { "remote" } else { "local" };
+                    println!("DHT get: found {} record for query {:?}, key: {}", source, id, key_str);
                     let value = String::from_utf8(record.record.value.clone())
                         .unwrap_or_else(|_| String::new());
                     println!("DHT record value length: {} bytes", value.len());
-                    if let Some(tx) = pending_get_queries.remove(&id) {
-                        let _ = tx.send(Ok(Some(value)));
-                    }
+                    // Accumulate — don't resolve yet. We wait for FinishedWithNoAdditionalRecord
+                    // so we see ALL copies (local + remote) and pick the most up-to-date one.
+                    pending_get_results.entry(id).or_default().push(value);
                 }
                 kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })) => {
-                    println!("DHT get finished with no additional records for query {:?}", id);
+                    println!("DHT get finished for query {:?}", id);
+                    if let Some(tx) = pending_get_queries.remove(&id) {
+                        let results = pending_get_results.remove(&id).unwrap_or_default();
+                        if results.is_empty() {
+                            let _ = tx.send(Ok(None));
+                        } else {
+                            // Pick the longest record as "best" — records with more seeders
+                            // are longer, so this resolves stale-local-copy vs fresh-remote.
+                            let best = results.into_iter().max_by_key(|r: &String| r.len()).unwrap();
+                            let _ = tx.send(Ok(Some(best)));
+                        }
+                    } else {
+                        pending_get_results.remove(&id);
+                    }
                 }
                 kad::QueryResult::GetRecord(Err(err)) => {
                     println!("DHT get failed for query {:?}: {:?}", id, err);
                     if let Some(tx) = pending_get_queries.remove(&id) {
-                        let _ = tx.send(Ok(None));
+                        // Some records may have been found before the error (e.g. QuorumFailed)
+                        let results = pending_get_results.remove(&id).unwrap_or_default();
+                        if results.is_empty() {
+                            let _ = tx.send(Ok(None));
+                        } else {
+                            let best = results.into_iter().max_by_key(|r: &String| r.len()).unwrap();
+                            let _ = tx.send(Ok(Some(best)));
+                        }
+                    } else {
+                        pending_get_results.remove(&id);
                     }
                 }
                 kad::QueryResult::PutRecord(Ok(ok)) => {
