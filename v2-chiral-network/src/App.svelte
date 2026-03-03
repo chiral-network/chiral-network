@@ -19,7 +19,6 @@
   import SettingsPage from './pages/Settings.svelte';
   import HostingPage from './pages/Hosting.svelte';
   import DrivePage from './pages/Drive.svelte';
-  import ReputationPage from './pages/Reputation.svelte';
   import HostsPage from './pages/Hosts.svelte';
 
   let currentPath = $state('/wallet');
@@ -315,10 +314,6 @@
     {
       path: '/drive',
       component: DrivePage
-    },
-    {
-      path: '/reputation',
-      component: ReputationPage
     },
     {
       path: '/hosts',
