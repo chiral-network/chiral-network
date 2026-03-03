@@ -2920,6 +2920,38 @@ async fn show_in_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Show a Drive item in the system file manager
+#[tauri::command]
+async fn show_drive_item_in_folder(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<(), String> {
+    let manifest = ds::load_manifest();
+    let item = manifest
+        .items
+        .iter()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .ok_or("Item not found")?;
+
+    let path = if item.item_type == "folder" {
+        // For folders, open the Drive files directory
+        ds::drive_files_dir().ok_or("Cannot determine storage directory")?
+    } else {
+        let storage = item.storage_path.as_ref().ok_or("No storage path for this item")?;
+        ds::drive_files_dir()
+            .ok_or("Cannot determine storage directory")?
+            .join(storage)
+    };
+
+    if !path.exists() {
+        return Err(format!("File not found on disk: {}", path.display()));
+    }
+
+    let path_str = path.to_string_lossy().to_string();
+    show_in_folder(path_str).await
+}
+
 // ============================================================================
 // Geth Commands
 // ============================================================================
@@ -4395,6 +4427,7 @@ pub fn run() {
             export_torrent_file,
             open_file,
             show_in_folder,
+            show_drive_item_in_folder,
             // Wallet commands
             get_wallet_balance,
             send_transaction,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderInput, Pencil, Star, StarOff, Share2, Link, Download, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2 } from 'lucide-svelte';
+  import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Download, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2 } from 'lucide-svelte';
   import type { DriveItem } from '$lib/stores/driveStore';
 
   let {
@@ -36,6 +36,7 @@
     onStopSeed?: (item: DriveItem) => void;
     onCopyHash?: (item: DriveItem) => void;
     onCopyMagnet?: (item: DriveItem) => void;
+    onShowInExplorer?: (item: DriveItem) => void;
   } = $props();
 
   function action(fn: (item: DriveItem) => void) {
@@ -53,6 +54,9 @@
     { label: 'Move to...', icon: FolderInput, action: action(onMove) },
     ...(item.type === 'file'
       ? [{ label: 'Download', icon: Download, action: action(onDownload) }]
+      : []),
+    ...(onShowInExplorer
+      ? [{ label: 'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
       : []),
     { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
     { label: 'Share...', icon: Share2, action: action(onShare) },
