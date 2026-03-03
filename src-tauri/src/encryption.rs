@@ -1,767 +1,359 @@
+//! End-to-End Encryption Module for Chiral Network V2
+//!
+//! Provides secure file encryption using:
+//! - X25519 for key exchange (ECDH)
+//! - AES-256-GCM for symmetric encryption
+//! - HKDF-SHA256 for key derivation
+//!
+//! This implements the ECIES (Elliptic Curve Integrated Encryption Scheme) pattern.
+
 use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
 };
-// PBKDF2 imports handled in function
-use rand::RngCore;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::path::Path;
-use tokio::fs;
-use base64::{Engine as _, engine::general_purpose};
-
-// ECIES imports for key encryption
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
-use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
+use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
-/// Encryption configuration and metadata
+/// Domain separator for key derivation
+const HKDF_INFO: &[u8] = b"chiral-network-v2-e2ee";
+
+/// Encrypted file bundle containing all data needed for decryption
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncryptionInfo {
-    pub method: String,
-    pub key_fingerprint: String,
-    pub nonce: Vec<u8>,
-    pub salt: Vec<u8>,
+#[serde(rename_all = "camelCase")]
+pub struct EncryptedFileBundle {
+    /// Sender's ephemeral public key (32 bytes, hex-encoded)
+    pub ephemeral_public_key: String,
+    /// Encrypted file data (hex-encoded)
+    pub ciphertext: String,
+    /// Nonce used for AES-GCM (12 bytes, hex-encoded)
+    pub nonce: String,
 }
 
-/// Result of file encryption operation
-#[derive(Debug)]
-pub struct EncryptionResult {
-    pub encrypted_file_path: String,
-    pub encryption_info: EncryptionInfo,
-    pub original_size: u64,
-    pub encrypted_size: u64,
+/// User's encryption keypair for receiving encrypted files
+#[derive(Clone)]
+pub struct EncryptionKeypair {
+    secret: StaticSecret,
+    public: PublicKey,
 }
 
-/// File encryption service
-pub struct FileEncryption;
-
-impl FileEncryption {
-    /// Generate a secure encryption key from password using PBKDF2
-    pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<[u8; 32], String> {
-        use pbkdf2::pbkdf2_hmac;
-        use sha2::Sha256;
-
-        let password_bytes = password.as_bytes();
-        let mut key = [0u8; 32];
-
-        pbkdf2_hmac::<Sha256>(password_bytes, salt, 100_000, &mut key);
-
-        Ok(key)
+impl EncryptionKeypair {
+    /// Generate a new random keypair
+    pub fn generate() -> Self {
+        let secret = StaticSecret::random_from_rng(OsRng);
+        let public = PublicKey::from(&secret);
+        Self { secret, public }
     }
 
-    /// Generate a random encryption key
-    pub fn generate_random_key() -> [u8; 32] {
-        let mut key = [0u8; 32];
-        OsRng.fill_bytes(&mut key);
-        key
+    /// Create keypair from existing secret key bytes
+    pub fn from_secret_bytes(bytes: [u8; 32]) -> Self {
+        let secret = StaticSecret::from(bytes);
+        let public = PublicKey::from(&secret);
+        Self { secret, public }
     }
 
-    /// Generate key fingerprint for identification
-    pub fn generate_key_fingerprint(key: &[u8; 32]) -> String {
-        let mut hasher = Sha256::default();
-        hasher.update(key);
+    /// Derive keypair from wallet private key (for deterministic key generation)
+    pub fn from_wallet_key(wallet_private_key: &[u8]) -> Self {
+        use sha2::Digest;
+        let mut hasher = Sha256::new();
+        hasher.update(b"chiral-encryption-key-derivation");
+        hasher.update(wallet_private_key);
         let hash = hasher.finalize();
-        hex::encode(&hash[..8]) // Use first 8 bytes as fingerprint
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(&hash);
+        Self::from_secret_bytes(key_bytes)
     }
 
-    /// Decrypt a Base64-encoded AES-256-GCM encrypted string
-    /// 
-    /// The encrypted data format is: nonce (12 bytes) + ciphertext
-    /// 
-    /// # Arguments
-    /// * `encrypted_base64` - Base64-encoded encrypted data
-    /// * `key` - 32-byte AES-256 key
-    /// 
-    /// # Returns
-    /// Decrypted string
-    pub fn decrypt_string(encrypted_base64: &str, key: &[u8; 32]) -> Result<String, String> {
-        // Decode base64
-        let encrypted_data = general_purpose::STANDARD
-            .decode(encrypted_base64)
-            .map_err(|e| format!("Failed to decode base64: {}", e))?;
-
-        if encrypted_data.len() < 12 {
-            return Err("Encrypted data too short (missing nonce)".to_string());
-        }
-
-        // Extract nonce (first 12 bytes) and ciphertext (rest)
-        let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
-
-        // Create cipher and decrypt
-        let key = Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(key);
-
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| format!("Decryption failed: {}", e))?;
-
-        String::from_utf8(plaintext)
-            .map_err(|e| format!("Invalid UTF-8 in decrypted data: {}", e))
+    /// Get the public key as hex string (for sharing with others)
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(self.public.as_bytes())
     }
 
-    /// Encrypt a file using AES-256-GCM
-    pub async fn encrypt_file(
-        input_path: &Path,
-        output_path: &Path,
-        key: &[u8; 32],
-    ) -> Result<EncryptionResult, String> {
-        // Read the input file
-        let plaintext = fs::read(input_path)
-            .await
-            .map_err(|e| format!("Failed to read input file: {}", e))?;
-
-        let original_size = plaintext.len() as u64;
-
-        // Create cipher
-        let key = Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(key);
-
-        // Generate random nonce
-        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-
-        // Encrypt the file
-        let ciphertext = cipher
-            .encrypt(&nonce, plaintext.as_ref())
-            .map_err(|e| format!("Encryption failed: {}", e))?;
-
-        // Write encrypted file
-        fs::write(output_path, &ciphertext)
-            .await
-            .map_err(|e| format!("Failed to write encrypted file: {}", e))?;
-
-        let encrypted_size = ciphertext.len() as u64;
-
-        // Generate salt for key derivation (even if using random key)
-        let mut salt = [0u8; 16];
-        OsRng.fill_bytes(&mut salt);
-
-        let key_array: [u8; 32] = key.as_slice().try_into()
-            .map_err(|_| "Key must be exactly 32 bytes".to_string())?;
-
-        let encryption_info = EncryptionInfo {
-            method: "AES-256-GCM".to_string(),
-            key_fingerprint: Self::generate_key_fingerprint(&key_array),
-            nonce: nonce.to_vec(),
-            salt: salt.to_vec(),
-        };
-
-        Ok(EncryptionResult {
-            encrypted_file_path: output_path.to_string_lossy().to_string(),
-            encryption_info,
-            original_size,
-            encrypted_size,
-        })
+    /// Get the public key bytes
+    pub fn public_key_bytes(&self) -> [u8; 32] {
+        *self.public.as_bytes()
     }
 
-    /// Decrypt a file using AES-256-GCM
-    pub async fn decrypt_file(
-        input_path: &Path,
-        output_path: &Path,
-        key: &[u8; 32],
-        encryption_info: &EncryptionInfo,
-    ) -> Result<u64, String> {
-        // Verify encryption method
-        if encryption_info.method != "AES-256-GCM" {
-            return Err(format!(
-                "Unsupported encryption method: {}",
-                encryption_info.method
-            ));
-        }
-
-        // Verify key fingerprint
-        let expected_fingerprint = Self::generate_key_fingerprint(key);
-        if encryption_info.key_fingerprint != expected_fingerprint {
-            return Err("Invalid decryption key (fingerprint mismatch)".to_string());
-        }
-
-        // Read encrypted file
-        let ciphertext = fs::read(input_path)
-            .await
-            .map_err(|e| format!("Failed to read encrypted file: {}", e))?;
-
-        // Create cipher
-        let key = Key::<Aes256Gcm>::from_slice(key);
-        let cipher = Aes256Gcm::new(key);
-
-        // Extract nonce
-        if encryption_info.nonce.len() != 12 {
-            return Err("Invalid nonce length".to_string());
-        }
-        let nonce = Nonce::from_slice(&encryption_info.nonce);
-
-        // Decrypt the file
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext.as_ref())
-            .map_err(|e| format!("Decryption failed: {}", e))?;
-
-        // Write decrypted file
-        fs::write(output_path, &plaintext)
-            .await
-            .map_err(|e| format!("Failed to write decrypted file: {}", e))?;
-
-        Ok(plaintext.len() as u64)
-    }
-
-    /// Encrypt file with password
-    pub async fn encrypt_file_with_password(
-        input_path: &Path,
-        output_path: &Path,
-        password: &str,
-    ) -> Result<EncryptionResult, String> {
-        // Generate random salt
-        let mut salt = [0u8; 16];
-        OsRng.fill_bytes(&mut salt);
-
-        // Derive key from password
-        let key = Self::derive_key_from_password(password, &salt)?;
-
-        // Encrypt file
-        let mut result = Self::encrypt_file(input_path, output_path, &key).await?;
-
-        // Update salt in encryption info
-        result.encryption_info.salt = salt.to_vec();
-
-        Ok(result)
-    }
-
-    /// Decrypt file with password
-    pub async fn decrypt_file_with_password(
-        input_path: &Path,
-        output_path: &Path,
-        password: &str,
-        encryption_info: &EncryptionInfo,
-    ) -> Result<u64, String> {
-        // Derive key from password and salt
-        let key = Self::derive_key_from_password(password, &encryption_info.salt)?;
-
-        // Decrypt file
-        Self::decrypt_file(input_path, output_path, &key, encryption_info).await
+    /// Get the secret key bytes (be careful with this!)
+    pub fn secret_key_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
     }
 }
 
-/// A bundle containing the encrypted AES key and the necessary data for decryption.
-/// This struct is designed to be serialized (e.g., to JSON) and stored as file metadata.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct EncryptedAesKeyBundle {
-    /// The sender's temporary public key (32 bytes), hex-encoded.
-    pub ephemeral_public_key: String,
-    /// The AES key, encrypted and then hex-encoded.
-    pub encrypted_key: String,
-    /// The nonce used for AES-GCM encryption (12 bytes), hex-encoded.
-    pub nonce: String,
-}
-
-pub trait DiffieHellman {
-    fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret;
-}
-
-impl DiffieHellman for &StaticSecret {
-    fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret {
-        self.diffie_hellman(their_public)
-    }
-}
-
-impl DiffieHellman for EphemeralSecret {
-    fn diffie_hellman(self, their_public: &PublicKey) -> SharedSecret {
-        self.diffie_hellman(their_public)
-    }
-}
-
-/// Encrypts a 32-byte AES key using the recipient's public key (ECIES pattern).
+/// Encrypt data for a recipient using their public key
 ///
 /// # Arguments
-/// * `aes_key_to_encrypt` - The 32-byte AES key for file chunks (the DEK).
-/// * `recipient_public_key` - The recipient's X25519 public key.
+/// * `plaintext` - The data to encrypt
+/// * `recipient_public_key` - Recipient's X25519 public key (32 bytes)
 ///
 /// # Returns
-/// An `EncryptedAesKeyBundle` struct containing the data needed for decryption.
-pub fn encrypt_aes_key(
-    aes_key_to_encrypt: &[u8; 32],
-    recipient_public_key: &PublicKey,
-) -> Result<EncryptedAesKeyBundle, String> {
-    // 1. Generate a temporary (ephemeral) X25519 key pair for the sender.
+/// An `EncryptedFileBundle` containing all data needed for decryption
+pub fn encrypt_for_recipient(
+    plaintext: &[u8],
+    recipient_public_key: &[u8; 32],
+) -> Result<EncryptedFileBundle, String> {
+    let recipient_pk = PublicKey::from(*recipient_public_key);
+
+    // Generate ephemeral keypair for this encryption
     let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
-    let ephemeral_public_key = PublicKey::from(&ephemeral_secret);
+    let ephemeral_public = PublicKey::from(&ephemeral_secret);
 
-    // 2. Compute the shared secret.
-    let shared_secret = ephemeral_secret.diffie_hellman(recipient_public_key);
+    // Compute shared secret via ECDH
+    let shared_secret = ephemeral_secret.diffie_hellman(&recipient_pk);
 
-    // 3. Use HKDF to derive a Key Encryption Key (KEK) from the shared secret.
-    let hk = Hkdf::<Sha256>::new(
-        Some(ephemeral_public_key.as_bytes()),
-        shared_secret.as_bytes(),
-    );
-    let mut kek = [0u8; 32]; // 32 bytes for an AES-256 key
-    hk.expand(b"chiral-network-kek", &mut kek)
-        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
-
-    // 4. Encrypt the AES key (DEK) with the derived KEK.
-    let key = Key::<Aes256Gcm>::from_slice(&kek);
-    let kek_cipher = Aes256Gcm::new(key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // Generate a random nonce
-    let encrypted_key = kek_cipher
-        .encrypt(&nonce, aes_key_to_encrypt.as_ref())
-        .map_err(|e| format!("AES key encryption failed: {}", e))?;
-
-    // 5. Return the bundle with hex-encoded data for easy serialization.
-    Ok(EncryptedAesKeyBundle {
-        ephemeral_public_key: hex::encode(ephemeral_public_key.as_bytes()),
-        encrypted_key: hex::encode(encrypted_key),
-        nonce: hex::encode(nonce.as_slice()),
-    })
-}
-
-/// Decrypts an AES key using the recipient's private key.
-///
-/// # Arguments
-/// * `encrypted_bundle` - The `EncryptedAesKeyBundle` received from the sender.
-/// * `recipient_secret_key` - The recipient's X25519 private key.
-///
-/// # Returns
-/// The decrypted 32-byte AES key.
-pub fn decrypt_aes_key<S: DiffieHellman>(
-    encrypted_bundle: &EncryptedAesKeyBundle,
-    recipient_secret_key: S,
-) -> Result<[u8; 32], String> {
-    // 1. Decode hex-encoded data from the bundle.
-    let ephemeral_public_key_bytes: [u8; 32] = hex::decode(&encrypted_bundle.ephemeral_public_key)
-        .map_err(|e| e.to_string())?
-        .try_into()
-        .map_err(|_| "Invalid ephemeral public key length".to_string())?;
-    let ephemeral_public_key = PublicKey::from(ephemeral_public_key_bytes);
-
-    let encrypted_key = hex::decode(&encrypted_bundle.encrypted_key).map_err(|e| e.to_string())?;
-    let nonce_bytes = hex::decode(&encrypted_bundle.nonce).map_err(|e| e.to_string())?;
-
-    // 2. Compute the same shared secret.
-    let shared_secret = recipient_secret_key.diffie_hellman(&ephemeral_public_key);
-
-    // 3. Derive the same KEK using the same HKDF parameters.
-    let hk = Hkdf::<Sha256>::new(
-        Some(ephemeral_public_key.as_bytes()),
-        shared_secret.as_bytes(),
-    );
-    let mut kek = [0u8; 32];
-    hk.expand(b"chiral-network-kek", &mut kek)
-        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
-
-    // 4. Decrypt the AES key (DEK) with the derived KEK.
-    let key = Key::<Aes256Gcm>::from_slice(&kek);
-    let kek_cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let decrypted_key_vec = kek_cipher
-        .decrypt(nonce, encrypted_key.as_ref())
-        .map_err(|e| format!("AES key decryption failed: {}", e))?;
-
-    decrypted_key_vec
-        .try_into()
-        .map_err(|_| "Decrypted key is not 32 bytes".to_string())
-}
-
-/// A bundle containing an encrypted message and the necessary data for decryption.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct EncryptedMessageBundle {
-    /// The sender's temporary public key (32 bytes), hex-encoded.
-    pub ephemeral_public_key: String,
-    /// The message, encrypted and then hex-encoded.
-    pub encrypted_message: String,
-    /// The nonce used for AES-GCM encryption (12 bytes), hex-encoded.
-    pub nonce: String,
-}
-
-/// Encrypts a message using the recipient's public key (ECIES pattern).
-///
-/// # Arguments
-/// * `message` - The message to encrypt.
-/// * `recipient_public_key` - The recipient's X25519 public key.
-///
-/// # Returns
-/// An `EncryptedMessageBundle` struct containing the data needed for decryption.
-pub fn encrypt_message(
-    message: &[u8],
-    recipient_public_key: &PublicKey,
-) -> Result<EncryptedMessageBundle, String> {
-    // 1. Generate a temporary (ephemeral) X25519 key pair for the sender.
-    let ephemeral_secret = EphemeralSecret::random_from_rng(OsRng);
-    let ephemeral_public_key = PublicKey::from(&ephemeral_secret);
-
-    // 2. Compute the shared secret.
-    let shared_secret = ephemeral_secret.diffie_hellman(recipient_public_key);
-
-    // 3. Use HKDF to derive an encryption key from the shared secret.
-    let hk = Hkdf::<Sha256>::new(
-        Some(ephemeral_public_key.as_bytes()),
-        shared_secret.as_bytes(),
-    );
-    let mut encryption_key = [0u8; 32]; // 32 bytes for an AES-256 key
-    hk.expand(b"chiral-network-msg", &mut encryption_key)
-        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
-
-    // 4. Encrypt the message with the derived key.
-    let key = Key::<Aes256Gcm>::from_slice(&encryption_key);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); // Generate a random nonce
-    let encrypted_message = cipher
-        .encrypt(&nonce, message)
-        .map_err(|e| format!("Message encryption failed: {}", e))?;
-
-    // 5. Return the bundle with hex-encoded data.
-    Ok(EncryptedMessageBundle {
-        ephemeral_public_key: hex::encode(ephemeral_public_key.as_bytes()),
-        encrypted_message: hex::encode(encrypted_message),
-        nonce: hex::encode(nonce.as_slice()),
-    })
-}
-
-/// Decrypts a message using the recipient's private key.
-///
-/// # Arguments
-/// * `encrypted_bundle` - The `EncryptedMessageBundle` received from the sender.
-/// * `recipient_secret_key` - The recipient's X25519 private key.
-///
-/// # Returns
-/// The decrypted message as a `Vec<u8>`.
-pub fn decrypt_message<S: DiffieHellman>(
-    encrypted_bundle: &EncryptedMessageBundle,
-    recipient_secret_key: S,
-) -> Result<Vec<u8>, String> {
-    // 1. Decode hex-encoded data from the bundle.
-    let ephemeral_public_key_bytes: [u8; 32] = hex::decode(&encrypted_bundle.ephemeral_public_key)
-        .map_err(|e| e.to_string())?
-        .try_into()
-        .map_err(|_| "Invalid ephemeral public key length".to_string())?;
-    let ephemeral_public_key = PublicKey::from(ephemeral_public_key_bytes);
-
-    let encrypted_message =
-        hex::decode(&encrypted_bundle.encrypted_message).map_err(|e| e.to_string())?;
-    let nonce_bytes = hex::decode(&encrypted_bundle.nonce).map_err(|e| e.to_string())?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
-    // 2. Derive the same encryption key using the same process as encryption.
-    let shared_secret = recipient_secret_key.diffie_hellman(&ephemeral_public_key);
-    let hk = Hkdf::<Sha256>::new(
-        Some(ephemeral_public_key.as_bytes()),
-        shared_secret.as_bytes(),
-    );
+    // Derive encryption key using HKDF
+    let hk = Hkdf::<Sha256>::new(Some(ephemeral_public.as_bytes()), shared_secret.as_bytes());
     let mut encryption_key = [0u8; 32];
-    hk.expand(b"chiral-network-msg", &mut encryption_key)
+    hk.expand(HKDF_INFO, &mut encryption_key)
         .map_err(|e| format!("HKDF expansion failed: {}", e))?;
 
-    // 3. Decrypt the message.
+    // Encrypt with AES-256-GCM
     let key = Key::<Aes256Gcm>::from_slice(&encryption_key);
     let cipher = Aes256Gcm::new(key);
-    cipher
-        .decrypt(nonce, encrypted_message.as_ref())
-        .map_err(|e| format!("Message decryption failed: {}", e))
-}
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
-/// A bundle containing a message and a signature to verify its authenticity.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SignedMessage {
-    /// The original message data, base64-encoded for JSON compatibility.
-    pub message: String,
-    /// The signer's public key (32 bytes), hex-encoded.
-    pub signer_public_key: String,
-    /// The Ed25519 signature over the message (64 bytes), hex-encoded.
-    pub signature: String,
-}
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|e| format!("Encryption failed: {}", e))?;
 
-/// Signs a message with the sender's private key to prove authenticity.
-///
-/// # Arguments
-/// * `message` - The message to sign.
-/// * `sender_signing_key` - The sender's Ed25519 `SigningKey`.
-///
-/// # Returns
-/// A `SignedMessage` struct containing the message, signature, and public key.
-pub fn sign_message(
-    message: &[u8],
-    sender_signing_key: &SigningKey,
-) -> Result<SignedMessage, String> {
-    let signature = sender_signing_key.sign(message);
-
-    Ok(SignedMessage {
-        message: general_purpose::STANDARD.encode(message),
-        signer_public_key: hex::encode(sender_signing_key.verifying_key().as_bytes()),
-        signature: hex::encode(signature.to_bytes()),
+    Ok(EncryptedFileBundle {
+        ephemeral_public_key: hex::encode(ephemeral_public.as_bytes()),
+        ciphertext: hex::encode(ciphertext),
+        nonce: hex::encode(nonce.as_slice()),
     })
 }
 
-/// Verifies the signature of a message to ensure it's authentic and untampered.
+/// Decrypt data using the recipient's keypair
 ///
 /// # Arguments
-/// * `signed_message` - The `SignedMessage` bundle to verify.
+/// * `bundle` - The encrypted file bundle
+/// * `keypair` - Recipient's encryption keypair
 ///
 /// # Returns
-/// `Ok(true)` if the signature is valid, `Ok(false)` if it's not.
-/// Returns an `Err` if any part of the bundle is malformed.
-pub fn verify_message(signed_message: &SignedMessage) -> Result<bool, String> {
-    // 1. Decode the data from the bundle.
-    let message_bytes = general_purpose::STANDARD.decode(&signed_message.message)
-        .map_err(|e| format!("Invalid base64 message: {}", e))?;
+/// The decrypted plaintext
+pub fn decrypt_with_keypair(
+    bundle: &EncryptedFileBundle,
+    keypair: &EncryptionKeypair,
+) -> Result<Vec<u8>, String> {
+    // Decode hex data
+    let ephemeral_pk_bytes: [u8; 32] = hex::decode(&bundle.ephemeral_public_key)
+        .map_err(|e| format!("Invalid ephemeral public key: {}", e))?
+        .try_into()
+        .map_err(|_| "Ephemeral public key must be 32 bytes")?;
 
-    let public_key_bytes: [u8; 32] = hex::decode(&signed_message.signer_public_key)
+    let ciphertext = hex::decode(&bundle.ciphertext)
+        .map_err(|e| format!("Invalid ciphertext: {}", e))?;
+
+    let nonce_bytes = hex::decode(&bundle.nonce)
+        .map_err(|e| format!("Invalid nonce: {}", e))?;
+
+    let ephemeral_pk = PublicKey::from(ephemeral_pk_bytes);
+
+    // Compute shared secret via ECDH
+    let shared_secret = keypair.secret.diffie_hellman(&ephemeral_pk);
+
+    // Derive the same encryption key using HKDF
+    let hk = Hkdf::<Sha256>::new(Some(ephemeral_pk.as_bytes()), shared_secret.as_bytes());
+    let mut encryption_key = [0u8; 32];
+    hk.expand(HKDF_INFO, &mut encryption_key)
+        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
+
+    // Decrypt with AES-256-GCM
+    let key = Key::<Aes256Gcm>::from_slice(&encryption_key);
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|e| format!("Decryption failed: {}", e))
+}
+
+/// Convenience function to encrypt for a recipient given their public key as hex
+pub fn encrypt_for_recipient_hex(
+    plaintext: &[u8],
+    recipient_public_key_hex: &str,
+) -> Result<EncryptedFileBundle, String> {
+    let pk_bytes: [u8; 32] = hex::decode(recipient_public_key_hex)
         .map_err(|e| format!("Invalid public key hex: {}", e))?
         .try_into()
-        .map_err(|_| "Invalid public key length".to_string())?;
-    let signer_public_key = VerifyingKey::from_bytes(&public_key_bytes)
-        .map_err(|e| format!("Invalid public key: {}", e))?;
+        .map_err(|_| "Public key must be 32 bytes")?;
 
-    let signature_bytes: [u8; 64] = hex::decode(&signed_message.signature)
-        .map_err(|e| format!("Invalid signature hex: {}", e))?
-        .try_into()
-        .map_err(|_| "Invalid signature length".to_string())?;
-    let signature = Signature::from_bytes(&signature_bytes);
-
-    // 2. Verify the signature against the message.
-    // The `verify` method will hash the message internally before checking.
-    Ok(signer_public_key.verify(&message_bytes, &signature).is_ok())
+    encrypt_for_recipient(plaintext, &pk_bytes)
 }
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
-    use tokio::fs;
-    use tokio::time::{sleep, Duration};
 
-    #[tokio::test]
-    async fn test_file_encryption_random_key() {
-        let dir = tempdir().unwrap();
-        let input_path = dir.path().join("test_input.txt");
-        let output_path = dir.path().join("test_encrypted.bin");
-        let decrypted_path = dir.path().join("test_decrypted.txt");
-
-        // Create test file
-        let test_content = "Hello, this is a test file for encryption!";
-        fs::write(&input_path, test_content).await.unwrap();
-
-        // Generate key and encrypt
-        let key = FileEncryption::generate_random_key();
-        let result = FileEncryption::encrypt_file(&input_path, &output_path, &key)
-            .await
-            .unwrap();
-
-        assert_eq!(result.original_size, test_content.len() as u64);
-        assert!(result.encrypted_size > 0);
-
-        // Decrypt file
-        let decrypted_size = FileEncryption::decrypt_file(
-            &output_path,
-            &decrypted_path,
-            &key,
-            &result.encryption_info,
-        )
-        .await
-        .unwrap();
-
-        // Verify decrypted content
-        let decrypted_content = fs::read_to_string(&decrypted_path).await.unwrap();
-        assert_eq!(decrypted_content, test_content);
-        assert_eq!(decrypted_size, test_content.len() as u64);
-    }
-
-    #[tokio::test]
-    async fn test_file_encryption_with_password() {
-        let dir = tempdir().unwrap();
-        let input_path = dir.path().join("test_input.txt");
-        let output_path = dir.path().join("test_encrypted.bin");
-        let decrypted_path = dir.path().join("test_decrypted.txt");
-
-        // Create test file
-        let test_content = "Hello, this is a test file for password encryption!";
-        fs::write(&input_path, test_content).await.unwrap();
-
-        let password = "super_secure_password_123";
-
-        // Encrypt with password
-        let result =
-            FileEncryption::encrypt_file_with_password(&input_path, &output_path, password)
-                .await
-                .unwrap();
-
-        // Decrypt with password
-        let decrypted_size = FileEncryption::decrypt_file_with_password(
-            &output_path,
-            &decrypted_path,
-            password,
-            &result.encryption_info,
-        )
-        .await
-        .unwrap();
-
-        // Verify decrypted content
-        let decrypted_content = fs::read_to_string(&decrypted_path).await.unwrap();
-        assert_eq!(decrypted_content, test_content);
-        assert_eq!(decrypted_size, test_content.len() as u64);
-    }
-
-    #[tokio::test]
-    async fn test_wrong_password_fails() {
-        let dir = tempdir().unwrap();
-        let input_path = dir.path().join("test_input.txt");
-        let output_path = dir.path().join("test_encrypted.bin");
-        let decrypted_path = dir.path().join("test_decrypted.txt");
-
-        // Create test file
-        fs::write(&input_path, "test content").await.unwrap();
-
-        let correct_password = "correct_password";
-        let wrong_password = "wrong_password";
-
-        // Encrypt with correct password
-        let result =
-            FileEncryption::encrypt_file_with_password(&input_path, &output_path, correct_password)
-                .await
-                .unwrap();
-
-        // Try to decrypt with wrong password - should fail
-        let decrypt_result = FileEncryption::decrypt_file_with_password(
-            &output_path,
-            &decrypted_path,
-            wrong_password,
-            &result.encryption_info,
-        )
-        .await;
-
-        assert!(decrypt_result.is_err());
-        assert!(decrypt_result.unwrap_err().contains("fingerprint mismatch"));
+    #[test]
+    fn test_keypair_generation() {
+        let keypair = EncryptionKeypair::generate();
+        assert_eq!(keypair.public_key_hex().len(), 64); // 32 bytes = 64 hex chars
     }
 
     #[test]
-    fn test_message_encryption_decryption() {
-        // 1. Setup recipient's key pair.
-        let recipient_secret = StaticSecret::random_from_rng(OsRng);
-        let recipient_public = PublicKey::from(&recipient_secret);
+    fn test_encrypt_decrypt_roundtrip() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext = b"Hello, Chiral Network!";
 
-        // 2. Define a message to encrypt.
-        let original_message = b"This is a secret message for the Chiral Network.";
+        let bundle = encrypt_for_recipient(plaintext, &recipient.public_key_bytes()).unwrap();
+        let decrypted = decrypt_with_keypair(&bundle, &recipient).unwrap();
 
-        // 3. Encrypt the message for the recipient.
-        let encrypted_bundle = encrypt_message(original_message, &recipient_public).unwrap();
-
-        // 4. Decrypt the message using the recipient's secret key.
-        let decrypted_message = decrypt_message(&encrypted_bundle, &recipient_secret).unwrap();
-
-        // 5. Verify that the decrypted message matches the original.
-        assert_eq!(original_message.to_vec(), decrypted_message);
-
-        // 6. Negative test: try to decrypt with the wrong key.
-        let wrong_secret = StaticSecret::random_from_rng(OsRng);
-        let decryption_result = decrypt_message(&encrypted_bundle, &wrong_secret);
-        assert!(decryption_result.is_err());
-        assert!(decryption_result
-            .unwrap_err()
-            .contains("Message decryption failed"));
+        assert_eq!(decrypted, plaintext);
     }
 
     #[test]
-    fn test_message_signing_and_verification() {
-        // 1. Setup sender's key pair.
-        let mut csprng = OsRng;
-        let sender_signing_key = SigningKey::generate(&mut csprng);
+    fn test_encrypt_decrypt_large_data() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
 
-        // 2. Define a message to sign.
-        let original_message = b"This message needs to be authenticated.";
+        let bundle = encrypt_for_recipient(&plaintext, &recipient.public_key_bytes()).unwrap();
+        let decrypted = decrypt_with_keypair(&bundle, &recipient).unwrap();
 
-        // 3. Sign the message.
-        let signed_message = sign_message(original_message, &sender_signing_key).unwrap();
-
-        // 4. Verify the message.
-        let is_valid = verify_message(&signed_message).unwrap();
-        assert!(is_valid, "Signature should be valid");
-
-        // 5. Negative test: tampered message should fail verification.
-        let mut tampered_bundle = signed_message.clone();
-        tampered_bundle.message = general_purpose::STANDARD.encode(b"This is a tampered message!");
-        let is_tampered_valid = verify_message(&tampered_bundle).unwrap();
-        assert!(
-            !is_tampered_valid,
-            "Signature for tampered message should be invalid"
-        );
+        assert_eq!(decrypted, plaintext);
     }
 
-    // Add E2E messaging tests. Marked #[ignore] so they don't run in normal CI
-    // This is so that they won't break the CI while changes are being made to the encryption/decryption.
-    // Run them explicitly with: cargo test --test <name> -- --ignored
-    #[tokio::test]
-    #[ignore]
-    async fn e2e_message_encryption_between_nodes() {
-        // Simulate two nodes: sender and recipient
-        let recipient_secret = x25519_dalek::StaticSecret::random_from_rng(&mut OsRng);
-        let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-        let original_message = b"Hello E2EE node-to-node test";
+    #[test]
+    fn test_wrong_key_fails() {
+        let sender_target = EncryptionKeypair::generate();
+        let wrong_recipient = EncryptionKeypair::generate();
+        let plaintext = b"Secret message";
 
-        // Sender encrypts the message for recipient
-        let encrypted_bundle = encrypt_message(original_message, &recipient_public)
-            .expect("encryption should succeed");
+        let bundle = encrypt_for_recipient(plaintext, &sender_target.public_key_bytes()).unwrap();
+        let result = decrypt_with_keypair(&bundle, &wrong_recipient);
 
-        // Simulate small network latency
-        sleep(Duration::from_millis(150)).await;
-
-        // Recipient decrypts
-        let decrypted = decrypt_message(&encrypted_bundle, &recipient_secret)
-            .expect("decryption should succeed");
-
-        assert_eq!(decrypted, original_message);
+        assert!(result.is_err());
     }
 
-    #[tokio::test]
-    #[ignore]
-    async fn ensure_no_plaintext_in_encrypted_bundle() {
-        // Verify that the encrypted bundle does not contain the plaintext (hex) anywhere
-        let recipient_secret = x25519_dalek::StaticSecret::random_from_rng(&mut OsRng);
-        let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-        let original_message = b"Sensitive payload - must not leak";
+    #[test]
+    fn test_wallet_derived_keypair() {
+        let wallet_key = [0u8; 32]; // Mock wallet private key
+        let keypair1 = EncryptionKeypair::from_wallet_key(&wallet_key);
+        let keypair2 = EncryptionKeypair::from_wallet_key(&wallet_key);
 
-        let encrypted_bundle = encrypt_message(original_message, &recipient_public)
-            .expect("encryption should succeed");
-
-        // hex of original - ensure it is not present in any returned hex fields
-        let original_hex = hex::encode(original_message);
-
-        // The encrypted fields are hex strings; check they don't (accidentally) contain original hex
-        assert!(
-            !encrypted_bundle.encrypted_message.contains(&original_hex),
-            "Encrypted message unexpectedly contains plaintext hex"
-        );
-        assert!(
-            !encrypted_bundle
-                .ephemeral_public_key
-                .contains(&original_hex),
-            "Ephemeral public key unexpectedly contains plaintext hex"
-        );
-        assert!(
-            !encrypted_bundle.nonce.contains(&original_hex),
-            "Nonce unexpectedly contains plaintext hex"
-        );
+        // Same wallet key should produce same encryption keypair
+        assert_eq!(keypair1.public_key_hex(), keypair2.public_key_hex());
     }
 
-    #[tokio::test]
-    #[ignore]
-    async fn message_delivery_with_latency_and_reconnects_simulation() {
-        // Simulate network hiccups: encryption happens, message delayed, "reconnect" re-send.
-        let recipient_secret = x25519_dalek::StaticSecret::random_from_rng(&mut OsRng);
-        let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
-        let original_message = b"Message across unreliable network";
+    #[test]
+    fn test_different_wallet_keys_produce_different_keypairs() {
+        let wallet_key1 = [0u8; 32];
+        let wallet_key2 = [1u8; 32];
+        let keypair1 = EncryptionKeypair::from_wallet_key(&wallet_key1);
+        let keypair2 = EncryptionKeypair::from_wallet_key(&wallet_key2);
 
-        // Sender encrypts
-        let encrypted_bundle =
-            encrypt_message(original_message, &recipient_public).expect("encrypt");
+        assert_ne!(keypair1.public_key_hex(), keypair2.public_key_hex());
+    }
 
-        // Simulate message lost on first attempt
-        sleep(Duration::from_millis(100)).await;
+    #[test]
+    fn test_encrypt_decrypt_hex_roundtrip() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext = b"Testing hex API";
+        let pub_key_hex = recipient.public_key_hex();
 
-        // Simulate reconnect and re-send (re-encrypt or reuse same bundle is valid)
-        // Here we re-use same bundle to model idempotent delivery
-        sleep(Duration::from_millis(250)).await;
+        let bundle = encrypt_for_recipient_hex(plaintext, &pub_key_hex).unwrap();
+        let decrypted = decrypt_with_keypair(&bundle, &recipient).unwrap();
 
-        // Recipient tries to decrypt after reconnect
-        let decrypted =
-            decrypt_message(&encrypted_bundle, &recipient_secret).expect("decrypt after reconnect");
+        assert_eq!(decrypted, plaintext);
+    }
 
-        assert_eq!(decrypted, original_message);
+    #[test]
+    fn test_encrypt_decrypt_hex_invalid_key() {
+        let result = encrypt_for_recipient_hex(b"test", "not_valid_hex");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_hex_wrong_length() {
+        let result = encrypt_for_recipient_hex(b"test", "aabb");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encrypted_bundle_fields_are_hex() {
+        let recipient = EncryptionKeypair::generate();
+        let bundle = encrypt_for_recipient(b"data", &recipient.public_key_bytes()).unwrap();
+
+        // All fields should be valid hex strings
+        assert!(hex::decode(&bundle.ephemeral_public_key).is_ok());
+        assert!(hex::decode(&bundle.ciphertext).is_ok());
+        assert!(hex::decode(&bundle.nonce).is_ok());
+
+        // Ephemeral public key should be 32 bytes (64 hex chars)
+        assert_eq!(bundle.ephemeral_public_key.len(), 64);
+
+        // Nonce should be 12 bytes (24 hex chars) for AES-GCM
+        assert_eq!(bundle.nonce.len(), 24);
+
+        // Ciphertext should be longer than plaintext (includes auth tag)
+        assert!(hex::decode(&bundle.ciphertext).unwrap().len() > 4);
+    }
+
+    #[test]
+    fn test_encrypt_empty_data() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext = b"";
+
+        let bundle = encrypt_for_recipient(plaintext, &recipient.public_key_bytes()).unwrap();
+        let decrypted = decrypt_with_keypair(&bundle, &recipient).unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_from_secret_bytes() {
+        let bytes = [42u8; 32];
+        let keypair1 = EncryptionKeypair::from_secret_bytes(bytes);
+        let keypair2 = EncryptionKeypair::from_secret_bytes(bytes);
+
+        assert_eq!(keypair1.public_key_hex(), keypair2.public_key_hex());
+        assert_eq!(keypair1.secret_key_bytes(), keypair2.secret_key_bytes());
+    }
+
+    #[test]
+    fn test_public_key_bytes_roundtrip() {
+        let keypair = EncryptionKeypair::generate();
+        let pk_bytes = keypair.public_key_bytes();
+        let pk_hex = keypair.public_key_hex();
+
+        assert_eq!(hex::encode(pk_bytes), pk_hex);
+    }
+
+    #[test]
+    fn test_each_encryption_produces_unique_ciphertext() {
+        let recipient = EncryptionKeypair::generate();
+        let plaintext = b"Same message";
+
+        let bundle1 = encrypt_for_recipient(plaintext, &recipient.public_key_bytes()).unwrap();
+        let bundle2 = encrypt_for_recipient(plaintext, &recipient.public_key_bytes()).unwrap();
+
+        // Each encryption uses ephemeral keys and random nonces
+        assert_ne!(bundle1.ephemeral_public_key, bundle2.ephemeral_public_key);
+        assert_ne!(bundle1.nonce, bundle2.nonce);
+        assert_ne!(bundle1.ciphertext, bundle2.ciphertext);
+
+        // But both should decrypt to the same plaintext
+        let d1 = decrypt_with_keypair(&bundle1, &recipient).unwrap();
+        let d2 = decrypt_with_keypair(&bundle2, &recipient).unwrap();
+        assert_eq!(d1, d2);
+    }
+
+    #[test]
+    fn test_bundle_serialization_roundtrip() {
+        let recipient = EncryptionKeypair::generate();
+        let bundle = encrypt_for_recipient(b"serialize me", &recipient.public_key_bytes()).unwrap();
+
+        let json = serde_json::to_string(&bundle).unwrap();
+        let deserialized: EncryptedFileBundle = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(bundle.ephemeral_public_key, deserialized.ephemeral_public_key);
+        assert_eq!(bundle.ciphertext, deserialized.ciphertext);
+        assert_eq!(bundle.nonce, deserialized.nonce);
+
+        // Decryption should still work with deserialized bundle
+        let decrypted = decrypt_with_keypair(&deserialized, &recipient).unwrap();
+        assert_eq!(decrypted, b"serialize me");
     }
 }
