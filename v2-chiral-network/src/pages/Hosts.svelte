@@ -81,6 +81,36 @@
     }
   }
 
+  /** Delete hosted files from Drive "Shared" folder when agreement is cancelled */
+  async function cleanupDriveSharedFiles(agreementId: string) {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) return;
+    const agreement = myAgreements.find((a) => a.agreementId === agreementId);
+    if (!agreement?.fileHashes?.length) return;
+    try {
+      const rootItems = await invoke<{ id: string; name: string; itemType: string }[]>(
+        'drive_list_items', { owner: wallet.address, parentId: null },
+      );
+      const sharedFolder = rootItems.find(
+        (i) => i.name === 'Shared' && i.itemType === 'folder',
+      );
+      if (!sharedFolder) return;
+      const sharedItems = await invoke<{ id: string; name: string; merkleRoot?: string }[]>(
+        'drive_list_items', { owner: wallet.address, parentId: sharedFolder.id },
+      );
+      // Match by file name (fileName = fileHash in fulfillAgreement) or by merkleRoot
+      const hashSet = new Set(agreement.fileHashes);
+      for (const item of sharedItems) {
+        if (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot))) {
+          await invoke('drive_delete_item', { owner: wallet.address, itemId: item.id });
+          console.log(`🗑️ Removed hosted file ${item.name} from Drive/Shared`);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to cleanup Drive shared files:', err);
+    }
+  }
+
   // ── Helpers ──
   function formatPeerId(id: string): string {
     if (id.length <= 16) return id;
@@ -297,6 +327,7 @@
         if (agreement && agreement.hostPeerId === myPeerId) {
           try {
             await invoke('cleanup_agreement_files', { agreementId });
+            await cleanupDriveSharedFiles(agreementId);
           } catch {
             // Best-effort cleanup
           }
@@ -419,6 +450,7 @@
             if (agreement && agreement.hostPeerId === myPeerId) {
               try {
                 await invoke('cleanup_agreement_files', { agreementId });
+                await cleanupDriveSharedFiles(agreementId);
               } catch {
                 // Best-effort cleanup
               }
@@ -448,6 +480,7 @@
             if (agreement && agreement.hostPeerId === myPeerId) {
               try {
                 await invoke('cleanup_agreement_files', { agreementId });
+                await cleanupDriveSharedFiles(agreementId);
               } catch {
                 // Best-effort cleanup
               }

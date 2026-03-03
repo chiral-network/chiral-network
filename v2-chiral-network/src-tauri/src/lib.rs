@@ -1153,7 +1153,7 @@ async fn start_download(
 
         // Check which seeders are actually reachable before attempting download
         let mut reachable_seeders = Vec::new();
-        let mut offline_count = 0;
+        let mut offline_seeders = Vec::new();
 
         for seeder in &seeders {
             match dht.is_peer_connected(seeder).await {
@@ -1162,21 +1162,21 @@ async fn start_download(
                     reachable_seeders.push(seeder.clone());
                 }
                 Ok(false) => {
-                    println!("⚠️ Seeder {} is not currently connected", seeder);
-                    // Still include them — the swarm RequestFile handler will attempt to dial
-                    reachable_seeders.push(seeder.clone());
-                    offline_count += 1;
+                    println!("⚠️ Seeder {} is not currently connected — skipping", seeder);
+                    offline_seeders.push(seeder.clone());
                 }
                 Err(e) => {
-                    println!("❌ Failed to check seeder {} connectivity: {}", seeder, e);
-                    offline_count += 1;
-                    reachable_seeders.push(seeder.clone());
+                    println!("❌ Failed to check seeder {} connectivity: {} — skipping", seeder, e);
+                    offline_seeders.push(seeder.clone());
                 }
             }
         }
 
-        if offline_count == seeders.len() {
-            println!("⚠️ All {} seeders appear to be offline, will attempt dial anyway", seeders.len());
+        let had_offline = !offline_seeders.is_empty();
+        if reachable_seeders.is_empty() {
+            // No connected seeders — try dialing offline seeders as last resort
+            println!("⚠️ No connected seeders, attempting to dial {} offline seeder(s)", offline_seeders.len());
+            reachable_seeders = offline_seeders;
         }
 
         // Try each seeder until one succeeds
@@ -1210,7 +1210,7 @@ async fn start_download(
                 let mut tiers = state.download_tiers.lock().await;
                 tiers.remove(&request_id);
             }
-            let error_msg = if offline_count > 0 {
+            let error_msg = if had_offline {
                 format!("All {} seeder(s) are offline or unreachable. The file owner may have disconnected.", seeders.len())
             } else {
                 format!("No seeder could provide the file: {}", last_error)
