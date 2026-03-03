@@ -3714,6 +3714,20 @@ async fn drive_list_items(
     Ok(items)
 }
 
+/// List ALL Drive items for an owner (flat, ignoring folder hierarchy).
+/// Used by hosted-file cleanup to find files regardless of which folder they're in.
+#[tauri::command]
+async fn drive_list_all_items(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+) -> Result<Vec<DsItem>, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+    let m = state.drive_state.manifest.read().await;
+    Ok(m.items.iter().filter(|i| i.owner == owner).cloned().collect())
+}
+
 #[tauri::command]
 async fn drive_create_folder(
     state: tauri::State<'_, AppState>,
@@ -4538,6 +4552,7 @@ pub fn run() {
             publish_drive_share,
             unpublish_drive_share,
             drive_list_items,
+            drive_list_all_items,
             drive_create_folder,
             drive_upload_file,
             drive_update_item,
