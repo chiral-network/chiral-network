@@ -676,6 +676,10 @@ struct SeederInfo {
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
+    /// Multiaddresses where this seeder can be reached (TCP + relay circuit).
+    /// Stored in DHT so downloaders can dial seeders they haven't discovered via mDNS/Kademlia.
+    #[serde(default)]
+    multiaddrs: Vec<String>,
 }
 
 /// File metadata stored in DHT
@@ -760,11 +764,13 @@ async fn publish_file(
             wallet_addr.clone(),
         ).await;
 
-        // Build our seeder entry
+        // Build our seeder entry with listening addresses so other peers can dial us
+        let our_multiaddrs = dht.get_listening_addresses().await;
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
+            multiaddrs: our_multiaddrs,
         };
 
         // Read-modify-write: preserve existing seeders from other peers
@@ -883,11 +889,13 @@ async fn publish_file_data(
             wallet_addr.clone(),
         ).await;
 
-        // Build our seeder entry
+        // Build our seeder entry with listening addresses so other peers can dial us
+        let our_multiaddrs = dht.get_listening_addresses().await;
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
+            multiaddrs: our_multiaddrs,
         };
 
         // Read-modify-write: preserve existing seeders from other peers
@@ -989,6 +997,7 @@ async fn search_file(
                         peer_id: metadata.peer_id,
                         price_wei: metadata.price_wei.clone(),
                         wallet_address: metadata.wallet_address.clone(),
+                        multiaddrs: vec![],
                     });
                 }
 
@@ -1203,6 +1212,21 @@ async fn start_download(
             "speedTier": speed_tier
         }));
 
+        // Look up seeder multiaddresses from DHT metadata so we can dial peers directly
+        let seeder_addrs: std::collections::HashMap<String, Vec<String>> = {
+            let dht_key = format!("chiral_file_{}", file_hash);
+            match dht.get_dht_value(dht_key).await {
+                Ok(Some(json)) => {
+                    serde_json::from_str::<FileMetadata>(&json)
+                        .map(|meta| meta.seeders.into_iter()
+                            .map(|s| (s.peer_id, s.multiaddrs))
+                            .collect())
+                        .unwrap_or_default()
+                }
+                _ => std::collections::HashMap::new(),
+            }
+        };
+
         // Check which seeders are actually reachable before attempting download
         let mut reachable_seeders = Vec::new();
         let mut offline_seeders = Vec::new();
@@ -1238,7 +1262,8 @@ async fn start_download(
         for (i, seeder) in reachable_seeders.iter().enumerate() {
             println!("Trying seeder {}/{}: {} for file {}", i + 1, reachable_seeders.len(), seeder, file_hash);
 
-            match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone()).await {
+            let addrs = seeder_addrs.get(seeder).cloned().unwrap_or_default();
+            match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone(), addrs).await {
                 Ok(_) => {
                     println!("✅ File request sent successfully to seeder {}", seeder);
                     request_sent = true;
@@ -1391,10 +1416,12 @@ async fn republish_shared_file(
         if !peer_id.is_empty() {
             let dht_key = format!("chiral_file_{}", file_hash);
 
+            let our_multiaddrs = dht.get_listening_addresses().await;
             let our_seeder = SeederInfo {
                 peer_id: peer_id.clone(),
                 price_wei: price_wei.to_string(),
                 wallet_address: wallet_addr.clone(),
+                multiaddrs: our_multiaddrs,
             };
 
             // Read existing metadata or create fresh
@@ -4078,10 +4105,12 @@ async fn publish_drive_file(
             wallet_addr.clone(),
         ).await;
 
+        let our_multiaddrs = dht.get_listening_addresses().await;
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
+            multiaddrs: our_multiaddrs,
         };
 
         let dht_key = format!("chiral_file_{}", file_hash);
@@ -4629,6 +4658,7 @@ mod multi_seeder_tests {
             peer_id: "12D3KooWTest1".to_string(),
             price_wei: "1000000000000000".to_string(),
             wallet_address: "0xabc123".to_string(),
+            multiaddrs: vec![],
         };
         let json = serde_json::to_string(&seeder).unwrap();
         assert!(json.contains("peerId"));      // camelCase
@@ -4657,11 +4687,13 @@ mod multi_seeder_tests {
                     peer_id: "12D3KooWPeerA".to_string(),
                     price_wei: "0".to_string(),
                     wallet_address: String::new(),
+                    multiaddrs: vec![],
                 },
                 SeederInfo {
                     peer_id: "12D3KooWPeerB".to_string(),
                     price_wei: "5000000000000000".to_string(),
                     wallet_address: "0xdef456".to_string(),
+                    multiaddrs: vec![],
                 },
             ],
         };
@@ -4722,6 +4754,7 @@ mod multi_seeder_tests {
                 peer_id: metadata.peer_id,
                 price_wei: metadata.price_wei.clone(),
                 wallet_address: metadata.wallet_address.clone(),
+                multiaddrs: vec![],
             });
         }
 
@@ -4748,6 +4781,7 @@ mod multi_seeder_tests {
                 peer_id: "12D3KooWPeerA".to_string(),
                 price_wei: "0".to_string(),
                 wallet_address: String::new(),
+                multiaddrs: vec![],
             }],
         };
 
@@ -4756,6 +4790,7 @@ mod multi_seeder_tests {
             peer_id: new_peer.to_string(),
             price_wei: "5000".to_string(),
             wallet_address: "0xB".to_string(),
+            multiaddrs: vec![],
         };
 
         // Upsert logic from publish_file
@@ -4786,6 +4821,7 @@ mod multi_seeder_tests {
                 peer_id: "12D3KooWPeerA".to_string(),
                 price_wei: "1000".to_string(),
                 wallet_address: "0xA".to_string(),
+                multiaddrs: vec![],
             }],
         };
 
@@ -4826,11 +4862,13 @@ mod multi_seeder_tests {
                     peer_id: our_peer.to_string(),
                     price_wei: "0".to_string(),
                     wallet_address: String::new(),
+                    multiaddrs: vec![],
                 },
                 SeederInfo {
                     peer_id: other_peer.to_string(),
                     price_wei: "3000".to_string(),
                     wallet_address: "0xOther".to_string(),
+                    multiaddrs: vec![],
                 },
             ],
         };
@@ -4864,6 +4902,7 @@ mod multi_seeder_tests {
                 peer_id: our_peer.to_string(),
                 price_wei: "0".to_string(),
                 wallet_address: String::new(),
+                multiaddrs: vec![],
             }],
         };
 
@@ -4904,6 +4943,7 @@ mod multi_seeder_tests {
                 peer_id: peer_id.to_string(),
                 price_wei: price.to_string(),
                 wallet_address: wallet.to_string(),
+                multiaddrs: vec![],
             };
             if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == *peer_id) {
                 existing.price_wei = seeder.price_wei;
@@ -4934,11 +4974,13 @@ mod multi_seeder_tests {
                     peer_id: "PeerA".to_string(),
                     price_wei: "0".to_string(),
                     wallet_address: String::new(),
+                    multiaddrs: vec![],
                 },
                 SeederInfo {
                     peer_id: "PeerB".to_string(),
                     price_wei: "5000".to_string(),
                     wallet_address: "0xB".to_string(),
+                    multiaddrs: vec![],
                 },
             ],
             created_at: 1700000000,
