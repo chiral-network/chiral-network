@@ -1,13 +1,12 @@
 //! Ethereum/Geth Bootstrap Node Management
 //!
-//! This module provides robust bootstrap node management for Geth networking including:
-//! - Health checking with retry logic
-//! - Dynamic bootstrap node selection
-//! - Automatic re-bootstrap on peer count drop
-//! - Exponential backoff for failed connections
-//!
-//! The bootstrap nodes are used by Geth to discover peers on the Chiral Network.
+//! Provides robust bootstrap node management for Geth networking:
+//! - Health checking with retry logic and exponential backoff
+//! - Dynamic bootstrap node selection based on latency
+//! - Cached results for efficient repeated access
+//! - Environment variable override for custom bootstrap nodes
 
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,626 +14,322 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 // ============================================================================
-// Configuration Constants
+// Configuration
 // ============================================================================
 
-/// Default timeout for TCP health checks
-const DEFAULT_HEALTH_CHECK_TIMEOUT_SECS: u64 = 5;
-
-/// Extended timeout for RPC health verification
-const RPC_HEALTH_CHECK_TIMEOUT_SECS: u64 = 10;
-
-/// Minimum number of healthy bootstrap nodes required
-const MIN_HEALTHY_NODES: usize = 1;
-
-/// How often to re-check bootstrap health (in seconds)
-const HEALTH_CHECK_INTERVAL_SECS: u64 = 60;
+/// Default timeout for TCP health checks (seconds)
+const HEALTH_CHECK_TIMEOUT_SECS: u64 = 5;
 
 /// Maximum retry attempts for health checks
-const MAX_HEALTH_CHECK_RETRIES: u32 = 3;
+const MAX_RETRIES: u32 = 2;
 
-/// Initial retry delay in milliseconds
-const INITIAL_RETRY_DELAY_MS: u64 = 500;
+/// Initial retry delay (milliseconds)
+const INITIAL_RETRY_DELAY_MS: u64 = 300;
 
-/// Maximum retry delay in milliseconds
-const MAX_RETRY_DELAY_MS: u64 = 5000;
+/// Maximum retry delay (milliseconds)
+const MAX_RETRY_DELAY_MS: u64 = 2000;
 
-/// Backoff multiplier for exponential backoff
-const BACKOFF_MULTIPLIER: f64 = 2.0;
+/// How long to cache health check results (seconds)
+const CACHE_TTL_SECS: u64 = 60;
+
+/// Minimum number of healthy nodes required
+const MIN_HEALTHY_NODES: usize = 1;
 
 // ============================================================================
 // Data Structures
 // ============================================================================
 
+/// A bootstrap node configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapNode {
+    /// Full enode URL
     pub enode: String,
-    pub description: String,
+    /// Human-readable description
+    pub name: String,
+    /// Geographic region
     pub region: String,
-    /// Priority for selection (lower = higher priority)
-    #[serde(default)]
+    /// Priority (lower = higher priority)
     pub priority: u8,
-    /// Whether this node supports discovery v5
-    #[serde(default)]
-    pub supports_discv5: bool,
 }
 
+/// Health check result for a single node
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BootstrapNodeHealth {
+#[serde(rename_all = "camelCase")]
+pub struct NodeHealth {
     pub enode: String,
-    pub description: String,
+    pub name: String,
     pub region: String,
     pub reachable: bool,
     pub latency_ms: Option<u64>,
     pub error: Option<String>,
-    /// Number of consecutive failures
-    #[serde(default)]
-    pub consecutive_failures: u32,
-    /// Last successful check timestamp (unix epoch seconds)
-    pub last_success: Option<u64>,
-    /// Last check timestamp
-    pub last_checked: Option<u64>,
+    pub last_checked: u64,
 }
 
+/// Overall bootstrap health report
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BootstrapHealthReport {
     pub total_nodes: usize,
-    pub reachable_nodes: usize,
-    pub unreachable_nodes: usize,
-    pub nodes: Vec<BootstrapNodeHealth>,
-    /// Timestamp of this report
+    pub healthy_nodes: usize,
+    pub nodes: Vec<NodeHealth>,
     pub timestamp: u64,
-    /// Whether minimum node threshold is met
-    pub healthy: bool,
-    /// Recommended action if unhealthy
-    pub recommendation: Option<String>,
+    pub is_healthy: bool,
+    pub healthy_enode_string: String,
 }
 
-/// Configuration for retry behavior
-#[derive(Debug, Clone)]
-pub struct RetryConfig {
-    pub max_attempts: u32,
-    pub initial_delay_ms: u64,
-    pub max_delay_ms: u64,
-    pub backoff_multiplier: f64,
-}
-
-impl Default for RetryConfig {
-    fn default() -> Self {
-        Self {
-            max_attempts: MAX_HEALTH_CHECK_RETRIES,
-            initial_delay_ms: INITIAL_RETRY_DELAY_MS,
-            max_delay_ms: MAX_RETRY_DELAY_MS,
-            backoff_multiplier: BACKOFF_MULTIPLIER,
-        }
-    }
-}
-
-/// Cached bootstrap state for efficient access
-#[derive(Debug)]
-pub struct BootstrapCache {
-    /// Last health report
-    pub last_report: Option<BootstrapHealthReport>,
-    /// Cached healthy enode string
-    pub healthy_enodes: String,
-    /// When the cache was last updated
-    pub last_updated: Option<Instant>,
-    /// Per-node failure counts (enode -> consecutive failures)
-    pub failure_counts: std::collections::HashMap<String, u32>,
+/// Cached bootstrap state
+struct BootstrapCache {
+    report: Option<BootstrapHealthReport>,
+    last_updated: Option<Instant>,
 }
 
 impl Default for BootstrapCache {
     fn default() -> Self {
         Self {
-            last_report: None,
-            healthy_enodes: String::new(),
+            report: None,
             last_updated: None,
-            failure_counts: std::collections::HashMap::new(),
         }
     }
 }
 
-/// Global bootstrap cache for efficient repeated access
-static BOOTSTRAP_CACHE: once_cell::sync::Lazy<Arc<RwLock<BootstrapCache>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(RwLock::new(BootstrapCache::default())));
+/// Global bootstrap cache
+static CACHE: Lazy<Arc<RwLock<BootstrapCache>>> =
+    Lazy::new(|| Arc::new(RwLock::new(BootstrapCache::default())));
 
 // ============================================================================
 // Bootstrap Node Registry
 // ============================================================================
 
-/// Get all configured bootstrap nodes for Chiral Network
-///
-/// These nodes run Geth and are the entry points for new nodes joining the network.
-/// The list includes primary and backup nodes across different regions for redundancy.
-pub fn get_bootstrap_nodes() -> Vec<BootstrapNode> {
+/// Get the default bootstrap nodes for Chiral Network
+pub fn get_default_nodes() -> Vec<BootstrapNode> {
     vec![
-        // Primary bootstrap node (Chiral Bootstrap Test server)
         BootstrapNode {
-            enode: "enode://45cc5ba89142b2c82180986f411aa16dbfe6041043d1f7112f08e710f23fdeb7283551ec15ca9d23a0da91ac12e080e014f8c32230a8109d6d0b01be8ca71102@130.245.173.73:30303".to_string(),
-            description: "Primary Bootstrap Node (Chiral Test)".to_string(),
-            region: "US East".to_string(),
+            enode: "enode://45cc5ba89142b2c82180986f411aa16dbfe6041043d1f7112f08e710f23fdeb7283551ec15ca9d23a0da91ac12e080e014f8c32230a8109d6d0b01be8ca71102@130.245.173.73:30303".into(),
+            name: "Primary Bootstrap (Chiral Test)".into(),
+            region: "US East".into(),
             priority: 1,
-            supports_discv5: true,
-        },
-        // Secondary US East bootstrap node (Stony Brook infrastructure)
-        BootstrapNode {
-            enode: "enode://ae987db6399b50addb75d7822bfad9b4092fbfd79cbfe97e6864b1f17d3e8fcd8e9e190ad109572c1439230fa688a9837e58f0b1ad7c0dc2bc6e4ab328f3991e@130.245.173.105:30303".to_string(),
-            description: "Secondary US Bootstrap Node (Stony Brook)".to_string(),
-            region: "US East".to_string(),
-            priority: 2,
-            supports_discv5: true,
-        },
-        // Backup US West bootstrap node (Azure)
-        BootstrapNode {
-            enode: "enode://b3ead5f07d0dbeda56023435a7c05877d67b055df3a8bf18f3d5f7c56873495cd4de5cf031ae9052827c043c12f1d30704088c79fb539c96834bfa74b78bf80b@20.85.124.187:30303".to_string(),
-            description: "Backup US Bootstrap Node (Azure West)".to_string(),
-            region: "US West".to_string(),
-            priority: 3,
-            supports_discv5: true,
         },
     ]
 }
 
-/// Get bootstrap nodes from environment variable if set, otherwise use defaults
-///
-/// Environment variable format: comma-separated enode URLs
-/// Example: CHIRAL_BOOTSTRAP_NODES=enode://...@ip1:port1,enode://...@ip2:port2
-pub fn get_bootstrap_nodes_with_env_override() -> Vec<BootstrapNode> {
-    if let Ok(env_nodes) = std::env::var("CHIRAL_BOOTSTRAP_NODES") {
-        let nodes: Vec<BootstrapNode> = env_nodes
+/// Get bootstrap nodes, checking for environment variable override first
+pub fn get_nodes() -> Vec<BootstrapNode> {
+    // Check for custom bootstrap nodes via environment variable
+    if let Ok(custom) = std::env::var("CHIRAL_BOOTSTRAP_NODES") {
+        let nodes: Vec<BootstrapNode> = custom
             .split(',')
             .filter(|s| !s.trim().is_empty())
             .enumerate()
             .map(|(i, enode)| BootstrapNode {
                 enode: enode.trim().to_string(),
-                description: format!("Environment Bootstrap Node {}", i + 1),
-                region: "Unknown".to_string(),
+                name: format!("Custom Node {}", i + 1),
+                region: "Unknown".into(),
                 priority: i as u8,
-                supports_discv5: false,
             })
             .collect();
 
         if !nodes.is_empty() {
-            info!(
-                "Using {} bootstrap nodes from CHIRAL_BOOTSTRAP_NODES environment variable",
-                nodes.len()
-            );
+            info!("Using {} custom bootstrap nodes from CHIRAL_BOOTSTRAP_NODES", nodes.len());
             return nodes;
         }
     }
 
-    get_bootstrap_nodes()
+    get_default_nodes()
 }
 
 // ============================================================================
 // Health Checking
 // ============================================================================
 
-/// Parse enode address to extract IP and port
-///
-/// Enode format: enode://[node_id]@[ip]:[port]
-pub fn parse_enode_address(enode: &str) -> Result<(String, u16), String> {
+/// Parse IP and port from an enode URL
+fn parse_enode(enode: &str) -> Result<(String, u16), String> {
+    // Format: enode://[node_id]@[ip]:[port]
     let parts: Vec<&str> = enode.split('@').collect();
     if parts.len() != 2 {
-        return Err(format!(
-            "Invalid enode format: expected 'enode://id@ip:port', got '{}'",
-            enode
-        ));
+        return Err(format!("Invalid enode format: {}", enode));
     }
 
-    // Handle potential query parameters (e.g., ?discport=30304)
-    let addr_part = parts[1].split('?').next().unwrap_or(parts[1]);
-    let addr_parts: Vec<&str> = addr_part.split(':').collect();
+    // Handle query params like ?discport=30304
+    let addr = parts[1].split('?').next().unwrap_or(parts[1]);
+    let addr_parts: Vec<&str> = addr.split(':').collect();
 
     if addr_parts.len() != 2 {
-        return Err(format!(
-            "Invalid address format: expected 'ip:port', got '{}'",
-            addr_part
-        ));
+        return Err(format!("Invalid address in enode: {}", addr));
     }
 
     let ip = addr_parts[0].to_string();
     let port = addr_parts[1]
         .parse::<u16>()
-        .map_err(|e| format!("Invalid port number '{}': {}", addr_parts[1], e))?;
+        .map_err(|e| format!("Invalid port: {}", e))?;
 
     Ok((ip, port))
 }
 
-/// Extract node ID from enode URL
-pub fn extract_node_id(enode: &str) -> Option<String> {
-    if !enode.starts_with("enode://") {
-        return None;
-    }
-
-    let without_prefix = &enode[8..]; // Skip "enode://"
-    without_prefix.split('@').next().map(|s| s.to_string())
-}
-
-/// Check health of a single bootstrap node via TCP connection with retry
-pub async fn check_bootstrap_node_health(node: &BootstrapNode) -> BootstrapNodeHealth {
-    check_bootstrap_node_health_with_config(node, &RetryConfig::default()).await
-}
-
-/// Check health of a single bootstrap node with custom retry configuration
-pub async fn check_bootstrap_node_health_with_config(
-    node: &BootstrapNode,
-    retry_config: &RetryConfig,
-) -> BootstrapNodeHealth {
-    let mut attempts = 0;
-    let mut delay = retry_config.initial_delay_ms;
-    let mut last_error: Option<String>;
-
+/// Check health of a single node with retry logic
+async fn check_node_health(node: &BootstrapNode) -> NodeHealth {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
-    // Get current failure count from cache
-    let current_failures = {
-        let cache = BOOTSTRAP_CACHE.read().await;
-        cache.failure_counts.get(&node.enode).copied().unwrap_or(0)
+    let (ip, port) = match parse_enode(&node.enode) {
+        Ok(addr) => addr,
+        Err(e) => {
+            return NodeHealth {
+                enode: node.enode.clone(),
+                name: node.name.clone(),
+                region: node.region.clone(),
+                reachable: false,
+                latency_ms: None,
+                error: Some(e),
+                last_checked: now,
+            };
+        }
     };
 
-    loop {
+    let mut attempts = 0;
+    let mut delay = INITIAL_RETRY_DELAY_MS;
+    let mut last_error = String::new();
+
+    while attempts <= MAX_RETRIES {
         attempts += 1;
         let start = Instant::now();
 
-        match parse_enode_address(&node.enode) {
-            Ok((ip, port)) => {
-                let connect_result = tokio::time::timeout(
-                    Duration::from_secs(DEFAULT_HEALTH_CHECK_TIMEOUT_SECS),
-                    tokio::net::TcpStream::connect(format!("{}:{}", ip, port)),
-                )
-                .await;
+        let connect_result = tokio::time::timeout(
+            Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS),
+            tokio::net::TcpStream::connect(format!("{}:{}", ip, port)),
+        )
+        .await;
 
-                match connect_result {
-                    Ok(Ok(stream)) => {
-                        let latency = start.elapsed().as_millis() as u64;
+        match connect_result {
+            Ok(Ok(_stream)) => {
+                let latency = start.elapsed().as_millis() as u64;
+                debug!("Bootstrap node {} reachable ({}ms)", node.name, latency);
 
-                        // Successful connection - reset failure count in cache
-                        {
-                            let mut cache = BOOTSTRAP_CACHE.write().await;
-                            cache.failure_counts.remove(&node.enode);
-                        }
-
-                        // Try to detect if this is actually a Geth node by checking
-                        // if it responds appropriately (basic protocol check)
-                        let is_geth = verify_geth_handshake(&stream).await;
-
-                        if !is_geth {
-                            debug!(
-                                "Node {} responded but may not be Geth (port open but no handshake)",
-                                node.description
-                            );
-                        }
-
-                        return BootstrapNodeHealth {
-                            enode: node.enode.clone(),
-                            description: node.description.clone(),
-                            region: node.region.clone(),
-                            reachable: true,
-                            latency_ms: Some(latency),
-                            error: None,
-                            consecutive_failures: 0,
-                            last_success: Some(now),
-                            last_checked: Some(now),
-                        };
-                    }
-                    Ok(Err(e)) => {
-                        last_error = Some(format!("Connection failed: {}", e));
-                    }
-                    Err(_) => {
-                        last_error = Some(format!(
-                            "Connection timeout ({}s)",
-                            DEFAULT_HEALTH_CHECK_TIMEOUT_SECS
-                        ));
-                    }
-                }
-            }
-            Err(e) => {
-                // Parse error - no point retrying
-                return BootstrapNodeHealth {
+                return NodeHealth {
                     enode: node.enode.clone(),
-                    description: node.description.clone(),
+                    name: node.name.clone(),
                     region: node.region.clone(),
-                    reachable: false,
-                    latency_ms: None,
-                    error: Some(format!("Invalid enode: {}", e)),
-                    consecutive_failures: current_failures + 1,
-                    last_success: None,
-                    last_checked: Some(now),
+                    reachable: true,
+                    latency_ms: Some(latency),
+                    error: None,
+                    last_checked: now,
                 };
             }
+            Ok(Err(e)) => {
+                last_error = format!("Connection failed: {}", e);
+            }
+            Err(_) => {
+                last_error = format!("Timeout ({}s)", HEALTH_CHECK_TIMEOUT_SECS);
+            }
         }
 
-        // Check if we should retry
-        if attempts >= retry_config.max_attempts {
-            break;
+        // Retry with exponential backoff
+        if attempts <= MAX_RETRIES {
+            debug!(
+                "Bootstrap node {} check failed (attempt {}/{}), retrying in {}ms",
+                node.name, attempts, MAX_RETRIES + 1, delay
+            );
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            delay = (delay * 2).min(MAX_RETRY_DELAY_MS);
         }
-
-        debug!(
-            "Bootstrap node {} check failed (attempt {}/{}), retrying in {}ms",
-            node.description, attempts, retry_config.max_attempts, delay
-        );
-
-        tokio::time::sleep(Duration::from_millis(delay)).await;
-
-        // Exponential backoff
-        delay = ((delay as f64) * retry_config.backoff_multiplier)
-            .min(retry_config.max_delay_ms as f64) as u64;
     }
 
-    // Update failure count in cache
-    {
-        let mut cache = BOOTSTRAP_CACHE.write().await;
-        let failures = cache
-            .failure_counts
-            .entry(node.enode.clone())
-            .or_insert(0);
-        *failures = current_failures + 1;
-    }
+    warn!("Bootstrap node {} unreachable: {}", node.name, last_error);
 
-    BootstrapNodeHealth {
+    NodeHealth {
         enode: node.enode.clone(),
-        description: node.description.clone(),
+        name: node.name.clone(),
         region: node.region.clone(),
         reachable: false,
         latency_ms: None,
-        error: last_error,
-        consecutive_failures: current_failures + 1,
-        last_success: None,
-        last_checked: Some(now),
+        error: Some(last_error),
+        last_checked: now,
     }
 }
 
-/// Verify that the connected stream is actually a Geth node
-///
-/// This performs a basic check to see if the node responds like a Geth P2P node.
-/// Note: Full RLPx handshake verification would require crypto operations.
-async fn verify_geth_handshake(_stream: &tokio::net::TcpStream) -> bool {
-    // For now, we just verify TCP connectivity
-    // A full implementation would:
-    // 1. Send RLPx auth message
-    // 2. Wait for auth-ack
-    // 3. Verify protocol version
-    //
-    // This is complex and requires secp256k1 operations, so we defer to
-    // Geth's own peer discovery which will handle this properly.
-    true
-}
-
 /// Check health of all bootstrap nodes concurrently
-pub async fn check_all_bootstrap_nodes() -> BootstrapHealthReport {
-    check_all_bootstrap_nodes_with_config(&RetryConfig::default()).await
-}
-
-/// Check health of all bootstrap nodes with custom retry configuration
-pub async fn check_all_bootstrap_nodes_with_config(
-    retry_config: &RetryConfig,
-) -> BootstrapHealthReport {
-    let nodes = get_bootstrap_nodes_with_env_override();
+pub async fn check_all_nodes() -> BootstrapHealthReport {
+    let nodes = get_nodes();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
     // Check all nodes concurrently
-    let health_futures: Vec<_> = nodes
+    let health_futures: Vec<_> = nodes.iter().map(check_node_health).collect();
+    let mut results = futures::future::join_all(health_futures).await;
+
+    // Sort by latency (healthy nodes first, then by latency)
+    results.sort_by(|a, b| {
+        match (a.reachable, b.reachable) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, true) => a.latency_ms.cmp(&b.latency_ms),
+            (false, false) => std::cmp::Ordering::Equal,
+        }
+    });
+
+    let healthy_count = results.iter().filter(|n| n.reachable).count();
+    let is_healthy = healthy_count >= MIN_HEALTHY_NODES;
+
+    // Build enode string from healthy nodes only
+    let healthy_enodes: Vec<String> = results
         .iter()
-        .map(|node| check_bootstrap_node_health_with_config(node, retry_config))
+        .filter(|n| n.reachable)
+        .map(|n| n.enode.clone())
         .collect();
 
-    let results = futures::future::join_all(health_futures).await;
-
-    let reachable_nodes = results.iter().filter(|h| h.reachable).count();
-    let unreachable_nodes = results.len() - reachable_nodes;
-
-    let healthy = reachable_nodes >= MIN_HEALTHY_NODES;
-    let recommendation = if !healthy {
-        Some(format!(
-            "Only {} of {} bootstrap nodes reachable (minimum: {}). Check network connectivity or bootstrap node status.",
-            reachable_nodes,
-            results.len(),
-            MIN_HEALTHY_NODES
-        ))
-    } else if reachable_nodes < results.len() / 2 {
-        Some(format!(
-            "Warning: Only {} of {} bootstrap nodes reachable. Network may be degraded.",
-            reachable_nodes,
-            results.len()
-        ))
+    let healthy_enode_string = if healthy_enodes.is_empty() {
+        // Fallback to all nodes if none are healthy
+        warn!("No healthy bootstrap nodes found, falling back to all nodes");
+        nodes.iter().map(|n| n.enode.clone()).collect::<Vec<_>>().join(",")
     } else {
-        None
+        info!("Found {} healthy bootstrap nodes", healthy_count);
+        healthy_enodes.join(",")
+    };
+
+    let report = BootstrapHealthReport {
+        total_nodes: results.len(),
+        healthy_nodes: healthy_count,
+        nodes: results,
+        timestamp: now,
+        is_healthy,
+        healthy_enode_string,
     };
 
     // Update cache
-    let report = BootstrapHealthReport {
-        total_nodes: results.len(),
-        reachable_nodes,
-        unreachable_nodes,
-        nodes: results,
-        timestamp: now,
-        healthy,
-        recommendation,
-    };
-
     {
-        let mut cache = BOOTSTRAP_CACHE.write().await;
-        cache.last_report = Some(report.clone());
+        let mut cache = CACHE.write().await;
+        cache.report = Some(report.clone());
         cache.last_updated = Some(Instant::now());
     }
 
     report
 }
 
-// ============================================================================
-// Enode String Generation
-// ============================================================================
-
-/// Get a comma-separated enode string of only healthy bootstrap nodes
-///
-/// This function checks all bootstrap nodes and returns only the reachable ones.
-/// If no nodes are reachable, it falls back to returning all nodes.
-pub async fn get_healthy_bootstrap_enode_string() -> String {
-    // Check if we have a recent cached result
+/// Get healthy bootstrap enode string, using cache if fresh
+pub async fn get_healthy_enodes() -> String {
+    // Check cache first
     {
-        let cache = BOOTSTRAP_CACHE.read().await;
-        if let Some(last_updated) = cache.last_updated {
-            if last_updated.elapsed() < Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS) {
-                if !cache.healthy_enodes.is_empty() {
-                    debug!("Using cached healthy bootstrap enodes");
-                    return cache.healthy_enodes.clone();
-                }
+        let cache = CACHE.read().await;
+        if let (Some(report), Some(updated)) = (&cache.report, cache.last_updated) {
+            if updated.elapsed() < Duration::from_secs(CACHE_TTL_SECS) {
+                debug!("Using cached bootstrap enodes");
+                return report.healthy_enode_string.clone();
             }
         }
     }
 
-    // Perform fresh health check
-    let report = check_all_bootstrap_nodes().await;
-
-    // Sort by priority and latency
-    let mut healthy_nodes: Vec<_> = report
-        .nodes
-        .iter()
-        .filter(|node| node.reachable)
-        .collect();
-
-    healthy_nodes.sort_by(|a, b| {
-        // Sort by latency (lower is better)
-        a.latency_ms.cmp(&b.latency_ms)
-    });
-
-    let healthy_enodes: Vec<String> = healthy_nodes
-        .iter()
-        .map(|node| node.enode.clone())
-        .collect();
-
-    let result = if healthy_enodes.is_empty() {
-        warn!(
-            "No healthy bootstrap nodes found! Falling back to all {} nodes",
-            report.total_nodes
-        );
-        get_bootstrap_nodes_with_env_override()
-            .iter()
-            .map(|n| n.enode.clone())
-            .collect::<Vec<String>>()
-            .join(",")
-    } else {
-        info!(
-            "Using {} healthy bootstrap nodes (of {} total)",
-            healthy_enodes.len(),
-            report.total_nodes
-        );
-        healthy_enodes.join(",")
-    };
-
-    // Update cache
-    {
-        let mut cache = BOOTSTRAP_CACHE.write().await;
-        cache.healthy_enodes = result.clone();
-        cache.last_updated = Some(Instant::now());
-    }
-
-    result
+    // Cache miss or stale - perform fresh check
+    let report = check_all_nodes().await;
+    report.healthy_enode_string
 }
 
-/// Get all bootstrap enodes without health checking (synchronous fallback)
-pub fn get_all_bootstrap_enode_string() -> String {
-    get_bootstrap_nodes_with_env_override()
-        .iter()
-        .map(|n| n.enode.clone())
-        .collect::<Vec<String>>()
-        .join(",")
-}
-
-// ============================================================================
-// Bootstrap Monitoring (for auto-recovery)
-// ============================================================================
-
-/// Configuration for bootstrap health monitoring
-#[derive(Debug, Clone)]
-pub struct BootstrapMonitorConfig {
-    /// How often to check bootstrap health (seconds)
-    pub check_interval_secs: u64,
-    /// Minimum healthy nodes before triggering re-bootstrap
-    pub min_healthy_nodes: usize,
-    /// Callback channel for health status changes
-    pub enable_notifications: bool,
-}
-
-impl Default for BootstrapMonitorConfig {
-    fn default() -> Self {
-        Self {
-            check_interval_secs: HEALTH_CHECK_INTERVAL_SECS,
-            min_healthy_nodes: MIN_HEALTHY_NODES,
-            enable_notifications: false,
-        }
-    }
-}
-
-/// Start a background task that monitors bootstrap node health
-///
-/// Returns a handle that can be used to stop the monitor and a receiver
-/// for health status changes.
-pub fn start_bootstrap_monitor(
-    config: BootstrapMonitorConfig,
-) -> (
-    tokio::task::JoinHandle<()>,
-    Option<tokio::sync::mpsc::Receiver<BootstrapHealthReport>>,
-) {
-    let (tx, rx) = if config.enable_notifications {
-        let (tx, rx) = tokio::sync::mpsc::channel(10);
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
-
-    let handle = tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(Duration::from_secs(config.check_interval_secs));
-
-        loop {
-            interval.tick().await;
-
-            let report = check_all_bootstrap_nodes().await;
-
-            if !report.healthy {
-                warn!(
-                    "Bootstrap health degraded: {} of {} nodes reachable",
-                    report.reachable_nodes, report.total_nodes
-                );
-
-                if let Some(ref recommendation) = report.recommendation {
-                    warn!("Recommendation: {}", recommendation);
-                }
-            } else {
-                debug!(
-                    "Bootstrap health OK: {} of {} nodes reachable",
-                    report.reachable_nodes, report.total_nodes
-                );
-            }
-
-            // Send notification if enabled
-            if let Some(ref tx) = tx {
-                let _ = tx.try_send(report);
-            }
-        }
-    });
-
-    (handle, rx)
-}
-
-/// Get the cached health report without performing a new check
-pub async fn get_cached_health_report() -> Option<BootstrapHealthReport> {
-    let cache = BOOTSTRAP_CACHE.read().await;
-    cache.last_report.clone()
-}
-
-/// Clear the bootstrap cache (useful for testing or forcing fresh checks)
-pub async fn clear_bootstrap_cache() {
-    let mut cache = BOOTSTRAP_CACHE.write().await;
-    *cache = BootstrapCache::default();
+/// Get cached health report without performing new check
+pub async fn get_cached_report() -> Option<BootstrapHealthReport> {
+    let cache = CACHE.read().await;
+    cache.report.clone()
 }
 
 // ============================================================================
@@ -646,9 +341,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_enode_address_valid() {
+    fn test_parse_enode_valid() {
         let enode = "enode://abc123@192.168.1.1:30303";
-        let result = parse_enode_address(enode);
+        let result = parse_enode(enode);
         assert!(result.is_ok());
         let (ip, port) = result.unwrap();
         assert_eq!(ip, "192.168.1.1");
@@ -656,9 +351,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_enode_address_with_query() {
+    fn test_parse_enode_with_query() {
         let enode = "enode://abc123@192.168.1.1:30303?discport=30304";
-        let result = parse_enode_address(enode);
+        let result = parse_enode(enode);
         assert!(result.is_ok());
         let (ip, port) = result.unwrap();
         assert_eq!(ip, "192.168.1.1");
@@ -666,44 +361,101 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_enode_address_invalid() {
-        assert!(parse_enode_address("invalid").is_err());
-        assert!(parse_enode_address("enode://abc").is_err());
-        assert!(parse_enode_address("enode://abc@").is_err());
-        assert!(parse_enode_address("enode://abc@ip:notaport").is_err());
+    fn test_parse_enode_invalid() {
+        assert!(parse_enode("invalid").is_err());
+        assert!(parse_enode("enode://abc").is_err());
     }
 
     #[test]
-    fn test_extract_node_id() {
-        let enode = "enode://abc123def456@192.168.1.1:30303";
-        assert_eq!(extract_node_id(enode), Some("abc123def456".to_string()));
-
-        assert_eq!(extract_node_id("invalid"), None);
-    }
-
-    #[test]
-    fn test_get_bootstrap_nodes_not_empty() {
-        let nodes = get_bootstrap_nodes();
+    fn test_get_default_nodes() {
+        let nodes = get_default_nodes();
         assert!(!nodes.is_empty());
-
         for node in &nodes {
             assert!(node.enode.starts_with("enode://"));
-            assert!(!node.description.is_empty());
-            assert!(!node.region.is_empty());
         }
     }
 
     #[test]
-    fn test_get_all_bootstrap_enode_string() {
-        let enode_string = get_all_bootstrap_enode_string();
-        assert!(!enode_string.is_empty());
-        assert!(enode_string.contains("enode://"));
+    fn test_parse_enode_extracts_correct_port() {
+        let enode = "enode://abc@10.0.0.1:30303";
+        let (ip, port) = parse_enode(enode).unwrap();
+        assert_eq!(ip, "10.0.0.1");
+        assert_eq!(port, 30303);
     }
 
     #[test]
-    fn test_retry_config_default() {
-        let config = RetryConfig::default();
-        assert_eq!(config.max_attempts, MAX_HEALTH_CHECK_RETRIES);
-        assert!(config.backoff_multiplier > 1.0);
+    fn test_parse_enode_missing_at_sign() {
+        assert!(parse_enode("enode://abc123").is_err());
     }
+
+    #[test]
+    fn test_parse_enode_missing_port() {
+        assert!(parse_enode("enode://abc@192.168.1.1").is_err());
+    }
+
+    #[test]
+    fn test_parse_enode_invalid_port() {
+        assert!(parse_enode("enode://abc@192.168.1.1:notaport").is_err());
+    }
+
+    #[test]
+    fn test_default_nodes_have_required_fields() {
+        for node in get_default_nodes() {
+            assert!(!node.name.is_empty(), "Node name should not be empty");
+            assert!(!node.region.is_empty(), "Node region should not be empty");
+            assert!(node.enode.starts_with("enode://"), "Enode should start with enode://");
+            assert!(node.enode.contains("@"), "Enode should contain @");
+            assert!(node.enode.contains(":30303"), "Enode should contain port 30303");
+        }
+    }
+
+    #[test]
+    fn test_get_nodes_returns_defaults_without_env() {
+        let nodes = get_nodes();
+        let defaults = get_default_nodes();
+        assert_eq!(nodes.len(), defaults.len());
+    }
+
+    #[test]
+    fn test_bootstrap_node_priorities() {
+        let nodes = get_default_nodes();
+        assert_eq!(nodes[0].priority, 1);
+    }
+
+    #[test]
+    fn test_node_health_serialization() {
+        let health = NodeHealth {
+            enode: "enode://abc@127.0.0.1:30303".to_string(),
+            name: "Test Node".to_string(),
+            region: "US East".to_string(),
+            reachable: true,
+            latency_ms: Some(42),
+            error: None,
+            last_checked: 1700000000,
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        assert!(json.contains("latencyMs"));
+        assert!(json.contains("lastChecked"));
+        let deserialized: NodeHealth = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "Test Node");
+        assert_eq!(deserialized.latency_ms, Some(42));
+    }
+
+    #[test]
+    fn test_bootstrap_health_report_serialization() {
+        let report = BootstrapHealthReport {
+            total_nodes: 2,
+            healthy_nodes: 1,
+            nodes: vec![],
+            timestamp: 1700000000,
+            is_healthy: true,
+            healthy_enode_string: "enode://test@127.0.0.1:30303".to_string(),
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("totalNodes"));
+        assert!(json.contains("healthyNodes"));
+        assert!(json.contains("isHealthy"));
+        assert!(json.contains("healthyEnodeString"));
+    }
+
 }
