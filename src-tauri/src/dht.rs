@@ -314,6 +314,9 @@ enum SwarmCommand {
         peer_id: PeerId,
         request_id: String,
         file_hash: String,
+        /// Known multiaddresses for this peer (from DHT SeederInfo).
+        /// Used to dial the peer directly when not already connected.
+        multiaddrs: Vec<String>,
     },
     PutDhtValue {
         key: String,
@@ -335,6 +338,9 @@ enum SwarmCommand {
         peer_id: PeerId,
         payload: Vec<u8>,
         response_tx: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    },
+    GetListeningAddresses {
+        response_tx: tokio::sync::oneshot::Sender<Vec<String>>,
     },
 }
 
@@ -758,8 +764,9 @@ impl DhtService {
         }
     }
 
-    /// Request a file from a remote peer by hash (initiates chunked transfer)
-    pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String) -> Result<(), String> {
+    /// Request a file from a remote peer by hash (initiates chunked transfer).
+    /// `multiaddrs` are known addresses for the peer (from DHT SeederInfo) used for direct dialing.
+    pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String, multiaddrs: Vec<String>) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
@@ -767,10 +774,27 @@ impl DhtService {
                 peer_id: peer_id_parsed,
                 request_id,
                 file_hash,
+                multiaddrs,
             }).map_err(|e| e.to_string())?;
             Ok(())
         } else {
             Err("DHT not running".to_string())
+        }
+    }
+
+    /// Get this node's listening addresses (TCP + relay circuit).
+    /// Used to populate SeederInfo.multiaddrs so other peers can dial us directly.
+    pub async fn get_listening_addresses(&self) -> Vec<String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            if tx.send(SwarmCommand::GetListeningAddresses { response_tx }).is_ok() {
+                response_rx.await.unwrap_or_default()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
         }
     }
 }
@@ -1422,7 +1446,13 @@ async fn event_loop(
                         let req_id = swarm.behaviour_mut().echo_protocol.send_request(&peer_id, EchoRequest(payload));
                         pending_echo.insert(req_id, response_tx);
                     }
-                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash } => {
+                    SwarmCommand::GetListeningAddresses { response_tx } => {
+                        let addrs: Vec<String> = swarm.listeners()
+                            .map(|a| a.to_string())
+                            .collect();
+                        let _ = response_tx.send(addrs);
+                    }
+                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash, multiaddrs } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
 
                         if swarm.is_connected(&peer_id) {
@@ -1435,31 +1465,68 @@ async fn event_loop(
                             outbound_request_map.insert(req_id, request_id.clone());
                             println!("File info request sent with ID: {:?}", req_id);
                         } else {
-                            // Peer not connected — dial via relay, defer send_request()
-                            // until ConnectionEstablished. We CANNOT call send_request()
-                            // now because it triggers DialOpts::peer_id() internally,
-                            // which races with our relay dial (DialPending→DialFailure).
-                            println!("⚠️ Peer {} is not connected, dialing via relay...", peer_id);
+                            // Peer not connected — try dialing using known multiaddrs
+                            // from DHT SeederInfo, then fall back to relay circuit.
+                            println!("⚠️ Peer {} is not connected, attempting to dial...", peer_id);
                             let mut dialed = false;
-                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
-                            for relay_addr_str in get_relay_nodes() {
-                                if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
-                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
-                                        if !relay_peer_ids_tried.insert(relay_pid) {
+
+                            // Strategy 1: Dial using stored multiaddresses from DHT metadata.
+                            // These include the seeder's TCP and relay circuit addresses.
+                            if !multiaddrs.is_empty() {
+                                // Collect valid addresses, appending /p2p/TARGET where needed
+                                let mut dial_addrs: Vec<Multiaddr> = Vec::new();
+                                for addr_str in &multiaddrs {
+                                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                                        // Skip loopback addresses
+                                        if addr_str.starts_with("/ip4/127.") || addr_str.starts_with("/ip6/::1/") {
                                             continue;
                                         }
+                                        // Append target peer_id so libp2p verifies identity
+                                        let full_addr = addr.with(libp2p::multiaddr::Protocol::P2p(peer_id));
+                                        dial_addrs.push(full_addr);
                                     }
-                                    let circuit_addr = relay_addr
-                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
-                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id));
-                                    match swarm.dial(circuit_addr.clone()) {
+                                }
+                                if !dial_addrs.is_empty() {
+                                    println!("📡 Trying {} stored address(es) for peer {}", dial_addrs.len(), peer_id);
+                                    let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
+                                        .addresses(dial_addrs)
+                                        .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
+                                        .build();
+                                    match swarm.dial(opts) {
                                         Ok(_) => {
-                                            println!("📡 Dialing peer {} via relay: {}", peer_id, circuit_addr);
+                                            println!("📡 Direct dial initiated for peer {}", peer_id);
                                             dialed = true;
-                                            break;
                                         }
                                         Err(e) => {
-                                            println!("Relay dial failed: {:?}", e);
+                                            println!("Direct dial setup failed: {:?}", e);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Strategy 2: Fall back to hardcoded relay nodes
+                            if !dialed {
+                                println!("📡 Falling back to relay dial for peer {}...", peer_id);
+                                let mut relay_peer_ids_tried = std::collections::HashSet::new();
+                                for relay_addr_str in get_relay_nodes() {
+                                    if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
+                                        if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
+                                            if !relay_peer_ids_tried.insert(relay_pid) {
+                                                continue;
+                                            }
+                                        }
+                                        let circuit_addr = relay_addr
+                                            .with(libp2p::multiaddr::Protocol::P2pCircuit)
+                                            .with(libp2p::multiaddr::Protocol::P2p(peer_id));
+                                        match swarm.dial(circuit_addr.clone()) {
+                                            Ok(_) => {
+                                                println!("📡 Dialing peer {} via relay: {}", peer_id, circuit_addr);
+                                                dialed = true;
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                println!("Relay dial failed: {:?}", e);
+                                            }
                                         }
                                     }
                                 }
@@ -1470,9 +1537,9 @@ async fn event_loop(
                                 pending_file_requests.entry(peer_id)
                                     .or_default()
                                     .push((request_id.clone(), file_hash.clone()));
-                                println!("📋 File request queued, waiting for relay circuit...");
+                                println!("📋 File request queued, waiting for connection...");
                             } else {
-                                println!("❌ Cannot reach peer {}: all relay dial attempts failed", peer_id);
+                                println!("❌ Cannot reach peer {}: all dial attempts failed", peer_id);
                                 let _ = app.emit("file-download-failed", serde_json::json!({
                                     "requestId": request_id,
                                     "fileHash": file_hash,
