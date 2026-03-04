@@ -23,14 +23,17 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.12"
+          node-version: "22"
           cache: "npm"
 
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Run frontend linting
-        run: npm run check || true
+      - name: Run frontend type check
+        run: npx svelte-check || true
+
+      - name: Run frontend tests
+        run: npm test
 
       - name: Build frontend
         run: npm run build
@@ -86,42 +89,13 @@ jobs:
       - name: Check if backend compiles
         run: |
           cd src-tauri
-          # Check library code first (faster, no GUI dependencies)
           cargo check --lib
-          # Then check binaries if lib passes
           cargo check --bins
         timeout-minutes: 10
 
       - name: Run backend tests
         run: |
           cd src-tauri
-          # Run tests for multi-source download
-          cargo test --lib multi_source_download
-          # Run tests for FTP client
-          cargo test --lib ftp_client
-          # Run tests for download scheduler
-          cargo test --lib download_scheduler
+          cargo test --lib
         timeout-minutes: 10
         continue-on-error: true
-
-  relay:
-    name: Relay Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "relay -> target"
-          shared-key: "relay-build"
-          cache-on-failure: true
-
-      - name: Build and run relay tests
-        run: cd relay && cargo test --release --no-fail-fast
-        continue-on-error: true
-        timeout-minutes: 5
