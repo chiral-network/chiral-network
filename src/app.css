@@ -17,4 +17,14 @@
     --color-primary-900: 30 58 138;
     --color-primary-950: 23 37 84;
   }
+
+  body {
+    @apply text-gray-900 dark:text-gray-100;
+  }
+}
+
+@layer utilities {
+  .text-muted-foreground {
+    @apply text-gray-600 dark:text-gray-400;
+  }
 }
