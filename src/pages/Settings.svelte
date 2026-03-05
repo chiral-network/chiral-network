@@ -125,14 +125,29 @@
   // ── Hosting config ──
   let hostingPublishing = $state(false);
 
-  function toggleHosting() {
+  async function toggleHosting() {
+    if (hostingPublishing) return;
+
+    const nextEnabled = !$settings.hostingConfig.enabled;
     settings.update((s) => ({
       ...s,
       hostingConfig: {
         ...s.hostingConfig,
-        enabled: !s.hostingConfig.enabled
+        enabled: nextEnabled
       }
     }));
+
+    if (nextEnabled) {
+      const wallet = get(walletAccount);
+      if (wallet?.address) {
+        await publishHosting();
+      } else {
+        toasts.show('Hosting enabled. It will auto-publish when you log in.', 'info');
+      }
+      return;
+    }
+
+    await unpublishHosting();
   }
 
   function updateHostingMaxStorage(gb: number) {
