@@ -5,7 +5,7 @@
   import { dhtService } from '$lib/dhtService';
   import { gethService } from '$lib/services/gethService';
   import { applyColorTheme } from '$lib/services/colorThemeService';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import Navbar from '$lib/components/Navbar.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Toast from '$lib/components/Toast.svelte';
@@ -23,6 +23,9 @@
 
   let currentPath = $state('/wallet');
   let sidebarCollapsed = $state(false);
+  let hostingAutoPublishedKey = $state<string | null>(null);
+  let hostingAutoPublishing = $state(false);
+  let hostingAutoPublishRetryTimer = $state<number | null>(null);
 
   // Apply dark mode class to document
   $effect(() => {
@@ -162,6 +165,13 @@
     }
   });
 
+  onDestroy(() => {
+    if (hostingAutoPublishRetryTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(hostingAutoPublishRetryTimer);
+      hostingAutoPublishRetryTimer = null;
+    }
+  });
+
   // Auto-reseed AFTER Kademlia bootstrap completes, so DHT puts propagate.
   // The Rust backend emits "dht-bootstrap-complete" once bootstrap finishes.
   onMount(async () => {
@@ -266,20 +276,55 @@
     } catch {
       // Agreements dir may not exist yet — skip
     }
+  }
 
-    // 4. Auto-publish hosting marketplace if enabled in settings
+  function clearHostingAutoPublishRetry() {
+    if (hostingAutoPublishRetryTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(hostingAutoPublishRetryTimer);
+      hostingAutoPublishRetryTimer = null;
+    }
+  }
+
+  function scheduleHostingAutoPublishRetry() {
+    if (typeof window === 'undefined' || hostingAutoPublishRetryTimer !== null) return;
+    hostingAutoPublishRetryTimer = window.setTimeout(() => {
+      hostingAutoPublishRetryTimer = null;
+      void maybeAutoPublishHosting();
+    }, 3000);
+  }
+
+  async function maybeAutoPublishHosting(): Promise<void> {
+    if (
+      typeof window === 'undefined'
+      || !('__TAURI_INTERNALS__' in window)
+      || !$isAuthenticated
+      || !$networkConnected
+      || !$settings.hostingConfig?.enabled
+    ) {
+      return;
+    }
+
+    const addr = $walletAccount?.address;
+    if (!addr) return;
+
+    const publishKey = `${addr}:${JSON.stringify($settings.hostingConfig)}`;
+    if (hostingAutoPublishing || hostingAutoPublishedKey === publishKey) {
+      return;
+    }
+
+    hostingAutoPublishing = true;
     try {
-      const currentSettings = $settings;
-      if (currentSettings.hostingConfig?.enabled) {
-        const addr = $walletAccount?.address;
-        if (addr) {
-          const { hostingService } = await import('$lib/services/hostingService');
-          await hostingService.publishHostAdvertisement(currentSettings.hostingConfig, addr);
-          console.log('✅ Auto-published hosting marketplace advertisement');
-        }
-      }
-    } catch {
-      // Hosting publish may fail if DHT not ready — skip
+      const { hostingService } = await import('$lib/services/hostingService');
+      await hostingService.publishHostAdvertisement($settings.hostingConfig, addr);
+      hostingAutoPublishedKey = publishKey;
+      clearHostingAutoPublishRetry();
+      console.log('✅ Auto-published hosting marketplace advertisement');
+    } catch (err) {
+      hostingAutoPublishedKey = null;
+      scheduleHostingAutoPublishRetry();
+      console.warn('Hosting auto-publish failed, retrying shortly:', err);
+    } finally {
+      hostingAutoPublishing = false;
     }
   }
 
@@ -389,6 +434,23 @@
     if (!$isAuthenticated) {
       dhtAutoConnected = false;
     }
+  });
+
+  // Auto-publish hosting marketplace on login while enabled.
+  // This path is independent of bootstrap events so it still works when DHT is
+  // already running from a previous session.
+  $effect(() => {
+    const enabled = $settings.hostingConfig?.enabled ?? false;
+    const addr = $walletAccount?.address ?? null;
+    const canPublish = $isAuthenticated && enabled && !!addr && $networkConnected;
+
+    if (!canPublish) {
+      hostingAutoPublishedKey = null;
+      clearHostingAutoPublishRetry();
+      return;
+    }
+
+    void maybeAutoPublishHosting();
   });
 
   // Auto-start Geth node once when user logs in
