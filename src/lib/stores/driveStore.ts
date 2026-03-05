@@ -49,6 +49,15 @@ function fromApi(item: ApiDriveItem): DriveItem {
   };
 }
 
+function compareDriveItems(a: DriveItem, b: DriveItem): number {
+  // Starred items always float to the top.
+  if (a.starred !== b.starred) return a.starred ? -1 : 1;
+  // Within the same starred bucket, keep folders before files.
+  if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+  // Finally sort by name (case-insensitive).
+  return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+}
+
 /** Sync the current wallet address to the API service. */
 function syncOwner(): string {
   const account = get(walletAccount);
@@ -212,10 +221,14 @@ function createDriveStore() {
       if (!item) return;
       const newStarred = !item.starred;
       try {
-        await driveApi.updateItem(id, { starred: newStarred });
+        const updated = await driveApi.updateItem(id, { starred: newStarred });
+        const converted = fromApi(updated);
         update(m => {
-          const found = m.items.find(i => i.id === id);
-          if (found) found.starred = newStarred;
+          const idx = m.items.findIndex(i => i.id === id);
+          if (idx >= 0) {
+            converted.shared = m.items[idx].shared;
+            m.items[idx] = converted;
+          }
           return m;
         });
       } catch (e) {
@@ -314,10 +327,7 @@ function createDriveStore() {
     getChildren(parentId: string | null, manifest: DriveManifest): DriveItem[] {
       return manifest.items
         .filter(i => i.parentId === parentId)
-        .sort((a, b) => {
-          if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
+        .sort(compareDriveItems);
     },
 
     getBreadcrumb(itemId: string | null, manifest: DriveManifest): DriveItem[] {
@@ -334,7 +344,9 @@ function createDriveStore() {
 
     searchByName(query: string, manifest: DriveManifest): DriveItem[] {
       const q = query.toLowerCase();
-      return manifest.items.filter(i => i.name.toLowerCase().includes(q));
+      return manifest.items
+        .filter(i => i.name.toLowerCase().includes(q))
+        .sort(compareDriveItems);
     },
 
     getItem(id: string, manifest: DriveManifest): DriveItem | undefined {

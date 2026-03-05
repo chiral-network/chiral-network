@@ -145,21 +145,21 @@ describe('driveStore', () => {
       expect(nestedChildren[0].name).toBe('nested.txt');
     });
 
-    it('should sort folders before files, then alphabetically', async () => {
+    it('should sort starred items to the front, then folders before files, then alphabetically', async () => {
       const { driveStore } = await import('$lib/stores/driveStore');
       const manifest = {
         version: 1,
         items: [
           { id: '1', name: 'z-file.txt', type: 'file' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: false, shared: false, isPublic: true },
-          { id: '2', name: 'a-file.txt', type: 'file' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: false, shared: false, isPublic: true },
+          { id: '2', name: 'a-file.txt', type: 'file' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: true, shared: false, isPublic: true },
           { id: '3', name: 'z-folder', type: 'folder' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: false, shared: false, isPublic: true },
-          { id: '4', name: 'a-folder', type: 'folder' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: false, shared: false, isPublic: true },
+          { id: '4', name: 'a-folder', type: 'folder' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: true, shared: false, isPublic: true },
         ],
         shares: [],
         lastModified: 0,
       };
       const children = driveStore.getChildren(null, manifest);
-      expect(children.map(c => c.name)).toEqual(['a-folder', 'z-folder', 'a-file.txt', 'z-file.txt']);
+      expect(children.map(c => c.name)).toEqual(['a-folder', 'a-file.txt', 'z-folder', 'z-file.txt']);
     });
   });
 
@@ -219,6 +219,22 @@ describe('driveStore', () => {
         lastModified: 0,
       };
       expect(driveStore.searchByName('nonexistent', manifest)).toHaveLength(0);
+    });
+
+    it('should sort search results with starred items first', async () => {
+      const { driveStore } = await import('$lib/stores/driveStore');
+      const manifest = {
+        version: 1,
+        items: [
+          { id: '1', name: 'report-z.txt', type: 'file' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: false, shared: false, isPublic: true },
+          { id: '2', name: 'report-a.txt', type: 'file' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: true, shared: false, isPublic: true },
+          { id: '3', name: 'report-folder', type: 'folder' as const, parentId: null, createdAt: 0, modifiedAt: 0, starred: false, shared: false, isPublic: true },
+        ],
+        shares: [],
+        lastModified: 0,
+      };
+      const results = driveStore.searchByName('report', manifest);
+      expect(results.map(r => r.id)).toEqual(['2', '3', '1']);
     });
   });
 
