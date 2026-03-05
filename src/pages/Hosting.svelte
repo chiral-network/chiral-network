@@ -17,6 +17,14 @@
   } from 'lucide-svelte';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
+  import {
+    formatHostedFileSize as formatFileSize,
+    formatHostedTimeAgo as timeAgo,
+    buildHostedSiteUrl,
+    buildHostedLocalUrl,
+    getTotalHostedSiteSize as totalSize,
+    resolveHostingPort,
+  } from '$lib/utils/hostingPageUtils';
   const log = logger('Hosting');
 
   // Default relay gateway URL
@@ -75,42 +83,14 @@
   // Helpers
   // ---------------------------------------------------------------------------
 
-  function formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
-
-  function timeAgo(unixSecs: number): string {
-    const diff = Math.floor(Date.now() / 1000) - unixSecs;
-    if (diff < 60) return 'just now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  }
-
   function siteUrl(site: HostedSite): string {
-    // Prefer relay URL if published
-    if (site.relayUrl) {
-      return site.relayUrl;
-    }
-    // Local URL — always use localhost (public IP is unreachable behind NAT;
-    // use "Publish to Network" for public access instead)
-    const p = serverStatus.address?.split(':').pop() || String(port);
-    return `http://localhost:${p}/sites/${site.id}/`;
+    // Local URL always uses localhost (public IP is unreachable behind NAT);
+    // use "Publish to Network" for public access.
+    return buildHostedSiteUrl(site.id, site.relayUrl, serverStatus.address, port);
   }
 
   function localUrl(): string {
-    if (serverStatus.address) {
-      return `http://${serverStatus.address}`;
-    }
-    return `http://localhost:${port}`;
-  }
-
-  function totalSize(files: SiteFile[]): number {
-    return files.reduce((sum, f) => sum + f.size, 0);
+    return buildHostedLocalUrl(serverStatus.address, port);
   }
 
   // ---------------------------------------------------------------------------
@@ -308,13 +288,7 @@
   onMount(async () => {
     isTauri = checkTauriAvailability();
 
-    const savedPort = localStorage.getItem('chiral-hosting-port');
-    if (savedPort) {
-      const parsed = parseInt(savedPort, 10);
-      if (!isNaN(parsed) && parsed > 0 && parsed <= 65535) {
-        port = parsed;
-      }
-    }
+    port = resolveHostingPort(localStorage.getItem('chiral-hosting-port'));
 
     await loadServerStatus();
     await loadSites();
