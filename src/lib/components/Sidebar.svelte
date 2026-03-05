@@ -74,7 +74,7 @@
 <!-- Mobile overlay -->
 {#if mobileOpen}
   <div class="md:hidden fixed inset-0 z-40 bg-black/50" onclick={() => mobileOpen = false}></div>
-  <div class="md:hidden fixed top-14 left-0 right-0 z-50 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-lg">
+  <div class="md:hidden fixed top-14 left-0 right-0 z-50 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shadow-lg max-h-[calc(100vh-3.5rem)] overflow-y-auto">
     <div class="px-3 py-2 space-y-1">
       {#each navItems as item}
         <button
