@@ -7,6 +7,10 @@
 
   let mobileMenuOpen = $state(false);
   let moreMenuOpen = $state(false);
+  let moreButtonEl = $state<HTMLButtonElement | null>(null);
+  let moreMenuLeft = $state(0);
+  let moreMenuTop = $state(0);
+  let moreMenuMaxHeight = $state(320);
 
   function handleLogout() {
     isAuthenticated.set(false);
@@ -18,6 +22,42 @@
     goto(path);
     mobileMenuOpen = false;
     moreMenuOpen = false;
+  }
+
+  function positionMoreMenu() {
+    if (!moreButtonEl || typeof window === 'undefined') return;
+
+    const VIEWPORT_PADDING = 8;
+    const MENU_WIDTH = 192;
+    const MENU_GAP = 6;
+    const ITEM_HEIGHT = 36;
+    const MIN_HEIGHT = 140;
+
+    const rect = moreButtonEl.getBoundingClientRect();
+    const preferredHeight = Math.min(320, moreItems.length * ITEM_HEIGHT + 8);
+
+    let left = rect.right - MENU_WIDTH;
+    if (left + MENU_WIDTH > window.innerWidth - VIEWPORT_PADDING) {
+      left = window.innerWidth - MENU_WIDTH - VIEWPORT_PADDING;
+    }
+    if (left < VIEWPORT_PADDING) {
+      left = VIEWPORT_PADDING;
+    }
+
+    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_PADDING;
+    const spaceAbove = rect.top - VIEWPORT_PADDING;
+    const openUp = spaceBelow < MIN_HEIGHT && spaceAbove > spaceBelow;
+
+    if (openUp) {
+      moreMenuMaxHeight = Math.max(MIN_HEIGHT, spaceAbove - MENU_GAP);
+      const usedHeight = Math.min(preferredHeight, moreMenuMaxHeight);
+      moreMenuTop = Math.max(VIEWPORT_PADDING, rect.top - MENU_GAP - usedHeight);
+    } else {
+      moreMenuMaxHeight = Math.max(MIN_HEIGHT, spaceBelow - MENU_GAP);
+      moreMenuTop = rect.bottom + MENU_GAP;
+    }
+
+    moreMenuLeft = left;
   }
 
   const MAX_VISIBLE = 6;
@@ -48,6 +88,20 @@
     }
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
+  });
+
+  $effect(() => {
+    if (!moreMenuOpen || typeof window === 'undefined') return;
+    moreItems.length;
+    const rafId = window.requestAnimationFrame(positionMoreMenu);
+    const handleViewportChange = () => positionMoreMenu();
+    window.addEventListener('resize', handleViewportChange);
+    window.addEventListener('scroll', handleViewportChange, true);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('scroll', handleViewportChange, true);
+    };
   });
 
   const isMoreActive = $derived(moreItems.some(item => item.path === currentPage));
@@ -97,6 +151,7 @@
         {#if moreItems.length > 0}
           <div class="relative more-menu-container">
             <button
+              bind:this={moreButtonEl}
               onclick={() => moreMenuOpen = !moreMenuOpen}
               class="flex items-center gap-1 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap
                 {isMoreActive
@@ -109,7 +164,10 @@
             </button>
 
             {#if moreMenuOpen}
-              <div class="absolute right-0 top-full mt-1 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50">
+              <div
+                class="fixed w-48 overflow-y-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50"
+                style="left: {moreMenuLeft}px; top: {moreMenuTop}px; max-height: {moreMenuMaxHeight}px;"
+              >
                 {#each moreItems as item}
                   <button
                     onclick={() => navigate(item.path)}
@@ -169,7 +227,7 @@
 
   <!-- Mobile menu dropdown -->
   {#if mobileMenuOpen}
-    <div class="md:hidden border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+    <div class="md:hidden border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 max-h-[calc(100vh-3.5rem)] overflow-y-auto">
       <div class="px-3 py-2 space-y-1">
         {#each navItems as item}
           <button

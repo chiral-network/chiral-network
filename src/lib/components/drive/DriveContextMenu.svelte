@@ -40,14 +40,75 @@
     onShowInExplorer?: (item: DriveItem) => void;
   } = $props();
 
+  let menuEl = $state<HTMLDivElement | null>(null);
+  let menuLeft = $state(0);
+  let menuTop = $state(0);
+  let menuMaxHeight = $state(320);
+
   function action(fn: (item: DriveItem) => void) {
     return () => { fn(item); onClose(); };
+  }
+
+  function positionMenu() {
+    if (!menuEl || typeof window === 'undefined') return;
+
+    const VIEWPORT_PADDING = 8;
+    const FALLBACK_WIDTH = 192;
+    const FALLBACK_HEIGHT = 280;
+
+    const rect = menuEl.getBoundingClientRect();
+    const menuWidth = rect.width || FALLBACK_WIDTH;
+    const naturalHeight = rect.height || FALLBACK_HEIGHT;
+    const maxHeight = Math.max(140, window.innerHeight - VIEWPORT_PADDING * 2);
+    const renderedHeight = Math.min(naturalHeight, maxHeight);
+
+    let left = x;
+    let top = y;
+
+    if (left + menuWidth > window.innerWidth - VIEWPORT_PADDING) {
+      left = window.innerWidth - menuWidth - VIEWPORT_PADDING;
+    }
+    if (left < VIEWPORT_PADDING) {
+      left = VIEWPORT_PADDING;
+    }
+
+    const canFitBelow = y + renderedHeight <= window.innerHeight - VIEWPORT_PADDING;
+    const canFitAbove = y - renderedHeight >= VIEWPORT_PADDING;
+    if (!canFitBelow && canFitAbove) {
+      top = y - renderedHeight;
+    }
+
+    if (top + renderedHeight > window.innerHeight - VIEWPORT_PADDING) {
+      top = window.innerHeight - renderedHeight - VIEWPORT_PADDING;
+    }
+    if (top < VIEWPORT_PADDING) {
+      top = VIEWPORT_PADDING;
+    }
+
+    menuLeft = left;
+    menuTop = top;
+    menuMaxHeight = maxHeight;
   }
 
   $effect(() => {
     function handleClick() { onClose(); }
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
+  });
+
+  $effect(() => {
+    x;
+    y;
+    menuItems.length;
+    if (typeof window === 'undefined' || !menuEl) return;
+
+    const rafId = window.requestAnimationFrame(positionMenu);
+    const handleResize = () => positionMenu();
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', handleResize);
+    };
   });
 
   const menuItems = $derived([
@@ -84,8 +145,9 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="fixed z-[100] w-48 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1"
-  style="left: {x}px; top: {y}px;"
+  bind:this={menuEl}
+  class="fixed z-[100] w-48 overflow-y-auto bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1"
+  style="left: {menuLeft}px; top: {menuTop}px; max-height: {menuMaxHeight}px;"
   onclick={(e) => e.stopPropagation()}
 >
   {#each menuItems as mi}
