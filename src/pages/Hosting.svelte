@@ -324,7 +324,7 @@
 <div class="p-6 space-y-6">
   <!-- Header -->
   <div>
-    <h1 class="text-3xl font-bold">Hosting</h1>
+    <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Hosting</h1>
     <p class="text-muted-foreground mt-2">
       Host static websites on the Chiral Network. Publish to the network to make your site accessible from anywhere.
     </p>
