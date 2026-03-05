@@ -2,6 +2,7 @@
   import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive, Users } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { isAuthenticated, walletAccount, networkConnected } from '$lib/stores';
+  import { computeAnchoredDropdownPlacement } from '$lib/utils/uiPositioning';
 
   let { currentPage = 'download' }: { currentPage?: string } = $props();
 
@@ -27,37 +28,24 @@
   function positionMoreMenu() {
     if (!moreButtonEl || typeof window === 'undefined') return;
 
-    const VIEWPORT_PADDING = 8;
     const MENU_WIDTH = 192;
-    const MENU_GAP = 6;
     const ITEM_HEIGHT = 36;
-    const MIN_HEIGHT = 140;
 
     const rect = moreButtonEl.getBoundingClientRect();
     const preferredHeight = Math.min(320, moreItems.length * ITEM_HEIGHT + 8);
+    const placement = computeAnchoredDropdownPlacement({
+      anchorTop: rect.top,
+      anchorBottom: rect.bottom,
+      anchorRight: rect.right,
+      menuWidth: MENU_WIDTH,
+      preferredHeight,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
 
-    let left = rect.right - MENU_WIDTH;
-    if (left + MENU_WIDTH > window.innerWidth - VIEWPORT_PADDING) {
-      left = window.innerWidth - MENU_WIDTH - VIEWPORT_PADDING;
-    }
-    if (left < VIEWPORT_PADDING) {
-      left = VIEWPORT_PADDING;
-    }
-
-    const spaceBelow = window.innerHeight - rect.bottom - VIEWPORT_PADDING;
-    const spaceAbove = rect.top - VIEWPORT_PADDING;
-    const openUp = spaceBelow < MIN_HEIGHT && spaceAbove > spaceBelow;
-
-    if (openUp) {
-      moreMenuMaxHeight = Math.max(MIN_HEIGHT, spaceAbove - MENU_GAP);
-      const usedHeight = Math.min(preferredHeight, moreMenuMaxHeight);
-      moreMenuTop = Math.max(VIEWPORT_PADDING, rect.top - MENU_GAP - usedHeight);
-    } else {
-      moreMenuMaxHeight = Math.max(MIN_HEIGHT, spaceBelow - MENU_GAP);
-      moreMenuTop = rect.bottom + MENU_GAP;
-    }
-
-    moreMenuLeft = left;
+    moreMenuLeft = placement.left;
+    moreMenuTop = placement.top;
+    moreMenuMaxHeight = placement.maxHeight;
   }
 
   const MAX_VISIBLE = 6;

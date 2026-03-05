@@ -1,6 +1,7 @@
 <script lang="ts">
   import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Download, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2 } from 'lucide-svelte';
   import type { DriveItem } from '$lib/stores/driveStore';
+  import { computeContextMenuPlacement } from '$lib/utils/uiPositioning';
 
   let {
     item,
@@ -52,42 +53,24 @@
   function positionMenu() {
     if (!menuEl || typeof window === 'undefined') return;
 
-    const VIEWPORT_PADDING = 8;
     const FALLBACK_WIDTH = 192;
     const FALLBACK_HEIGHT = 280;
 
     const rect = menuEl.getBoundingClientRect();
     const menuWidth = rect.width || FALLBACK_WIDTH;
     const naturalHeight = rect.height || FALLBACK_HEIGHT;
-    const maxHeight = Math.max(140, window.innerHeight - VIEWPORT_PADDING * 2);
-    const renderedHeight = Math.min(naturalHeight, maxHeight);
+    const placement = computeContextMenuPlacement({
+      pointerX: x,
+      pointerY: y,
+      menuWidth,
+      menuHeight: naturalHeight,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
 
-    let left = x;
-    let top = y;
-
-    if (left + menuWidth > window.innerWidth - VIEWPORT_PADDING) {
-      left = window.innerWidth - menuWidth - VIEWPORT_PADDING;
-    }
-    if (left < VIEWPORT_PADDING) {
-      left = VIEWPORT_PADDING;
-    }
-
-    const canFitBelow = y + renderedHeight <= window.innerHeight - VIEWPORT_PADDING;
-    const canFitAbove = y - renderedHeight >= VIEWPORT_PADDING;
-    if (!canFitBelow && canFitAbove) {
-      top = y - renderedHeight;
-    }
-
-    if (top + renderedHeight > window.innerHeight - VIEWPORT_PADDING) {
-      top = window.innerHeight - renderedHeight - VIEWPORT_PADDING;
-    }
-    if (top < VIEWPORT_PADDING) {
-      top = VIEWPORT_PADDING;
-    }
-
-    menuLeft = left;
-    menuTop = top;
-    menuMaxHeight = maxHeight;
+    menuLeft = placement.left;
+    menuTop = placement.top;
+    menuMaxHeight = placement.maxHeight;
   }
 
   $effect(() => {
