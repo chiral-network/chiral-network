@@ -1,4 +1,4 @@
-mod dht;
+pub mod dht;
 pub mod drive_api;
 pub mod drive_storage;
 pub mod rating_api;
