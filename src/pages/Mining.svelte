@@ -278,7 +278,8 @@
       if (miningMode === 'gpu') {
         if (!gpuCapabilities?.supported) {
           throw new Error(
-            'GPU miner is not available. Install ethminer or set CHIRAL_GPU_MINER_PATH.'
+            gpuCapabilities?.lastError ||
+              'GPU miner is still being prepared. Wait a moment and refresh.'
           );
         }
         await invoke('start_gpu_mining', {
@@ -564,9 +565,18 @@
         <div class="mb-4">
           {#if !gpuCapabilities?.supported}
             <div class="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
-              <p class="text-sm text-amber-800 dark:text-amber-300">
-                GPU miner is unavailable. Install `ethminer` or set `CHIRAL_GPU_MINER_PATH`.
-              </p>
+              {#if gpuCapabilities?.lastError}
+                <p class="text-sm text-amber-800 dark:text-amber-300">
+                  Automatic GPU miner download failed: {gpuCapabilities.lastError}
+                </p>
+                <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                  You can still set `CHIRAL_GPU_MINER_PATH` manually and refresh.
+                </p>
+              {:else}
+                <p class="text-sm text-amber-800 dark:text-amber-300">
+                  Preparing GPU miner automatically. If this stays here, click refresh.
+                </p>
+              {/if}
             </div>
           {:else}
             <div class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
