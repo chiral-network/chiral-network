@@ -25,3 +25,19 @@ Build for production:
 npm run tauri:build
 ```
 
+## Headless CLI (WIP)
+
+The repository now includes an initial headless runtime and CLI:
+
+```bash
+cargo build --manifest-path src-tauri/Cargo.toml --bin chiral --bin chiral_daemon
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- --help
+```
+
+Start/stop local headless daemon:
+
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon start
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon status
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon stop
+```
