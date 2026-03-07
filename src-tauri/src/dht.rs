@@ -321,6 +321,8 @@ enum SwarmCommand {
         /// Known multiaddresses for this peer (from DHT SeederInfo).
         /// Used to dial the peer directly when not already connected.
         multiaddrs: Vec<String>,
+        /// Synchronous ack so caller can try another seeder if this one is unreachable immediately.
+        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
     PutDhtValue {
         key: String,
@@ -846,14 +848,16 @@ impl DhtService {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
             tx.send(SwarmCommand::RequestFileInfo {
                 peer_id: peer_id_parsed,
                 request_id,
                 file_hash,
                 multiaddrs,
+                response_tx,
             })
             .map_err(|e| e.to_string())?;
-            Ok(())
+            response_rx.await.map_err(|e| e.to_string())?
         } else {
             Err("DHT not running".to_string())
         }
@@ -1209,6 +1213,25 @@ fn save_failed_peers(failed: &HashSet<PeerId>) {
     let _ = std::fs::write(&path, contents);
 }
 
+/// Decrement pending file-info seeder attempts for a download request.
+/// Returns the remaining number of candidate attempts.
+fn decrement_file_request_attempt(
+    pending_attempts: &mut HashMap<String, usize>,
+    request_id: &str,
+) -> usize {
+    if let Some(count) = pending_attempts.get_mut(request_id) {
+        if *count > 1 {
+            *count -= 1;
+            *count
+        } else {
+            pending_attempts.remove(request_id);
+            0
+        }
+    } else {
+        0
+    }
+}
+
 async fn event_loop(
     mut swarm: Swarm<DhtBehaviour>,
     peers: Arc<Mutex<Vec<PeerInfo>>>,
@@ -1240,6 +1263,11 @@ async fn event_loop(
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    // request_id -> number of in-flight FileInfo seeder attempts.
+    // Used to avoid failing the download early when one candidate seeder is down.
+    let mut pending_file_attempts: HashMap<String, usize> = HashMap::new();
+    // request_id -> file_hash for final failure events when all seeder attempts are exhausted.
+    let mut pending_file_hashes: HashMap<String, String> = HashMap::new();
     // Pending echo responses
     let mut pending_echo: HashMap<
         request_response::OutboundRequestId,
@@ -1310,6 +1338,8 @@ async fn event_loop(
                             &download_directory,
                             &active_downloads,
                             &mut outbound_request_map,
+                            &mut pending_file_attempts,
+                            &mut pending_file_hashes,
                             &download_credentials,
                             &failed_peers,
                             &mut pending_echo,
@@ -1423,11 +1453,23 @@ async fn event_loop(
                                 let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
                                 for (req_id, fhash) in pending {
                                     println!("❌ Deferred file request {} failed: peer unreachable", req_id);
-                                    let _ = events.emit("file-download-failed", serde_json::json!({
-                                        "requestId": req_id,
-                                        "fileHash": fhash,
-                                        "error": format!("Seeder ({}...) is offline or unreachable via relay.", peer_short)
-                                    }));
+                                    let remaining = decrement_file_request_attempt(
+                                        &mut pending_file_attempts,
+                                        &req_id,
+                                    );
+                                    if remaining == 0 {
+                                        pending_file_hashes.remove(&req_id);
+                                        let _ = events.emit("file-download-failed", serde_json::json!({
+                                            "requestId": req_id,
+                                            "fileHash": fhash,
+                                            "error": format!("Seeder ({}...) is offline or unreachable via relay.", peer_short)
+                                        }));
+                                    } else {
+                                        println!(
+                                            "🔁 Seeder failed for request {}, still trying {} other seeder(s)",
+                                            req_id, remaining
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -1581,8 +1623,12 @@ async fn event_loop(
                             .collect();
                         let _ = response_tx.send(addrs);
                     }
-                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash, multiaddrs } => {
+                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash, multiaddrs, response_tx } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
+                        pending_file_hashes
+                            .entry(request_id.clone())
+                            .or_insert_with(|| file_hash.clone());
+                        let mut started_attempt = false;
 
                         if swarm.is_connected(&peer_id) {
                             // Peer already connected — send immediately
@@ -1593,95 +1639,140 @@ async fn event_loop(
                             let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
                             outbound_request_map.insert(req_id, request_id.clone());
                             println!("File info request sent with ID: {:?}", req_id);
+                            started_attempt = true;
                         } else {
-                            // Peer not connected — try dialing using known multiaddrs
-                            // from DHT SeederInfo, then fall back to relay circuit.
+                            // Peer not connected — dial known reachable addresses + relay fallback.
                             println!("⚠️ Peer {} is not connected, attempting to dial...", peer_id);
-                            let mut dialed = false;
+                            let mut dial_addrs: Vec<Multiaddr> = Vec::new();
+                            let mut seen_addrs = std::collections::HashSet::new();
 
-                            // Strategy 1: Dial using stored multiaddresses from DHT metadata.
-                            // These include the seeder's TCP and relay circuit addresses.
-                            if !multiaddrs.is_empty() {
-                                // Collect valid addresses, appending /p2p/TARGET where needed
-                                let mut dial_addrs: Vec<Multiaddr> = Vec::new();
-                                for addr_str in &multiaddrs {
-                                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                                        // Skip loopback addresses
-                                        if addr_str.starts_with("/ip4/127.") || addr_str.starts_with("/ip6/::1/") {
-                                            continue;
-                                        }
-                                        // Append target peer_id so libp2p verifies identity
-                                        let full_addr = addr.with(libp2p::multiaddr::Protocol::P2p(peer_id));
-                                        dial_addrs.push(full_addr);
-                                    }
+                            let mut push_dial_addr = |addr: Multiaddr| {
+                                let key = addr.to_string();
+                                if seen_addrs.insert(key) {
+                                    dial_addrs.push(addr);
                                 }
-                                if !dial_addrs.is_empty() {
-                                    println!("📡 Trying {} stored address(es) for peer {}", dial_addrs.len(), peer_id);
-                                    let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
-                                        .addresses(dial_addrs)
-                                        .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
-                                        .build();
-                                    match swarm.dial(opts) {
-                                        Ok(_) => {
-                                            println!("📡 Direct dial initiated for peer {}", peer_id);
-                                            dialed = true;
-                                        }
-                                        Err(e) => {
-                                            println!("Direct dial setup failed: {:?}", e);
-                                        }
-                                    }
-                                }
-                            }
+                            };
 
-                            // Strategy 2: Fall back to hardcoded relay nodes
-                            if !dialed {
-                                println!("📡 Falling back to relay dial for peer {}...", peer_id);
-                                let mut relay_peer_ids_tried = std::collections::HashSet::new();
-                                for relay_addr_str in get_relay_nodes() {
-                                    if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
-                                        if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
-                                            if !relay_peer_ids_tried.insert(relay_pid) {
-                                                continue;
-                                            }
-                                        }
-                                        let circuit_addr = relay_addr
-                                            .with(libp2p::multiaddr::Protocol::P2pCircuit)
-                                            .with(libp2p::multiaddr::Protocol::P2p(peer_id));
-                                        match swarm.dial(circuit_addr.clone()) {
-                                            Ok(_) => {
-                                                println!("📡 Dialing peer {} via relay: {}", peer_id, circuit_addr);
-                                                dialed = true;
+                            // Strategy 1: stored multiaddresses from DHT metadata.
+                            for addr_str in &multiaddrs {
+                                let Ok(addr_raw) = addr_str.parse::<Multiaddr>() else {
+                                    continue;
+                                };
+                                let base_addr = remove_peer_id_from_multiaddr(&addr_raw);
+                                let has_circuit = base_addr
+                                    .iter()
+                                    .any(|p| matches!(p, libp2p::multiaddr::Protocol::P2pCircuit));
+
+                                // Skip non-routable direct addresses to avoid dead-end dials.
+                                if !has_circuit {
+                                    let mut skip = false;
+                                    for proto in base_addr.iter() {
+                                        match proto {
+                                            libp2p::multiaddr::Protocol::Ip4(ip)
+                                                if ip.is_loopback()
+                                                    || ip.is_private()
+                                                    || ip.is_link_local()
+                                                    || ip.is_unspecified() =>
+                                            {
+                                                skip = true;
                                                 break;
                                             }
-                                            Err(e) => {
-                                                println!("Relay dial failed: {:?}", e);
+                                            libp2p::multiaddr::Protocol::Ip6(ip)
+                                                if ip.is_loopback()
+                                                    || ip.is_unspecified()
+                                                    || ip.is_unique_local()
+                                                    || ip.is_unicast_link_local() =>
+                                            {
+                                                skip = true;
+                                                break;
                                             }
+                                            libp2p::multiaddr::Protocol::Dns(host)
+                                            | libp2p::multiaddr::Protocol::Dns4(host)
+                                            | libp2p::multiaddr::Protocol::Dns6(host)
+                                                if host.eq_ignore_ascii_case("localhost") =>
+                                            {
+                                                skip = true;
+                                                break;
+                                            }
+                                            _ => {}
                                         }
+                                    }
+                                    if skip {
+                                        continue;
+                                    }
+                                }
+
+                                let full_addr = base_addr
+                                    .with(libp2p::multiaddr::Protocol::P2p(peer_id.clone()));
+                                push_dial_addr(full_addr);
+                            }
+
+                            // Strategy 2: always include relay fallback addresses.
+                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
+                            for relay_addr_str in get_relay_nodes() {
+                                if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
+                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
+                                        if !relay_peer_ids_tried.insert(relay_pid) {
+                                            continue;
+                                        }
+                                    }
+                                    let circuit_addr = relay_addr
+                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
+                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id.clone()));
+                                    push_dial_addr(circuit_addr);
+                                }
+                            }
+
+                            if !dial_addrs.is_empty() {
+                                println!(
+                                    "📡 Trying {} dial address(es) for peer {}",
+                                    dial_addrs.len(),
+                                    peer_id
+                                );
+                                let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id.clone())
+                                    .addresses(dial_addrs)
+                                    .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
+                                    .build();
+                                match swarm.dial(opts) {
+                                    Ok(_) => {
+                                        println!("📡 Dial initiated for peer {}", peer_id);
+                                        started_attempt = true;
+                                    }
+                                    Err(e) => {
+                                        println!("Dial setup failed: {:?}", e);
                                     }
                                 }
                             }
 
-                            if dialed {
+                            if started_attempt {
                                 // Queue the request — will be sent on ConnectionEstablished
-                                pending_file_requests.entry(peer_id)
+                                pending_file_requests.entry(peer_id.clone())
                                     .or_default()
                                     .push((request_id.clone(), file_hash.clone()));
                                 println!("📋 File request queued, waiting for connection...");
                             } else {
                                 println!("❌ Cannot reach peer {}: all dial attempts failed", peer_id);
-                                let _ = events.emit("file-download-failed", serde_json::json!({
-                                    "requestId": request_id,
-                                    "fileHash": file_hash,
-                                    "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
-                                }));
-                                continue;
                             }
                         }
-                        let _ = events.emit("file-request-sent", serde_json::json!({
-                            "requestId": request_id,
-                            "fileHash": file_hash,
-                            "peerId": peer_id.to_string()
-                        }));
+
+                        if started_attempt {
+                            *pending_file_attempts.entry(request_id.clone()).or_insert(0) += 1;
+                            let _ = response_tx.send(Ok(()));
+                            let _ = events.emit("file-request-sent", serde_json::json!({
+                                "requestId": request_id,
+                                "fileHash": file_hash,
+                                "peerId": peer_id.to_string()
+                            }));
+                        } else {
+                            let peer_short = &peer_id.to_string()[..std::cmp::min(8, peer_id.to_string().len())];
+                            if !pending_file_attempts.contains_key(&request_id) {
+                                pending_file_hashes.remove(&request_id);
+                            }
+                            let _ = response_tx.send(Err(format!(
+                                "Seeder ({}...) is offline or unreachable via relay.",
+                                peer_short
+                            )));
+                        }
                     }
                 }
             }
@@ -1707,6 +1798,8 @@ async fn handle_behaviour_event(
     download_directory: &DownloadDirectoryRef,
     active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
+    pending_file_attempts: &mut HashMap<String, usize>,
+    pending_file_hashes: &mut HashMap<String, String>,
     download_credentials: &DownloadCredentialsMap,
     failed_peers: &HashSet<PeerId>,
     pending_echo: &mut HashMap<
@@ -2633,8 +2726,33 @@ async fn handle_behaviour_event(
                                     wallet_address,
                                     error,
                                 } => {
+                                    // Another seeder may have already started this download request.
+                                    // Ignore duplicate FileInfo responses once an active download exists.
+                                    {
+                                        let downloads = active_downloads.lock().await;
+                                        if downloads.contains_key(&request_id) {
+                                            println!(
+                                                "ℹ️ Ignoring duplicate FileInfo for request {} from peer {}",
+                                                request_id, peer
+                                            );
+                                            return;
+                                        }
+                                    }
+
                                     if let Some(err) = error {
                                         println!("❌ FileInfo error: {}", err);
+                                        let remaining = decrement_file_request_attempt(
+                                            pending_file_attempts,
+                                            &request_id,
+                                        );
+                                        if remaining > 0 {
+                                            println!(
+                                                "🔁 Seeder returned FileInfo error for request {}, still trying {} other seeder(s)",
+                                                request_id, remaining
+                                            );
+                                            return;
+                                        }
+                                        pending_file_hashes.remove(&request_id);
                                         let mut tiers = download_tiers.lock().await;
                                         tiers.remove(&request_id);
                                         let _ = events.emit(
@@ -2647,6 +2765,10 @@ async fn handle_behaviour_event(
                                         );
                                         return;
                                     }
+
+                                    // First successful seeder won this request.
+                                    pending_file_attempts.remove(&request_id);
+                                    pending_file_hashes.remove(&request_id);
 
                                     let price: u128 = price_wei.parse().unwrap_or(0);
                                     println!("📋 Received FileInfo: {} ({} bytes, {} chunks, price={} wei)", file_name, file_size, total_chunks, price);
@@ -3187,44 +3309,72 @@ async fn handle_behaviour_event(
                 } => {
                     let our_request_id = outbound_request_map.remove(&outbound_req_id);
                     let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
+                    let mut emit_failure = true;
+                    let mut request_id_for_error: Option<String> = None;
+                    let mut file_hash_for_error: Option<String> = None;
 
                     if let Some(request_id) = our_request_id {
+                        request_id_for_error = Some(request_id.clone());
                         let mut downloads = active_downloads.lock().await;
                         if let Some(dl) = downloads.get_mut(&request_id) {
-                            let chunk_index = dl.current_chunk_index.saturating_sub(1).max(0);
-                            dl.retry_counts[chunk_index as usize] += 1;
+                            if dl.peer_id == peer {
+                                let chunk_index = dl.current_chunk_index.saturating_sub(1).max(0);
+                                dl.retry_counts[chunk_index as usize] += 1;
 
-                            if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
-                                println!(
-                                    "🔄 Retrying chunk {} after outbound failure (attempt {})",
-                                    chunk_index, dl.retry_counts[chunk_index as usize]
-                                );
-                                let peer_id = dl.peer_id;
-                                let fh = dl.file_hash.clone();
-                                let rid = dl.request_id.clone();
-                                drop(downloads);
-                                // Wait before retry
-                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                                let request = ChunkRequest::Chunk {
-                                    request_id: rid.clone(),
-                                    file_hash: fh,
-                                    chunk_index,
-                                };
-                                let req_id = swarm
-                                    .behaviour_mut()
-                                    .file_request
-                                    .send_request(&peer_id, request);
-                                outbound_request_map.insert(req_id, rid);
-                                return;
+                                if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
+                                    println!(
+                                        "🔄 Retrying chunk {} after outbound failure (attempt {})",
+                                        chunk_index, dl.retry_counts[chunk_index as usize]
+                                    );
+                                    let peer_id = dl.peer_id;
+                                    let fh = dl.file_hash.clone();
+                                    let rid = dl.request_id.clone();
+                                    drop(downloads);
+                                    // Wait before retry
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                    let request = ChunkRequest::Chunk {
+                                        request_id: rid.clone(),
+                                        file_hash: fh,
+                                        chunk_index,
+                                    };
+                                    let req_id = swarm
+                                        .behaviour_mut()
+                                        .file_request
+                                        .send_request(&peer_id, request);
+                                    outbound_request_map.insert(req_id, rid);
+                                    return;
+                                } else {
+                                    // Max retries exceeded
+                                    let dl = downloads.remove(&request_id).unwrap();
+                                    file_hash_for_error = Some(dl.file_hash.clone());
+                                    let _ = std::fs::remove_file(&dl.output_path);
+                                    let mut tiers = download_tiers.lock().await;
+                                    tiers.remove(&request_id);
+                                }
                             } else {
-                                // Max retries exceeded
-                                let dl = downloads.remove(&request_id).unwrap();
-                                let _ = std::fs::remove_file(&dl.output_path);
-                                let mut tiers = download_tiers.lock().await;
-                                tiers.remove(&request_id);
+                                // Another seeder attempt failed after a different seeder
+                                // already became the active source for this request.
+                                emit_failure = false;
+                            }
+                        } else {
+                            // No active chunked download yet => this was a FileInfo seeder attempt.
+                            let remaining =
+                                decrement_file_request_attempt(pending_file_attempts, &request_id);
+                            if remaining > 0 {
+                                emit_failure = false;
+                                println!(
+                                    "🔁 Seeder {} failed for request {}, still trying {} other seeder(s)",
+                                    peer, request_id, remaining
+                                );
+                            } else {
+                                file_hash_for_error = pending_file_hashes.remove(&request_id);
                             }
                         }
                         drop(downloads);
+                    }
+
+                    if !emit_failure {
+                        return;
                     }
 
                     let user_error = match &error {
@@ -3245,6 +3395,8 @@ async fn handle_behaviour_event(
                     let _ = events.emit(
                         "file-download-failed",
                         serde_json::json!({
+                            "requestId": request_id_for_error,
+                            "fileHash": file_hash_for_error,
                             "peerId": peer.to_string(),
                             "error": user_error
                         }),

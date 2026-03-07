@@ -209,6 +209,21 @@
     }
   }
 
+  function formatInvokeError(error: unknown): string {
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object') {
+      const maybe = error as Record<string, unknown>;
+      if (typeof maybe.error === 'string') return maybe.error;
+      if (typeof maybe.message === 'string') return maybe.message;
+      try {
+        return JSON.stringify(maybe);
+      } catch {
+        // ignore
+      }
+    }
+    return String(error);
+  }
+
   // State
   let searchMode = $state<SearchMode>('hash');
   let searchQuery = $state('');
@@ -842,7 +857,7 @@
         d.id === newDownload.id ? { ...d, status: 'failed' as const } : d
       );
       saveDownloadHistory();
-      toasts.show(`Download failed: ${error}`, 'error');
+      toasts.show(`Download failed: ${formatInvokeError(error)}`, 'error');
     } finally {
       isProcessingPayment = false;
     }
