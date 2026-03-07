@@ -27,32 +27,56 @@ npm run tauri:build
 
 ## Headless CLI
 
-The repository includes a headless daemon + CLI runtime:
+The repository includes a headless daemon + CLI runtime (`chiral_daemon` + `chiral`).
+
+Build binaries:
 
 ```bash
 cargo build --manifest-path src-tauri/Cargo.toml --bin chiral --bin chiral_daemon
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- --help
 ```
 
-Start/stop local headless daemon:
+Start the daemon:
 
 ```bash
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon start
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon status
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon stop
+src-tauri/target/debug/chiral daemon start --port 9419
+src-tauri/target/debug/chiral daemon status --port 9419
 ```
 
-Example runtime flows:
+Or via `cargo run`:
+
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon start --port 9419
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon status --port 9419
+```
+
+Status should show `headless_api=true`.
+
+Stop daemon:
+
+```bash
+src-tauri/target/debug/chiral daemon stop --port 9419
+```
+
+CLI help:
+
+```bash
+src-tauri/target/debug/chiral --help
+src-tauri/target/debug/chiral <group> --help
+```
+
+Example workflows:
 
 ```bash
 # DHT lifecycle
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- dht start --port 9419
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- dht status --port 9419
+src-tauri/target/debug/chiral dht start --port 9419
+src-tauri/target/debug/chiral dht status --port 9419
 
 # Wallet/account
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- wallet create
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- account balance
+src-tauri/target/debug/chiral wallet create
+src-tauri/target/debug/chiral account balance
 
 # Drive
-cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- drive ls --owner <wallet> --port 9419
+src-tauri/target/debug/chiral drive ls --owner <wallet> --port 9419
 ```
+
+Full headless documentation: `docs/headless-mode.md`.

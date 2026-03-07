@@ -1069,18 +1069,23 @@ async fn check_headless_api(port: u16) -> bool {
 fn locate_daemon_binary() -> Result<PathBuf, String> {
     let current =
         std::env::current_exe().map_err(|e| format!("Failed to get current exe: {}", e))?;
-    let daemon_name = if cfg!(windows) {
-        "chiral_daemon.exe"
+    let daemon_candidates: &[&str] = if cfg!(windows) {
+        &["chiral_daemon.exe", "chiral-daemon.exe"]
     } else {
-        "chiral_daemon"
+        &["chiral_daemon", "chiral-daemon"]
     };
-    let sibling = current.with_file_name(daemon_name);
-    if sibling.exists() {
-        return Ok(sibling);
+
+    for daemon_name in daemon_candidates {
+        let sibling = current.with_file_name(daemon_name);
+        if sibling.exists() {
+            return Ok(sibling);
+        }
     }
+
+    let expected = current.with_file_name(daemon_candidates[0]);
     Err(format!(
         "Could not locate daemon binary at {}",
-        sibling.display()
+        expected.display()
     ))
 }
 
@@ -2367,7 +2372,8 @@ async fn handle_daemon(cmd: DaemonCommand) -> Result<(), String> {
                     .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
             }
 
-            let mut launch = if let Ok(path) = locate_daemon_binary() {
+            let located = locate_daemon_binary().ok();
+            let mut launch = if let Some(path) = located {
                 Command::new(path)
             } else {
                 Command::new("chiral_daemon")
@@ -2382,7 +2388,12 @@ async fn handle_daemon(cmd: DaemonCommand) -> Result<(), String> {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|e| format!("Failed to start daemon: {}", e))?;
+                .map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        return "Failed to start daemon: `chiral_daemon` executable was not found. Build it with `cargo build --manifest-path src-tauri/Cargo.toml --bin chiral_daemon` and retry.".to_string();
+                    }
+                    format!("Failed to start daemon: {}", e)
+                })?;
 
             let mut ready = false;
             for _ in 0..180 {
