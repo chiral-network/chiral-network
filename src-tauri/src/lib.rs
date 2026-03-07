@@ -1339,20 +1339,23 @@ async fn start_download(
         let mut last_error = String::new();
         let mut request_sent = false;
 
+        let mut request_tasks = Vec::with_capacity(candidate_seeders.len());
         for (i, seeder) in candidate_seeders.iter().enumerate() {
-            println!(
-                "Trying seeder {}/{}: {} for file {}",
-                i + 1,
-                candidate_seeders.len(),
-                seeder,
-                file_hash
-            );
+            let dht = dht.clone();
+            let seeder = seeder.clone();
+            let fh = file_hash.clone();
+            let rid = request_id.clone();
+            let addrs = seeder_addrs.get(&seeder).cloned().unwrap_or_default();
+            let total = candidate_seeders.len();
+            request_tasks.push(async move {
+                println!("Trying seeder {}/{}: {} for file {}", i + 1, total, seeder, fh);
+                let result = dht.request_file(seeder.clone(), fh, rid, addrs).await;
+                (seeder, result)
+            });
+        }
 
-            let addrs = seeder_addrs.get(seeder).cloned().unwrap_or_default();
-            match dht
-                .request_file(seeder.clone(), file_hash.clone(), request_id.clone(), addrs)
-                .await
-            {
+        for (seeder, result) in futures::future::join_all(request_tasks).await {
+            match result {
                 Ok(_) => {
                     println!("✅ File request started for seeder {}", seeder);
                     request_sent = true;

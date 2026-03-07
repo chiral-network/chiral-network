@@ -410,7 +410,7 @@ pub struct SharedFileInfo {
     pub file_path: String,
     pub file_name: String,
     pub file_size: u64,
-    /// Cached chunk hashes, computed lazily on first FileInfo request
+    /// Cached chunk hashes, precomputed at registration when possible
     pub chunk_hashes: Option<Vec<String>>,
     /// Price in wei (0 = free)
     pub price_wei: u128,
@@ -446,6 +446,7 @@ struct ActiveChunkedDownload {
     output_path: PathBuf,
     bytes_written: u64,
     peer_id: PeerId,
+    backup_peers: Vec<PeerId>,
     tier: SpeedTier,
     retry_counts: Vec<u8>,
     current_chunk_index: u32,
@@ -961,9 +962,10 @@ async fn verify_payment_on_chain(
         return Ok(false);
     }
 
-    // Verify transaction receipt (confirmed) — retry up to 30 times (30 seconds)
-    // since the transaction may not be mined immediately
-    let max_retries = 30;
+    // Verify transaction receipt (confirmed). Keep this bounded so download setup
+    // doesn't stall for long periods waiting on slow blocks.
+    let max_retries = 20;
+    let retry_delay = std::time::Duration::from_millis(500);
     for attempt in 0..max_retries {
         let receipt_resp = client
             .post(&rpc_url)
@@ -999,11 +1001,11 @@ async fn verify_payment_on_chain(
                 attempt + 1,
                 max_retries
             );
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(retry_delay).await;
         }
     }
 
-    Err("Transaction not confirmed after 30 seconds".to_string())
+    Err("Transaction not confirmed after 10 seconds".to_string())
 }
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
@@ -1268,6 +1270,15 @@ fn chunk_retry_delay(attempt: u8, chunk_index: u32) -> std::time::Duration {
     // without introducing additional randomness in tests.
     let jitter_ms = ((chunk_index as u64 * 31) + (attempt as u64 * 17)) % 80;
     std::time::Duration::from_millis(base_ms + jitter_ms)
+}
+
+fn take_next_backup_peer(download: &mut ActiveChunkedDownload) -> Option<PeerId> {
+    while let Some(candidate) = download.backup_peers.pop() {
+        if candidate != download.peer_id {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 async fn event_loop(
@@ -2764,10 +2775,21 @@ async fn handle_behaviour_event(
                                     error,
                                 } => {
                                     // Another seeder may have already started this download request.
-                                    // Ignore duplicate FileInfo responses once an active download exists.
+                                    // Use duplicate FileInfo responses as backup seeders for failover.
                                     {
-                                        let downloads = active_downloads.lock().await;
-                                        if downloads.contains_key(&request_id) {
+                                        let mut downloads = active_downloads.lock().await;
+                                        if let Some(existing) = downloads.get_mut(&request_id) {
+                                            if existing.peer_id != peer
+                                                && !existing.backup_peers.iter().any(|p| *p == peer)
+                                            {
+                                                existing.backup_peers.push(peer);
+                                                println!(
+                                                    "🧭 Added backup seeder {} for request {} ({} backups total)",
+                                                    existing.backup_peers.last().unwrap(),
+                                                    request_id,
+                                                    existing.backup_peers.len()
+                                                );
+                                            }
                                             println!(
                                                 "ℹ️ Ignoring duplicate FileInfo for request {} from peer {}",
                                                 request_id, peer
@@ -2866,6 +2888,7 @@ async fn handle_behaviour_event(
                                         output_path: output_path.clone(),
                                         bytes_written: 0,
                                         peer_id: peer,
+                                        backup_peers: vec![],
                                         tier,
                                         retry_counts: vec![0u8; total_chunks as usize],
                                         current_chunk_index: 0,
@@ -3005,6 +3028,8 @@ async fn handle_behaviour_event(
                                         println!("❌ Chunk {} error: {}", chunk_index, err);
                                         // Check if we should retry
                                         let mut downloads = active_downloads.lock().await;
+                                        let mut failover: Option<(PeerId, String, String, u32, String)> =
+                                            None;
                                         if let Some(dl) = downloads.get_mut(&request_id) {
                                             dl.retry_counts[chunk_index as usize] += 1;
                                             let attempt = dl.retry_counts[chunk_index as usize];
@@ -3015,7 +3040,7 @@ async fn handle_behaviour_event(
                                                     attempt,
                                                     MAX_CHUNK_RETRIES
                                                 );
-                                                let peer_id = dl.peer_id;
+                                                let peer_id = dl.peer_id.clone();
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
@@ -3031,19 +3056,64 @@ async fn handle_behaviour_event(
                                                     .file_request
                                                     .send_request(&peer_id, request);
                                                 outbound_request_map.insert(req_id, rid);
+                                                return;
                                             } else {
-                                                // Max retries exceeded — abort
-                                                let dl = downloads.remove(&request_id).unwrap();
-                                                let _ = std::fs::remove_file(&dl.output_path);
-                                                let mut tiers = download_tiers.lock().await;
-                                                tiers.remove(&request_id);
-                                                drop(downloads);
-                                                let _ = events.emit("file-download-failed", serde_json::json!({
-                                                    "requestId": request_id,
-                                                    "fileHash": file_hash,
-                                                    "error": format!("Chunk {} failed after {} retries: {}", chunk_index, MAX_CHUNK_RETRIES, err)
-                                                }));
+                                                if let Some(next_peer) = take_next_backup_peer(dl) {
+                                                    let previous_peer = dl.peer_id.clone();
+                                                    dl.peer_id = next_peer.clone();
+                                                    dl.current_chunk_index = chunk_index;
+                                                    dl.retry_counts[chunk_index as usize] = 0;
+                                                    failover = Some((
+                                                        next_peer,
+                                                        dl.file_hash.clone(),
+                                                        dl.request_id.clone(),
+                                                        chunk_index,
+                                                        previous_peer.to_string(),
+                                                    ));
+                                                } else {
+                                                    // Max retries exceeded — abort
+                                                    let dl = downloads.remove(&request_id).unwrap();
+                                                    let _ = std::fs::remove_file(&dl.output_path);
+                                                    let mut tiers = download_tiers.lock().await;
+                                                    tiers.remove(&request_id);
+                                                    drop(downloads);
+                                                    let _ = events.emit("file-download-failed", serde_json::json!({
+                                                        "requestId": request_id,
+                                                        "fileHash": file_hash,
+                                                        "error": format!("Chunk {} failed after {} retries: {}", chunk_index, MAX_CHUNK_RETRIES, err)
+                                                    }));
+                                                    return;
+                                                }
                                             }
+                                        }
+                                        drop(downloads);
+                                        if let Some((next_peer, fh, rid, idx, previous_peer)) =
+                                            failover
+                                        {
+                                            println!(
+                                                "🔁 Failing over request {} from {} to {} at chunk {}",
+                                                rid, previous_peer, next_peer, idx
+                                            );
+                                            let _ = events.emit(
+                                                "download-peer-failover",
+                                                serde_json::json!({
+                                                    "requestId": rid,
+                                                    "fileHash": fh,
+                                                    "fromPeer": previous_peer,
+                                                    "toPeer": next_peer.to_string(),
+                                                    "chunkIndex": idx,
+                                                }),
+                                            );
+                                            let request = ChunkRequest::Chunk {
+                                                request_id: rid.clone(),
+                                                file_hash: fh,
+                                                chunk_index: idx,
+                                            };
+                                            let req_id = swarm
+                                                .behaviour_mut()
+                                                .file_request
+                                                .send_request(&next_peer, request);
+                                            outbound_request_map.insert(req_id, rid);
                                         }
                                         return;
                                     }
@@ -3083,7 +3153,7 @@ async fn handle_behaviour_event(
                                                     attempt,
                                                     MAX_CHUNK_RETRIES
                                                 );
-                                                let peer_id = dl.peer_id;
+                                                let peer_id = dl.peer_id.clone();
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
@@ -3100,16 +3170,50 @@ async fn handle_behaviour_event(
                                                     .send_request(&peer_id, request);
                                                 outbound_request_map.insert(req_id, rid);
                                             } else {
-                                                let dl = downloads.remove(&request_id).unwrap();
-                                                let _ = std::fs::remove_file(&dl.output_path);
-                                                let mut tiers = download_tiers.lock().await;
-                                                tiers.remove(&request_id);
-                                                drop(downloads);
-                                                let _ = events.emit("file-download-failed", serde_json::json!({
-                                                    "requestId": request_id,
-                                                    "fileHash": file_hash,
-                                                    "error": format!("Chunk {} failed integrity check after {} retries", chunk_index, MAX_CHUNK_RETRIES)
-                                                }));
+                                                if let Some(next_peer) = take_next_backup_peer(dl) {
+                                                    let previous_peer = dl.peer_id.clone();
+                                                    dl.peer_id = next_peer.clone();
+                                                    dl.current_chunk_index = chunk_index;
+                                                    dl.retry_counts[chunk_index as usize] = 0;
+                                                    let fh = dl.file_hash.clone();
+                                                    let rid = dl.request_id.clone();
+                                                    drop(downloads);
+                                                    println!(
+                                                        "🔁 Failing over request {} from {} to {} at chunk {} (hash mismatch)",
+                                                        rid, previous_peer, next_peer, chunk_index
+                                                    );
+                                                    let _ = events.emit(
+                                                        "download-peer-failover",
+                                                        serde_json::json!({
+                                                            "requestId": rid,
+                                                            "fileHash": fh,
+                                                            "fromPeer": previous_peer.to_string(),
+                                                            "toPeer": next_peer.to_string(),
+                                                            "chunkIndex": chunk_index,
+                                                        }),
+                                                    );
+                                                    let request = ChunkRequest::Chunk {
+                                                        request_id: rid.clone(),
+                                                        file_hash: fh,
+                                                        chunk_index,
+                                                    };
+                                                    let req_id = swarm
+                                                        .behaviour_mut()
+                                                        .file_request
+                                                        .send_request(&next_peer, request);
+                                                    outbound_request_map.insert(req_id, rid);
+                                                } else {
+                                                    let dl = downloads.remove(&request_id).unwrap();
+                                                    let _ = std::fs::remove_file(&dl.output_path);
+                                                    let mut tiers = download_tiers.lock().await;
+                                                    tiers.remove(&request_id);
+                                                    drop(downloads);
+                                                    let _ = events.emit("file-download-failed", serde_json::json!({
+                                                        "requestId": request_id,
+                                                        "fileHash": file_hash,
+                                                        "error": format!("Chunk {} failed integrity check after {} retries", chunk_index, MAX_CHUNK_RETRIES)
+                                                    }));
+                                                }
                                             }
                                             return;
                                         }
@@ -3384,7 +3488,7 @@ async fn handle_behaviour_event(
                                             "🔄 Retrying chunk {} after outbound failure (attempt {}/{})",
                                             chunk_index, attempt, MAX_CHUNK_RETRIES
                                         );
-                                        let peer_id = dl.peer_id;
+                                        let peer_id = dl.peer_id.clone();
                                         let fh = dl.file_hash.clone();
                                         let rid = dl.request_id.clone();
                                         drop(downloads);
@@ -3402,12 +3506,47 @@ async fn handle_behaviour_event(
                                         outbound_request_map.insert(req_id, rid);
                                         return;
                                     } else {
-                                        // Max retries exceeded
-                                        let dl = downloads.remove(&request_id).unwrap();
-                                        file_hash_for_error = Some(dl.file_hash.clone());
-                                        let _ = std::fs::remove_file(&dl.output_path);
-                                        let mut tiers = download_tiers.lock().await;
-                                        tiers.remove(&request_id);
+                                        if let Some(next_peer) = take_next_backup_peer(dl) {
+                                            let previous_peer = dl.peer_id.clone();
+                                            dl.peer_id = next_peer.clone();
+                                            dl.current_chunk_index = chunk_index;
+                                            dl.retry_counts[chunk_index as usize] = 0;
+                                            let fh = dl.file_hash.clone();
+                                            let rid = dl.request_id.clone();
+                                            drop(downloads);
+                                            println!(
+                                                "🔁 Failing over request {} from {} to {} at chunk {} (outbound failure)",
+                                                rid, previous_peer, next_peer, chunk_index
+                                            );
+                                            let _ = events.emit(
+                                                "download-peer-failover",
+                                                serde_json::json!({
+                                                    "requestId": rid,
+                                                    "fileHash": fh,
+                                                    "fromPeer": previous_peer.to_string(),
+                                                    "toPeer": next_peer.to_string(),
+                                                    "chunkIndex": chunk_index,
+                                                }),
+                                            );
+                                            let request = ChunkRequest::Chunk {
+                                                request_id: rid.clone(),
+                                                file_hash: fh,
+                                                chunk_index,
+                                            };
+                                            let req_id = swarm
+                                                .behaviour_mut()
+                                                .file_request
+                                                .send_request(&next_peer, request);
+                                            outbound_request_map.insert(req_id, rid);
+                                            return;
+                                        } else {
+                                            // Max retries exceeded
+                                            let dl = downloads.remove(&request_id).unwrap();
+                                            file_hash_for_error = Some(dl.file_hash.clone());
+                                            let _ = std::fs::remove_file(&dl.output_path);
+                                            let mut tiers = download_tiers.lock().await;
+                                            tiers.remove(&request_id);
+                                        }
                                     }
                                 }
                             } else {

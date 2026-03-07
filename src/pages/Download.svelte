@@ -224,6 +224,18 @@
     return String(error);
   }
 
+  async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+    try {
+      return await Promise.race([promise, timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   // State
   let searchMode = $state<SearchMode>('hash');
   let searchQuery = $state('');
@@ -445,9 +457,11 @@
 
         if (result) {
           // Search DHT for seeders using the parsed hash
-          const dhtResult = await invoke<SearchResult | null>('search_file', {
-            fileHash: result.infoHash
-          });
+          const dhtResult = await withTimeout(
+            invoke<SearchResult | null>('search_file', { fileHash: result.infoHash }),
+            8000,
+            'search'
+          );
 
           searchResult = {
             hash: result.infoHash,
@@ -507,9 +521,11 @@
 
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
-        const result = await invoke<SearchResult | null>('search_file', {
-          fileHash
-        });
+        const result = await withTimeout(
+          invoke<SearchResult | null>('search_file', { fileHash }),
+          8000,
+          'search'
+        );
 
         if (result) {
           // For magnet links, use the name from the magnet link if available
@@ -852,7 +868,11 @@
         params.seederWalletAddress = seederWalletAddr;
       }
 
-      const response = await invoke<{ requestId: string; status: string }>('start_download', params);
+      const response = await withTimeout(
+        invoke<{ requestId: string; status: string }>('start_download', params),
+        12000,
+        'download start'
+      );
 
       log.info('Download request sent:', response);
       if (tierCost > 0) {

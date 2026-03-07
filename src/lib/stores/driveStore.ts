@@ -80,9 +80,17 @@ function createDriveStore() {
   const folderCache = new Map<string, { items: DriveItem[]; expiresAt: number }>();
   const inflightFolderLoads = new Map<string, Promise<void>>();
   const FOLDER_CACHE_TTL_MS = 3000;
+  let cacheOwner = '';
 
-  function folderCacheKey(parentId: string | null): string {
-    return parentId ?? '__root__';
+  function ensureCacheOwner(owner: string) {
+    if (owner !== cacheOwner) {
+      cacheOwner = owner;
+      clearFolderCaches();
+    }
+  }
+
+  function folderCacheKey(owner: string, parentId: string | null): string {
+    return `${owner}::${parentId ?? '__root__'}`;
   }
 
   function clearFolderCaches() {
@@ -95,6 +103,7 @@ function createDriveStore() {
     /** Load all items from the server (fetches root-level, then all items) */
     async load() {
       const owner = syncOwner();
+      ensureCacheOwner(owner);
       if (!owner) {
         // No wallet connected — clear items
         set({ version: 1, items: [], shares: [], lastModified: Date.now() });
@@ -118,7 +127,7 @@ function createDriveStore() {
           shares,
           lastModified: Date.now(),
         });
-        folderCache.set(folderCacheKey(null), {
+        folderCache.set(folderCacheKey(owner, null), {
           items: converted.map(item => ({ ...item })),
           expiresAt: Date.now() + FOLDER_CACHE_TTL_MS,
         });
@@ -129,8 +138,14 @@ function createDriveStore() {
 
     /** Load items for a specific folder from the server */
     async loadFolder(parentId: string | null) {
-      syncOwner();
-      const key = folderCacheKey(parentId);
+      const owner = syncOwner();
+      ensureCacheOwner(owner);
+      if (!owner) {
+        set({ version: 1, items: [], shares: [], lastModified: Date.now() });
+        clearFolderCaches();
+        return;
+      }
+      const key = folderCacheKey(owner, parentId);
       const cached = folderCache.get(key);
       if (cached && cached.expiresAt > Date.now()) {
         const m = get({ subscribe });
