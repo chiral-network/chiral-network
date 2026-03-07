@@ -1,15 +1,16 @@
 pub mod dht;
 pub mod drive_api;
 pub mod drive_storage;
+mod encryption;
+pub mod event_sink;
+pub mod file_transfer;
+pub mod geth;
+pub mod geth_bootstrap;
+pub mod hosting;
+pub mod hosting_server;
 pub mod rating_api;
 pub mod rating_storage;
 pub mod relay_share_proxy;
-mod encryption;
-mod file_transfer;
-mod geth;
-mod geth_bootstrap;
-pub mod hosting;
-pub mod hosting_server;
 mod speed_tiers;
 
 use dht::DhtService;
@@ -17,15 +18,15 @@ use encryption::EncryptionKeypair;
 use file_transfer::FileTransferService;
 use geth::{GethDownloader, GethProcess, GethStatus, MinedBlock, MiningStatus};
 use geth_bootstrap::BootstrapHealthReport;
-use speed_tiers::SpeedTier;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use tauri::Emitter;
-use secp256k1::{Secp256k1, SecretKey, Message};
-use tiny_keccak::{Hasher, Keccak};
 use rlp::RlpStream;
+use secp256k1::{Message, Secp256k1, SecretKey};
+use serde::{Deserialize, Serialize};
+use speed_tiers::SpeedTier;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tauri::Emitter;
+use tiny_keccak::{Hasher, Keccak};
+use tokio::sync::Mutex;
 
 pub struct AppState {
     pub dht: Arc<Mutex<Option<Arc<DhtService>>>>,
@@ -67,7 +68,10 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
         let map = shared.lock().await;
         map.keys().cloned().collect()
     };
-    println!("🛑 Unpublishing {} shared files from DHT", file_hashes.len());
+    println!(
+        "🛑 Unpublishing {} shared files from DHT",
+        file_hashes.len()
+    );
     let mut count = 0u32;
     for file_hash in &file_hashes {
         let dht_key = format!("chiral_file_{}", file_hash);
@@ -89,8 +93,7 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
     // 2. Remove our host advertisement from the registry
     let registry_key = "chiral_host_registry".to_string();
     if let Ok(Some(json)) = dht.get_dht_value(registry_key.clone()).await {
-        let mut registry: Vec<HostRegistryEntry> =
-            serde_json::from_str(&json).unwrap_or_default();
+        let mut registry: Vec<HostRegistryEntry> = serde_json::from_str(&json).unwrap_or_default();
         registry.retain(|e| e.peer_id != peer_id);
         if let Ok(registry_json) = serde_json::to_string(&registry) {
             let _ = dht.put_dht_value(registry_key, registry_json).await;
@@ -110,7 +113,12 @@ async fn start_dht(
         return Err("DHT already running".to_string());
     }
 
-    let dht = Arc::new(DhtService::new(state.file_transfer.clone(), state.download_tiers.clone(), state.download_directory.clone(), state.download_credentials.clone()));
+    let dht = Arc::new(DhtService::new(
+        state.file_transfer.clone(),
+        state.download_tiers.clone(),
+        state.download_directory.clone(),
+        state.download_credentials.clone(),
+    ));
     let result = dht.start(app.clone()).await?;
     *dht_guard = Some(dht);
 
@@ -242,7 +250,8 @@ async fn send_file(
             sender_wallet.unwrap_or_default(),
             file_hash.unwrap_or_default(),
             actual_size,
-        ).await
+        )
+        .await
     } else {
         Err("DHT not running".to_string())
     }
@@ -260,7 +269,8 @@ async fn send_file_by_path(
     file_hash: Option<String>,
 ) -> Result<(), String> {
     let path = std::path::Path::new(&file_path);
-    let file_name = path.file_name()
+    let file_name = path
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| file_path.clone());
     let file_data = std::fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
@@ -277,7 +287,8 @@ async fn send_file_by_path(
             sender_wallet.unwrap_or_default(),
             file_hash.unwrap_or_default(),
             file_size,
-        ).await
+        )
+        .await
     } else {
         Err("DHT not running".to_string())
     }
@@ -291,7 +302,13 @@ async fn accept_file_transfer(
 ) -> Result<String, String> {
     let custom_dir = state.download_directory.lock().await.clone();
     let file_transfer = state.file_transfer.lock().await;
-    file_transfer.accept_transfer(app, transfer_id, custom_dir).await
+    file_transfer
+        .accept_transfer(
+            crate::event_sink::EventSink::tauri(app),
+            transfer_id,
+            custom_dir,
+        )
+        .await
 }
 
 #[tauri::command]
@@ -363,10 +380,7 @@ async fn publish_host_advertisement(
         let ad_json = serde_json::to_string(&ad)
             .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
 
-        let wallet_address = ad["walletAddress"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
 
         // Store individual advertisement
         let host_key = format!("chiral_host_{}", peer_id);
@@ -374,10 +388,11 @@ async fn publish_host_advertisement(
 
         // Update registry (read-modify-write)
         let registry_key = "chiral_host_registry".to_string();
-        let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
-            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-            _ => Vec::new(),
-        };
+        let mut registry: Vec<HostRegistryEntry> =
+            match dht.get_dht_value(registry_key.clone()).await {
+                Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+                _ => Vec::new(),
+            };
 
         // Remove existing entry for this peer, add fresh one
         registry.retain(|e| e.peer_id != peer_id);
@@ -400,9 +415,7 @@ async fn publish_host_advertisement(
 }
 
 #[tauri::command]
-async fn unpublish_host_advertisement(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+async fn unpublish_host_advertisement(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let dht_guard = state.dht.lock().await;
 
     if let Some(dht) = dht_guard.as_ref() {
@@ -410,10 +423,11 @@ async fn unpublish_host_advertisement(
 
         // Remove from registry
         let registry_key = "chiral_host_registry".to_string();
-        let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
-            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-            _ => Vec::new(),
-        };
+        let mut registry: Vec<HostRegistryEntry> =
+            match dht.get_dht_value(registry_key.clone()).await {
+                Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+                _ => Vec::new(),
+            };
 
         registry.retain(|e| e.peer_id != peer_id);
 
@@ -426,9 +440,7 @@ async fn unpublish_host_advertisement(
 }
 
 #[tauri::command]
-async fn get_host_registry(
-    state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
+async fn get_host_registry(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let dht_guard = state.dht.lock().await;
 
     if let Some(dht) = dht_guard.as_ref() {
@@ -499,8 +511,8 @@ async fn get_hosting_agreement(
     // Try local disk first
     let path = agreements_dir()?.join(format!("{}.json", agreement_id));
     if path.exists() {
-        let json = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read agreement: {e}"))?;
+        let json =
+            std::fs::read_to_string(&path).map_err(|e| format!("Failed to read agreement: {e}"))?;
         return Ok(Some(json));
     }
 
@@ -523,8 +535,8 @@ async fn get_hosting_agreement(
 async fn list_hosting_agreements() -> Result<Vec<String>, String> {
     let dir = agreements_dir()?;
     let mut ids = Vec::new();
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("Failed to read agreements dir: {e}"))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| format!("Failed to read agreements dir: {e}"))?;
     for entry in entries.flatten() {
         if let Some(name) = entry.file_name().to_str() {
             if let Some(id) = name.strip_suffix(".json") {
@@ -566,7 +578,7 @@ async fn get_available_storage() -> Result<u64, String> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = home_dir; // Suppress warning
-        // Default fallback for other platforms
+                          // Default fallback for other platforms
         Ok(10000) // Return 10GB as default
     }
 }
@@ -584,7 +596,10 @@ async fn open_file_dialog(multiple: bool) -> Result<Vec<String>, String> {
     if multiple {
         let files = FileDialog::new().pick_files();
         if let Some(paths) = files {
-            Ok(paths.iter().map(|p| p.to_string_lossy().to_string()).collect())
+            Ok(paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect())
         } else {
             Ok(vec![])
         }
@@ -634,9 +649,7 @@ async fn set_download_directory(
 }
 
 #[tauri::command]
-async fn get_download_directory(
-    state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
+async fn get_download_directory(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let dir = state.download_directory.lock().await;
     match dir.as_ref() {
         Some(path) => Ok(path.clone()),
@@ -656,7 +669,10 @@ fn get_effective_download_dir(custom_dir: &Option<String>) -> Result<std::path::
         if path.exists() && path.is_dir() {
             return Ok(path);
         }
-        println!("⚠️ Custom download directory '{}' is invalid, falling back to system default", dir);
+        println!(
+            "⚠️ Custom download directory '{}' is invalid, falling back to system default",
+            dir
+        );
     }
     dirs::download_dir().ok_or_else(|| "Could not find downloads directory".to_string())
 }
@@ -717,7 +733,7 @@ async fn publish_file(
     let file_size = file_data.len() as u64;
 
     // Compute SHA-256 hash
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(&file_data);
     let hash = hasher.finalize();
@@ -762,7 +778,8 @@ async fn publish_file(
             file_size,
             price_wei_val,
             wallet_addr.clone(),
-        ).await;
+        )
+        .await;
 
         // Build our seeder entry with listening addresses so other peers can dial us
         let our_multiaddrs = dht.get_listening_addresses().await;
@@ -783,7 +800,9 @@ async fn publish_file(
                     file_size,
                     protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
                     created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
                     peer_id: String::new(),
                     price_wei: String::new(),
                     wallet_address: String::new(),
@@ -796,7 +815,9 @@ async fn publish_file(
                 file_size,
                 protocol: protocol.unwrap_or_else(|| "WebRTC".to_string()),
                 created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
                 peer_id: String::new(),
                 price_wei: String::new(),
                 wallet_address: String::new(),
@@ -814,8 +835,11 @@ async fn publish_file(
         // Update legacy fields for backward compat
         metadata.peer_id = peer_id.clone();
         metadata.price_wei = price_wei_val.to_string();
-        metadata.wallet_address = metadata.seeders.iter()
-            .find(|s| s.peer_id == peer_id).map(|s| s.wallet_address.clone())
+        metadata.wallet_address = metadata
+            .seeders
+            .iter()
+            .find(|s| s.peer_id == peer_id)
+            .map(|s| s.wallet_address.clone())
             .unwrap_or_default();
 
         // Serialize and store in DHT
@@ -823,7 +847,11 @@ async fn publish_file(
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         dht.put_dht_value(dht_key, metadata_json).await?;
 
-        println!("File metadata published to DHT: {} ({} seeders)", merkle_root, metadata.seeders.len());
+        println!(
+            "File metadata published to DHT: {} ({} seeders)",
+            merkle_root,
+            metadata.seeders.len()
+        );
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -843,13 +871,16 @@ async fn publish_file_data(
     let file_size = file_data.len() as u64;
 
     // Compute SHA-256 hash
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(&file_data);
     let hash = hasher.finalize();
     let merkle_root = hex::encode(hash);
 
-    println!("Publishing file from data: {} with hash: {}", file_name, merkle_root);
+    println!(
+        "Publishing file from data: {} with hash: {}",
+        file_name, merkle_root
+    );
 
     // Store file data in memory for serving to peers
     {
@@ -887,7 +918,8 @@ async fn publish_file_data(
             file_size,
             price_wei_val,
             wallet_addr.clone(),
-        ).await;
+        )
+        .await;
 
         // Build our seeder entry with listening addresses so other peers can dial us
         let our_multiaddrs = dht.get_listening_addresses().await;
@@ -908,7 +940,9 @@ async fn publish_file_data(
                     file_size,
                     protocol: "WebRTC".to_string(),
                     created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
                     peer_id: String::new(),
                     price_wei: String::new(),
                     wallet_address: String::new(),
@@ -921,7 +955,9 @@ async fn publish_file_data(
                 file_size,
                 protocol: "WebRTC".to_string(),
                 created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
                 peer_id: String::new(),
                 price_wei: String::new(),
                 wallet_address: String::new(),
@@ -938,8 +974,11 @@ async fn publish_file_data(
         }
         metadata.peer_id = peer_id.clone();
         metadata.price_wei = price_wei_val.to_string();
-        metadata.wallet_address = metadata.seeders.iter()
-            .find(|s| s.peer_id == peer_id).map(|s| s.wallet_address.clone())
+        metadata.wallet_address = metadata
+            .seeders
+            .iter()
+            .find(|s| s.peer_id == peer_id)
+            .map(|s| s.wallet_address.clone())
             .unwrap_or_default();
 
         // Serialize and store in DHT
@@ -947,7 +986,11 @@ async fn publish_file_data(
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         dht.put_dht_value(dht_key, metadata_json).await?;
 
-        println!("File data published to DHT: {} ({} seeders)", merkle_root, metadata.seeders.len());
+        println!(
+            "File data published to DHT: {} ({} seeders)",
+            merkle_root,
+            metadata.seeders.len()
+        );
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -987,7 +1030,10 @@ async fn search_file(
                 let metadata: FileMetadata = serde_json::from_str(&metadata_json)
                     .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
 
-                println!("Found file in DHT: {} ({})", metadata.file_name, metadata.hash);
+                println!(
+                    "Found file in DHT: {} ({})",
+                    metadata.file_name, metadata.hash
+                );
 
                 // Build seeder list: use seeders vec if present, fall back to legacy peer_id
                 let mut seeders = metadata.seeders;
@@ -1051,20 +1097,30 @@ async fn start_download(
 ) -> Result<DownloadStartResult, String> {
     // Parse speed tier
     let tier = SpeedTier::from_str(&speed_tier)?;
-    println!("⚡ Starting download: {} (hash: {}) from {} seeders [tier: {:?}]",
-             file_name, file_hash, seeders.len(), tier);
+    println!(
+        "⚡ Starting download: {} (hash: {}) from {} seeders [tier: {:?}]",
+        file_name,
+        file_hash,
+        seeders.len(),
+        tier
+    );
 
     // Handle payment for paid tiers
     let cost_wei = speed_tiers::calculate_cost(&tier, file_size);
     if cost_wei > 0 {
-        let wallet_addr = wallet_address.as_deref()
+        let wallet_addr = wallet_address
+            .as_deref()
             .ok_or("Wallet address required for paid speed tier")?;
-        let priv_key = private_key.as_deref()
+        let priv_key = private_key
+            .as_deref()
             .ok_or("Private key required for paid speed tier")?;
 
         // Convert wei to CHI string for send_transaction
         let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
-        println!("💰 Speed tier payment: {} CHI ({} wei) to burn address", cost_chi, cost_wei);
+        println!(
+            "💰 Speed tier payment: {} CHI ({} wei) to burn address",
+            cost_chi, cost_wei
+        );
 
         // Process payment to burn address
         let payment_result = send_transaction(
@@ -1072,7 +1128,8 @@ async fn start_download(
             BURN_ADDRESS.to_string(),
             cost_chi.clone(),
             priv_key.to_string(),
-        ).await;
+        )
+        .await;
 
         match payment_result {
             Ok(result) => {
@@ -1093,14 +1150,17 @@ async fn start_download(
                 metadata.insert(result.hash.clone(), meta);
 
                 // Emit event so Download page can show balance change
-                let _ = app.emit("speed-tier-payment-complete", serde_json::json!({
-                    "txHash": result.hash,
-                    "fileHash": file_hash,
-                    "fileName": file_name,
-                    "speedTier": speed_tier,
-                    "balanceBefore": result.balance_before,
-                    "balanceAfter": result.balance_after,
-                }));
+                let _ = app.emit(
+                    "speed-tier-payment-complete",
+                    serde_json::json!({
+                        "txHash": result.hash,
+                        "fileHash": file_hash,
+                        "fileName": file_name,
+                        "speedTier": speed_tier,
+                        "balanceBefore": result.balance_before,
+                        "balanceAfter": result.balance_after,
+                    }),
+                );
             }
             Err(e) => {
                 println!("❌ Speed tier payment failed: {}", e);
@@ -1120,12 +1180,14 @@ async fn start_download(
             let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
             let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-            let request_id = format!("local-{}-{}",
+            let request_id = format!(
+                "local-{}-{}",
                 file_hash_prefix,
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_millis());
+                    .as_millis()
+            );
 
             let file_data_clone = file_data.clone();
             let app_clone = app.clone();
@@ -1137,27 +1199,40 @@ async fn start_download(
             // Spawn rate-limited write
             tokio::spawn(async move {
                 match speed_tiers::rate_limited_write(
-                    &app_clone, &file_path, &file_data_clone, &tier_clone,
-                    &rid_clone, &hash_clone, &name_clone,
-                ).await {
+                    &app_clone,
+                    &file_path,
+                    &file_data_clone,
+                    &tier_clone,
+                    &rid_clone,
+                    &hash_clone,
+                    &name_clone,
+                )
+                .await
+                {
                     Ok(_) => {
                         println!("📁 File saved to: {:?}", file_path);
-                        let _ = app_clone.emit("file-download-complete", serde_json::json!({
-                            "requestId": rid_clone,
-                            "fileHash": hash_clone,
-                            "fileName": name_clone,
-                            "filePath": file_path.to_string_lossy(),
-                            "fileSize": file_data_clone.len(),
-                            "status": "completed"
-                        }));
+                        let _ = app_clone.emit(
+                            "file-download-complete",
+                            serde_json::json!({
+                                "requestId": rid_clone,
+                                "fileHash": hash_clone,
+                                "fileName": name_clone,
+                                "filePath": file_path.to_string_lossy(),
+                                "fileSize": file_data_clone.len(),
+                                "status": "completed"
+                            }),
+                        );
                     }
                     Err(e) => {
                         println!("❌ Failed to save cached file: {}", e);
-                        let _ = app_clone.emit("file-download-failed", serde_json::json!({
-                            "requestId": rid_clone,
-                            "fileHash": hash_clone,
-                            "error": format!("Failed to save file: {}", e)
-                        }));
+                        let _ = app_clone.emit(
+                            "file-download-failed",
+                            serde_json::json!({
+                                "requestId": rid_clone,
+                                "fileHash": hash_clone,
+                                "error": format!("Failed to save file: {}", e)
+                            }),
+                        );
                     }
                 }
             });
@@ -1179,11 +1254,14 @@ async fn start_download(
     if let Some(dht) = dht_guard.as_ref() {
         // Generate a unique request ID
         let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-        let request_id = format!("download-{}-{}", file_hash_prefix,
+        let request_id = format!(
+            "download-{}-{}",
+            file_hash_prefix,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis());
+                .as_millis()
+        );
 
         // Store the speed tier for this download so dht.rs can use it during write
         {
@@ -1192,37 +1270,48 @@ async fn start_download(
         }
 
         // Store download credentials if wallet is available (needed for file payment in event loop)
-        let seeder_price: u128 = seeder_price_wei.as_deref().unwrap_or("0").parse().unwrap_or(0);
+        let seeder_price: u128 = seeder_price_wei
+            .as_deref()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
         if seeder_price > 0 || wallet_address.is_some() {
             if let (Some(ref addr), Some(ref key)) = (&wallet_address, &private_key) {
                 let mut creds = state.download_credentials.lock().await;
-                creds.insert(request_id.clone(), dht::DownloadCredentials {
-                    wallet_address: addr.clone(),
-                    private_key: key.clone(),
-                });
+                creds.insert(
+                    request_id.clone(),
+                    dht::DownloadCredentials {
+                        wallet_address: addr.clone(),
+                        private_key: key.clone(),
+                    },
+                );
             }
         }
 
         // Emit download started event
-        let _ = app.emit("download-started", serde_json::json!({
-            "requestId": request_id,
-            "fileHash": file_hash,
-            "fileName": file_name,
-            "seeders": seeders.len(),
-            "speedTier": speed_tier
-        }));
+        let _ = app.emit(
+            "download-started",
+            serde_json::json!({
+                "requestId": request_id,
+                "fileHash": file_hash,
+                "fileName": file_name,
+                "seeders": seeders.len(),
+                "speedTier": speed_tier
+            }),
+        );
 
         // Look up seeder multiaddresses from DHT metadata so we can dial peers directly
         let seeder_addrs: std::collections::HashMap<String, Vec<String>> = {
             let dht_key = format!("chiral_file_{}", file_hash);
             match dht.get_dht_value(dht_key).await {
-                Ok(Some(json)) => {
-                    serde_json::from_str::<FileMetadata>(&json)
-                        .map(|meta| meta.seeders.into_iter()
+                Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json)
+                    .map(|meta| {
+                        meta.seeders
+                            .into_iter()
                             .map(|s| (s.peer_id, s.multiaddrs))
-                            .collect())
-                        .unwrap_or_default()
-                }
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 _ => std::collections::HashMap::new(),
             }
         };
@@ -1242,7 +1331,10 @@ async fn start_download(
                     offline_seeders.push(seeder.clone());
                 }
                 Err(e) => {
-                    println!("❌ Failed to check seeder {} connectivity: {} — skipping", seeder, e);
+                    println!(
+                        "❌ Failed to check seeder {} connectivity: {} — skipping",
+                        seeder, e
+                    );
                     offline_seeders.push(seeder.clone());
                 }
             }
@@ -1251,7 +1343,10 @@ async fn start_download(
         let had_offline = !offline_seeders.is_empty();
         if reachable_seeders.is_empty() {
             // No connected seeders — try dialing offline seeders as last resort
-            println!("⚠️ No connected seeders, attempting to dial {} offline seeder(s)", offline_seeders.len());
+            println!(
+                "⚠️ No connected seeders, attempting to dial {} offline seeder(s)",
+                offline_seeders.len()
+            );
             reachable_seeders = offline_seeders;
         }
 
@@ -1260,10 +1355,19 @@ async fn start_download(
         let mut request_sent = false;
 
         for (i, seeder) in reachable_seeders.iter().enumerate() {
-            println!("Trying seeder {}/{}: {} for file {}", i + 1, reachable_seeders.len(), seeder, file_hash);
+            println!(
+                "Trying seeder {}/{}: {} for file {}",
+                i + 1,
+                reachable_seeders.len(),
+                seeder,
+                file_hash
+            );
 
             let addrs = seeder_addrs.get(seeder).cloned().unwrap_or_default();
-            match dht.request_file(seeder.clone(), file_hash.clone(), request_id.clone(), addrs).await {
+            match dht
+                .request_file(seeder.clone(), file_hash.clone(), request_id.clone(), addrs)
+                .await
+            {
                 Ok(_) => {
                     println!("✅ File request sent successfully to seeder {}", seeder);
                     request_sent = true;
@@ -1292,11 +1396,14 @@ async fn start_download(
             } else {
                 format!("No seeder could provide the file: {}", last_error)
             };
-            let _ = app.emit("file-download-failed", serde_json::json!({
-                "requestId": request_id,
-                "fileHash": file_hash,
-                "error": error_msg
-            }));
+            let _ = app.emit(
+                "file-download-failed",
+                serde_json::json!({
+                    "requestId": request_id,
+                    "fileHash": file_hash,
+                    "error": error_msg
+                }),
+            );
             Err(error_msg)
         }
     } else {
@@ -1347,7 +1454,10 @@ async fn register_shared_file(
     price_chi: Option<String>,
     wallet_address: Option<String>,
 ) -> Result<(), String> {
-    println!("Re-registering shared file: {} (hash: {})", file_name, file_hash);
+    println!(
+        "Re-registering shared file: {} (hash: {})",
+        file_name, file_hash
+    );
 
     // Verify file still exists
     if !std::path::Path::new(&file_path).exists() {
@@ -1369,7 +1479,15 @@ async fn register_shared_file(
     // Get DHT service
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
-        dht.register_shared_file(file_hash, file_path, file_name, file_size, price_wei, wallet_addr).await;
+        dht.register_shared_file(
+            file_hash,
+            file_path,
+            file_name,
+            file_size,
+            price_wei,
+            wallet_addr,
+        )
+        .await;
         Ok(())
     } else {
         // DHT not running yet - this is okay, will be registered when DHT starts
@@ -1389,7 +1507,10 @@ async fn republish_shared_file(
     price_chi: Option<String>,
     wallet_address: Option<String>,
 ) -> Result<(), String> {
-    println!("Re-publishing shared file: {} (hash: {})", file_name, file_hash);
+    println!(
+        "Re-publishing shared file: {} (hash: {})",
+        file_name, file_hash
+    );
 
     // Verify file still exists
     if !std::path::Path::new(&file_path).exists() {
@@ -1397,7 +1518,11 @@ async fn republish_shared_file(
     }
 
     let price_wei = if let Some(ref price) = price_chi {
-        if price.is_empty() || price == "0" { 0u128 } else { parse_chi_to_wei(price)? }
+        if price.is_empty() || price == "0" {
+            0u128
+        } else {
+            parse_chi_to_wei(price)?
+        }
     } else {
         0u128
     };
@@ -1407,9 +1532,14 @@ async fn republish_shared_file(
     if let Some(dht) = dht_guard.as_ref() {
         // Step 1: Register in shared_files map (same as register_shared_file)
         dht.register_shared_file(
-            file_hash.clone(), file_path, file_name.clone(), file_size,
-            price_wei, wallet_addr.clone(),
-        ).await;
+            file_hash.clone(),
+            file_path,
+            file_name.clone(),
+            file_size,
+            price_wei,
+            wallet_addr.clone(),
+        )
+        .await;
 
         // Step 2: Update DHT metadata — add ourselves to seeders list
         let peer_id = dht.get_peer_id().await.unwrap_or_default();
@@ -1433,7 +1563,9 @@ async fn republish_shared_file(
                         file_size,
                         protocol: "WebRTC".to_string(),
                         created_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs(),
                         peer_id: String::new(),
                         price_wei: String::new(),
                         wallet_address: String::new(),
@@ -1446,7 +1578,9 @@ async fn republish_shared_file(
                     file_size,
                     protocol: "WebRTC".to_string(),
                     created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
                     peer_id: String::new(),
                     price_wei: String::new(),
                     wallet_address: String::new(),
@@ -1466,7 +1600,12 @@ async fn republish_shared_file(
             let metadata_json = serde_json::to_string(&metadata)
                 .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
             let _ = dht.put_dht_value(dht_key, metadata_json).await;
-            println!("✅ Re-published {} to DHT with peer_id {} ({} seeders)", file_hash, peer_id, metadata.seeders.len());
+            println!(
+                "✅ Re-published {} to DHT with peer_id {} ({} seeders)",
+                file_hash,
+                peer_id,
+                metadata.seeders.len()
+            );
         }
 
         Ok(())
@@ -1478,9 +1617,7 @@ async fn republish_shared_file(
 
 /// Remove our peer_id from all shared file DHT records (called on app shutdown)
 #[tauri::command]
-async fn unpublish_all_shared_files(
-    state: tauri::State<'_, AppState>,
-) -> Result<u32, String> {
+async fn unpublish_all_shared_files(state: tauri::State<'_, AppState>) -> Result<u32, String> {
     let dht_guard = state.dht.lock().await;
     let dht = match dht_guard.as_ref() {
         Some(d) => d,
@@ -1498,7 +1635,10 @@ async fn unpublish_all_shared_files(
         map.keys().cloned().collect()
     };
 
-    println!("🛑 Unpublishing {} shared files from DHT", file_hashes.len());
+    println!(
+        "🛑 Unpublishing {} shared files from DHT",
+        file_hashes.len()
+    );
 
     let mut count = 0u32;
     for file_hash in &file_hashes {
@@ -1522,7 +1662,10 @@ async fn unpublish_all_shared_files(
         }
     }
 
-    println!("✅ Unpublished {} files from DHT (removed our seeder entry)", count);
+    println!(
+        "✅ Unpublished {} files from DHT (removed our seeder entry)",
+        count
+    );
     Ok(count)
 }
 
@@ -1552,16 +1695,28 @@ async fn get_active_hosted_files(
     let dir = agreements_dir()?;
     let mut hosted_files = Vec::new();
 
-    let entries = std::fs::read_dir(&dir)
-        .map_err(|e| format!("Failed to read agreements dir: {e}"))?;
+    let entries =
+        std::fs::read_dir(&dir).map_err(|e| format!("Failed to read agreements dir: {e}"))?;
 
     for entry in entries.flatten() {
         if let Ok(json) = std::fs::read_to_string(entry.path()) {
             if let Ok(agreement) = serde_json::from_str::<serde_json::Value>(&json) {
-                let status = agreement.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                let host_peer = agreement.get("hostPeerId").and_then(|v| v.as_str()).unwrap_or("");
-                let agreement_id = agreement.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
-                let client_peer = agreement.get("clientPeerId").and_then(|v| v.as_str()).unwrap_or("");
+                let status = agreement
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let host_peer = agreement
+                    .get("hostPeerId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let agreement_id = agreement
+                    .get("agreementId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let client_peer = agreement
+                    .get("clientPeerId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let expires_at = agreement.get("expiresAt").and_then(|v| v.as_u64());
 
                 if (status == "active" || status == "accepted") && host_peer == my_peer_id {
@@ -1593,15 +1748,19 @@ async fn cleanup_agreement_files(
 ) -> Result<(), String> {
     let dir = agreements_dir()?;
     let path = dir.join(format!("{}.json", agreement_id));
-    let json = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read agreement: {e}"))?;
-    let agreement: serde_json::Value = serde_json::from_str(&json)
-        .map_err(|e| format!("Failed to parse agreement: {e}"))?;
+    let json =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read agreement: {e}"))?;
+    let agreement: serde_json::Value =
+        serde_json::from_str(&json).map_err(|e| format!("Failed to parse agreement: {e}"))?;
 
     let file_hashes: Vec<String> = agreement
         .get("fileHashes")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     if file_hashes.is_empty() {
@@ -1611,13 +1770,11 @@ async fn cleanup_agreement_files(
     // Get download directory for file deletion
     let download_dir = {
         let dir_lock = state.download_directory.lock().await;
-        dir_lock
-            .clone()
-            .unwrap_or_else(|| {
-                dirs::download_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default()
-            })
+        dir_lock.clone().unwrap_or_else(|| {
+            dirs::download_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
+        })
     };
 
     let dht_guard = state.dht.lock().await;
@@ -1635,7 +1792,10 @@ async fn cleanup_agreement_files(
             if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
                 if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
                     if let Some(obj) = metadata.as_object_mut() {
-                        obj.insert("peerId".to_string(), serde_json::Value::String(String::new()));
+                        obj.insert(
+                            "peerId".to_string(),
+                            serde_json::Value::String(String::new()),
+                        );
                         if let Ok(updated) = serde_json::to_string(&metadata) {
                             let _ = dht.put_dht_value(dht_key, updated).await;
                         }
@@ -1678,8 +1838,8 @@ struct TorrentInfo {
 #[tauri::command]
 async fn parse_torrent_file(file_path: String) -> Result<TorrentInfo, String> {
     // Read the torrent file
-    let torrent_data = std::fs::read(&file_path)
-        .map_err(|e| format!("Failed to read torrent file: {}", e))?;
+    let torrent_data =
+        std::fs::read(&file_path).map_err(|e| format!("Failed to read torrent file: {}", e))?;
 
     let mut name = String::new();
     let mut size: u64 = 0;
@@ -1709,14 +1869,20 @@ async fn parse_torrent_file(file_path: String) -> Result<TorrentInfo, String> {
         if let Some(hash_bytes) = extract_bencode_bytes(&torrent_data[pieces_pos..]) {
             // Convert bytes to hex string
             info_hash = hex::encode(&hash_bytes);
-            println!("Extracted file hash from torrent pieces field: {}", info_hash);
+            println!(
+                "Extracted file hash from torrent pieces field: {}",
+                info_hash
+            );
         }
     }
 
     // If we couldn't extract the hash from pieces, this might be a standard BitTorrent torrent
     // In that case, we can't use it with our network
     if info_hash.is_empty() {
-        return Err("Invalid torrent file: could not find Chiral Network file hash in pieces field".to_string());
+        return Err(
+            "Invalid torrent file: could not find Chiral Network file hash in pieces field"
+                .to_string(),
+        );
     }
 
     if name.is_empty() {
@@ -1727,7 +1893,10 @@ async fn parse_torrent_file(file_path: String) -> Result<TorrentInfo, String> {
             .unwrap_or_else(|| "Unknown".to_string());
     }
 
-    println!("Parsed torrent: name={}, size={}, hash={}", name, size, info_hash);
+    println!(
+        "Parsed torrent: name={}, size={}, hash={}",
+        name, size, info_hash
+    );
 
     Ok(TorrentInfo {
         info_hash,
@@ -1789,7 +1958,6 @@ fn extract_bencode_bytes(data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportTorrentResult {
@@ -1809,14 +1977,14 @@ struct WalletBalanceResult {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionMeta {
     tx_hash: String,
-    tx_type: String,         // "send", "receive", "speed_tier_payment", "faucet"
-    description: String,     // Human-readable description
-    file_name: Option<String>,    // For download payments
-    file_hash: Option<String>,    // For download payments
-    speed_tier: Option<String>,   // For speed tier payments
+    tx_type: String,            // "send", "receive", "speed_tier_payment", "faucet"
+    description: String,        // Human-readable description
+    file_name: Option<String>,  // For download payments
+    file_hash: Option<String>,  // For download payments
+    speed_tier: Option<String>, // For speed tier payments
     recipient_label: Option<String>, // User-provided label for recipient
-    balance_before: Option<String>,  // Balance before tx (CHI)
-    balance_after: Option<String>,   // Balance after tx (CHI)
+    balance_before: Option<String>, // Balance before tx (CHI)
+    balance_after: Option<String>, // Balance after tx (CHI)
 }
 
 // Transaction types
@@ -1830,11 +1998,11 @@ struct Transaction {
     value_wei: String,
     block_number: u64,
     timestamp: u64,
-    status: String,          // "confirmed", "pending", "failed"
+    status: String, // "confirmed", "pending", "failed"
     gas_used: u64,
     // Enriched metadata fields
-    tx_type: String,         // "send", "receive", "speed_tier_payment", "unknown"
-    description: String,     // Human-readable description
+    tx_type: String,     // "send", "receive", "speed_tier_payment", "unknown"
+    description: String, // Human-readable description
     file_name: Option<String>,
     file_hash: Option<String>,
     speed_tier: Option<String>,
@@ -1866,7 +2034,10 @@ fn default_rpc_endpoint() -> String {
 #[tauri::command]
 async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, String> {
     let rpc_endpoint = default_rpc_endpoint();
-    println!("[get_wallet_balance] Querying balance for {} from RPC: {}", address, rpc_endpoint);
+    println!(
+        "[get_wallet_balance] Querying balance for {} from RPC: {}",
+        address, rpc_endpoint
+    );
 
     // Query balance from blockchain via JSON-RPC
     let client = reqwest::Client::new();
@@ -1884,8 +2055,14 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
         .send()
         .await
         .map_err(|e| {
-            println!("[get_wallet_balance] Failed to connect to {}: {}", rpc_endpoint, e);
-            format!("Failed to connect to blockchain node at {}: {}", rpc_endpoint, e)
+            println!(
+                "[get_wallet_balance] Failed to connect to {}: {}",
+                rpc_endpoint, e
+            );
+            format!(
+                "Failed to connect to blockchain node at {}: {}",
+                rpc_endpoint, e
+            )
         })?;
 
     let status = response.status();
@@ -1918,7 +2095,10 @@ async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, Stri
     // Convert wei to CHI (1 CHI = 10^18 wei)
     let balance_chi = balance_wei as f64 / 1e18;
 
-    println!("[get_wallet_balance] Balance for {}: {} CHI (hex: {}, wei: {})", address, balance_chi, balance_hex, balance_wei);
+    println!(
+        "[get_wallet_balance] Balance for {}: {} CHI (hex: {}, wei: {})",
+        address, balance_chi, balance_hex, balance_wei
+    );
 
     Ok(WalletBalanceResult {
         balance: format!("{:.6}", balance_chi),
@@ -2023,18 +2203,12 @@ mod chi_to_wei_tests {
     #[test]
     fn test_smallest_wei_unit() {
         // 0.000000000000000001 CHI = 1 wei
-        assert_eq!(
-            parse_chi_to_wei("0.000000000000000001").unwrap(),
-            1
-        );
+        assert_eq!(parse_chi_to_wei("0.000000000000000001").unwrap(), 1);
     }
 
     #[test]
     fn test_fractional_only() {
-        assert_eq!(
-            parse_chi_to_wei("0.5").unwrap(),
-            500_000_000_000_000_000
-        );
+        assert_eq!(parse_chi_to_wei("0.5").unwrap(), 500_000_000_000_000_000);
     }
 
     #[test]
@@ -2052,7 +2226,9 @@ fn parse_chi_to_wei(amount: &str) -> Result<u128, String> {
         return Err("Invalid amount format".to_string());
     }
 
-    let whole: u128 = if parts[0].is_empty() { 0 } else {
+    let whole: u128 = if parts[0].is_empty() {
+        0
+    } else {
         parts[0].parse().map_err(|_| "Invalid amount".to_string())?
     };
 
@@ -2060,10 +2236,14 @@ fn parse_chi_to_wei(amount: &str) -> Result<u128, String> {
         let frac_str = parts[1];
         if frac_str.len() > 18 {
             // Truncate to 18 decimal places
-            frac_str[..18].parse::<u128>().map_err(|_| "Invalid amount".to_string())?
+            frac_str[..18]
+                .parse::<u128>()
+                .map_err(|_| "Invalid amount".to_string())?
         } else {
             let padded = format!("{:0<18}", frac_str);
-            padded.parse::<u128>().map_err(|_| "Invalid amount".to_string())?
+            padded
+                .parse::<u128>()
+                .map_err(|_| "Invalid amount".to_string())?
         }
     } else {
         0u128
@@ -2154,12 +2334,11 @@ async fn send_transaction(
 
     // Parse private key
     let pk_hex = private_key.trim_start_matches("0x");
-    let pk_bytes = hex::decode(pk_hex)
-        .map_err(|e| format!("Invalid private key hex: {}", e))?;
+    let pk_bytes = hex::decode(pk_hex).map_err(|e| format!("Invalid private key hex: {}", e))?;
 
     let secp = Secp256k1::new();
-    let secret_key = SecretKey::from_slice(&pk_bytes)
-        .map_err(|e| format!("Invalid private key: {}", e))?;
+    let secret_key =
+        SecretKey::from_slice(&pk_bytes).map_err(|e| format!("Invalid private key: {}", e))?;
 
     // Convert amount from CHI to wei (1 CHI = 10^18 wei)
     // Use string-based conversion to avoid f64 precision loss
@@ -2181,7 +2360,9 @@ async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to get nonce: {}", e))?;
 
-    let nonce_json: serde_json::Value = nonce_response.json().await
+    let nonce_json: serde_json::Value = nonce_response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse nonce response: {}", e))?;
 
     if let Some(error) = nonce_json.get("error") {
@@ -2206,13 +2387,19 @@ async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to get balance: {}", e))?;
 
-    let balance_json: serde_json::Value = balance_response.json().await
+    let balance_json: serde_json::Value = balance_response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse balance response: {}", e))?;
 
     let balance_hex = balance_json["result"].as_str().unwrap_or("0x0");
     let balance_wei = u128::from_str_radix(balance_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
-    println!("💰 Sender balance: {} wei ({} CHI)", balance_wei, balance_wei as f64 / 1e18);
+    println!(
+        "💰 Sender balance: {} wei ({} CHI)",
+        balance_wei,
+        balance_wei as f64 / 1e18
+    );
 
     // Get gas price
     let gas_price_payload = serde_json::json!({
@@ -2229,12 +2416,18 @@ async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to get gas price: {}", e))?;
 
-    let gas_price_json: serde_json::Value = gas_price_response.json().await
+    let gas_price_json: serde_json::Value = gas_price_response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse gas price response: {}", e))?;
 
     let gas_price = parse_hex_u64(gas_price_json["result"].as_str().unwrap_or("0x0"));
     // Use at least 1 gwei if gas price is 0
-    let gas_price = if gas_price == 0 { 1_000_000_000 } else { gas_price };
+    let gas_price = if gas_price == 0 {
+        1_000_000_000
+    } else {
+        gas_price
+    };
 
     let gas_limit: u64 = 21000; // Standard transfer
     let chain_id: u64 = geth::CHAIN_ID;
@@ -2242,7 +2435,9 @@ async fn send_transaction(
 
     // Check total cost (amount + gas)
     let gas_cost = gas_price_u128 * gas_limit as u128;
-    let total_cost = amount_wei.checked_add(gas_cost).ok_or("Amount overflow".to_string())?;
+    let total_cost = amount_wei
+        .checked_add(gas_cost)
+        .ok_or("Amount overflow".to_string())?;
 
     // Capture balance before/after for transaction history
     let balance_before_chi = format!("{:.6}", balance_wei as f64 / 1e18);
@@ -2314,7 +2509,10 @@ async fn send_transaction(
     println!("   Gas Price: {}", gas_price);
     println!("   Chain ID: {}", chain_id);
     println!("   V: {}", v);
-    println!("   Signed TX: {}...", &signed_tx_hex[..66.min(signed_tx_hex.len())]);
+    println!(
+        "   Signed TX: {}...",
+        &signed_tx_hex[..66.min(signed_tx_hex.len())]
+    );
 
     // Send the raw transaction
     let send_payload = serde_json::json!({
@@ -2331,7 +2529,9 @@ async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to send transaction: {}", e))?;
 
-    let send_json: serde_json::Value = send_response.json().await
+    let send_json: serde_json::Value = send_response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse send response: {}", e))?;
 
     println!("📥 RPC Response: {}", send_json);
@@ -2358,7 +2558,9 @@ async fn send_transaction(
                     .await
                     .map_err(|e| format!("Retry failed: {}", e))?;
 
-                let retry_json: serde_json::Value = retry_resp.json().await
+                let retry_json: serde_json::Value = retry_resp
+                    .json()
+                    .await
                     .map_err(|e| format!("Failed to parse retry response: {}", e))?;
 
                 if retry_json.get("result").is_some() && !retry_json["result"].is_null() {
@@ -2374,7 +2576,8 @@ async fn send_transaction(
                     });
                 }
 
-                let retry_msg = retry_json.get("error")
+                let retry_msg = retry_json
+                    .get("error")
                     .and_then(|e| e.get("message"))
                     .and_then(|m| m.as_str())
                     .unwrap_or("");
@@ -2384,7 +2587,10 @@ async fn send_transaction(
                     break;
                 }
                 if !retry_msg.contains("overdraft") {
-                    return Err(format!("Transaction failed on retry: {}", retry_json.get("error").unwrap()));
+                    return Err(format!(
+                        "Transaction failed on retry: {}",
+                        retry_json.get("error").unwrap()
+                    ));
                 }
             }
         } else {
@@ -2427,9 +2633,16 @@ async fn send_transaction(
             if receipt_json["result"].is_null() {
                 println!("⏳ Transaction pending (not yet mined). Make sure mining is running!");
             } else {
-                let status = receipt_json["result"]["status"].as_str().unwrap_or("unknown");
-                let block = receipt_json["result"]["blockNumber"].as_str().unwrap_or("unknown");
-                println!("📦 Transaction mined in block {} with status {}", block, status);
+                let status = receipt_json["result"]["status"]
+                    .as_str()
+                    .unwrap_or("unknown");
+                let block = receipt_json["result"]["blockNumber"]
+                    .as_str()
+                    .unwrap_or("unknown");
+                println!(
+                    "📦 Transaction mined in block {} with status {}",
+                    block, status
+                );
             }
         }
     }
@@ -2462,7 +2675,8 @@ pub async fn send_payment_transaction(
         to_address.to_string(),
         amount_chi.to_string(),
         private_key.to_string(),
-    ).await?;
+    )
+    .await?;
     Ok(PaymentResult {
         tx_hash: result.hash,
         balance_before: result.balance_before,
@@ -2489,7 +2703,9 @@ async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::V
         .await
         .map_err(|e| format!("Failed to get receipt: {}", e))?;
 
-    let json: serde_json::Value = response.json().await
+    let json: serde_json::Value = response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse receipt: {}", e))?;
 
     if let Some(error) = json.get("error") {
@@ -2531,7 +2747,9 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
         .await
         .map_err(|e| format!("Failed to get faucet nonce: {}", e))?;
 
-    let nonce_json: serde_json::Value = nonce_response.json().await
+    let nonce_json: serde_json::Value = nonce_response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse nonce response: {}", e))?;
 
     let nonce = nonce_json["result"].as_str().unwrap_or("0x0");
@@ -2577,12 +2795,17 @@ async fn request_faucet(address: String) -> Result<SendTransactionResult, String
         .await
         .map_err(|e| format!("Faucet request failed: {}", e))?;
 
-    let send_json: serde_json::Value = send_response.json().await
+    let send_json: serde_json::Value = send_response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse faucet response: {}", e))?;
 
     if let Some(error) = send_json.get("error") {
         // If faucet fails, suggest mining instead
-        return Err(format!("Faucet unavailable. Please mine some blocks to get CHI. Error: {}", error));
+        return Err(format!(
+            "Faucet unavailable. Please mine some blocks to get CHI. Error: {}",
+            error
+        ));
     }
 
     let tx_hash = send_json["result"]
@@ -2605,7 +2828,16 @@ fn classify_transaction(
     to: &str,
     address: &str,
     metadata: &HashMap<String, TransactionMeta>,
-) -> (String, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) {
+) -> (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     let address_lower = address.to_lowercase();
     let to_lower = to.to_lowercase();
     let from_lower = from.to_lowercase();
@@ -2631,9 +2863,12 @@ fn classify_transaction(
         return (
             "speed_tier_payment".to_string(),
             "⚡ Speed tier download payment".to_string(),
-            None, None, None,
+            None,
+            None,
+            None,
             Some("Burn Address (Speed Tier)".to_string()),
-            None, None,
+            None,
+            None,
         );
     }
 
@@ -2641,7 +2876,12 @@ fn classify_transaction(
         return (
             "send".to_string(),
             format!("💸 Sent to {}", &to[..std::cmp::min(10, to.len())]),
-            None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
     }
 
@@ -2649,11 +2889,25 @@ fn classify_transaction(
         return (
             "receive".to_string(),
             format!("📥 Received from {}", &from[..10]),
-            None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
     }
 
-    ("unknown".to_string(), "Transaction".to_string(), None, None, None, None, None, None)
+    (
+        "unknown".to_string(),
+        "Transaction".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 /// Get transaction history for an address.
@@ -2684,11 +2938,14 @@ async fn get_transaction_history(
         .await
         .map_err(|e| format!("Failed to get block number: {}", e))?;
 
-    let block_json: serde_json::Value = block_response.json().await
+    let block_json: serde_json::Value = block_response
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse block response: {}", e))?;
 
     let latest_block_hex = block_json["result"].as_str().unwrap_or("0x0");
-    let latest_block = u64::from_str_radix(latest_block_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+    let latest_block =
+        u64::from_str_radix(latest_block_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
     // Load local metadata for enrichment
     let metadata = state.tx_metadata.lock().await;
@@ -2720,11 +2977,7 @@ async fn get_transaction_history(
             })
             .collect();
 
-        let batch_response = client
-            .post(&rpc)
-            .json(&batch)
-            .send()
-            .await;
+        let batch_response = client.post(&rpc).json(&batch).send().await;
 
         if let Ok(response) = batch_response {
             if let Ok(results) = response.json::<Vec<serde_json::Value>>().await {
@@ -2734,33 +2987,67 @@ async fn get_transaction_history(
                             if txs.is_empty() {
                                 continue;
                             }
-                            let block_timestamp = result.get("timestamp")
+                            let block_timestamp = result
+                                .get("timestamp")
                                 .and_then(|t| t.as_str())
-                                .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0))
+                                .map(|s| {
+                                    u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0)
+                                })
                                 .unwrap_or(0);
-                            let block_number_hex = result.get("number")
+                            let block_number_hex = result
+                                .get("number")
                                 .and_then(|n| n.as_str())
                                 .unwrap_or("0x0");
-                            let block_num = u64::from_str_radix(block_number_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                            let block_num =
+                                u64::from_str_radix(block_number_hex.trim_start_matches("0x"), 16)
+                                    .unwrap_or(0);
 
                             for tx in txs {
-                                let from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
-                                let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
+                                let from = tx
+                                    .get("from")
+                                    .and_then(|f| f.as_str())
+                                    .unwrap_or("")
+                                    .to_lowercase();
+                                let to = tx
+                                    .get("to")
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("")
+                                    .to_lowercase();
 
                                 if from == address_lower || to == address_lower {
-                                    let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
-                                    let value_wei = u128::from_str_radix(value_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                                    let value_hex =
+                                        tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
+                                    let value_wei = u128::from_str_radix(
+                                        value_hex.trim_start_matches("0x"),
+                                        16,
+                                    )
+                                    .unwrap_or(0);
                                     let value_chi = value_wei as f64 / 1e18;
 
-                                    let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
-                                    let gas_used = u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                                    let gas_hex =
+                                        tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
+                                    let gas_used =
+                                        u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16)
+                                            .unwrap_or(0);
 
-                                    let tx_hash = tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
-                                    let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
+                                    let tx_hash =
+                                        tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
+                                    let tx_from =
+                                        tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
                                     let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
 
-                                    let (tx_type, description, file_name, file_hash, speed_tier, recipient_label, balance_before, balance_after) =
-                                        classify_transaction(tx_hash, tx_from, tx_to, &address, &metadata);
+                                    let (
+                                        tx_type,
+                                        description,
+                                        file_name,
+                                        file_hash,
+                                        speed_tier,
+                                        recipient_label,
+                                        balance_before,
+                                        balance_after,
+                                    ) = classify_transaction(
+                                        tx_hash, tx_from, tx_to, &address, &metadata,
+                                    );
 
                                     transactions.push(Transaction {
                                         hash: tx_hash.to_string(),
@@ -2846,8 +3133,8 @@ async fn export_torrent_file(
     // This is a simplified torrent format for our network
 
     // Get the downloads directory for saving the torrent
-    let downloads_dir = dirs::download_dir()
-        .ok_or_else(|| "Could not find downloads directory".to_string())?;
+    let downloads_dir =
+        dirs::download_dir().ok_or_else(|| "Could not find downloads directory".to_string())?;
 
     // Create torrent filename
     let torrent_filename = format!("{}.torrent", file_name);
@@ -2890,8 +3177,7 @@ async fn export_torrent_file(
 
     // File hash (our merkle root as the "pieces" field)
     // In real BitTorrent this would be SHA1 hashes of pieces
-    let hash_bytes = hex::decode(&file_hash)
-        .map_err(|e| format!("Invalid hash: {}", e))?;
+    let hash_bytes = hex::decode(&file_hash).map_err(|e| format!("Invalid hash: {}", e))?;
     let pieces_entry = format!("6:pieces{}:", hash_bytes.len());
     torrent_content.extend_from_slice(pieces_entry.as_bytes());
     torrent_content.extend_from_slice(&hash_bytes);
@@ -3017,7 +3303,10 @@ async fn show_drive_item_in_folder(
         // For folders, open the Drive files directory
         ds::drive_files_dir().ok_or("Cannot determine storage directory")?
     } else {
-        let storage = item.storage_path.as_ref().ok_or("No storage path for this item")?;
+        let storage = item
+            .storage_path
+            .as_ref()
+            .ok_or("No storage path for this item")?;
         ds::drive_files_dir()
             .ok_or("Cannot determine storage directory")?
             .join(storage)
@@ -3136,7 +3425,11 @@ fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
         .map_err(|e| format!("Failed to read geth.log: {}", e))?;
     let max_lines = lines.unwrap_or(100);
     let all_lines: Vec<&str> = contents.lines().collect();
-    let start = if all_lines.len() > max_lines { all_lines.len() - max_lines } else { 0 };
+    let start = if all_lines.len() > max_lines {
+        all_lines.len() - max_lines
+    } else {
+        0
+    };
     Ok(all_lines[start..].join("\n"))
 }
 
@@ -3166,8 +3459,8 @@ async fn init_encryption_keypair(
     state: tauri::State<'_, AppState>,
     wallet_private_key: String,
 ) -> Result<String, String> {
-    let pk_bytes = hex::decode(&wallet_private_key)
-        .map_err(|e| format!("Invalid private key hex: {}", e))?;
+    let pk_bytes =
+        hex::decode(&wallet_private_key).map_err(|e| format!("Invalid private key hex: {}", e))?;
 
     let keypair = EncryptionKeypair::from_wallet_key(&pk_bytes);
     let public_key_hex = keypair.public_key_hex();
@@ -3203,7 +3496,8 @@ async fn decrypt_file_data(
     encrypted_bundle: encryption::EncryptedFileBundle,
 ) -> Result<Vec<u8>, String> {
     let keypair_guard = state.encryption_keypair.lock().await;
-    let keypair = keypair_guard.as_ref()
+    let keypair = keypair_guard
+        .as_ref()
         .ok_or("Encryption keypair not initialized")?;
 
     encryption::decrypt_with_keypair(&encrypted_bundle, keypair)
@@ -3220,7 +3514,8 @@ async fn send_encrypted_file(
     transfer_id: String,
 ) -> Result<(), String> {
     // Encrypt the file for the recipient
-    let encrypted_bundle = encryption::encrypt_for_recipient_hex(&file_data, &recipient_public_key)?;
+    let encrypted_bundle =
+        encryption::encrypt_for_recipient_hex(&file_data, &recipient_public_key)?;
 
     // Serialize the encrypted bundle to JSON for transmission
     let encrypted_json = serde_json::to_vec(&encrypted_bundle)
@@ -3232,7 +3527,17 @@ async fn send_encrypted_file(
         // Prefix file name with .encrypted to indicate it's encrypted
         let encrypted_file_name = format!("{}.encrypted", file_name);
         let size = encrypted_json.len() as u64;
-        dht.send_file(peer_id, transfer_id, encrypted_file_name, encrypted_json, String::new(), String::new(), String::new(), size).await
+        dht.send_file(
+            peer_id,
+            transfer_id,
+            encrypted_file_name,
+            encrypted_json,
+            String::new(),
+            String::new(),
+            String::new(),
+            size,
+        )
+        .await
     } else {
         Err("DHT not running".to_string())
     }
@@ -3240,11 +3545,10 @@ async fn send_encrypted_file(
 
 /// Publish a peer's encryption public key to the DHT (for discovery)
 #[tauri::command]
-async fn publish_encryption_key(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+async fn publish_encryption_key(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let keypair_guard = state.encryption_keypair.lock().await;
-    let keypair = keypair_guard.as_ref()
+    let keypair = keypair_guard
+        .as_ref()
         .ok_or("Encryption keypair not initialized")?;
 
     let public_key = keypair.public_key_hex();
@@ -3293,8 +3597,8 @@ async fn create_hosted_site(
     file_paths: Vec<String>,
 ) -> Result<hosting::HostedSite, String> {
     let site_id = hosting::generate_site_id();
-    let base = hosting::sites_base_dir()
-        .ok_or_else(|| "Cannot determine data directory".to_string())?;
+    let base =
+        hosting::sites_base_dir().ok_or_else(|| "Cannot determine data directory".to_string())?;
     let site_dir = base.join(&site_id);
     std::fs::create_dir_all(&site_dir).map_err(|e| format!("Failed to create site dir: {}", e))?;
 
@@ -3313,8 +3617,7 @@ async fn create_hosted_site(
             .ok_or_else(|| format!("Invalid file name: {}", src_path_str))?;
 
         let dest = site_dir.join(file_name);
-        std::fs::copy(src, &dest)
-            .map_err(|e| format!("Failed to copy {}: {}", file_name, e))?;
+        std::fs::copy(src, &dest).map_err(|e| format!("Failed to copy {}: {}", file_name, e))?;
 
         let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         site_files.push(hosting::SiteFile {
@@ -3402,12 +3705,8 @@ async fn start_hosting_server(
 
     let (tx, rx) = tokio::sync::oneshot::channel();
 
-    let bound_addr = hosting_server::start_server(
-        Arc::clone(&state.hosting_server_state),
-        port,
-        rx,
-    )
-    .await?;
+    let bound_addr =
+        hosting_server::start_server(Arc::clone(&state.hosting_server_state), port, rx).await?;
 
     *state.hosting_server_addr.lock().await = Some(bound_addr);
     *state.hosting_server_shutdown.lock().await = Some(tx);
@@ -3416,9 +3715,7 @@ async fn start_hosting_server(
 }
 
 #[tauri::command]
-async fn stop_hosting_server(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+async fn stop_hosting_server(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let shutdown_tx = state.hosting_server_shutdown.lock().await.take();
     if let Some(tx) = shutdown_tx {
         let _ = tx.send(());
@@ -3461,7 +3758,9 @@ fn spawn_relay_tunnel(
         loop {
             let ws_url = format!(
                 "{}/api/tunnel/ws?type={}&id={}",
-                relay_base.replace("http://", "ws://").replace("https://", "wss://"),
+                relay_base
+                    .replace("http://", "ws://")
+                    .replace("https://", "wss://"),
                 resource_type,
                 resource_id
             );
@@ -3472,10 +3771,7 @@ fn spawn_relay_tunnel(
 
             match tokio_tungstenite::connect_async(&ws_url).await {
                 Ok((ws_stream, _)) => {
-                    println!(
-                        "[TUNNEL] Connected for {}:{}",
-                        resource_type, resource_id
-                    );
+                    println!("[TUNNEL] Connected for {}:{}", resource_type, resource_id);
                     let (mut ws_tx, mut ws_rx) = futures_util::StreamExt::split(ws_stream);
 
                     let client = reqwest::Client::builder()
@@ -3500,23 +3796,24 @@ fn spawn_relay_tunnel(
 
                                 // Fetch from local server
                                 let target = format!("{}{}", local, req.path);
-                                let (status, headers, body_bytes): (u16, HashMap<String, String>, Vec<u8>) =
-                                    match client.get(&target).send().await {
-                                        Ok(resp) => {
-                                            let st = resp.status().as_u16();
-                                            let mut hdr = HashMap::<String, String>::new();
-                                            for (k, v) in resp.headers() {
-                                                if let Ok(vs) = v.to_str() {
-                                                    hdr.insert(k.to_string(), vs.to_string());
-                                                }
+                                let (status, headers, body_bytes): (
+                                    u16,
+                                    HashMap<String, String>,
+                                    Vec<u8>,
+                                ) = match client.get(&target).send().await {
+                                    Ok(resp) => {
+                                        let st = resp.status().as_u16();
+                                        let mut hdr = HashMap::<String, String>::new();
+                                        for (k, v) in resp.headers() {
+                                            if let Ok(vs) = v.to_str() {
+                                                hdr.insert(k.to_string(), vs.to_string());
                                             }
-                                            let bytes = resp.bytes().await.unwrap_or_default().to_vec();
-                                            (st, hdr, bytes)
                                         }
-                                        Err(_) => {
-                                            (502, HashMap::new(), b"Local server error".to_vec())
-                                        }
-                                    };
+                                        let bytes = resp.bytes().await.unwrap_or_default().to_vec();
+                                        (st, hdr, bytes)
+                                    }
+                                    Err(_) => (502, HashMap::new(), b"Local server error".to_vec()),
+                                };
 
                                 // Send response back through the tunnel
                                 use base64::Engine;
@@ -3706,9 +4003,7 @@ async fn unpublish_site_from_relay(
 // Drive CRUD commands (via Tauri invoke, bypasses browser HTTP restrictions)
 // ---------------------------------------------------------------------------
 
-use crate::drive_storage::{
-    self as ds, DriveItem as DsItem, ShareLink as DsShareLink,
-};
+use crate::drive_storage::{self as ds, DriveItem as DsItem, ShareLink as DsShareLink};
 
 #[tauri::command]
 async fn drive_list_items(
@@ -3752,7 +4047,11 @@ async fn drive_list_all_items(
         return Err("owner required".into());
     }
     let m = state.drive_state.manifest.read().await;
-    Ok(m.items.iter().filter(|i| i.owner == owner).cloned().collect())
+    Ok(m.items
+        .iter()
+        .filter(|i| i.owner == owner)
+        .cloned()
+        .collect())
 }
 
 #[tauri::command]
@@ -3849,7 +4148,11 @@ async fn drive_upload_file(
         m.items.push(item.clone());
     }
     state.drive_state.persist().await;
-    println!("[DRIVE] Uploaded file: {} ({} bytes)", file_name, data.len());
+    println!(
+        "[DRIVE] Uploaded file: {} ({} bytes)",
+        file_name,
+        data.len()
+    );
     Ok(item)
 }
 
@@ -3903,10 +4206,9 @@ async fn drive_delete_item(
     if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
         return Err("Item not found".into());
     }
-    let to_delete: std::collections::HashSet<String> =
-        ds::collect_descendants(&item_id, &m.items)
-            .into_iter()
-            .collect();
+    let to_delete: std::collections::HashSet<String> = ds::collect_descendants(&item_id, &m.items)
+        .into_iter()
+        .collect();
     if let Some(files_dir) = ds::drive_files_dir() {
         for id in &to_delete {
             if let Some(item) = m.items.iter().find(|i| &i.id == id) {
@@ -4048,7 +4350,10 @@ async fn publish_drive_file(
             .iter()
             .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
             .ok_or("Drive file not found")?;
-        let sp = item.storage_path.as_ref().ok_or("Drive file has no storage path")?;
+        let sp = item
+            .storage_path
+            .as_ref()
+            .ok_or("Drive file has no storage path")?;
         (item.name.clone(), sp.clone(), item.size.unwrap_or(0))
     };
 
@@ -4064,7 +4369,7 @@ async fn publish_drive_file(
     let file_data = std::fs::read(&full_path).map_err(|e| format!("Failed to read file: {}", e))?;
     let actual_size = file_data.len() as u64;
 
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(&file_data);
     let hash = hasher.finalize();
@@ -4072,11 +4377,18 @@ async fn publish_drive_file(
 
     let proto = protocol.unwrap_or_else(|| "WebRTC".to_string());
 
-    println!("[DRIVE] Publishing drive file to network: {} (hash: {}, protocol: {})", file_name, file_hash, proto);
+    println!(
+        "[DRIVE] Publishing drive file to network: {} (hash: {}, protocol: {})",
+        file_name, file_hash, proto
+    );
 
     // Parse price from CHI to wei
     let price_wei_val = if let Some(ref price) = price_chi {
-        if price.is_empty() || price == "0" { 0u128 } else { parse_chi_to_wei(price)? }
+        if price.is_empty() || price == "0" {
+            0u128
+        } else {
+            parse_chi_to_wei(price)?
+        }
     } else {
         0u128
     };
@@ -4103,7 +4415,8 @@ async fn publish_drive_file(
             actual_size,
             price_wei_val,
             wallet_addr.clone(),
-        ).await;
+        )
+        .await;
 
         let our_multiaddrs = dht.get_listening_addresses().await;
         let our_seeder = SeederInfo {
@@ -4115,18 +4428,34 @@ async fn publish_drive_file(
 
         let dht_key = format!("chiral_file_{}", file_hash);
         let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-            Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-                hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
-                protocol: proto.clone(),
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
-                seeders: Vec::new(),
-            }),
+            Ok(Some(json)) => {
+                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                    hash: file_hash.clone(),
+                    file_name: file_name.clone(),
+                    file_size: actual_size,
+                    protocol: proto.clone(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                })
+            }
             _ => FileMetadata {
-                hash: file_hash.clone(), file_name: file_name.clone(), file_size: actual_size,
+                hash: file_hash.clone(),
+                file_name: file_name.clone(),
+                file_size: actual_size,
                 protocol: proto.clone(),
-                created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-                peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
                 seeders: Vec::new(),
             },
         };
@@ -4148,7 +4477,9 @@ async fn publish_drive_file(
     // Update the Drive manifest with seeding metadata
     let updated_item = {
         let mut m = state.drive_state.manifest.write().await;
-        let item = m.items.iter_mut()
+        let item = m
+            .items
+            .iter_mut()
             .find(|i| i.id == item_id)
             .ok_or("Drive item not found in manifest")?;
         item.merkle_root = Some(file_hash);
@@ -4177,7 +4508,9 @@ async fn drive_stop_seeding(
     // Look up the Drive item
     let merkle_root = {
         let m = state.drive_state.manifest.read().await;
-        let item = m.items.iter()
+        let item = m
+            .items
+            .iter()
             .find(|i| i.id == item_id && i.owner == owner)
             .ok_or("Drive item not found")?;
         item.merkle_root.clone()
@@ -4197,7 +4530,9 @@ async fn drive_stop_seeding(
     // Update manifest
     let updated_item = {
         let mut m = state.drive_state.manifest.write().await;
-        let item = m.items.iter_mut()
+        let item = m
+            .items
+            .iter_mut()
             .find(|i| i.id == item_id)
             .ok_or("Drive item not found in manifest")?;
         item.seeding = false;
@@ -4222,24 +4557,32 @@ async fn drive_export_torrent(
 
     let (file_name, file_size, merkle_root, storage_path) = {
         let m = state.drive_state.manifest.read().await;
-        let item = m.items.iter()
+        let item = m
+            .items
+            .iter()
             .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
             .ok_or("Drive file not found")?;
-        let hash = item.merkle_root.as_ref().ok_or("File has not been published to network")?;
-        let sp = item.storage_path.as_ref().ok_or("File has no storage path")?;
-        (item.name.clone(), item.size.unwrap_or(0), hash.clone(), sp.clone())
+        let hash = item
+            .merkle_root
+            .as_ref()
+            .ok_or("File has not been published to network")?;
+        let sp = item
+            .storage_path
+            .as_ref()
+            .ok_or("File has no storage path")?;
+        (
+            item.name.clone(),
+            item.size.unwrap_or(0),
+            hash.clone(),
+            sp.clone(),
+        )
     };
 
     let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
     let full_path = files_dir.join(&storage_path).to_string_lossy().to_string();
 
     // Delegate to existing export_torrent_file logic
-    let result = export_torrent_file(
-        merkle_root,
-        file_name,
-        file_size,
-        full_path,
-    ).await?;
+    let result = export_torrent_file(merkle_root, file_name, file_size, full_path).await?;
 
     Ok(result.path)
 }
@@ -4249,9 +4592,7 @@ async fn drive_export_torrent(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn get_drive_server_url(
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<String>, String> {
+async fn get_drive_server_url(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     // The local server starts asynchronously in .setup(). Wait up to 10s for it
     // to become ready, polling every 100ms, so the frontend doesn't get a null
     // URL on first mount.
@@ -4331,10 +4672,7 @@ async fn unpublish_drive_share(
     relay_url: String,
 ) -> Result<(), String> {
     let relay_base = relay_url.trim_end_matches('/');
-    let url = format!(
-        "{}/api/drive/relay-register/{}",
-        relay_base, share_token
-    );
+    let url = format!("{}/api/drive/relay-register/{}", relay_base, share_token);
 
     let client = reqwest::Client::new();
     let resp = client
@@ -4355,10 +4693,7 @@ async fn unpublish_drive_share(
         handle.abort();
     }
 
-    println!(
-        "[DRIVE] Unpublished share token={} from relay",
-        share_token
-    );
+    println!("[DRIVE] Unpublished share token={} from relay", share_token);
     Ok(())
 }
 
@@ -4399,7 +4734,8 @@ pub fn run() {
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
                     cleanup_dht_on_shutdown(&dht_for_signal),
-                ).await;
+                )
+                .await;
 
                 // Use try_lock to avoid deadlock with the main thread
                 match geth_for_signal.try_lock() {
@@ -4415,7 +4751,9 @@ pub fn run() {
                         let pid_path = data_dir.join("geth.pid");
                         if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
                             if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                                let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+                                let _ = std::process::Command::new("kill")
+                                    .arg(pid.to_string())
+                                    .output();
                             }
                         }
                     }
@@ -4634,9 +4972,13 @@ pub fn run() {
                         if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
                             if let Ok(pid) = pid_str.trim().parse::<u32>() {
                                 println!("🛑 Force-killing Geth PID {} on exit", pid);
-                                let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+                                let _ = std::process::Command::new("kill")
+                                    .arg(pid.to_string())
+                                    .output();
                                 std::thread::sleep(std::time::Duration::from_millis(500));
-                                let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).output();
+                                let _ = std::process::Command::new("kill")
+                                    .args(["-9", &pid.to_string()])
+                                    .output();
                             }
                         }
                         let _ = std::fs::remove_file(&pid_path);
@@ -4661,7 +5003,7 @@ mod multi_seeder_tests {
             multiaddrs: vec![],
         };
         let json = serde_json::to_string(&seeder).unwrap();
-        assert!(json.contains("peerId"));      // camelCase
+        assert!(json.contains("peerId")); // camelCase
         assert!(json.contains("priceWei"));
         assert!(json.contains("walletAddress"));
 
