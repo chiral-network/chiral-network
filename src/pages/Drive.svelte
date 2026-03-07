@@ -41,6 +41,8 @@
 
   // Tab state
   let activeTab = $state<'files' | 'seeding'>('files');
+  let seedingUploadProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
+  let seedingUploadPriceChi = $state('');
 
   // Seeding count for tab badge
   const seedingCount = $derived(driveStore.getSeedingItems(manifest).length);
@@ -380,6 +382,19 @@
     isDragging = false;
   }
 
+  function normalizePriceChi(value: string | number | null | undefined): string {
+    const raw = `${value ?? ''}`.trim();
+    if (!raw) return '';
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return '';
+    return raw;
+  }
+
+  function handleSeedingOptionsChange(protocol: 'WebRTC' | 'BitTorrent', priceChi: string) {
+    seedingUploadProtocol = protocol;
+    seedingUploadPriceChi = normalizePriceChi(priceChi);
+  }
+
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
@@ -394,6 +409,37 @@
     }
 
     // Web/browser mode — use File objects
+    if (activeTab === 'seeding') {
+      if (!$networkConnected) {
+        toasts.show('Please connect to the network first', 'error');
+        return;
+      }
+      uploading = true;
+      const priceChi = normalizePriceChi(seedingUploadPriceChi);
+      let count = 0;
+      try {
+        for (const file of e.dataTransfer.files) {
+          const driveItem = await driveStore.uploadFile(file, currentFolderId);
+          if (driveItem) {
+            const result = await driveStore.seedFile(
+              driveItem.id,
+              seedingUploadProtocol,
+              priceChi || undefined,
+            );
+            if (result) count++;
+          }
+        }
+        if (count > 0) {
+          toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${seedingUploadProtocol}`, 'success');
+        }
+      } catch (e) {
+        toasts.show('Upload failed: ' + (e as Error).message, 'error');
+      } finally {
+        uploading = false;
+      }
+      return;
+    }
+
     uploading = true;
     let count = 0;
     try {
@@ -418,7 +464,7 @@
       toasts.show('Please connect to the network first', 'error');
       return;
     }
-    const result = await driveStore.seedFile(item.id, 'WebRTC');
+    const result = await driveStore.seedFile(item.id, 'WebRTC', item.priceChi || undefined);
     if (result) {
       toasts.show(`Now seeding "${item.name}"`, 'success');
     } else {
@@ -469,6 +515,7 @@
       toasts.show('Please connect to the network first', 'error');
       return;
     }
+    const normalizedPrice = normalizePriceChi(priceChi);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const paths: string[] | null = await invoke('open_file_dialog', { multiple: true });
@@ -480,7 +527,7 @@
         const driveItem = await driveStore.uploadFile(path, currentFolderId);
         if (driveItem) {
           // Then publish to DHT for seeding
-          const result = await driveStore.seedFile(driveItem.id, protocol, priceChi || undefined);
+          const result = await driveStore.seedFile(driveItem.id, protocol, normalizedPrice || undefined);
           if (result) count++;
         }
       }
@@ -512,16 +559,23 @@
               return;
             }
             uploading = true;
+            const normalizedPrice = normalizePriceChi(seedingUploadPriceChi);
             let count = 0;
             try {
               for (const path of event.payload.paths) {
                 const driveItem = await driveStore.uploadFile(path as string, currentFolderId);
                 if (driveItem) {
-                  const result = await driveStore.seedFile(driveItem.id, 'WebRTC');
+                  const result = await driveStore.seedFile(
+                    driveItem.id,
+                    seedingUploadProtocol,
+                    normalizedPrice || undefined,
+                  );
                   if (result) count++;
                 }
               }
-              if (count > 0) toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding`, 'success');
+              if (count > 0) {
+                toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${seedingUploadProtocol}`, 'success');
+              }
             } catch (e) {
               toasts.show('Failed: ' + (e as Error).message, 'error');
             } finally {
@@ -623,7 +677,11 @@
 
   {#if activeTab === 'seeding'}
     <!-- Seeding tab -->
-    <DriveSeedingPanel {manifest} onAddFiles={handleAddFilesToSeed} />
+    <DriveSeedingPanel
+      {manifest}
+      onAddFiles={handleAddFilesToSeed}
+      onOptionsChange={handleSeedingOptionsChange}
+    />
   {:else}
   <!-- Breadcrumb -->
   {#if !searchQuery}
