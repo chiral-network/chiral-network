@@ -243,6 +243,8 @@ pub struct FileTransferResponse {
 const CHUNK_SIZE: usize = 256 * 1024;
 /// Maximum retries per chunk before aborting
 const MAX_CHUNK_RETRIES: u8 = 3;
+/// Retry delay schedule for chunk failures (attempt 1..=3), plus jitter.
+const CHUNK_RETRY_BASE_MS: [u64; 3] = [150, 400, 900];
 
 // Chunked file request protocol messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -523,7 +525,6 @@ impl DhtService {
         price_wei: u128,
         wallet_address: String,
     ) {
-        let mut shared = self.shared_files.lock().await;
         println!("=== REGISTERING SHARED FILE ===");
         println!("  Name: {}", file_name);
         println!("  Hash: {}", file_hash);
@@ -535,13 +536,34 @@ impl DhtService {
         } else {
             println!("  Price: Free");
         }
+
+        let chunk_hashes = {
+            let path_for_hashing = file_path.clone();
+            match tokio::task::spawn_blocking(move || compute_chunk_hashes(&path_for_hashing)).await
+            {
+                Ok(Ok(hashes)) => {
+                    println!("  Precomputed {} chunk hashes", hashes.len());
+                    Some(hashes)
+                }
+                Ok(Err(e)) => {
+                    println!("  Failed to precompute chunk hashes: {}", e);
+                    None
+                }
+                Err(e) => {
+                    println!("  Chunk hash precompute task failed: {}", e);
+                    None
+                }
+            }
+        };
+
+        let mut shared = self.shared_files.lock().await;
         shared.insert(
             file_hash.clone(),
             SharedFileInfo {
                 file_path,
                 file_name,
                 file_size,
-                chunk_hashes: None,
+                chunk_hashes,
                 price_wei,
                 wallet_address,
             },
@@ -1022,7 +1044,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             StreamProtocol::new("/chiral/ping/1.0.0"),
             request_response::ProtocolSupport::Full,
         )],
-        request_response::Config::default(),
+        request_response::Config::default()
+            .with_request_timeout(std::time::Duration::from_secs(5)),
     );
 
     let file_transfer = cbor_codec::Behaviour::new(
@@ -1030,7 +1053,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             StreamProtocol::new("/chiral/file-transfer/1.0.0"),
             request_response::ProtocolSupport::Full,
         )],
-        request_response::Config::default(),
+        request_response::Config::default()
+            .with_request_timeout(std::time::Duration::from_secs(30)),
     );
 
     let file_request = cbor_codec::Behaviour::new(
@@ -1038,7 +1062,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             StreamProtocol::new("/chiral/file-request/3.0.0"),
             request_response::ProtocolSupport::Full,
         )],
-        request_response::Config::default(),
+        request_response::Config::default()
+            .with_request_timeout(std::time::Duration::from_secs(12)),
     );
 
     let echo_protocol = request_response::cbor::Behaviour::new(
@@ -1046,7 +1071,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             StreamProtocol::new("/chiral/echo/1.0.0"),
             request_response::ProtocolSupport::Full,
         )],
-        request_response::Config::default(),
+        request_response::Config::default()
+            .with_request_timeout(std::time::Duration::from_secs(5)),
     );
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
@@ -1230,6 +1256,18 @@ fn decrement_file_request_attempt(
     } else {
         0
     }
+}
+
+fn chunk_retry_delay(attempt: u8, chunk_index: u32) -> std::time::Duration {
+    let idx = attempt.saturating_sub(1) as usize;
+    let base_ms = CHUNK_RETRY_BASE_MS
+        .get(idx)
+        .copied()
+        .unwrap_or(*CHUNK_RETRY_BASE_MS.last().unwrap_or(&900));
+    // Keep jitter deterministic per chunk/attempt so retries are staggered
+    // without introducing additional randomness in tests.
+    let jitter_ms = ((chunk_index as u64 * 31) + (attempt as u64 * 17)) % 80;
+    std::time::Duration::from_millis(base_ms + jitter_ms)
 }
 
 async fn event_loop(
@@ -1778,7 +1816,6 @@ async fn event_loop(
             }
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     }
 }
 
@@ -2970,18 +3007,20 @@ async fn handle_behaviour_event(
                                         let mut downloads = active_downloads.lock().await;
                                         if let Some(dl) = downloads.get_mut(&request_id) {
                                             dl.retry_counts[chunk_index as usize] += 1;
-                                            if dl.retry_counts[chunk_index as usize]
-                                                <= MAX_CHUNK_RETRIES
-                                            {
+                                            let attempt = dl.retry_counts[chunk_index as usize];
+                                            if attempt <= MAX_CHUNK_RETRIES {
                                                 println!(
-                                                    "🔄 Retrying chunk {} (attempt {})",
+                                                    "🔄 Retrying chunk {} (attempt {}/{})",
                                                     chunk_index,
-                                                    dl.retry_counts[chunk_index as usize]
+                                                    attempt,
+                                                    MAX_CHUNK_RETRIES
                                                 );
                                                 let peer_id = dl.peer_id;
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
+                                                tokio::time::sleep(chunk_retry_delay(attempt, chunk_index))
+                                                    .await;
                                                 let request = ChunkRequest::Chunk {
                                                     request_id: rid.clone(),
                                                     file_hash: fh,
@@ -3036,17 +3075,20 @@ async fn handle_behaviour_event(
                                                 chunk_index, expected_hash, computed_hash
                                             );
                                             dl.retry_counts[chunk_index as usize] += 1;
-                                            if dl.retry_counts[chunk_index as usize]
-                                                <= MAX_CHUNK_RETRIES
-                                            {
+                                            let attempt = dl.retry_counts[chunk_index as usize];
+                                            if attempt <= MAX_CHUNK_RETRIES {
                                                 println!(
-                                                    "🔄 Retrying chunk {} due to hash mismatch",
-                                                    chunk_index
+                                                    "🔄 Retrying chunk {} due to hash mismatch (attempt {}/{})",
+                                                    chunk_index,
+                                                    attempt,
+                                                    MAX_CHUNK_RETRIES
                                                 );
                                                 let peer_id = dl.peer_id;
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
+                                                tokio::time::sleep(chunk_retry_delay(attempt, chunk_index))
+                                                    .await;
                                                 let request = ChunkRequest::Chunk {
                                                     request_id: rid.clone(),
                                                     file_hash: fh,
@@ -3318,38 +3360,55 @@ async fn handle_behaviour_event(
                         let mut downloads = active_downloads.lock().await;
                         if let Some(dl) = downloads.get_mut(&request_id) {
                             if dl.peer_id == peer {
-                                let chunk_index = dl.current_chunk_index.saturating_sub(1).max(0);
-                                dl.retry_counts[chunk_index as usize] += 1;
-
-                                if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
+                                let chunk_index = dl
+                                    .current_chunk_index
+                                    .min(dl.total_chunks.saturating_sub(1));
+                                if (chunk_index as usize) >= dl.retry_counts.len() {
                                     println!(
-                                        "🔄 Retrying chunk {} after outbound failure (attempt {})",
-                                        chunk_index, dl.retry_counts[chunk_index as usize]
-                                    );
-                                    let peer_id = dl.peer_id;
-                                    let fh = dl.file_hash.clone();
-                                    let rid = dl.request_id.clone();
-                                    drop(downloads);
-                                    // Wait before retry
-                                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                                    let request = ChunkRequest::Chunk {
-                                        request_id: rid.clone(),
-                                        file_hash: fh,
+                                        "❌ Invalid retry index {} for request {} (retry len {})",
                                         chunk_index,
-                                    };
-                                    let req_id = swarm
-                                        .behaviour_mut()
-                                        .file_request
-                                        .send_request(&peer_id, request);
-                                    outbound_request_map.insert(req_id, rid);
-                                    return;
-                                } else {
-                                    // Max retries exceeded
+                                        request_id,
+                                        dl.retry_counts.len()
+                                    );
                                     let dl = downloads.remove(&request_id).unwrap();
                                     file_hash_for_error = Some(dl.file_hash.clone());
                                     let _ = std::fs::remove_file(&dl.output_path);
                                     let mut tiers = download_tiers.lock().await;
                                     tiers.remove(&request_id);
+                                } else {
+                                    dl.retry_counts[chunk_index as usize] += 1;
+                                    let attempt = dl.retry_counts[chunk_index as usize];
+
+                                    if attempt <= MAX_CHUNK_RETRIES {
+                                        println!(
+                                            "🔄 Retrying chunk {} after outbound failure (attempt {}/{})",
+                                            chunk_index, attempt, MAX_CHUNK_RETRIES
+                                        );
+                                        let peer_id = dl.peer_id;
+                                        let fh = dl.file_hash.clone();
+                                        let rid = dl.request_id.clone();
+                                        drop(downloads);
+                                        tokio::time::sleep(chunk_retry_delay(attempt, chunk_index))
+                                            .await;
+                                        let request = ChunkRequest::Chunk {
+                                            request_id: rid.clone(),
+                                            file_hash: fh,
+                                            chunk_index,
+                                        };
+                                        let req_id = swarm
+                                            .behaviour_mut()
+                                            .file_request
+                                            .send_request(&peer_id, request);
+                                        outbound_request_map.insert(req_id, rid);
+                                        return;
+                                    } else {
+                                        // Max retries exceeded
+                                        let dl = downloads.remove(&request_id).unwrap();
+                                        file_hash_for_error = Some(dl.file_hash.clone());
+                                        let _ = std::fs::remove_file(&dl.output_path);
+                                        let mut tiers = download_tiers.lock().await;
+                                        tiers.remove(&request_id);
+                                    }
                                 }
                             } else {
                                 // Another seeder attempt failed after a different seeder

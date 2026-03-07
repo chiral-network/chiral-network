@@ -253,6 +253,9 @@
 
   // Seeder reputation
   let seederRatings = $state<Record<string, BatchReputationEntry>>({});
+  const REPUTATION_CACHE_TTL_MS = 60_000;
+  const reputationCache = new Map<string, { rating: BatchReputationEntry; expiresAt: number }>();
+  const pendingReputationFetches = new Map<string, Promise<Record<string, BatchReputationEntry>>>();
   let showRatingModal = $state<{ transferId: string; seederWallet: string; fileHash: string; fileName: string } | null>(null);
   let transferReputationContexts = $state<Record<string, TransferReputationContext>>({});
 
@@ -605,9 +608,47 @@
         seeders.flatMap(s => [s.peerId, s.walletAddress]).filter(Boolean)
       )];
       if (wallets.length === 0) return;
-      const rawRatings = await ratingApi.getBatchReputation(wallets);
-      const ratings: Record<string, BatchReputationEntry> =
-        rawRatings && typeof rawRatings === 'object' ? rawRatings : {};
+      const now = Date.now();
+      const cachedRatings: Record<string, BatchReputationEntry> = {};
+      const missingWallets: string[] = [];
+
+      for (const wallet of wallets) {
+        const cached = reputationCache.get(wallet);
+        if (cached && cached.expiresAt > now) {
+          cachedRatings[wallet] = cached.rating;
+        } else {
+          missingWallets.push(wallet);
+        }
+      }
+
+      let fetchedRatings: Record<string, BatchReputationEntry> = {};
+      if (missingWallets.length > 0) {
+        const requestWallets = [...missingWallets].sort();
+        const requestKey = requestWallets.join('|');
+        let pending = pendingReputationFetches.get(requestKey);
+        if (!pending) {
+          pending = (async () => {
+            const raw = await ratingApi.getBatchReputation(requestWallets);
+            const ratings: Record<string, BatchReputationEntry> =
+              raw && typeof raw === 'object' ? raw : {};
+            const expiresAt = Date.now() + REPUTATION_CACHE_TTL_MS;
+            for (const [key, value] of Object.entries(ratings)) {
+              reputationCache.set(key, { rating: value, expiresAt });
+            }
+            return ratings;
+          })().finally(() => {
+            pendingReputationFetches.delete(requestKey);
+          });
+          pendingReputationFetches.set(requestKey, pending);
+        }
+        fetchedRatings = await pending;
+      }
+
+      const ratings = {
+        ...(seederRatings && typeof seederRatings === 'object' ? seederRatings : {}),
+        ...cachedRatings,
+        ...fetchedRatings,
+      };
       seederRatings = ratings;
 
       let changed = false;

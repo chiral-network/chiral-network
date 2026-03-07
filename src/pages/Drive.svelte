@@ -26,6 +26,7 @@
   let newFolderName = $state('');
   let loading = $state(false);
   let uploading = $state(false);
+  let loadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Context menu
   let contextItem = $state<DriveItem | null>(null);
@@ -60,10 +61,16 @@
     if (addr !== prevWalletAddr) {
       prevWalletAddr = addr;
       currentFolderId = null;
-      if (initialized) loadCurrentFolder();
+      if (initialized) scheduleLoadCurrentFolder(60);
     }
   });
   onDestroy(unsubWallet);
+  onDestroy(() => {
+    if (loadDebounceTimer) {
+      clearTimeout(loadDebounceTimer);
+      loadDebounceTimer = null;
+    }
+  });
 
   /** Migrate chiral_upload_history from the old Upload page into Drive items */
   async function migrateUploadHistory() {
@@ -156,11 +163,22 @@
     }
   }
 
+  function scheduleLoadCurrentFolder(delayMs = 0) {
+    if (loadDebounceTimer) {
+      clearTimeout(loadDebounceTimer);
+      loadDebounceTimer = null;
+    }
+    loadDebounceTimer = setTimeout(() => {
+      loadDebounceTimer = null;
+      void loadCurrentFolder();
+    }, delayMs);
+  }
+
   // Navigation
   function navigateTo(folderId: string | null) {
     currentFolderId = folderId;
     searchQuery = '';
-    loadCurrentFolder();
+    scheduleLoadCurrentFolder();
   }
 
   function handleOpen(item: DriveItem) {

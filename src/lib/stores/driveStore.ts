@@ -77,6 +77,17 @@ function syncOwner(): string {
 function createDriveStore() {
   const empty: DriveManifest = { version: 1, items: [], shares: [], lastModified: Date.now() };
   const { subscribe, set, update } = writable<DriveManifest>(empty);
+  const folderCache = new Map<string, { items: DriveItem[]; expiresAt: number }>();
+  const inflightFolderLoads = new Map<string, Promise<void>>();
+  const FOLDER_CACHE_TTL_MS = 3000;
+
+  function folderCacheKey(parentId: string | null): string {
+    return parentId ?? '__root__';
+  }
+
+  function clearFolderCaches() {
+    folderCache.clear();
+  }
 
   return {
     subscribe,
@@ -87,6 +98,7 @@ function createDriveStore() {
       if (!owner) {
         // No wallet connected — clear items
         set({ version: 1, items: [], shares: [], lastModified: Date.now() });
+        clearFolderCaches();
         return;
       }
       try {
@@ -106,6 +118,10 @@ function createDriveStore() {
           shares,
           lastModified: Date.now(),
         });
+        folderCache.set(folderCacheKey(null), {
+          items: converted.map(item => ({ ...item })),
+          expiresAt: Date.now() + FOLDER_CACHE_TTL_MS,
+        });
       } catch (e) {
         console.error('Failed to load drive items from server:', e);
       }
@@ -114,24 +130,56 @@ function createDriveStore() {
     /** Load items for a specific folder from the server */
     async loadFolder(parentId: string | null) {
       syncOwner();
-      try {
-        const items = await driveApi.listItems(parentId);
+      const key = folderCacheKey(parentId);
+      const cached = folderCache.get(key);
+      if (cached && cached.expiresAt > Date.now()) {
         const m = get({ subscribe });
-        const sharedIds = new Set(m.shares.map(s => s.itemId));
-        // Replace items for this parentId
         const otherItems = m.items.filter(i => i.parentId !== parentId);
-        const newItems = items.map(i => {
-          const item = fromApi(i);
-          item.shared = sharedIds.has(item.id);
-          return item;
-        });
         set({
           ...m,
-          items: [...otherItems, ...newItems],
+          items: [...otherItems, ...cached.items.map(item => ({ ...item }))],
           lastModified: Date.now(),
         });
-      } catch (e) {
-        console.error('Failed to load folder:', e);
+        return;
+      }
+
+      const existing = inflightFolderLoads.get(key);
+      if (existing) {
+        await existing;
+        return;
+      }
+
+      const loader = (async () => {
+        try {
+          const items = await driveApi.listItems(parentId);
+          const m = get({ subscribe });
+          const sharedIds = new Set(m.shares.map(s => s.itemId));
+          // Replace items for this parentId
+          const otherItems = m.items.filter(i => i.parentId !== parentId);
+          const newItems = items.map(i => {
+            const item = fromApi(i);
+            item.shared = sharedIds.has(item.id);
+            return item;
+          });
+          folderCache.set(key, {
+            items: newItems.map(item => ({ ...item })),
+            expiresAt: Date.now() + FOLDER_CACHE_TTL_MS,
+          });
+          set({
+            ...m,
+            items: [...otherItems, ...newItems],
+            lastModified: Date.now(),
+          });
+        } catch (e) {
+          console.error('Failed to load folder:', e);
+        }
+      })();
+
+      inflightFolderLoads.set(key, loader);
+      try {
+        await loader;
+      } finally {
+        inflightFolderLoads.delete(key);
       }
     },
 
@@ -144,6 +192,7 @@ function createDriveStore() {
           m.items.push(converted);
           return m;
         });
+        clearFolderCaches();
         return converted;
       } catch (e) {
         console.error('Failed to create folder:', e);
@@ -160,6 +209,7 @@ function createDriveStore() {
           m.items.push(converted);
           return m;
         });
+        clearFolderCaches();
         return converted;
       } catch (e) {
         console.error('Failed to upload file:', e);
@@ -179,6 +229,7 @@ function createDriveStore() {
           }
           return m;
         });
+        clearFolderCaches();
       } catch (e) {
         console.error('Failed to rename item:', e);
       }
@@ -196,6 +247,7 @@ function createDriveStore() {
           }
           return m;
         });
+        clearFolderCaches();
       } catch (e) {
         console.error('Failed to move item:', e);
       }
@@ -217,6 +269,7 @@ function createDriveStore() {
           m.shares = m.shares.filter(s => !toDelete.has(s.itemId));
           return m;
         });
+        clearFolderCaches();
       } catch (e) {
         console.error('Failed to delete item:', e);
       }
@@ -239,6 +292,7 @@ function createDriveStore() {
           }
           return m;
         });
+        clearFolderCaches();
       } catch (e) {
         console.error('Failed to toggle star:', e);
       }
@@ -260,6 +314,7 @@ function createDriveStore() {
           }
           return m;
         });
+        clearFolderCaches();
       } catch (e) {
         console.error('Failed to toggle visibility:', e);
       }
@@ -275,6 +330,7 @@ function createDriveStore() {
           if (item) item.shared = true;
           return m;
         });
+        clearFolderCaches();
 
         // Publish share metadata to relay so the share URL works via proxy
         try {
@@ -312,6 +368,7 @@ function createDriveStore() {
           }
           return m;
         });
+        clearFolderCaches();
 
         // Best-effort: remove share registration from relay
         try {
@@ -401,6 +458,7 @@ function createDriveStore() {
           }
           return m;
         });
+        clearFolderCaches();
         return converted;
       } catch (e) {
         console.error('Failed to seed file:', e);
@@ -424,6 +482,7 @@ function createDriveStore() {
           }
           return m;
         });
+        clearFolderCaches();
       } catch (e) {
         console.error('Failed to stop seeding:', e);
       }
