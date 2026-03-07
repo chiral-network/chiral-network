@@ -135,6 +135,33 @@ pub struct MiningStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GpuDevice {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpuMiningCapabilities {
+    pub supported: bool,
+    pub binary_path: Option<String>,
+    pub devices: Vec<GpuDevice>,
+    pub running: bool,
+    pub active_devices: Vec<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpuMiningStatus {
+    pub running: bool,
+    pub hash_rate: u64,
+    pub active_devices: Vec<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MinedBlock {
     pub block_number: u64,
     pub timestamp: u64,
@@ -347,6 +374,11 @@ pub struct GethProcess {
     child: Option<Child>,
     data_dir: PathBuf,
     downloader: GethDownloader,
+    gpu_miner_child: Option<Child>,
+    gpu_binary_path: Option<PathBuf>,
+    gpu_active_devices: Vec<String>,
+    gpu_hash_rate: u64,
+    gpu_last_error: Option<String>,
     /// Last observed block number for hashrate estimation
     last_block: u64,
     /// Timestamp (seconds since epoch) when last_block was observed
@@ -364,6 +396,11 @@ impl GethProcess {
             child: None,
             data_dir,
             downloader: GethDownloader::new(),
+            gpu_miner_child: None,
+            gpu_binary_path: Self::discover_gpu_miner_binary(),
+            gpu_active_devices: Vec::new(),
+            gpu_hash_rate: 0,
+            gpu_last_error: None,
             last_block: 0,
             last_block_time: 0,
         };
@@ -502,6 +539,163 @@ impl GethProcess {
 
     pub fn geth_path(&self) -> PathBuf {
         self.downloader.geth_path()
+    }
+
+    fn gpu_log_path(&self) -> PathBuf {
+        self.data_dir.join("gpu-miner.log")
+    }
+
+    fn discover_gpu_miner_binary() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var("CHIRAL_GPU_MINER_PATH") {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+
+        let current_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        let candidates = if cfg!(target_os = "windows") {
+            vec![
+                current_dir.join("bin").join("ethminer.exe"),
+                current_dir.join("ethminer.exe"),
+            ]
+        } else {
+            vec![
+                current_dir.join("bin").join("ethminer"),
+                current_dir.join("ethminer"),
+            ]
+        };
+
+        for candidate in candidates {
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+
+        let path_names: &[&str] = if cfg!(target_os = "windows") {
+            &["ethminer.exe", "ethminer"]
+        } else {
+            &["ethminer"]
+        };
+        for name in path_names {
+            if Command::new(name)
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok()
+            {
+                return Some(PathBuf::from(name));
+            }
+        }
+
+        None
+    }
+
+    fn parse_gpu_devices_from_text(output: &str) -> Vec<GpuDevice> {
+        let mut out = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with('[') {
+                continue;
+            }
+            let Some(end_idx) = trimmed.find(']') else {
+                continue;
+            };
+            let id = trimmed[1..end_idx].trim();
+            if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let mut name = trimmed[end_idx + 1..].trim();
+            if let Some(stripped) = name.strip_prefix(':') {
+                name = stripped.trim();
+            }
+            if name.is_empty() {
+                continue;
+            }
+            out.push(GpuDevice {
+                id: id.to_string(),
+                name: name.to_string(),
+            });
+        }
+        out
+    }
+
+    fn parse_hash_rate_from_line(line: &str) -> Option<u64> {
+        let lower = line.to_ascii_lowercase();
+        let units = [
+            ("gh/s", 1_000_000_000f64),
+            ("mh/s", 1_000_000f64),
+            ("kh/s", 1_000f64),
+            ("h/s", 1f64),
+        ];
+        for (unit, mult) in units {
+            if let Some(idx) = lower.rfind(unit) {
+                let before = &lower[..idx];
+                if let Some(token) = before.split_whitespace().last() {
+                    let cleaned = token.trim_matches(|c: char| !(c.is_ascii_digit() || c == '.'));
+                    if let Ok(value) = cleaned.parse::<f64>() {
+                        let h = (value * mult) as u64;
+                        if h > 0 {
+                            return Some(h);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn refresh_gpu_hash_rate_from_log(&mut self) {
+        let path = self.gpu_log_path();
+        let Ok(contents) = fs::read_to_string(path) else {
+            return;
+        };
+        for line in contents.lines().rev() {
+            if let Some(rate) = Self::parse_hash_rate_from_line(line) {
+                self.gpu_hash_rate = rate;
+                break;
+            }
+        }
+    }
+
+    fn refresh_gpu_runtime(&mut self) {
+        if let Some(ref mut child) = self.gpu_miner_child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    self.gpu_miner_child = None;
+                    if !status.success() {
+                        self.gpu_last_error =
+                            Some(format!("GPU miner exited unexpectedly with status {}", status));
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    self.gpu_miner_child = None;
+                    self.gpu_last_error = Some(format!("Failed to inspect GPU miner process: {}", err));
+                }
+            }
+        }
+
+        if self.gpu_miner_child.is_some() {
+            self.refresh_gpu_hash_rate_from_log();
+        } else {
+            self.gpu_hash_rate = 0;
+        }
+    }
+
+    fn stop_gpu_miner_sync(&mut self) -> Result<(), String> {
+        if let Some(mut child) = self.gpu_miner_child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.gpu_hash_rate = 0;
+        self.gpu_active_devices.clear();
+        Ok(())
     }
 
     /// Get the genesis.json content for Chiral Network.
@@ -783,6 +977,8 @@ impl GethProcess {
 
     /// Stop Geth process
     pub fn stop(&mut self) -> Result<(), String> {
+        let _ = self.stop_gpu_miner_sync();
+
         if let Some(mut child) = self.child.take() {
             LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
 
@@ -911,10 +1107,13 @@ impl GethProcess {
     }
 
     /// Start mining (requires local Geth process)
-    pub async fn start_mining(&self, threads: u32) -> Result<(), String> {
+    pub async fn start_mining(&mut self, threads: u32) -> Result<(), String> {
         if self.child.is_none() {
             return Err("Cannot mine: local Geth node is not running. Start the node from the Network page first.".to_string());
         }
+        // CPU and GPU mining modes are mutually exclusive.
+        self.stop_gpu_miner_sync()?;
+
         let client = reqwest::Client::new();
         self.rpc_call(&client, "miner_start", serde_json::json!([threads]))
             .await
@@ -922,25 +1121,178 @@ impl GethProcess {
     }
 
     /// Stop mining
-    pub async fn stop_mining(&self) -> Result<(), String> {
+    pub async fn stop_mining(&mut self) -> Result<(), String> {
         let client = reqwest::Client::new();
         self.rpc_call(&client, "miner_stop", serde_json::json!([]))
             .await
             .map(|_| ())
     }
 
+    /// Returns GPU mining capability details (binary + detected devices + runtime state).
+    pub async fn get_gpu_mining_capabilities(&mut self) -> Result<GpuMiningCapabilities, String> {
+        self.refresh_gpu_runtime();
+
+        if self.gpu_binary_path.is_none() {
+            self.gpu_binary_path = Self::discover_gpu_miner_binary();
+        }
+        let binary = self.gpu_binary_path.clone();
+        let Some(binary_path) = binary else {
+            return Ok(GpuMiningCapabilities {
+                supported: false,
+                binary_path: None,
+                devices: Vec::new(),
+                running: false,
+                active_devices: self.gpu_active_devices.clone(),
+                last_error: self.gpu_last_error.clone(),
+            });
+        };
+
+        let output = Command::new(&binary_path)
+            .arg("--list-devices")
+            .output()
+            .map_err(|e| format!("Failed to query GPU devices: {}", e))?;
+
+        let mut text = String::new();
+        text.push_str(&String::from_utf8_lossy(&output.stdout));
+        if !output.stderr.is_empty() {
+            text.push('\n');
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+        }
+        let devices = Self::parse_gpu_devices_from_text(&text);
+
+        Ok(GpuMiningCapabilities {
+            supported: true,
+            binary_path: Some(binary_path.to_string_lossy().to_string()),
+            devices,
+            running: self.gpu_miner_child.is_some(),
+            active_devices: self.gpu_active_devices.clone(),
+            last_error: self.gpu_last_error.clone(),
+        })
+    }
+
+    pub async fn list_gpu_devices(&mut self) -> Result<Vec<GpuDevice>, String> {
+        Ok(self.get_gpu_mining_capabilities().await?.devices)
+    }
+
+    pub async fn start_gpu_mining(&mut self, device_ids: Option<Vec<String>>) -> Result<(), String> {
+        if self.child.is_none() {
+            return Err(
+                "Cannot start GPU miner: local Geth node is not running. Start the node from the Network page first."
+                    .to_string(),
+            );
+        }
+
+        self.refresh_gpu_runtime();
+        if self.gpu_miner_child.is_some() {
+            return Err("GPU miner is already running".to_string());
+        }
+
+        // CPU and GPU mining modes are mutually exclusive.
+        let _ = self.stop_mining().await;
+
+        if self.gpu_binary_path.is_none() {
+            self.gpu_binary_path = Self::discover_gpu_miner_binary();
+        }
+        let binary = self
+            .gpu_binary_path
+            .clone()
+            .ok_or_else(|| {
+                "No GPU miner binary found. Install ethminer (or set CHIRAL_GPU_MINER_PATH) and retry."
+                    .to_string()
+            })?;
+
+        let selected = device_ids.unwrap_or_default();
+        let log_path = self.gpu_log_path();
+        if let Some(parent) = log_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create GPU miner log directory: {}", e))?;
+        }
+
+        let log_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_path)
+            .map_err(|e| format!("Failed to open GPU miner log file: {}", e))?;
+        let log_clone = log_file
+            .try_clone()
+            .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
+
+        let mut cmd = Command::new(&binary);
+        cmd.arg("-P")
+            .arg("http://127.0.0.1:8545")
+            .arg("--farm-recheck")
+            .arg("200");
+
+        if !selected.is_empty() {
+            let joined = selected.join(",");
+            cmd.arg("--opencl-devices").arg(&joined);
+        }
+
+        cmd.stdout(Stdio::from(log_clone))
+            .stderr(Stdio::from(log_file));
+
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to start GPU miner: {}", e))?;
+
+        self.gpu_miner_child = Some(child);
+        self.gpu_active_devices = selected;
+        self.gpu_hash_rate = 0;
+        self.gpu_last_error = None;
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        self.refresh_gpu_runtime();
+        if self.gpu_miner_child.is_none() {
+            let log_tail = fs::read_to_string(&log_path)
+                .unwrap_or_default()
+                .lines()
+                .rev()
+                .take(20)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!(
+                "GPU miner exited during startup. Check configuration/binary. Recent log output:\n{}",
+                log_tail
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub async fn stop_gpu_mining(&mut self) -> Result<(), String> {
+        self.stop_gpu_miner_sync()
+    }
+
+    pub async fn get_gpu_mining_status(&mut self) -> Result<GpuMiningStatus, String> {
+        self.refresh_gpu_runtime();
+        Ok(GpuMiningStatus {
+            running: self.gpu_miner_child.is_some(),
+            hash_rate: self.gpu_hash_rate,
+            active_devices: self.gpu_active_devices.clone(),
+            last_error: self.gpu_last_error.clone(),
+        })
+    }
+
     /// Get mining status
     /// Note: eth_hashrate returns 0 for Geth's internal CPU miner (known upstream issue).
     /// We estimate hashrate from block difficulty / block time instead.
     pub async fn get_mining_status(&mut self) -> Result<MiningStatus, String> {
+        self.refresh_gpu_runtime();
+        let gpu_running = self.gpu_miner_child.is_some();
+
         let client = reqwest::Client::new();
         let rpc_url = self.effective_rpc_endpoint();
 
         println!("⛏️  ---- Mining Status Debug ----");
         println!("⛏️  RPC endpoint: {}", rpc_url);
         println!("⛏️  Local Geth running: {}", self.child.is_some());
+        println!("⛏️  GPU miner running: {}", gpu_running);
 
-        let mining = match self.rpc_call(&client, "eth_mining", serde_json::json!([])).await {
+        let cpu_mining = match self.rpc_call(&client, "eth_mining", serde_json::json!([])).await {
             Ok(result) => {
                 let m = result.as_bool().unwrap_or(false);
                 println!("⛏️  eth_mining: {} (raw: {})", m, result);
@@ -956,7 +1308,7 @@ impl GethProcess {
         // hashrate ≈ difficulty / block_time
         let mut hash_rate: u64 = 0;
 
-        if mining {
+        if cpu_mining {
             // Get current block number
             let current_block = match self.rpc_call(&client, "eth_blockNumber", serde_json::json!([])).await {
                 Ok(result) => {
@@ -1028,7 +1380,16 @@ impl GethProcess {
             // Not mining — reset tracking
             self.last_block = 0;
             self.last_block_time = 0;
-            println!("⛏️  Mining is OFF");
+            if gpu_running {
+                println!("⛏️  CPU mining is OFF (GPU mining active)");
+            } else {
+                println!("⛏️  Mining is OFF");
+            }
+        }
+
+        let mining = cpu_mining || gpu_running;
+        if gpu_running {
+            hash_rate = self.gpu_hash_rate;
         }
 
         let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await
@@ -1675,6 +2036,54 @@ mod tests {
         assert_eq!(restored.miner_address, original.miner_address);
         assert_eq!(restored.total_mined_wei, original.total_mined_wei);
         assert_eq!(restored.total_mined_chi, original.total_mined_chi);
+    }
+
+    #[test]
+    fn test_gpu_device_serialization_round_trip() {
+        let dev = GpuDevice {
+            id: "0".to_string(),
+            name: "NVIDIA RTX".to_string(),
+        };
+        let json = serde_json::to_string(&dev).unwrap();
+        let restored: GpuDevice = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, "0");
+        assert_eq!(restored.name, "NVIDIA RTX");
+    }
+
+    #[test]
+    fn test_gpu_mining_capabilities_serialization() {
+        let caps = GpuMiningCapabilities {
+            supported: true,
+            binary_path: Some("/usr/bin/ethminer".to_string()),
+            devices: vec![GpuDevice {
+                id: "0".to_string(),
+                name: "GPU Zero".to_string(),
+            }],
+            running: false,
+            active_devices: vec!["0".to_string()],
+            last_error: None,
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(json.contains("binaryPath"));
+        assert!(json.contains("activeDevices"));
+        let restored: GpuMiningCapabilities = serde_json::from_str(&json).unwrap();
+        assert!(restored.supported);
+        assert_eq!(restored.devices.len(), 1);
+    }
+
+    #[test]
+    fn test_gpu_mining_status_serialization() {
+        let status = GpuMiningStatus {
+            running: true,
+            hash_rate: 123_000_000,
+            active_devices: vec!["0".to_string(), "1".to_string()],
+            last_error: None,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("hashRate"));
+        let restored: GpuMiningStatus = serde_json::from_str(&json).unwrap();
+        assert!(restored.running);
+        assert_eq!(restored.active_devices.len(), 2);
     }
 
     #[test]

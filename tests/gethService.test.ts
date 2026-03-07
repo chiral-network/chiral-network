@@ -175,6 +175,69 @@ describe('gethService', () => {
     });
   });
 
+  describe('gpu mining', () => {
+    it('getGpuMiningCapabilities should invoke command', async () => {
+      const capabilities = {
+        supported: true,
+        binaryPath: '/tmp/ethminer',
+        devices: [{ id: '0', name: 'GPU 0' }],
+        running: false,
+        activeDevices: [],
+        lastError: null,
+      };
+      mockInvoke.mockResolvedValueOnce(capabilities);
+      const { gethService } = await import('$lib/services/gethService');
+
+      const result = await gethService.getGpuMiningCapabilities();
+
+      expect(mockInvoke).toHaveBeenCalledWith('get_gpu_mining_capabilities');
+      expect(result).toEqual(capabilities);
+    });
+
+    it('startGpuMining should pass selected devices', async () => {
+      mockInvoke.mockResolvedValueOnce(undefined);
+      const { gethService } = await import('$lib/services/gethService');
+
+      await gethService.startGpuMining(['0', '1']);
+
+      expect(mockInvoke).toHaveBeenCalledWith('start_gpu_mining', { deviceIds: ['0', '1'] });
+    });
+
+    it('startGpuMining should pass null when no devices selected', async () => {
+      mockInvoke.mockResolvedValueOnce(undefined);
+      const { gethService } = await import('$lib/services/gethService');
+
+      await gethService.startGpuMining();
+
+      expect(mockInvoke).toHaveBeenCalledWith('start_gpu_mining', { deviceIds: null });
+    });
+
+    it('stopGpuMining should invoke command', async () => {
+      mockInvoke.mockResolvedValueOnce(undefined);
+      const { gethService } = await import('$lib/services/gethService');
+
+      await gethService.stopGpuMining();
+
+      expect(mockInvoke).toHaveBeenCalledWith('stop_gpu_mining');
+    });
+
+    it('getGpuMiningStatus should invoke command', async () => {
+      const status = {
+        running: true,
+        hashRate: 123000000,
+        activeDevices: ['0'],
+        lastError: null,
+      };
+      mockInvoke.mockResolvedValueOnce(status);
+      const { gethService } = await import('$lib/services/gethService');
+
+      const result = await gethService.getGpuMiningStatus();
+
+      expect(mockInvoke).toHaveBeenCalledWith('get_gpu_mining_status');
+      expect(result).toEqual(status);
+    });
+  });
+
   describe('setMinerAddress', () => {
     it('should invoke set_miner_address', async () => {
       mockInvoke.mockResolvedValueOnce(undefined);

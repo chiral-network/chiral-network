@@ -16,7 +16,10 @@ mod speed_tiers;
 use dht::DhtService;
 use encryption::EncryptionKeypair;
 use file_transfer::FileTransferService;
-use geth::{GethDownloader, GethProcess, GethStatus, MinedBlock, MiningStatus};
+use geth::{
+    GethDownloader, GethProcess, GethStatus, GpuDevice, GpuMiningCapabilities, GpuMiningStatus,
+    MinedBlock, MiningStatus,
+};
 use geth_bootstrap::BootstrapHealthReport;
 use rlp::RlpStream;
 use secp256k1::{Message, Secp256k1, SecretKey};
@@ -3367,13 +3370,13 @@ async fn start_mining(
     state: tauri::State<'_, AppState>,
     threads: Option<u32>,
 ) -> Result<(), String> {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     geth.start_mining(threads.unwrap_or(1)).await
 }
 
 #[tauri::command]
 async fn stop_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     geth.stop_mining().await
 }
 
@@ -3381,6 +3384,43 @@ async fn stop_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
 async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningStatus, String> {
     let mut geth = state.geth.lock().await;
     geth.get_mining_status().await
+}
+
+#[tauri::command]
+async fn get_gpu_mining_capabilities(
+    state: tauri::State<'_, AppState>,
+) -> Result<GpuMiningCapabilities, String> {
+    let mut geth = state.geth.lock().await;
+    geth.get_gpu_mining_capabilities().await
+}
+
+#[tauri::command]
+async fn list_gpu_devices(state: tauri::State<'_, AppState>) -> Result<Vec<GpuDevice>, String> {
+    let mut geth = state.geth.lock().await;
+    geth.list_gpu_devices().await
+}
+
+#[tauri::command]
+async fn start_gpu_mining(
+    state: tauri::State<'_, AppState>,
+    device_ids: Option<Vec<String>>,
+) -> Result<(), String> {
+    let mut geth = state.geth.lock().await;
+    geth.start_gpu_mining(device_ids).await
+}
+
+#[tauri::command]
+async fn stop_gpu_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut geth = state.geth.lock().await;
+    geth.stop_gpu_mining().await
+}
+
+#[tauri::command]
+async fn get_gpu_mining_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<GpuMiningStatus, String> {
+    let mut geth = state.geth.lock().await;
+    geth.get_gpu_mining_status().await
 }
 
 #[tauri::command]
@@ -4891,6 +4931,11 @@ pub fn run() {
             start_mining,
             stop_mining,
             get_mining_status,
+            get_gpu_mining_capabilities,
+            list_gpu_devices,
+            start_gpu_mining,
+            stop_gpu_mining,
+            get_gpu_mining_status,
             get_mined_blocks,
             set_miner_address,
             // Diagnostics commands
