@@ -58,6 +58,14 @@ function compareDriveItems(a: DriveItem, b: DriveItem): number {
   return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
 }
 
+function normalizePriceChi(priceChi?: string | number | null): string | null {
+  const raw = `${priceChi ?? ''}`.trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return raw;
+}
+
 /** Sync the current wallet address to the API service. */
 function syncOwner(): string {
   const account = get(walletAccount);
@@ -369,18 +377,19 @@ function createDriveStore() {
     async seedFile(
       itemId: string,
       protocol: 'WebRTC' | 'BitTorrent',
-      priceChi?: string,
+      priceChi?: string | number | null,
     ): Promise<DriveItem | null> {
       const owner = syncOwner();
       if (!owner) return null;
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const walletAddr = priceChi && priceChi !== '0' ? owner : undefined;
+        const normalizedPrice = normalizePriceChi(priceChi);
+        const walletAddr = normalizedPrice ? owner : undefined;
         const raw = await invoke('publish_drive_file', {
           owner,
           itemId,
           protocol,
-          priceChi: priceChi || null,
+          priceChi: normalizedPrice,
           walletAddress: walletAddr ?? null,
         });
         const converted = fromApi(raw as any);

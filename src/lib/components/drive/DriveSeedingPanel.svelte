@@ -8,14 +8,17 @@
   let {
     manifest,
     onAddFiles,
+    onOptionsChange,
   }: {
     manifest: DriveManifest;
     onAddFiles: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
+    onOptionsChange?: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
   } = $props();
 
   let selectedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
   let filePrice = $state('');
   let expandedFileId = $state<string | null>(null);
+  let priceDrafts = $state<Record<string, string>>({});
 
   const seedingItems = $derived(driveStore.getSeedingItems(manifest));
 
@@ -68,12 +71,63 @@
       : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
   }
 
+  function normalizePriceChi(value: string | number | null | undefined): string {
+    const raw = `${value ?? ''}`.trim();
+    if (!raw) return '';
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return '';
+    return raw;
+  }
+
+  function getCurrentItemPrice(item: DriveItem): string {
+    return normalizePriceChi(item.priceChi);
+  }
+
+  function getPriceDraft(item: DriveItem): string {
+    const existing = priceDrafts[item.id];
+    if (existing !== undefined) return existing;
+    return getCurrentItemPrice(item);
+  }
+
+  function setPriceDraft(itemId: string, value: string) {
+    priceDrafts = { ...priceDrafts, [itemId]: value };
+  }
+
+  function isPriceDirty(item: DriveItem): boolean {
+    return normalizePriceChi(getPriceDraft(item)) !== getCurrentItemPrice(item);
+  }
+
+  async function handleUpdatePrice(item: DriveItem) {
+    if (!$networkConnected) {
+      toasts.show('Please connect to the network first', 'error');
+      return;
+    }
+    const priceChi = normalizePriceChi(getPriceDraft(item));
+    const protocol = item.protocol === 'BitTorrent' ? 'BitTorrent' : 'WebRTC';
+    const updated = await driveStore.seedFile(item.id, protocol, priceChi || undefined);
+    if (!updated) {
+      toasts.show(`Failed to update price for ${item.name}`, 'error');
+      return;
+    }
+    setPriceDraft(item.id, normalizePriceChi(updated.priceChi));
+    toasts.show(
+      priceChi
+        ? `Updated "${item.name}" to ${priceChi} CHI`
+        : `Updated "${item.name}" to Free`,
+      'success',
+    );
+  }
+
+  $effect(() => {
+    onOptionsChange?.(selectedProtocol, normalizePriceChi(filePrice));
+  });
+
   function handleAddFiles() {
     if (!$networkConnected) {
       toasts.show('Please connect to the network first', 'error');
       return;
     }
-    onAddFiles(selectedProtocol, filePrice);
+    onAddFiles(selectedProtocol, normalizePriceChi(filePrice));
   }
 </script>
 
@@ -128,7 +182,7 @@
       </button>
     </div>
 
-    {#if filePrice && parseFloat(filePrice) > 0 && !$walletAccount}
+    {#if normalizePriceChi(filePrice) && !$walletAccount}
       <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
         Connect your wallet on the Account page to receive payments.
       </p>
@@ -174,6 +228,29 @@
               <div class="flex items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
                 <span>{formatFileSize(item.size)}</span>
                 <span>{formatDate(item.modifiedAt)}</span>
+              </div>
+
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <span class="text-xs text-gray-500 dark:text-gray-400">Price (CHI)</span>
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  placeholder="Free"
+                  value={getPriceDraft(item)}
+                  oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
+                  class="w-24 px-2 py-1 text-xs bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  onclick={() => handleUpdatePrice(item)}
+                  disabled={!isPriceDirty(item)}
+                  class="px-2.5 py-1 text-xs font-medium rounded transition
+                    {isPriceDirty(item)
+                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'}"
+                >
+                  Update Price
+                </button>
               </div>
 
               <!-- Merkle hash -->
