@@ -8,25 +8,42 @@ export function setRatingOwner(address: string) {
   currentOwner = address;
 }
 
-export interface Rating {
+export type TransferOutcome = 'completed' | 'failed';
+
+export interface ReputationEvent {
   id: string;
+  transferId: string;
   seederWallet: string;
-  raterWallet: string;
+  downloaderWallet: string;
   fileHash: string;
-  score: number;
-  comment?: string;
+  amountWei: string;
+  outcome: TransferOutcome;
+  txHash?: string;
+  ratingScore?: number;
+  ratingComment?: string;
   createdAt: number;
+  updatedAt: number;
 }
 
-export interface RatingResponse {
-  ratings: Rating[];
-  average: number;
-  count: number;
+export interface ReputationResponse {
+  wallet: string;
+  elo: number;
+  baseElo: number;
+  completedCount: number;
+  failedCount: number;
+  transactionCount: number;
+  ratingCount: number;
+  totalEarnedWei: string;
+  events: ReputationEvent[];
 }
 
-export interface BatchRatingEntry {
-  average: number;
-  count: number;
+export interface BatchReputationEntry {
+  elo: number;
+  completedCount: number;
+  failedCount: number;
+  transactionCount: number;
+  ratingCount: number;
+  totalEarnedWei: string;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -49,17 +66,42 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const ratingApi = {
-  /** Submit a rating for a seeder after downloading */
+  /** Record transfer outcome (completed/failed) for reputation scoring. */
+  async recordTransferOutcome(
+    transferId: string,
+    seederWallet: string,
+    fileHash: string,
+    outcome: TransferOutcome,
+    amountWei: string = '0',
+    txHash?: string,
+  ): Promise<ReputationEvent> {
+    return request<ReputationEvent>('/api/ratings/transfer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transferId,
+        seederWallet,
+        fileHash,
+        outcome,
+        amountWei,
+        txHash: txHash || null,
+      }),
+    });
+  },
+
+  /** Submit a 1-5 rating for a completed transfer event. */
   async submitRating(
+    transferId: string,
     seederWallet: string,
     fileHash: string,
     score: number,
     comment?: string,
-  ): Promise<Rating> {
-    return request<Rating>('/api/ratings', {
+  ): Promise<ReputationEvent> {
+    return request<ReputationEvent>('/api/ratings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        transferId,
         seederWallet,
         fileHash,
         score,
@@ -68,16 +110,16 @@ export const ratingApi = {
     });
   },
 
-  /** Get all ratings for a wallet address */
-  async getRatings(wallet: string): Promise<RatingResponse> {
-    return request<RatingResponse>(`/api/ratings/${encodeURIComponent(wallet)}`);
+  /** Get Elo reputation summary for a wallet. */
+  async getReputation(wallet: string): Promise<ReputationResponse> {
+    return request<ReputationResponse>(`/api/ratings/${encodeURIComponent(wallet)}`);
   },
 
-  /** Batch fetch average ratings for multiple wallets */
-  async getBatchRatings(
+  /** Batch fetch Elo reputations for multiple wallets. */
+  async getBatchReputation(
     wallets: string[],
-  ): Promise<Record<string, BatchRatingEntry>> {
-    const resp = await request<{ ratings: Record<string, BatchRatingEntry> }>(
+  ): Promise<Record<string, BatchReputationEntry>> {
+    const resp = await request<{ reputations: Record<string, BatchReputationEntry> }>(
       '/api/ratings/batch',
       {
         method: 'POST',
@@ -85,6 +127,6 @@ export const ratingApi = {
         body: JSON.stringify({ wallets }),
       },
     );
-    return resp.ratings;
+    return resp.reputations;
   },
 };

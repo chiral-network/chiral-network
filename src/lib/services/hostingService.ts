@@ -123,21 +123,21 @@ class HostingService {
       }
     }
 
-    // Batch fetch reputation scores via wallet addresses
+    // Batch fetch Elo reputation scores via wallet addresses
     const wallets = ads.map((a) => a.ad.walletAddress).filter(Boolean);
-    let ratings: Record<string, { average: number; count: number }> = {};
+    let reputations: Record<string, { elo: number }> = {};
     if (wallets.length > 0) {
       try {
-        ratings = await ratingApi.getBatchRatings(wallets);
+        reputations = await ratingApi.getBatchReputation(wallets);
       } catch {
-        // Ratings unavailable — continue with default scores
+        // Reputation service unavailable — continue with base Elo.
       }
     }
 
     return ads.map(({ entry, ad }) => {
-      const rating = ratings[ad.walletAddress];
-      // Normalize 0-5 star rating to 0-1 score; default to 0.5 if no ratings
-      const reputationScore = rating && rating.count > 0 ? rating.average / 5 : 0.5;
+      const rep = reputations[ad.walletAddress];
+      // Elo score is 0-100, base 50.
+      const reputationScore = rep?.elo ?? 50;
       const availableStorageBytes = ad.maxStorageBytes - ad.usedStorageBytes;
       const isOnline = connectedIds.has(entry.peerId);
 

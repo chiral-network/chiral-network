@@ -66,6 +66,7 @@ export interface HostingAgreement {
 /** Host entry for UI display, combining DHT data with reputation */
 export interface HostEntry {
   advertisement: HostAdvertisement;
+  /** Elo score in range 0-100 (base 50) */
   reputationScore: number;
   availableStorageBytes: number;
   isOnline: boolean;

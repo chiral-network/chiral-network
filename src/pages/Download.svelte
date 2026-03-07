@@ -27,13 +27,13 @@
     ExternalLink,
     Eye
   } from 'lucide-svelte';
-  import { Zap, Gauge, Rocket, Star } from 'lucide-svelte';
+  import { Zap, Gauge, Rocket } from 'lucide-svelte';
   import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import RateSeederModal from '$lib/components/RateSeederModal.svelte';
   import { walletService } from '$lib/services/walletService';
-  import { ratingApi, setRatingOwner, type BatchRatingEntry } from '$lib/services/ratingApiService';
+  import { ratingApi, setRatingOwner, type BatchReputationEntry } from '$lib/services/ratingApiService';
   import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
@@ -53,6 +53,7 @@
   let unlistenDownloadProgress: (() => void) | null = null;
   let unlistenPaymentProcessing: (() => void) | null = null;
   let unlistenSpeedTierPayment: (() => void) | null = null;
+  let unlistenPaymentSent: (() => void) | null = null;
 
   // Types
   type SearchMode = 'hash' | 'magnet' | 'torrent';
@@ -88,6 +89,8 @@
     startedAt: Date;
     completedAt?: Date;
     speedTier?: SpeedTier;
+    seederWallet?: string;
+    seederElo?: number;
     filePath?: string;
     balanceBefore?: string;
     balanceAfter?: string;
@@ -103,9 +106,21 @@
     status: 'completed' | 'cancelled' | 'failed';
     speedTier?: SpeedTier;
     seeders?: number;
+    seederWallet?: string;
+    seederElo?: number;
     filePath?: string;
     balanceBefore?: string;
     balanceAfter?: string;
+  }
+
+  interface TransferReputationContext {
+    transferId: string;
+    fileHash: string;
+    fileName: string;
+    seederWallet: string;
+    amountWei: string;
+    txHash?: string;
+    outcomeReported: boolean;
   }
 
   // File type detection
@@ -222,11 +237,13 @@
   let pendingDownload = $state<{ result: SearchResult; tierCost: number; seederPriceChi: number; totalCost: number } | null>(null);
 
   // Seeder reputation
-  let seederRatings = $state<Record<string, BatchRatingEntry>>({});
-  let showRatingModal = $state<{ seederWallet: string; fileHash: string; fileName: string } | null>(null);
+  let seederRatings = $state<Record<string, BatchReputationEntry>>({});
+  let showRatingModal = $state<{ transferId: string; seederWallet: string; fileHash: string; fileName: string } | null>(null);
+  let transferReputationContexts = $state<Record<string, TransferReputationContext>>({});
 
   // Seeder selection (for multi-seeder downloads)
   let selectedSeederIndex = $state<number>(0);
+  const BASE_ELO = 50;
 
   // Persistence keys
   const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
@@ -344,6 +361,8 @@
       status: download.status as 'completed' | 'cancelled' | 'failed',
       speedTier: download.speedTier,
       seeders: download.seeders,
+      seederWallet: download.seederWallet,
+      seederElo: download.seederElo,
       filePath: download.filePath,
       balanceBefore: download.balanceBefore,
       balanceAfter: download.balanceAfter,
@@ -526,18 +545,101 @@
     }
   }
 
-  // Fetch seeder reputation ratings (non-blocking)
+  function getTransferContext(requestId: string, fileHash: string): TransferReputationContext | null {
+    const byRequest = transferReputationContexts[requestId];
+    if (byRequest) return byRequest;
+    const byHash = Object.values(transferReputationContexts).find(
+      (ctx) => ctx.fileHash === fileHash && !ctx.outcomeReported
+    );
+    return byHash || null;
+  }
+
+  async function reportTransferOutcome(
+    context: TransferReputationContext,
+    outcome: 'completed' | 'failed',
+  ) {
+    if (context.outcomeReported || !context.seederWallet || !$walletAccount?.address) {
+      return;
+    }
+    try {
+      setRatingOwner($walletAccount.address);
+      await ratingApi.recordTransferOutcome(
+        context.transferId,
+        context.seederWallet,
+        context.fileHash,
+        outcome,
+        context.amountWei || '0',
+        context.txHash,
+      );
+      const updated = { ...context, outcomeReported: true };
+      const nextContexts: Record<string, TransferReputationContext> = {};
+      for (const [key, value] of Object.entries(transferReputationContexts)) {
+        nextContexts[key] = value.transferId === context.transferId ? updated : value;
+      }
+      nextContexts[context.transferId] = updated;
+      transferReputationContexts = nextContexts;
+    } catch (err) {
+      log.warn('Failed to record transfer outcome for reputation:', err);
+    }
+  }
+
+  // Fetch seeder Elo reputations (non-blocking)
   async function fetchSeederRatings(seeders: SeederInfo[]) {
     try {
       const wallets = [...new Set(
         seeders.flatMap(s => [s.peerId, s.walletAddress]).filter(Boolean)
       )];
       if (wallets.length === 0) return;
-      const ratings = await ratingApi.getBatchRatings(wallets);
+      const ratings = await ratingApi.getBatchReputation(wallets);
       seederRatings = ratings;
+
+      let changed = false;
+      downloads = downloads.map((download) => {
+        const wallet = download.seederWallet?.trim();
+        const nextElo = wallet ? ratings[wallet]?.elo : undefined;
+        if (Number.isFinite(nextElo) && download.seederElo !== nextElo) {
+          changed = true;
+          return { ...download, seederElo: nextElo };
+        }
+        return download;
+      });
+      downloadHistory = downloadHistory.map((entry) => {
+        const wallet = entry.seederWallet?.trim();
+        const nextElo = wallet ? ratings[wallet]?.elo : undefined;
+        if (Number.isFinite(nextElo) && entry.seederElo !== nextElo) {
+          changed = true;
+          return { ...entry, seederElo: nextElo };
+        }
+        return entry;
+      });
+      if (changed) {
+        saveDownloadHistory();
+      }
     } catch (err) {
-      log.warn('Failed to fetch seeder ratings:', err);
+      log.warn('Failed to fetch seeder reputations:', err);
     }
+  }
+
+  function getSeederReputation(seeder: SeederInfo): BatchReputationEntry | null {
+    const wallet = seeder.walletAddress?.trim();
+    if (wallet && seederRatings[wallet]) {
+      return seederRatings[wallet];
+    }
+    const peer = seeder.peerId?.trim();
+    if (peer && seederRatings[peer]) {
+      return seederRatings[peer];
+    }
+    return null;
+  }
+
+  function getSeederElo(seeder: SeederInfo): number {
+    const score = getSeederReputation(seeder)?.elo;
+    return Number.isFinite(score) ? score : BASE_ELO;
+  }
+
+  function getBestSeederElo(seeders: SeederInfo[]): number | null {
+    if (seeders.length === 0) return null;
+    return Math.max(...seeders.map((seeder) => getSeederElo(seeder)));
   }
 
   // Fetch wallet balance
@@ -650,6 +752,8 @@
       speed: totalCost > 0 ? 'Processing payment...' : 'Connecting...',
       eta: 'Requesting file...',
       seeders: result.seeders.length,
+      seederWallet: seederWalletAddr || selected?.walletAddress || result.walletAddress || '',
+      seederElo: selected ? getSeederElo(selected) : BASE_ELO,
       startedAt: new Date(),
       speedTier: selectedTier
     };
@@ -709,6 +813,24 @@
       downloads = downloads.map(d =>
         d.id === newDownload.id ? { ...d, id: resolvedRequestId, speed: 'Connecting...' } : d
       );
+
+      const transferId = response.requestId;
+      const context: TransferReputationContext = {
+        transferId,
+        fileHash: result.hash,
+        fileName: result.fileName,
+        seederWallet: seederWalletAddr || selected?.walletAddress || result.walletAddress || '',
+        amountWei: seederPriceWei || '0',
+        outcomeReported: false,
+      };
+      const nextContexts: Record<string, TransferReputationContext> = {
+        ...transferReputationContexts,
+        [transferId]: context,
+      };
+      if (resolvedRequestId !== transferId) {
+        nextContexts[resolvedRequestId] = context;
+      }
+      transferReputationContexts = nextContexts;
       saveDownloadHistory();
     } catch (error) {
       log.error('Download failed:', error);
@@ -794,7 +916,7 @@
         status: string;
       }>('file-download-complete', (event) => {
         log.info('Download complete:', event.payload);
-        const { fileHash, fileName, filePath, fileSize } = event.payload;
+        const { requestId, fileHash, fileName, filePath, fileSize } = event.payload;
 
         // Update the download status — only target the actively downloading entry
         downloads = downloads.map(d => {
@@ -814,13 +936,22 @@
 
         toasts.show(`Downloaded: ${fileName}`, 'success');
 
-        // Show rating modal for the seeder
-        if (searchResult && searchResult.hash === fileHash) {
-          const seederWallet = searchResult.walletAddress || searchResult.seeders[0]?.walletAddress || searchResult.seeders[0]?.peerId || '';
-          if (seederWallet) {
-            showRatingModal = { seederWallet, fileHash, fileName };
+        const context = getTransferContext(requestId, fileHash);
+        void (async () => {
+          if (context) {
+            await reportTransferOutcome(context, 'completed');
           }
-        }
+
+          // Show rating modal for this completed transfer.
+          if ($walletAccount?.address && context && context.seederWallet) {
+            showRatingModal = {
+              transferId: context.transferId,
+              seederWallet: context.seederWallet,
+              fileHash,
+              fileName,
+            };
+          }
+        })();
       });
 
       // Listen for failed downloads
@@ -830,7 +961,7 @@
         error: string;
       }>('file-download-failed', (event) => {
         log.error('Download failed:', event.payload);
-        const { fileHash, error } = event.payload;
+        const { requestId, fileHash, error } = event.payload;
 
         // Update the download status — only target the actively downloading entry
         downloads = downloads.map(d => {
@@ -843,6 +974,11 @@
           return d;
         });
         saveDownloadHistory();
+
+        const context = getTransferContext(requestId, fileHash);
+        if (context) {
+          void reportTransferOutcome(context, 'failed');
+        }
 
         toasts.show(`Download failed: ${error}`, 'error');
       });
@@ -914,6 +1050,34 @@
         });
       });
 
+      // Track paid transfer tx hash so outcome events can be chain-verified.
+      unlistenPaymentSent = await listen<{
+        requestId: string;
+        fileHash: string;
+        fileName: string;
+        txHash: string;
+        priceWei: string;
+        toWallet: string;
+      }>('chiraldrop-payment-sent', (event) => {
+        const { requestId, fileHash, fileName, txHash, priceWei, toWallet } = event.payload;
+        const current = getTransferContext(requestId, fileHash);
+        const next: TransferReputationContext = current
+          ? { ...current, txHash, amountWei: priceWei || current.amountWei || '0', seederWallet: toWallet || current.seederWallet }
+          : {
+              transferId: requestId,
+              fileHash,
+              fileName,
+              seederWallet: toWallet || '',
+              amountWei: priceWei || '0',
+              txHash,
+              outcomeReported: false,
+            };
+        transferReputationContexts = {
+          ...transferReputationContexts,
+          [requestId]: next,
+        };
+      });
+
       log.info('Download event listeners registered');
     } catch (error) {
       log.error('Failed to setup event listeners:', error);
@@ -941,6 +1105,10 @@
     if (unlistenSpeedTierPayment) {
       unlistenSpeedTierPayment();
       unlistenSpeedTierPayment = null;
+    }
+    if (unlistenPaymentSent) {
+      unlistenPaymentSent();
+      unlistenPaymentSent = null;
     }
   }
 
@@ -1186,6 +1354,14 @@
               <span class="{searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
               </span>
+              {#if searchResult.seeders.length > 0}
+                {@const bestSeederElo = getBestSeederElo(searchResult.seeders)}
+                {#if bestSeederElo !== null}
+                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                    Top Elo {bestSeederElo.toFixed(1)}
+                  </span>
+                {/if}
+              {/if}
             </div>
             <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
               {searchResult.hash}
@@ -1204,8 +1380,7 @@
             <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Select Seeder</p>
             <div class="space-y-2 max-h-48 overflow-y-auto">
               {#each searchResult.seeders as seeder, i}
-                {@const ratingKey = seeder.walletAddress || seeder.peerId}
-                {@const rating = seederRatings[ratingKey]}
+                {@const seederElo = getSeederElo(seeder)}
                 <button
                   onclick={() => selectedSeederIndex = i}
                   class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
@@ -1219,12 +1394,9 @@
                     <span class="font-mono text-xs truncate max-w-[180px]" title={seeder.peerId}>
                       {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
                     </span>
-                    {#if rating && rating.count > 0}
-                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400 flex-shrink-0">
-                        <Star class="w-3 h-3 fill-current" />
-                        {rating.average.toFixed(1)} ({rating.count})
-                      </span>
-                    {/if}
+                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 flex-shrink-0">
+                      Elo {seederElo.toFixed(1)}
+                    </span>
                   </div>
                   <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 flex-shrink-0">
                     {formatPriceWei(seeder.priceWei || '0')}
@@ -1235,18 +1407,14 @@
           </div>
         {:else if searchResult.seeders.length === 1}
           {@const seeder = searchResult.seeders[0]}
-          {@const ratingKey = seeder.walletAddress || seeder.peerId}
-          {@const rating = seederRatings[ratingKey]}
+          {@const seederElo = getSeederElo(seeder)}
           <div class="mt-3 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
             <span class="font-mono text-xs truncate" title={seeder.peerId}>
               Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
             </span>
-            {#if rating && rating.count > 0}
-              <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400">
-                <Star class="w-3 h-3 fill-current" />
-                {rating.average.toFixed(1)} ({rating.count})
-              </span>
-            {/if}
+            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+              Elo {seederElo.toFixed(1)}
+            </span>
             <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
               {formatPriceWei(seeder.priceWei || '0')}
             </span>
@@ -1450,6 +1618,11 @@
                       <span>Took {formatDuration(download.startedAt, download.completedAt)}</span>
                     {/if}
                     <span>{download.seeders} seeder{download.seeders !== 1 ? 's' : ''}</span>
+                    {#if typeof download.seederElo === 'number'}
+                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                        Elo {download.seederElo.toFixed(1)}
+                      </span>
+                    {/if}
                     <span class="text-gray-400 dark:text-gray-500">Started {formatDate(download.startedAt)}</span>
                   </div>
 
@@ -1604,6 +1777,11 @@
                     {#if entry.seeders}
                       <span>{entry.seeders} seeder{entry.seeders !== 1 ? 's' : ''}</span>
                     {/if}
+                    {#if typeof entry.seederElo === 'number'}
+                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                        Elo {entry.seederElo.toFixed(1)}
+                      </span>
+                    {/if}
                     <span>{formatDate(entry.completedAt)}</span>
                   </div>
 
@@ -1746,6 +1924,7 @@
 {/if}
 
 {#if pendingDownload}
+  {@const selectedPendingSeeder = pendingDownload.result.seeders[selectedSeederIndex] || pendingDownload.result.seeders[0]}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
@@ -1768,6 +1947,20 @@
             <p class="text-xs text-gray-400 mt-0.5">{formatFileSize(pendingDownload.result.fileSize)}</p>
           {/if}
         </div>
+
+        {#if selectedPendingSeeder}
+          <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+            <p class="text-sm text-gray-500 dark:text-gray-400">Selected Seeder</p>
+            <div class="flex items-center justify-between gap-2 mt-1 min-w-0">
+              <span class="font-mono text-xs text-gray-600 dark:text-gray-300 truncate" title={selectedPendingSeeder.peerId}>
+                {selectedPendingSeeder.peerId.slice(0, 8)}...{selectedPendingSeeder.peerId.slice(-6)}
+              </span>
+              <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                Elo {getSeederElo(selectedPendingSeeder).toFixed(1)}
+              </span>
+            </div>
+          </div>
+        {/if}
 
         <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-2">
           <p class="text-sm text-gray-500 dark:text-gray-400">Cost Breakdown</p>
@@ -1820,6 +2013,7 @@
 
 {#if showRatingModal}
   <RateSeederModal
+    transferId={showRatingModal.transferId}
     seederWallet={showRatingModal.seederWallet}
     fileHash={showRatingModal.fileHash}
     fileName={showRatingModal.fileName}
