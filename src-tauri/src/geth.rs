@@ -381,6 +381,7 @@ pub struct GethProcess {
     gpu_miner_child: Option<Child>,
     gpu_binary_path: Option<PathBuf>,
     gpu_auto_install_attempted: bool,
+    gpu_backend: Option<String>,
     gpu_active_devices: Vec<String>,
     gpu_hash_rate: u64,
     gpu_last_error: Option<String>,
@@ -404,6 +405,7 @@ impl GethProcess {
             gpu_miner_child: None,
             gpu_binary_path: Self::discover_gpu_miner_binary(),
             gpu_auto_install_attempted: false,
+            gpu_backend: None,
             gpu_active_devices: Vec::new(),
             gpu_hash_rate: 0,
             gpu_last_error: None,
@@ -792,6 +794,23 @@ impl GethProcess {
         out
     }
 
+    fn scan_gpu_devices(binary_path: &Path, backend_flag: &str) -> Result<(Vec<GpuDevice>, String), String> {
+        let output = Command::new(binary_path)
+            .arg(backend_flag)
+            .arg("--list-devices")
+            .output()
+            .map_err(|e| format!("Failed to query GPU devices ({}): {}", backend_flag, e))?;
+
+        let mut text = String::new();
+        text.push_str(&String::from_utf8_lossy(&output.stdout));
+        if !output.stderr.is_empty() {
+            text.push('\n');
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+        }
+        let devices = Self::parse_gpu_devices_from_text(&text);
+        Ok((devices, text))
+    }
+
     fn parse_hash_rate_from_line(line: &str) -> Option<u64> {
         let lower = line.to_ascii_lowercase();
         let units = [
@@ -860,6 +879,7 @@ impl GethProcess {
             let _ = child.kill();
             let _ = child.wait();
         }
+        self.gpu_backend = None;
         self.gpu_hash_rate = 0;
         self.gpu_active_devices.clear();
         Ok(())
@@ -1321,32 +1341,38 @@ impl GethProcess {
             });
         };
 
-        let output = match Command::new(&binary_path).arg("--list-devices").output() {
-            Ok(out) => out,
-            Err(err) => {
-                self.gpu_last_error =
-                    Some(format!("GPU miner exists but failed to execute: {}", err));
-                return Ok(GpuMiningCapabilities {
-                    supported: false,
-                    binary_path: Some(binary_path.to_string_lossy().to_string()),
-                    devices: Vec::new(),
-                    running: self.gpu_miner_child.is_some(),
-                    active_devices: self.gpu_active_devices.clone(),
-                    last_error: self.gpu_last_error.clone(),
-                });
-            }
-        };
+        let mut devices: Vec<GpuDevice> = Vec::new();
+        let mut backend: Option<String> = None;
+        let mut scan_messages: Vec<String> = Vec::new();
 
-        let mut text = String::new();
-        text.push_str(&String::from_utf8_lossy(&output.stdout));
-        if !output.stderr.is_empty() {
-            text.push('\n');
-            text.push_str(&String::from_utf8_lossy(&output.stderr));
+        // Try CUDA backend first, then OpenCL.
+        for (backend_name, flag) in [("cuda", "-U"), ("opencl", "-G")] {
+            match Self::scan_gpu_devices(&binary_path, flag) {
+                Ok((found, raw)) => {
+                    if !found.is_empty() {
+                        devices = found;
+                        backend = Some(backend_name.to_string());
+                        break;
+                    }
+                    let raw_excerpt = raw.lines().take(6).collect::<Vec<_>>().join(" | ");
+                    scan_messages.push(format!("{}: no devices ({})", backend_name, raw_excerpt));
+                }
+                Err(err) => {
+                    scan_messages.push(format!("{} scan failed: {}", backend_name, err));
+                }
+            }
         }
-        let devices = Self::parse_gpu_devices_from_text(&text);
+
+        self.gpu_backend = backend.clone();
+        if backend.is_none() {
+            self.gpu_last_error = Some(format!(
+                "GPU miner could not find devices. {}",
+                scan_messages.join(" ; ")
+            ));
+        }
 
         Ok(GpuMiningCapabilities {
-            supported: true,
+            supported: backend.is_some(),
             binary_path: Some(binary_path.to_string_lossy().to_string()),
             devices,
             running: self.gpu_miner_child.is_some(),
@@ -1390,6 +1416,19 @@ impl GethProcess {
                     .to_string()
             })?;
 
+        if self.gpu_backend.is_none() {
+            let caps = self.get_gpu_mining_capabilities().await?;
+            if !caps.supported {
+                return Err(caps
+                    .last_error
+                    .unwrap_or_else(|| "GPU miner could not detect any compatible devices".to_string()));
+            }
+        }
+        let backend = self
+            .gpu_backend
+            .clone()
+            .unwrap_or_else(|| "opencl".to_string());
+
         let selected = device_ids.unwrap_or_default();
         let log_path = self.gpu_log_path();
         if let Some(parent) = log_path.parent() {
@@ -1408,6 +1447,11 @@ impl GethProcess {
             .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
 
         let mut cmd = Command::new(&binary);
+        if backend == "cuda" {
+            cmd.arg("-U");
+        } else {
+            cmd.arg("-G");
+        }
         cmd.arg("-P")
             .arg("http://127.0.0.1:8545")
             .arg("--farm-recheck")
@@ -1415,7 +1459,11 @@ impl GethProcess {
 
         if !selected.is_empty() {
             let joined = selected.join(",");
-            cmd.arg("--opencl-devices").arg(&joined);
+            if backend == "cuda" {
+                cmd.arg("--cuda-devices").arg(&joined);
+            } else {
+                cmd.arg("--opencl-devices").arg(&joined);
+            }
         }
 
         cmd.stdout(Stdio::from(log_clone))
