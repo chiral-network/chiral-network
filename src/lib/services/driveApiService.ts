@@ -15,6 +15,8 @@ function getCrudBase(): string {
 
 /** Current owner wallet address — set via setOwner() */
 let currentOwner = '';
+const REQUEST_TIMEOUT_MS = 8_000;
+const inflightGetRequests = new Map<string, Promise<unknown>>();
 
 /** Set the owner wallet address for all Drive API requests */
 export function setDriveOwner(address: string) {
@@ -91,22 +93,64 @@ function convertItem(raw: any): DriveItem {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getCrudBase()}${path}`, {
-    ...init,
-    headers: {
-      ...(init?.headers || {}),
-      ...(currentOwner ? { 'X-Owner': currentOwner } : {}),
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
+  const method = (init?.method || 'GET').toUpperCase();
+  const bodyKey = typeof init?.body === 'string' ? init.body : '';
+  const requestKey = `${method}:${path}:${bodyKey}`;
+
+  if (method === 'GET') {
+    const pending = inflightGetRequests.get(requestKey);
+    if (pending) {
+      return pending as Promise<T>;
+    }
   }
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return res.json();
+
+  const controller = new AbortController();
+  if (init?.signal) {
+    if (init.signal.aborted) {
+      controller.abort();
+    } else {
+      init.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
   }
-  return (await res.text()) as unknown as T;
+
+  const run = async (): Promise<T> => {
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${getCrudBase()}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          ...(init?.headers || {}),
+          ...(currentOwner ? { 'X-Owner': currentOwner } : {}),
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        return res.json();
+      }
+      return (await res.text()) as unknown as T;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw new Error(`Drive request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      if (method === 'GET') {
+        inflightGetRequests.delete(requestKey);
+      }
+    }
+  };
+
+  const promise = run();
+  if (method === 'GET') {
+    inflightGetRequests.set(requestKey, promise as Promise<unknown>);
+  }
+  return promise;
 }
 
 export const driveApi = {

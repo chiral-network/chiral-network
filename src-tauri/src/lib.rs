@@ -1303,11 +1303,17 @@ async fn start_download(
             }),
         );
 
-        // Look up seeder multiaddresses from DHT metadata so we can dial peers directly
+        // Look up seeder multiaddresses from DHT metadata so we can dial peers directly.
+        // Bound this lookup to keep download startup snappy even when DHT lookups are slow.
         let seeder_addrs: std::collections::HashMap<String, Vec<String>> = {
             let dht_key = format!("chiral_file_{}", file_hash);
-            match dht.get_dht_value(dht_key).await {
-                Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json)
+            match tokio::time::timeout(
+                tokio::time::Duration::from_millis(900),
+                dht.get_dht_value(dht_key),
+            )
+            .await
+            {
+                Ok(Ok(Some(json))) => serde_json::from_str::<FileMetadata>(&json)
                     .map(|meta| {
                         meta.seeders
                             .into_iter()
@@ -1319,50 +1325,25 @@ async fn start_download(
             }
         };
 
-        // Check which seeders are actually reachable before attempting download
-        let mut reachable_seeders = Vec::new();
-        let mut offline_seeders = Vec::new();
-
-        for seeder in &seeders {
-            match dht.is_peer_connected(seeder).await {
-                Ok(true) => {
-                    println!("✅ Seeder {} is connected", seeder);
-                    reachable_seeders.push(seeder.clone());
-                }
-                Ok(false) => {
-                    println!("⚠️ Seeder {} is not currently connected — skipping", seeder);
-                    offline_seeders.push(seeder.clone());
-                }
-                Err(e) => {
-                    println!(
-                        "❌ Failed to check seeder {} connectivity: {} — skipping",
-                        seeder, e
-                    );
-                    offline_seeders.push(seeder.clone());
-                }
-            }
-        }
-
-        let had_offline = !offline_seeders.is_empty();
-        if reachable_seeders.is_empty() {
-            // No connected seeders — try dialing offline seeders as last resort
-            println!(
-                "⚠️ No connected seeders, attempting to dial {} offline seeder(s)",
-                offline_seeders.len()
-            );
-            reachable_seeders = offline_seeders;
-        }
+        // Start directly against all unique candidate seeders. Connectivity checks are avoided
+        // here because they add latency and request_file() already handles dial+fallback logic.
+        let mut seen_seeders = std::collections::HashSet::new();
+        let candidate_seeders: Vec<String> = seeders
+            .iter()
+            .filter(|s| seen_seeders.insert((*s).clone()))
+            .cloned()
+            .collect();
 
         // Start requests against all candidate seeders. The DHT layer will
         // keep trying alternatives and only fail when all attempts are exhausted.
         let mut last_error = String::new();
         let mut request_sent = false;
 
-        for (i, seeder) in reachable_seeders.iter().enumerate() {
+        for (i, seeder) in candidate_seeders.iter().enumerate() {
             println!(
                 "Trying seeder {}/{}: {} for file {}",
                 i + 1,
-                reachable_seeders.len(),
+                candidate_seeders.len(),
                 seeder,
                 file_hash
             );
@@ -1394,8 +1375,11 @@ async fn start_download(
                 let mut tiers = state.download_tiers.lock().await;
                 tiers.remove(&request_id);
             }
-            let error_msg = if had_offline {
-                format!("All {} seeder(s) are offline or unreachable. The file owner may have disconnected.", seeders.len())
+            let error_msg = if last_error.is_empty() {
+                format!(
+                    "No seeder could be contacted for this file ({} candidate(s)).",
+                    candidate_seeders.len()
+                )
             } else {
                 format!("No seeder could provide the file: {}", last_error)
             };
