@@ -8,6 +8,7 @@
 //! - Bootstrap node health checking (via geth_bootstrap module)
 
 use crate::geth_bootstrap;
+use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -191,13 +192,16 @@ impl GethDownloader {
     }
 
     pub fn geth_path(&self) -> PathBuf {
-        self.base_dir
-            .join("bin")
+        self.bin_dir()
             .join(if cfg!(target_os = "windows") {
                 "geth.exe"
             } else {
                 "geth"
             })
+    }
+
+    pub fn bin_dir(&self) -> PathBuf {
+        self.base_dir.join("bin")
     }
 
     pub fn is_geth_installed(&self) -> bool {
@@ -376,6 +380,7 @@ pub struct GethProcess {
     downloader: GethDownloader,
     gpu_miner_child: Option<Child>,
     gpu_binary_path: Option<PathBuf>,
+    gpu_auto_install_attempted: bool,
     gpu_active_devices: Vec<String>,
     gpu_hash_rate: u64,
     gpu_last_error: Option<String>,
@@ -398,6 +403,7 @@ impl GethProcess {
             downloader: GethDownloader::new(),
             gpu_miner_child: None,
             gpu_binary_path: Self::discover_gpu_miner_binary(),
+            gpu_auto_install_attempted: false,
             gpu_active_devices: Vec::new(),
             gpu_hash_rate: 0,
             gpu_last_error: None,
@@ -543,6 +549,167 @@ impl GethProcess {
 
     fn gpu_log_path(&self) -> PathBuf {
         self.data_dir.join("gpu-miner.log")
+    }
+
+    fn gpu_binary_name() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "ethminer.exe"
+        } else {
+            "ethminer"
+        }
+    }
+
+    fn default_gpu_binary_path(&self) -> PathBuf {
+        self.downloader.bin_dir().join(Self::gpu_binary_name())
+    }
+
+    fn gpu_download_url() -> Result<&'static str, String> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("windows", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda10.0-windows-amd64.zip"),
+            ("linux", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-linux-x86_64.tar.gz"),
+            ("macos", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-darwin-x86_64.tar.gz"),
+            _ => Err(format!(
+                "GPU miner auto-install is not supported on platform {} {}",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )),
+        }
+    }
+
+    fn extract_gpu_miner_zip(data: &[u8], output_dir: &Path) -> Result<PathBuf, String> {
+        let reader = Cursor::new(data);
+        let mut archive =
+            zip::ZipArchive::new(reader).map_err(|e| format!("Failed to read zip archive: {}", e))?;
+        let binary_name = Self::gpu_binary_name();
+
+        for i in 0..archive.len() {
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| format!("Failed to read zip entry: {}", e))?;
+            let entry_name = Path::new(file.name())
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if entry_name != binary_name {
+                continue;
+            }
+
+            let out_path = output_dir.join(binary_name);
+            let mut outfile = fs::File::create(&out_path)
+                .map_err(|e| format!("Failed to create GPU miner file: {}", e))?;
+            std::io::copy(&mut file, &mut outfile)
+                .map_err(|e| format!("Failed to write GPU miner file: {}", e))?;
+            return Ok(out_path);
+        }
+
+        Err("Could not find GPU miner binary in zip archive".to_string())
+    }
+
+    fn extract_gpu_miner_targz(data: &[u8], output_dir: &Path) -> Result<PathBuf, String> {
+        let decoder = GzDecoder::new(Cursor::new(data));
+        let mut archive = tar::Archive::new(decoder);
+        let binary_name = Self::gpu_binary_name();
+
+        let entries = archive
+            .entries()
+            .map_err(|e| format!("Failed to read tar archive entries: {}", e))?;
+        for entry in entries {
+            let mut entry = entry.map_err(|e| format!("Failed to read tar entry: {}", e))?;
+            let entry_path = entry
+                .path()
+                .map_err(|e| format!("Failed to read tar entry path: {}", e))?;
+            let file_name = entry_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if file_name != binary_name {
+                continue;
+            }
+
+            let out_path = output_dir.join(binary_name);
+            let mut outfile = fs::File::create(&out_path)
+                .map_err(|e| format!("Failed to create GPU miner file: {}", e))?;
+            std::io::copy(&mut entry, &mut outfile)
+                .map_err(|e| format!("Failed to write GPU miner file: {}", e))?;
+            return Ok(out_path);
+        }
+
+        Err("Could not find GPU miner binary in tar.gz archive".to_string())
+    }
+
+    async fn ensure_gpu_miner_available(&mut self) -> Result<PathBuf, String> {
+        if let Some(found) = Self::discover_gpu_miner_binary() {
+            self.gpu_binary_path = Some(found.clone());
+            self.gpu_last_error = None;
+            return Ok(found);
+        }
+
+        if self.gpu_auto_install_attempted {
+            return Err(self.gpu_last_error.clone().unwrap_or_else(|| {
+                "GPU miner auto-install already attempted but binary is still unavailable".to_string()
+            }));
+        }
+        self.gpu_auto_install_attempted = true;
+
+        let url = Self::gpu_download_url()?;
+        let bin_dir = self.downloader.bin_dir();
+        fs::create_dir_all(&bin_dir)
+            .map_err(|e| format!("Failed to create GPU miner install directory: {}", e))?;
+
+        println!("⛏️  GPU miner not found; auto-downloading from {}", url);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(300))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download GPU miner: {}", e))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to download GPU miner archive: HTTP {}",
+                response.status()
+            ));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed reading GPU miner download: {}", e))?;
+        let installed_path = if url.ends_with(".zip") {
+            Self::extract_gpu_miner_zip(&bytes, &bin_dir)?
+        } else if url.ends_with(".tar.gz") {
+            Self::extract_gpu_miner_targz(&bytes, &bin_dir)?
+        } else {
+            return Err("Unsupported GPU miner archive format".to_string());
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&installed_path)
+                .map_err(|e| format!("Failed to read GPU miner metadata: {}", e))?
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&installed_path, perms)
+                .map_err(|e| format!("Failed to set GPU miner permissions: {}", e))?;
+        }
+
+        let found = Self::discover_gpu_miner_binary().or_else(|| {
+            if self.default_gpu_binary_path().exists() {
+                Some(self.default_gpu_binary_path())
+            } else {
+                None
+            }
+        });
+        let Some(path) = found else {
+            return Err("GPU miner download completed but executable could not be located".to_string());
+        };
+        self.gpu_binary_path = Some(path.clone());
+        self.gpu_last_error = None;
+        println!("⛏️  GPU miner installed at {}", path.display());
+        Ok(path)
     }
 
     fn discover_gpu_miner_binary() -> Option<PathBuf> {
@@ -1133,7 +1300,14 @@ impl GethProcess {
         self.refresh_gpu_runtime();
 
         if self.gpu_binary_path.is_none() {
-            self.gpu_binary_path = Self::discover_gpu_miner_binary();
+            match self.ensure_gpu_miner_available().await {
+                Ok(path) => {
+                    self.gpu_binary_path = Some(path);
+                }
+                Err(err) => {
+                    self.gpu_last_error = Some(err);
+                }
+            }
         }
         let binary = self.gpu_binary_path.clone();
         let Some(binary_path) = binary else {
@@ -1147,10 +1321,21 @@ impl GethProcess {
             });
         };
 
-        let output = Command::new(&binary_path)
-            .arg("--list-devices")
-            .output()
-            .map_err(|e| format!("Failed to query GPU devices: {}", e))?;
+        let output = match Command::new(&binary_path).arg("--list-devices").output() {
+            Ok(out) => out,
+            Err(err) => {
+                self.gpu_last_error =
+                    Some(format!("GPU miner exists but failed to execute: {}", err));
+                return Ok(GpuMiningCapabilities {
+                    supported: false,
+                    binary_path: Some(binary_path.to_string_lossy().to_string()),
+                    devices: Vec::new(),
+                    running: self.gpu_miner_child.is_some(),
+                    active_devices: self.gpu_active_devices.clone(),
+                    last_error: self.gpu_last_error.clone(),
+                });
+            }
+        };
 
         let mut text = String::new();
         text.push_str(&String::from_utf8_lossy(&output.stdout));
@@ -1191,13 +1376,17 @@ impl GethProcess {
         let _ = self.stop_mining().await;
 
         if self.gpu_binary_path.is_none() {
-            self.gpu_binary_path = Self::discover_gpu_miner_binary();
+            let binary = self
+                .ensure_gpu_miner_available()
+                .await
+                .map_err(|e| format!("GPU miner unavailable: {}", e))?;
+            self.gpu_binary_path = Some(binary);
         }
         let binary = self
             .gpu_binary_path
             .clone()
             .ok_or_else(|| {
-                "No GPU miner binary found. Install ethminer (or set CHIRAL_GPU_MINER_PATH) and retry."
+                "No GPU miner binary found after auto-install. Set CHIRAL_GPU_MINER_PATH and retry."
                     .to_string()
             })?;
 
