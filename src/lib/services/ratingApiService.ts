@@ -46,6 +46,37 @@ export interface BatchReputationEntry {
   totalEarnedWei: string;
 }
 
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function asString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function normalizeEvent(event: any): ReputationEvent {
+  return {
+    id: asString(event?.id),
+    transferId: asString(event?.transferId ?? event?.transfer_id),
+    seederWallet: asString(event?.seederWallet ?? event?.seeder_wallet),
+    downloaderWallet: asString(event?.downloaderWallet ?? event?.downloader_wallet),
+    fileHash: asString(event?.fileHash ?? event?.file_hash),
+    amountWei: asString(event?.amountWei ?? event?.amount_wei, '0'),
+    outcome: event?.outcome === 'failed' ? 'failed' : 'completed',
+    txHash: typeof (event?.txHash ?? event?.tx_hash) === 'string'
+      ? (event?.txHash ?? event?.tx_hash)
+      : undefined,
+    ratingScore: typeof event?.ratingScore === 'number'
+      ? event.ratingScore
+      : (typeof event?.rating_score === 'number' ? event.rating_score : undefined),
+    ratingComment: typeof (event?.ratingComment ?? event?.rating_comment) === 'string'
+      ? (event?.ratingComment ?? event?.rating_comment)
+      : undefined,
+    createdAt: asNumber(event?.createdAt ?? event?.created_at, 0),
+    updatedAt: asNumber(event?.updatedAt ?? event?.updated_at, 0),
+  };
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${RELAY_BASE}${path}`, {
     ...init,
@@ -112,7 +143,19 @@ export const ratingApi = {
 
   /** Get Elo reputation summary for a wallet. */
   async getReputation(wallet: string): Promise<ReputationResponse> {
-    return request<ReputationResponse>(`/api/ratings/${encodeURIComponent(wallet)}`);
+    const raw = await request<any>(`/api/ratings/${encodeURIComponent(wallet)}`);
+    const rawEvents = Array.isArray(raw?.events) ? raw.events : [];
+    return {
+      wallet: asString(raw?.wallet, wallet),
+      elo: asNumber(raw?.elo, 50),
+      baseElo: asNumber(raw?.baseElo ?? raw?.base_elo, 50),
+      completedCount: asNumber(raw?.completedCount ?? raw?.completed_count, 0),
+      failedCount: asNumber(raw?.failedCount ?? raw?.failed_count, 0),
+      transactionCount: asNumber(raw?.transactionCount ?? raw?.transaction_count, 0),
+      ratingCount: asNumber(raw?.ratingCount ?? raw?.rating_count, 0),
+      totalEarnedWei: asString(raw?.totalEarnedWei ?? raw?.total_earned_wei, '0'),
+      events: rawEvents.map(normalizeEvent),
+    };
   },
 
   /** Batch fetch Elo reputations for multiple wallets. */

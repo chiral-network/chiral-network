@@ -78,8 +78,11 @@
       ratingCount = resp.ratingCount;
       totalEarnedWei = resp.totalEarnedWei;
       currentPage = 0;
-    } catch (err: any) {
-      error = `Failed to load reputation: ${err.message}`;
+    } catch (err: unknown) {
+      const message = err instanceof Error
+        ? err.message
+        : (typeof err === 'string' ? err : 'Unknown error');
+      error = `Failed to load reputation: ${message}`;
     } finally {
       loading = false;
     }
