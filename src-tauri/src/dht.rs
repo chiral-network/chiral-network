@@ -1,22 +1,21 @@
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::{Mutex, mpsc};
+use crate::event_sink::EventSink;
 use crate::speed_tiers::SpeedTier;
-use libp2p::{
-    kad, mdns, noise, ping, relay, dcutr,
-    swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Swarm, PeerId, StreamProtocol, Multiaddr,
-    identify, request_response,
-};
 use futures::StreamExt;
-use std::error::Error;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
-use std::str::FromStr;
+use libp2p::{
+    dcutr, identify, kad, mdns, noise, ping, relay, request_response,
+    swarm::{NetworkBehaviour, SwarmEvent},
+    tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use sha2::{Sha256, Digest};
+use std::error::Error;
 use std::io::{Read as _, Seek as _, SeekFrom};
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, Mutex};
 
 /// Custom CBOR codec with appropriate size limits for chunked file transfers.
 /// Individual chunks are 256 KB, but FileInfo responses can be large for big files
@@ -141,10 +140,13 @@ mod cbor_codec {
 pub fn get_bootstrap_nodes() -> Vec<String> {
     vec![
         // Primary bootstrap node with relay server (IPv4 + IPv6)
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
-        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
+            .to_string(),
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
+            .to_string(),
         // Additional bootstrap node
-        "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE".to_string(),
+        "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
+            .to_string(),
     ]
 }
 
@@ -154,8 +156,10 @@ pub fn get_bootstrap_nodes() -> Vec<String> {
 /// SAME handler if libp2p reuses connections.
 pub fn get_relay_nodes() -> Vec<String> {
     vec![
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
-        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1".to_string(),
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
+            .to_string(),
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
+            .to_string(),
     ]
 }
 
@@ -451,9 +455,10 @@ type ActiveDownloadsMap = HashMap<String, ActiveChunkedDownload>;
 
 /// Compute SHA-256 hashes for each chunk of a file
 fn compute_chunk_hashes(file_path: &str) -> Result<Vec<String>, String> {
-    let mut file = std::fs::File::open(file_path)
-        .map_err(|e| format!("Failed to open file: {}", e))?;
-    let metadata = file.metadata()
+    let mut file =
+        std::fs::File::open(file_path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let metadata = file
+        .metadata()
         .map_err(|e| format!("Failed to get file metadata: {}", e))?;
     let file_size = metadata.len();
     let total_chunks = ((file_size as usize + CHUNK_SIZE - 1) / CHUNK_SIZE) as u32;
@@ -461,7 +466,8 @@ fn compute_chunk_hashes(file_path: &str) -> Result<Vec<String>, String> {
 
     let mut buf = vec![0u8; CHUNK_SIZE];
     for _ in 0..total_chunks {
-        let bytes_read = file.read(&mut buf)
+        let bytes_read = file
+            .read(&mut buf)
             .map_err(|e| format!("Failed to read chunk: {}", e))?;
         let mut hasher = Sha256::new();
         hasher.update(&buf[..bytes_read]);
@@ -506,7 +512,15 @@ impl DhtService {
     }
 
     /// Register a file for sharing (seeding)
-    pub async fn register_shared_file(&self, file_hash: String, file_path: String, file_name: String, file_size: u64, price_wei: u128, wallet_address: String) {
+    pub async fn register_shared_file(
+        &self,
+        file_hash: String,
+        file_path: String,
+        file_name: String,
+        file_size: u64,
+        price_wei: u128,
+        wallet_address: String,
+    ) {
         let mut shared = self.shared_files.lock().await;
         println!("=== REGISTERING SHARED FILE ===");
         println!("  Name: {}", file_name);
@@ -519,14 +533,17 @@ impl DhtService {
         } else {
             println!("  Price: Free");
         }
-        shared.insert(file_hash.clone(), SharedFileInfo {
-            file_path,
-            file_name,
-            file_size,
-            chunk_hashes: None,
-            price_wei,
-            wallet_address,
-        });
+        shared.insert(
+            file_hash.clone(),
+            SharedFileInfo {
+                file_path,
+                file_name,
+                file_size,
+                chunk_hashes: None,
+                price_wei,
+                wallet_address,
+            },
+        );
         println!("  Total shared files now: {}", shared.len());
         println!("================================");
     }
@@ -535,7 +552,10 @@ impl DhtService {
     pub async fn unregister_shared_file(&self, file_hash: &str) {
         let mut shared = self.shared_files.lock().await;
         if let Some(info) = shared.remove(file_hash) {
-            println!("Unregistered shared file: {} (hash: {})", info.file_name, file_hash);
+            println!(
+                "Unregistered shared file: {} (hash: {})",
+                info.file_name, file_hash
+            );
         }
     }
 
@@ -545,27 +565,35 @@ impl DhtService {
     }
 
     pub async fn start(&self, app: tauri::AppHandle) -> Result<String, String> {
+        self.start_with_sink(EventSink::tauri(app)).await
+    }
+
+    pub async fn start_headless(&self) -> Result<String, String> {
+        self.start_with_sink(EventSink::noop()).await
+    }
+
+    async fn start_with_sink(&self, events: EventSink) -> Result<String, String> {
         let mut running = self.is_running.lock().await;
         if *running {
             return Err("DHT already running".to_string());
         }
-        
+
         // Create libp2p swarm
         let (swarm, peer_id) = create_swarm().await.map_err(|e| e.to_string())?;
-        
+
         // Store peer ID
         let mut local_id = self.local_peer_id.lock().await;
         *local_id = Some(peer_id.clone());
         drop(local_id);
-        
+
         *running = true;
-        
+
         // Create command channel
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let mut cmd_sender = self.command_sender.lock().await;
         *cmd_sender = Some(cmd_tx);
         drop(cmd_sender);
-        
+
         // Spawn event loop
         let peers_clone = self.peers.clone();
         let is_running_clone = self.is_running.clone();
@@ -575,21 +603,35 @@ impl DhtService {
         let download_dir_clone = self.download_directory.clone();
         let active_downloads_clone = self.active_downloads.clone();
         let download_credentials_clone = self.download_credentials.clone();
+        let events_clone = events.clone();
 
         tokio::spawn(async move {
-            event_loop(swarm, peers_clone, is_running_clone, app, cmd_rx, file_transfer_clone, shared_files_clone, download_tiers_clone, download_dir_clone, active_downloads_clone, download_credentials_clone).await;
+            event_loop(
+                swarm,
+                peers_clone,
+                is_running_clone,
+                events_clone,
+                cmd_rx,
+                file_transfer_clone,
+                shared_files_clone,
+                download_tiers_clone,
+                download_dir_clone,
+                active_downloads_clone,
+                download_credentials_clone,
+            )
+            .await;
         });
-        
+
         Ok(format!("DHT started with peer ID: {}", peer_id))
     }
 
     pub async fn stop(&self) -> Result<(), String> {
         let mut running = self.is_running.lock().await;
         *running = false;
-        
+
         let mut peers = self.peers.lock().await;
         peers.clear();
-        
+
         Ok(())
     }
 
@@ -608,11 +650,11 @@ impl DhtService {
             total_peers: peers.len(),
         }
     }
-    
+
     pub async fn get_peer_id(&self) -> Option<String> {
         self.local_peer_id.lock().await.clone()
     }
-    
+
     pub async fn get_health(&self) -> DhtHealthInfo {
         let running = *self.is_running.lock().await;
         if !running {
@@ -622,10 +664,13 @@ impl DhtService {
                 listening_addresses: vec![],
                 connected_peer_count: 0,
                 kademlia_peers: 0,
-                bootstrap_nodes: get_bootstrap_nodes().iter().map(|addr| BootstrapNodeStatus {
-                    address: addr.clone(),
-                    reachable: false,
-                }).collect(),
+                bootstrap_nodes: get_bootstrap_nodes()
+                    .iter()
+                    .map(|addr| BootstrapNodeStatus {
+                        address: addr.clone(),
+                        reachable: false,
+                    })
+                    .collect(),
                 shared_files: 0,
                 protocols: vec![],
             };
@@ -634,7 +679,12 @@ impl DhtService {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            if tx.send(SwarmCommand::HealthCheck { response_tx: resp_tx }).is_ok() {
+            if tx
+                .send(SwarmCommand::HealthCheck {
+                    response_tx: resp_tx,
+                })
+                .is_ok()
+            {
                 if let Ok(mut info) = resp_rx.await {
                     info.peer_id = self.local_peer_id.lock().await.clone();
                     info.shared_files = self.shared_files.lock().await.len();
@@ -658,12 +708,30 @@ impl DhtService {
         }
     }
 
-    pub async fn ping_peer(&self, peer_id: String, app: tauri::AppHandle) -> Result<String, String> {
+    pub async fn ping_peer(
+        &self,
+        peer_id: String,
+        app: tauri::AppHandle,
+    ) -> Result<String, String> {
+        self.ping_peer_with_sink(peer_id, EventSink::tauri(app))
+            .await
+    }
+
+    pub async fn ping_peer_headless(&self, peer_id: String) -> Result<String, String> {
+        self.ping_peer_with_sink(peer_id, EventSink::noop()).await
+    }
+
+    async fn ping_peer_with_sink(
+        &self,
+        peer_id: String,
+        events: EventSink,
+    ) -> Result<String, String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
-            tx.send(SwarmCommand::SendPing(peer_id_parsed)).map_err(|e| e.to_string())?;
-            let _ = app.emit("ping-sent", peer_id.clone());
+            tx.send(SwarmCommand::SendPing(peer_id_parsed))
+                .map_err(|e| e.to_string())?;
+            events.emit("ping-sent", peer_id.clone());
             Ok(format!("Ping sent to {}", peer_id))
         } else {
             Err("DHT not running".to_string())
@@ -693,7 +761,8 @@ impl DhtService {
                 sender_wallet,
                 file_hash,
                 file_size,
-            }).map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
             Ok(())
         } else {
             Err("DHT not running".to_string())
@@ -709,7 +778,8 @@ impl DhtService {
                 key,
                 value,
                 response_tx,
-            }).map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
             response_rx.await.map_err(|e| e.to_string())?
         } else {
             Err("DHT not running".to_string())
@@ -721,10 +791,8 @@ impl DhtService {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            tx.send(SwarmCommand::GetDhtValue {
-                key,
-                response_tx,
-            }).map_err(|e| e.to_string())?;
+            tx.send(SwarmCommand::GetDhtValue { key, response_tx })
+                .map_err(|e| e.to_string())?;
             response_rx.await.map_err(|e| e.to_string())?
         } else {
             Err("DHT not running".to_string())
@@ -740,7 +808,8 @@ impl DhtService {
             tx.send(SwarmCommand::CheckPeerConnected {
                 peer_id: peer_id_parsed,
                 response_tx,
-            }).map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
             response_rx.await.map_err(|e| e.to_string())
         } else {
             Err("DHT not running".to_string())
@@ -757,7 +826,8 @@ impl DhtService {
                 peer_id: peer_id_parsed,
                 payload,
                 response_tx,
-            }).map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
             response_rx.await.map_err(|e| e.to_string())?
         } else {
             Err("DHT not running".to_string())
@@ -766,7 +836,13 @@ impl DhtService {
 
     /// Request a file from a remote peer by hash (initiates chunked transfer).
     /// `multiaddrs` are known addresses for the peer (from DHT SeederInfo) used for direct dialing.
-    pub async fn request_file(&self, peer_id: String, file_hash: String, request_id: String, multiaddrs: Vec<String>) -> Result<(), String> {
+    pub async fn request_file(
+        &self,
+        peer_id: String,
+        file_hash: String,
+        request_id: String,
+        multiaddrs: Vec<String>,
+    ) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let peer_id_parsed = PeerId::from_str(&peer_id).map_err(|e| e.to_string())?;
@@ -775,7 +851,8 @@ impl DhtService {
                 request_id,
                 file_hash,
                 multiaddrs,
-            }).map_err(|e| e.to_string())?;
+            })
+            .map_err(|e| e.to_string())?;
             Ok(())
         } else {
             Err("DHT not running".to_string())
@@ -788,7 +865,10 @@ impl DhtService {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
             let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-            if tx.send(SwarmCommand::GetListeningAddresses { response_tx }).is_ok() {
+            if tx
+                .send(SwarmCommand::GetListeningAddresses { response_tx })
+                .is_ok()
+            {
                 response_rx.await.unwrap_or_default()
             } else {
                 vec![]
@@ -833,7 +913,8 @@ async fn verify_payment_on_chain(
     }
 
     // Check recipient
-    let to = tx.get("to")
+    let to = tx
+        .get("to")
         .and_then(|v| v.as_str())
         .ok_or("Transaction has no recipient")?;
 
@@ -842,12 +923,13 @@ async fn verify_payment_on_chain(
     }
 
     // Check value
-    let value_hex = tx.get("value")
+    let value_hex = tx
+        .get("value")
         .and_then(|v| v.as_str())
         .ok_or("Transaction has no value")?;
     let value_hex = value_hex.strip_prefix("0x").unwrap_or(value_hex);
-    let value = u128::from_str_radix(value_hex, 16)
-        .map_err(|e| format!("Failed to parse value: {}", e))?;
+    let value =
+        u128::from_str_radix(value_hex, 16).map_err(|e| format!("Failed to parse value: {}", e))?;
 
     if value < expected_min_wei {
         return Ok(false);
@@ -876,14 +958,21 @@ async fn verify_payment_on_chain(
 
         let receipt = receipt_json.get("result");
         if receipt.is_some() && !receipt.unwrap().is_null() {
-            let status = receipt.unwrap().get("status")
+            let status = receipt
+                .unwrap()
+                .get("status")
                 .and_then(|v| v.as_str())
                 .unwrap_or("0x0");
             return Ok(status == "0x1");
         }
 
         if attempt < max_retries - 1 {
-            println!("⏳ Payment tx {} not confirmed yet, retrying ({}/{})", tx_hash, attempt + 1, max_retries);
+            println!(
+                "⏳ Payment tx {} not confirmed yet, retrying ({}/{})",
+                tx_hash,
+                attempt + 1,
+                max_retries
+            );
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     }
@@ -918,34 +1007,41 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     }
 
     let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
-    let ping = ping::Behaviour::new(
-        ping::Config::new()
-            .with_interval(std::time::Duration::from_secs(15))
-    );
+    let ping =
+        ping::Behaviour::new(ping::Config::new().with_interval(std::time::Duration::from_secs(15)));
 
-    let identify_config = identify::Config::new(
-        "/chiral/id/1.0.0".to_string(),
-        local_key.public(),
-    );
+    let identify_config = identify::Config::new("/chiral/id/1.0.0".to_string(), local_key.public());
     let identify = identify::Behaviour::new(identify_config);
 
     let ping_protocol = request_response::cbor::Behaviour::new(
-        [(StreamProtocol::new("/chiral/ping/1.0.0"), request_response::ProtocolSupport::Full)],
+        [(
+            StreamProtocol::new("/chiral/ping/1.0.0"),
+            request_response::ProtocolSupport::Full,
+        )],
         request_response::Config::default(),
     );
 
     let file_transfer = cbor_codec::Behaviour::new(
-        [(StreamProtocol::new("/chiral/file-transfer/1.0.0"), request_response::ProtocolSupport::Full)],
+        [(
+            StreamProtocol::new("/chiral/file-transfer/1.0.0"),
+            request_response::ProtocolSupport::Full,
+        )],
         request_response::Config::default(),
     );
 
     let file_request = cbor_codec::Behaviour::new(
-        [(StreamProtocol::new("/chiral/file-request/3.0.0"), request_response::ProtocolSupport::Full)],
+        [(
+            StreamProtocol::new("/chiral/file-request/3.0.0"),
+            request_response::ProtocolSupport::Full,
+        )],
         request_response::Config::default(),
     );
 
     let echo_protocol = request_response::cbor::Behaviour::new(
-        [(StreamProtocol::new("/chiral/echo/1.0.0"), request_response::ProtocolSupport::Full)],
+        [(
+            StreamProtocol::new("/chiral/echo/1.0.0"),
+            request_response::ProtocolSupport::Full,
+        )],
         request_response::Config::default(),
     );
 
@@ -956,10 +1052,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             noise::Config::new,
             yamux::Config::default,
         )?
-        .with_relay_client(
-            noise::Config::new,
-            yamux::Config::default,
-        )?
+        .with_relay_client(noise::Config::new, yamux::Config::default)?
         .with_behaviour(|_key, relay_client| {
             let dcutr = dcutr::Behaviour::new(local_peer_id);
             DhtBehaviour {
@@ -1007,7 +1100,10 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
                 }
                 let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
                 match swarm.listen_on(relay_addr.clone()) {
-                    Ok(id) => println!("✅ Relay listen requested: {} (listener {:?})", relay_addr, id),
+                    Ok(id) => println!(
+                        "✅ Relay listen requested: {} (listener {:?})",
+                        relay_addr, id
+                    ),
                     Err(e) => println!("❌ Relay listen failed for {}: {:?}", relay_addr, e),
                 }
             }
@@ -1067,8 +1163,12 @@ fn load_or_generate_keypair() -> libp2p::identity::Keypair {
 /// Load failed peers from disk, discarding entries older than 24 hours.
 fn load_failed_peers() -> HashSet<PeerId> {
     let mut set = HashSet::new();
-    let Some(path) = failed_peers_path() else { return set };
-    let Ok(contents) = std::fs::read_to_string(&path) else { return set };
+    let Some(path) = failed_peers_path() else {
+        return set;
+    };
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return set;
+    };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1091,7 +1191,9 @@ fn load_failed_peers() -> HashSet<PeerId> {
 
 /// Save the current failed peers set to disk.
 fn save_failed_peers(failed: &HashSet<PeerId>) {
-    let Some(path) = failed_peers_path() else { return };
+    let Some(path) = failed_peers_path() else {
+        return;
+    };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -1111,7 +1213,7 @@ async fn event_loop(
     mut swarm: Swarm<DhtBehaviour>,
     peers: Arc<Mutex<Vec<PeerInfo>>>,
     is_running: Arc<Mutex<bool>>,
-    app: tauri::AppHandle,
+    events: EventSink,
     mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
@@ -1121,13 +1223,17 @@ async fn event_loop(
     download_credentials: DownloadCredentialsMap,
 ) {
     // Track pending get queries
-    let mut pending_get_queries: HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>> = HashMap::new();
+    let mut pending_get_queries: HashMap<
+        kad::QueryId,
+        tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
+    > = HashMap::new();
     // Accumulate all FoundRecord results for a GET query before resolving.
     // Without this, the first FoundRecord (often from local stale MemoryStore)
     // would resolve the query, ignoring more up-to-date remote records.
     let mut pending_get_results: HashMap<kad::QueryId, Vec<String>> = HashMap::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
-    let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> = HashMap::new();
+    let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> =
+        HashMap::new();
     // File requests deferred until relay circuit is established.
     // send_request() triggers its own dial via DialOpts::peer_id(), but the relay
     // transport needs the full /p2p-circuit/p2p/<target> address which only our
@@ -1135,12 +1241,18 @@ async fn event_loop(
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
     // Pending echo responses
-    let mut pending_echo: HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>> = HashMap::new();
+    let mut pending_echo: HashMap<
+        request_response::OutboundRequestId,
+        tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    > = HashMap::new();
     // Peers that have failed to connect — prevents re-adding via mDNS/Identify.
     // Persisted to disk with 24h expiry so restarts don't re-try known-bad peers.
     let mut failed_peers: HashSet<PeerId> = load_failed_peers();
     if !failed_peers.is_empty() {
-        println!("Loaded {} previously-failed peers from disk", failed_peers.len());
+        println!(
+            "Loaded {} previously-failed peers from disk",
+            failed_peers.len()
+        );
     }
     // Kademlia bootstrap is deferred until after the first relay reservation is confirmed,
     // to prevent Kademlia from racing the relay client for the bootstrap connection.
@@ -1185,7 +1297,24 @@ async fn event_loop(
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
-                        handle_behaviour_event(event, &peers, &app, &mut swarm, &file_transfer_service, &mut pending_get_queries, &mut pending_get_results, &shared_files, &download_tiers, &download_directory, &active_downloads, &mut outbound_request_map, &download_credentials, &failed_peers, &mut pending_echo).await;
+                        handle_behaviour_event(
+                            event,
+                            &peers,
+                            &events,
+                            &mut swarm,
+                            &file_transfer_service,
+                            &mut pending_get_queries,
+                            &mut pending_get_results,
+                            &shared_files,
+                            &download_tiers,
+                            &download_directory,
+                            &active_downloads,
+                            &mut outbound_request_map,
+                            &download_credentials,
+                            &failed_peers,
+                            &mut pending_echo,
+                        )
+                        .await;
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
                         // Check if this is a relay circuit address
@@ -1258,15 +1387,15 @@ async fn event_loop(
                                     last_seen: now,
                                 });
                             }
-                            let _ = app.emit("peer-discovered", peers_guard.clone());
+                            let _ = events.emit("peer-discovered", peers_guard.clone());
                         }
 
-                        let _ = app.emit("connection-established", peer_id_str);
+                        let _ = events.emit("connection-established", peer_id_str);
 
                         // If this is an incoming connection, notify that we're being pinged
                         if endpoint.is_listener() {
                             println!("Incoming connection from {}", peer_id);
-                            let _ = app.emit("ping-received", peer_id.to_string());
+                            let _ = events.emit("ping-received", peer_id.to_string());
                         }
                     }
                     SwarmEvent::ConnectionClosed { peer_id, num_established, .. } => {
@@ -1276,7 +1405,7 @@ async fn event_loop(
                             println!("All connections closed with {}", peer_id_str);
                             let mut peers_guard = peers.lock().await;
                             peers_guard.retain(|p| p.id != peer_id_str);
-                            let _ = app.emit("peer-discovered", peers_guard.clone());
+                            let _ = events.emit("peer-discovered", peers_guard.clone());
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, .. } => {
@@ -1294,7 +1423,7 @@ async fn event_loop(
                                 let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
                                 for (req_id, fhash) in pending {
                                     println!("❌ Deferred file request {} failed: peer unreachable", req_id);
-                                    let _ = app.emit("file-download-failed", serde_json::json!({
+                                    let _ = events.emit("file-download-failed", serde_json::json!({
                                         "requestId": req_id,
                                         "fileHash": fhash,
                                         "error": format!("Seeder ({}...) is offline or unreachable via relay.", peer_short)
@@ -1366,7 +1495,7 @@ async fn event_loop(
                         };
                         let request_id = swarm.behaviour_mut().file_transfer.send_request(&peer_id, request);
                         println!("File transfer request sent with ID: {:?}", request_id);
-                        let _ = app.emit("file-transfer-started", serde_json::json!({
+                        let _ = events.emit("file-transfer-started", serde_json::json!({
                             "transferId": transfer_id,
                             "peerId": peer_id.to_string(),
                             "fileName": file_name
@@ -1540,7 +1669,7 @@ async fn event_loop(
                                 println!("📋 File request queued, waiting for connection...");
                             } else {
                                 println!("❌ Cannot reach peer {}: all dial attempts failed", peer_id);
-                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                let _ = events.emit("file-download-failed", serde_json::json!({
                                     "requestId": request_id,
                                     "fileHash": file_hash,
                                     "error": format!("Seeder is offline or unreachable (peer: {}...)", &peer_id.to_string()[..8])
@@ -1548,7 +1677,7 @@ async fn event_loop(
                                 continue;
                             }
                         }
-                        let _ = app.emit("file-request-sent", serde_json::json!({
+                        let _ = events.emit("file-request-sent", serde_json::json!({
                             "requestId": request_id,
                             "fileHash": file_hash,
                             "peerId": peer_id.to_string()
@@ -1557,7 +1686,7 @@ async fn event_loop(
                 }
             }
         }
-        
+
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     }
 }
@@ -1565,10 +1694,13 @@ async fn event_loop(
 async fn handle_behaviour_event(
     event: DhtBehaviourEvent,
     peers: &Arc<Mutex<Vec<PeerInfo>>>,
-    app: &tauri::AppHandle,
+    events: &EventSink,
     swarm: &mut Swarm<DhtBehaviour>,
     file_transfer_service: &Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
-    pending_get_queries: &mut HashMap<kad::QueryId, tokio::sync::oneshot::Sender<Result<Option<String>, String>>>,
+    pending_get_queries: &mut HashMap<
+        kad::QueryId,
+        tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
+    >,
     pending_get_results: &mut HashMap<kad::QueryId, Vec<String>>,
     shared_files: &SharedFilesMap,
     download_tiers: &DownloadTiersMap,
@@ -1577,7 +1709,10 @@ async fn handle_behaviour_event(
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
     download_credentials: &DownloadCredentialsMap,
     failed_peers: &HashSet<PeerId>,
-    pending_echo: &mut HashMap<request_response::OutboundRequestId, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>,
+    pending_echo: &mut HashMap<
+        request_response::OutboundRequestId,
+        tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
+    >,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -1586,7 +1721,7 @@ async fn handle_behaviour_event(
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64;
-            
+
             for (peer_id, multiaddr) in list {
                 // Skip peers that previously failed to connect
                 if failed_peers.contains(&peer_id) {
@@ -1597,7 +1732,10 @@ async fn handle_behaviour_event(
                 println!("Discovered peer: {}", peer_id_str);
 
                 // Add peer to Kademlia routing table
-                swarm.behaviour_mut().kad.add_address(&peer_id, multiaddr.clone());
+                swarm
+                    .behaviour_mut()
+                    .kad
+                    .add_address(&peer_id, multiaddr.clone());
 
                 // Check if peer already exists
                 if let Some(existing) = peers_guard.iter_mut().find(|p| p.id == peer_id_str) {
@@ -1617,7 +1755,7 @@ async fn handle_behaviour_event(
             }
 
             // Emit event to frontend
-            let _ = app.emit("peer-discovered", peers_guard.clone());
+            let _ = events.emit("peer-discovered", peers_guard.clone());
         }
         DhtBehaviourEvent::Mdns(mdns::Event::Expired(list)) => {
             let mut peers_guard = peers.lock().await;
@@ -1633,12 +1771,18 @@ async fn handle_behaviour_event(
             match event {
                 Event::Message { peer, message } => {
                     match message {
-                        request_response::Message::Request { request, channel, .. } => {
+                        request_response::Message::Request {
+                            request, channel, ..
+                        } => {
                             println!("Received ping request from {}: {:?}", peer, request);
-                            let _ = app.emit("ping-received", peer.to_string());
+                            let _ = events.emit("ping-received", peer.to_string());
                             // Send pong response
                             let response = PingResponse("PONG".to_string());
-                            if let Err(e) = swarm.behaviour_mut().ping_protocol.send_response(channel, response) {
+                            if let Err(e) = swarm
+                                .behaviour_mut()
+                                .ping_protocol
+                                .send_response(channel, response)
+                            {
                                 println!("Failed to send ping response: {:?}", e);
                             } else {
                                 println!("Sent PONG response to {}", peer);
@@ -1646,7 +1790,7 @@ async fn handle_behaviour_event(
                         }
                         request_response::Message::Response { response, .. } => {
                             println!("Received ping response from {}: {:?}", peer, response);
-                            let _ = app.emit("pong-received", peer.to_string());
+                            let _ = events.emit("pong-received", peer.to_string());
                         }
                     }
                 }
@@ -1664,80 +1808,154 @@ async fn handle_behaviour_event(
             match event {
                 Event::Message { peer, message } => {
                     match message {
-                        request_response::Message::Request { request, channel, .. } => {
+                        request_response::Message::Request {
+                            request, channel, ..
+                        } => {
                             let EchoRequest(data) = request;
 
                             // Check for typed JSON messages (hosting proposals, etc.)
                             if let Ok(json_str) = std::str::from_utf8(&data) {
-                                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                if let Ok(parsed) =
+                                    serde_json::from_str::<serde_json::Value>(json_str)
+                                {
                                     match parsed.get("type").and_then(|v| v.as_str()) {
                                         Some("hosting_proposal") => {
                                             if let Some(agreement) = parsed.get("agreement") {
-                                                println!("📋 Received hosting proposal from peer {}", peer);
+                                                println!(
+                                                    "📋 Received hosting proposal from peer {}",
+                                                    peer
+                                                );
                                                 // Save to disk immediately
-                                                if let Some(id) = agreement.get("agreementId").and_then(|v| v.as_str()) {
+                                                if let Some(id) = agreement
+                                                    .get("agreementId")
+                                                    .and_then(|v| v.as_str())
+                                                {
                                                     if let Some(data_dir) = dirs::data_dir() {
-                                                        let dir = data_dir.join("chiral-network").join("agreements");
+                                                        let dir = data_dir
+                                                            .join("chiral-network")
+                                                            .join("agreements");
                                                         let _ = std::fs::create_dir_all(&dir);
-                                                        let _ = std::fs::write(dir.join(format!("{}.json", id)), agreement.to_string());
+                                                        let _ = std::fs::write(
+                                                            dir.join(format!("{}.json", id)),
+                                                            agreement.to_string(),
+                                                        );
                                                     }
                                                 }
-                                                let _ = app.emit("hosting_proposal_received", serde_json::json!({
-                                                    "fromPeer": peer.to_string(),
-                                                    "agreementJson": agreement.to_string(),
-                                                }));
+                                                let _ = events.emit(
+                                                    "hosting_proposal_received",
+                                                    serde_json::json!({
+                                                        "fromPeer": peer.to_string(),
+                                                        "agreementJson": agreement.to_string(),
+                                                    }),
+                                                );
                                             }
                                         }
                                         Some("hosting_response") => {
-                                            let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
-                                            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                                            println!("📋 Received hosting response for agreement {}: {}", agreement_id, status);
+                                            let agreement_id = parsed
+                                                .get("agreementId")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let status = parsed
+                                                .get("status")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            println!(
+                                                "📋 Received hosting response for agreement {}: {}",
+                                                agreement_id, status
+                                            );
 
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 if let Some(data_dir) = dirs::data_dir() {
-                                                    let dir = data_dir.join("chiral-network").join("agreements");
-                                                    let path = dir.join(format!("{}.json", agreement_id));
-                                                    if let Ok(contents) = std::fs::read_to_string(&path) {
-                                                        if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
+                                                    let dir = data_dir
+                                                        .join("chiral-network")
+                                                        .join("agreements");
+                                                    let path =
+                                                        dir.join(format!("{}.json", agreement_id));
+                                                    if let Ok(contents) =
+                                                        std::fs::read_to_string(&path)
+                                                    {
+                                                        if let Ok(mut ag) = serde_json::from_str::<
+                                                            serde_json::Value,
+                                                        >(
+                                                            &contents
+                                                        ) {
                                                             if let Some(obj) = ag.as_object_mut() {
-                                                                obj.insert("status".to_string(), serde_json::Value::String(status.to_string()));
-                                                                let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                obj.insert(
+                                                                    "status".to_string(),
+                                                                    serde_json::Value::String(
+                                                                        status.to_string(),
+                                                                    ),
+                                                                );
+                                                                let _ = std::fs::write(
+                                                                    &path,
+                                                                    serde_json::to_string(&ag)
+                                                                        .unwrap_or_default(),
+                                                                );
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
 
-                                            let _ = app.emit("hosting_response_received", serde_json::json!({
-                                                "agreementId": agreement_id,
-                                                "status": status,
-                                            }));
+                                            let _ = events.emit(
+                                                "hosting_response_received",
+                                                serde_json::json!({
+                                                    "agreementId": agreement_id,
+                                                    "status": status,
+                                                }),
+                                            );
                                         }
                                         Some("hosting_cancel_request") => {
-                                            let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
+                                            let agreement_id = parsed
+                                                .get("agreementId")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
                                             println!("📋 Received cancellation request for agreement {} from peer {}", agreement_id, peer);
 
                                             if !agreement_id.is_empty() {
                                                 if let Some(data_dir) = dirs::data_dir() {
-                                                    let dir = data_dir.join("chiral-network").join("agreements");
-                                                    let path = dir.join(format!("{}.json", agreement_id));
-                                                    if let Ok(contents) = std::fs::read_to_string(&path) {
-                                                        if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
+                                                    let dir = data_dir
+                                                        .join("chiral-network")
+                                                        .join("agreements");
+                                                    let path =
+                                                        dir.join(format!("{}.json", agreement_id));
+                                                    if let Ok(contents) =
+                                                        std::fs::read_to_string(&path)
+                                                    {
+                                                        if let Ok(mut ag) = serde_json::from_str::<
+                                                            serde_json::Value,
+                                                        >(
+                                                            &contents
+                                                        ) {
                                                             if let Some(obj) = ag.as_object_mut() {
-                                                                let current_status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                                                let current_status = obj
+                                                                    .get("status")
+                                                                    .and_then(|v| v.as_str())
+                                                                    .unwrap_or("")
+                                                                    .to_string();
                                                                 if current_status == "proposed" {
                                                                     // Proposed agreements: auto-cancel (proposer is withdrawing)
-                                                                    obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
-                                                                    let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
-                                                                    let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                    obj.insert(
+                                                                        "status".to_string(),
+                                                                        serde_json::Value::String(
+                                                                            "cancelled".to_string(),
+                                                                        ),
+                                                                    );
+                                                                    let _ = std::fs::write(
+                                                                        &path,
+                                                                        serde_json::to_string(&ag)
+                                                                            .unwrap_or_default(),
+                                                                    );
+                                                                    let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                         "agreementId": agreement_id,
                                                                         "fromPeer": peer.to_string(),
                                                                         "autoCancelled": true,
                                                                     }));
                                                                 } else {
                                                                     // Check if we already requested cancellation too
-                                                                    let already_requested = obj.get("cancelRequestedBy")
+                                                                    let already_requested = obj
+                                                                        .get("cancelRequestedBy")
                                                                         .and_then(|v| v.as_str())
                                                                         .map(|v| !v.is_empty())
                                                                         .unwrap_or(false);
@@ -1745,9 +1963,17 @@ async fn handle_behaviour_event(
                                                                     if already_requested {
                                                                         // Both sides want to cancel — auto-approve
                                                                         obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
-                                                                        obj.remove("cancelRequestedBy");
-                                                                        let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
-                                                                        let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                        obj.remove(
+                                                                            "cancelRequestedBy",
+                                                                        );
+                                                                        let _ = std::fs::write(
+                                                                            &path,
+                                                                            serde_json::to_string(
+                                                                                &ag,
+                                                                            )
+                                                                            .unwrap_or_default(),
+                                                                        );
+                                                                        let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                             "agreementId": agreement_id,
                                                                             "fromPeer": peer.to_string(),
                                                                             "autoCancelled": true,
@@ -1755,8 +1981,14 @@ async fn handle_behaviour_event(
                                                                     } else {
                                                                         // Only other party wants to cancel — needs our consent
                                                                         obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
-                                                                        let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
-                                                                        let _ = app.emit("hosting_cancel_request_received", serde_json::json!({
+                                                                        let _ = std::fs::write(
+                                                                            &path,
+                                                                            serde_json::to_string(
+                                                                                &ag,
+                                                                            )
+                                                                            .unwrap_or_default(),
+                                                                        );
+                                                                        let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                             "agreementId": agreement_id,
                                                                             "fromPeer": peer.to_string(),
                                                                             "autoCancelled": false,
@@ -1770,33 +2002,60 @@ async fn handle_behaviour_event(
                                             }
                                         }
                                         Some("hosting_cancel_response") => {
-                                            let agreement_id = parsed.get("agreementId").and_then(|v| v.as_str()).unwrap_or("");
-                                            let approved = parsed.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
+                                            let agreement_id = parsed
+                                                .get("agreementId")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let approved = parsed
+                                                .get("approved")
+                                                .and_then(|v| v.as_bool())
+                                                .unwrap_or(false);
                                             println!("📋 Received cancellation response for agreement {}: approved={}", agreement_id, approved);
 
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 if let Some(data_dir) = dirs::data_dir() {
-                                                    let dir = data_dir.join("chiral-network").join("agreements");
-                                                    let path = dir.join(format!("{}.json", agreement_id));
-                                                    if let Ok(contents) = std::fs::read_to_string(&path) {
-                                                        if let Ok(mut ag) = serde_json::from_str::<serde_json::Value>(&contents) {
+                                                    let dir = data_dir
+                                                        .join("chiral-network")
+                                                        .join("agreements");
+                                                    let path =
+                                                        dir.join(format!("{}.json", agreement_id));
+                                                    if let Ok(contents) =
+                                                        std::fs::read_to_string(&path)
+                                                    {
+                                                        if let Ok(mut ag) = serde_json::from_str::<
+                                                            serde_json::Value,
+                                                        >(
+                                                            &contents
+                                                        ) {
                                                             if let Some(obj) = ag.as_object_mut() {
                                                                 if approved {
-                                                                    obj.insert("status".to_string(), serde_json::Value::String("cancelled".to_string()));
+                                                                    obj.insert(
+                                                                        "status".to_string(),
+                                                                        serde_json::Value::String(
+                                                                            "cancelled".to_string(),
+                                                                        ),
+                                                                    );
                                                                 }
                                                                 obj.remove("cancelRequestedBy");
-                                                                let _ = std::fs::write(&path, serde_json::to_string(&ag).unwrap_or_default());
+                                                                let _ = std::fs::write(
+                                                                    &path,
+                                                                    serde_json::to_string(&ag)
+                                                                        .unwrap_or_default(),
+                                                                );
                                                             }
                                                         }
                                                     }
                                                 }
                                             }
 
-                                            let _ = app.emit("hosting_cancel_response_received", serde_json::json!({
-                                                "agreementId": agreement_id,
-                                                "approved": approved,
-                                            }));
+                                            let _ = events.emit(
+                                                "hosting_cancel_response_received",
+                                                serde_json::json!({
+                                                    "agreementId": agreement_id,
+                                                    "approved": approved,
+                                                }),
+                                            );
                                         }
                                         _ => {}
                                     }
@@ -1804,9 +2063,15 @@ async fn handle_behaviour_event(
                             }
 
                             // Echo the data back
-                            let _ = swarm.behaviour_mut().echo_protocol.send_response(channel, EchoResponse(data));
+                            let _ = swarm
+                                .behaviour_mut()
+                                .echo_protocol
+                                .send_response(channel, EchoResponse(data));
                         }
-                        request_response::Message::Response { request_id, response } => {
+                        request_response::Message::Response {
+                            request_id,
+                            response,
+                        } => {
                             if let Some(tx) = pending_echo.remove(&request_id) {
                                 let EchoResponse(data) = response;
                                 let _ = tx.send(Ok(data));
@@ -1814,7 +2079,9 @@ async fn handle_behaviour_event(
                         }
                     }
                 }
-                Event::OutboundFailure { request_id, error, .. } => {
+                Event::OutboundFailure {
+                    request_id, error, ..
+                } => {
                     if let Some(tx) = pending_echo.remove(&request_id) {
                         let _ = tx.send(Err(format!("Echo failed: {:?}", error)));
                     }
@@ -1827,8 +2094,15 @@ async fn handle_behaviour_event(
                 kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FoundRecord(record))) => {
                     let key_bytes = record.record.key.as_ref();
                     let key_str = String::from_utf8_lossy(key_bytes);
-                    let source = if record.peer.is_some() { "remote" } else { "local" };
-                    println!("DHT get: found {} record for query {:?}, key: {}", source, id, key_str);
+                    let source = if record.peer.is_some() {
+                        "remote"
+                    } else {
+                        "local"
+                    };
+                    println!(
+                        "DHT get: found {} record for query {:?}, key: {}",
+                        source, id, key_str
+                    );
                     let value = String::from_utf8(record.record.value.clone())
                         .unwrap_or_else(|_| String::new());
                     println!("DHT record value length: {} bytes", value.len());
@@ -1836,7 +2110,9 @@ async fn handle_behaviour_event(
                     // so we see ALL copies (local + remote) and pick the most up-to-date one.
                     pending_get_results.entry(id).or_default().push(value);
                 }
-                kad::QueryResult::GetRecord(Ok(kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. })) => {
+                kad::QueryResult::GetRecord(Ok(
+                    kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. },
+                )) => {
                     println!("DHT get finished for query {:?}", id);
                     if let Some(tx) = pending_get_queries.remove(&id) {
                         let results = pending_get_results.remove(&id).unwrap_or_default();
@@ -1845,7 +2121,10 @@ async fn handle_behaviour_event(
                         } else {
                             // Pick the longest record as "best" — records with more seeders
                             // are longer, so this resolves stale-local-copy vs fresh-remote.
-                            let best = results.into_iter().max_by_key(|r: &String| r.len()).unwrap();
+                            let best = results
+                                .into_iter()
+                                .max_by_key(|r: &String| r.len())
+                                .unwrap();
                             let _ = tx.send(Ok(Some(best)));
                         }
                     } else {
@@ -1860,7 +2139,10 @@ async fn handle_behaviour_event(
                         if results.is_empty() {
                             let _ = tx.send(Ok(None));
                         } else {
-                            let best = results.into_iter().max_by_key(|r: &String| r.len()).unwrap();
+                            let best = results
+                                .into_iter()
+                                .max_by_key(|r: &String| r.len())
+                                .unwrap();
                             let _ = tx.send(Ok(Some(best)));
                         }
                     } else {
@@ -1878,27 +2160,36 @@ async fn handle_behaviour_event(
                     println!("⚠️ DHT put replication incomplete for query {:?} (record stored locally): {:?}", id, err);
                 }
                 kad::QueryResult::Bootstrap(Ok(result)) => {
-                    println!("Kademlia bootstrap successful: {:?} peers remaining", result.num_remaining);
+                    println!(
+                        "Kademlia bootstrap successful: {:?} peers remaining",
+                        result.num_remaining
+                    );
                     if result.num_remaining == 0 {
                         println!("✅ Kademlia bootstrap fully complete — DHT ready");
-                        let _ = app.emit("dht-bootstrap-complete", ());
+                        let _ = events.emit("dht-bootstrap-complete", ());
                     }
                 }
                 kad::QueryResult::Bootstrap(Err(err)) => {
                     println!("Kademlia bootstrap failed: {:?}", err);
                     // Emit anyway so auto-reseed isn't blocked forever
-                    let _ = app.emit("dht-bootstrap-complete", ());
+                    let _ = events.emit("dht-bootstrap-complete", ());
                 }
                 _ => {}
             }
         }
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-            println!("Identified peer {}: protocol={}, addrs={:?}", peer_id, info.protocol_version, info.listen_addrs);
+            println!(
+                "Identified peer {}: protocol={}, addrs={:?}",
+                peer_id, info.protocol_version, info.listen_addrs
+            );
             // Skip peers that previously failed to connect
             if !failed_peers.contains(&peer_id) {
                 // Add all listen addresses to Kademlia so peers can discover each other
                 for addr in &info.listen_addrs {
-                    swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                    swarm
+                        .behaviour_mut()
+                        .kad
+                        .add_address(&peer_id, addr.clone());
                 }
             }
         }
@@ -1908,12 +2199,17 @@ async fn handle_behaviour_event(
             match event {
                 Event::Message { peer, message } => {
                     match message {
-                        request_response::Message::Request { request, channel, .. } => {
+                        request_response::Message::Request {
+                            request, channel, ..
+                        } => {
                             let is_paid = !request.price_wei.is_empty()
                                 && request.price_wei != "0"
                                 && request.price_wei.parse::<u128>().unwrap_or(0) > 0;
 
-                            println!("Received file transfer from {}: {} (paid: {})", peer, request.file_name, is_paid);
+                            println!(
+                                "Received file transfer from {}: {} (paid: {})",
+                                peer, request.file_name, is_paid
+                            );
 
                             if is_paid {
                                 // Paid transfer: file_data is empty, emit event with pricing
@@ -1923,26 +2219,31 @@ async fn handle_behaviour_event(
                                 } else {
                                     request.file_data.len() as u64
                                 };
-                                let _ = app.emit("chiraldrop-paid-request", serde_json::json!({
-                                    "transferId": request.transfer_id,
-                                    "fromPeerId": peer.to_string(),
-                                    "fileName": request.file_name,
-                                    "fileHash": request.file_hash,
-                                    "fileSize": actual_size,
-                                    "priceWei": request.price_wei,
-                                    "senderWallet": request.sender_wallet
-                                }));
+                                let _ = events.emit(
+                                    "chiraldrop-paid-request",
+                                    serde_json::json!({
+                                        "transferId": request.transfer_id,
+                                        "fromPeerId": peer.to_string(),
+                                        "fileName": request.file_name,
+                                        "fileHash": request.file_hash,
+                                        "fileSize": actual_size,
+                                        "priceWei": request.price_wei,
+                                        "senderWallet": request.sender_wallet
+                                    }),
+                                );
                             } else {
                                 // Free transfer: store file data for acceptance
                                 if let Some(fts) = file_transfer_service {
                                     let fts_lock = fts.lock().await;
-                                    let _ = fts_lock.receive_file_request(
-                                        app.clone(),
-                                        peer.to_string(),
-                                        request.file_name.clone(),
-                                        request.file_data.clone(),
-                                        request.transfer_id.clone()
-                                    ).await;
+                                    let _ = fts_lock
+                                        .receive_file_request(
+                                            events.clone(),
+                                            peer.to_string(),
+                                            request.file_name.clone(),
+                                            request.file_data.clone(),
+                                            request.transfer_id.clone(),
+                                        )
+                                        .await;
                                 }
                             }
 
@@ -1952,23 +2253,36 @@ async fn handle_behaviour_event(
                                 accepted: true,
                                 error: None,
                             };
-                            if let Err(e) = swarm.behaviour_mut().file_transfer.send_response(channel, response) {
+                            if let Err(e) = swarm
+                                .behaviour_mut()
+                                .file_transfer
+                                .send_response(channel, response)
+                            {
                                 println!("Failed to send file transfer response: {:?}", e);
                             }
                         }
                         request_response::Message::Response { response, .. } => {
-                            println!("Received file transfer response from {}: accepted={}", peer, response.accepted);
+                            println!(
+                                "Received file transfer response from {}: accepted={}",
+                                peer, response.accepted
+                            );
                             if response.accepted {
-                                let _ = app.emit("file-transfer-complete", serde_json::json!({
-                                    "transferId": response.transfer_id,
-                                    "status": "completed"
-                                }));
+                                let _ = events.emit(
+                                    "file-transfer-complete",
+                                    serde_json::json!({
+                                        "transferId": response.transfer_id,
+                                        "status": "completed"
+                                    }),
+                                );
                             } else {
-                                let _ = app.emit("file-transfer-complete", serde_json::json!({
-                                    "transferId": response.transfer_id,
-                                    "status": "declined",
-                                    "error": response.error
-                                }));
+                                let _ = events.emit(
+                                    "file-transfer-complete",
+                                    serde_json::json!({
+                                        "transferId": response.transfer_id,
+                                        "status": "declined",
+                                        "error": response.error
+                                    }),
+                                );
                             }
                         }
                     }
@@ -1976,20 +2290,23 @@ async fn handle_behaviour_event(
                 Event::OutboundFailure { peer, error, .. } => {
                     let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
                     let user_error = match &error {
-                        request_response::OutboundFailure::DialFailure |
-                        request_response::OutboundFailure::UnsupportedProtocols => {
+                        request_response::OutboundFailure::DialFailure
+                        | request_response::OutboundFailure::UnsupportedProtocols => {
                             format!("Seeder ({}...) is offline or unreachable", peer_short)
                         }
                         request_response::OutboundFailure::Timeout => {
                             format!("Seeder ({}...) did not respond in time", peer_short)
                         }
-                        _ => format!("Transfer failed to ({}...): {:?}", peer_short, error)
+                        _ => format!("Transfer failed to ({}...): {:?}", peer_short, error),
                     };
                     println!("❌ File transfer failed to {:?}: {:?}", peer, error);
-                    let _ = app.emit("file-transfer-failed", serde_json::json!({
-                        "peerId": peer.to_string(),
-                        "error": user_error
-                    }));
+                    let _ = events.emit(
+                        "file-transfer-failed",
+                        serde_json::json!({
+                            "peerId": peer.to_string(),
+                            "error": user_error
+                        }),
+                    );
                 }
                 Event::InboundFailure { peer, error, .. } => {
                     println!("Inbound file transfer failed from {:?}: {:?}", peer, error);
@@ -2003,22 +2320,38 @@ async fn handle_behaviour_event(
                 Event::Message { peer, message } => {
                     match message {
                         // === SEEDER SIDE: Handle incoming requests ===
-                        request_response::Message::Request { request, channel, .. } => {
+                        request_response::Message::Request {
+                            request, channel, ..
+                        } => {
                             match request {
-                                ChunkRequest::FileInfo { request_id, file_hash } => {
-                                    println!("📋 Received FileInfo request from {}: hash={}", peer, file_hash);
+                                ChunkRequest::FileInfo {
+                                    request_id,
+                                    file_hash,
+                                } => {
+                                    println!(
+                                        "📋 Received FileInfo request from {}: hash={}",
+                                        peer, file_hash
+                                    );
                                     let mut shared = shared_files.lock().await;
 
-                                    let response = if let Some(file_info) = shared.get_mut(&file_hash) {
+                                    let response = if let Some(file_info) =
+                                        shared.get_mut(&file_hash)
+                                    {
                                         // Compute chunk hashes if not cached
                                         if file_info.chunk_hashes.is_none() {
-                                            println!("Computing chunk hashes for {}...", file_info.file_name);
+                                            println!(
+                                                "Computing chunk hashes for {}...",
+                                                file_info.file_name
+                                            );
                                             match compute_chunk_hashes(&file_info.file_path) {
                                                 Ok(hashes) => {
                                                     file_info.chunk_hashes = Some(hashes);
                                                 }
                                                 Err(e) => {
-                                                    println!("Failed to compute chunk hashes: {}", e);
+                                                    println!(
+                                                        "Failed to compute chunk hashes: {}",
+                                                        e
+                                                    );
                                                     let resp = ChunkResponse::FileInfo {
                                                         request_id,
                                                         file_hash,
@@ -2029,10 +2362,16 @@ async fn handle_behaviour_event(
                                                         chunk_hashes: vec![],
                                                         price_wei: "0".to_string(),
                                                         wallet_address: String::new(),
-                                                        error: Some(format!("Failed to read file: {}", e)),
+                                                        error: Some(format!(
+                                                            "Failed to read file: {}",
+                                                            e
+                                                        )),
                                                     };
                                                     drop(shared);
-                                                    let _ = swarm.behaviour_mut().file_request.send_response(channel, resp);
+                                                    let _ = swarm
+                                                        .behaviour_mut()
+                                                        .file_request
+                                                        .send_response(channel, resp);
                                                     return;
                                                 }
                                             }
@@ -2073,11 +2412,19 @@ async fn handle_behaviour_event(
                                     };
                                     drop(shared);
 
-                                    if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
+                                    if let Err(e) = swarm
+                                        .behaviour_mut()
+                                        .file_request
+                                        .send_response(channel, response)
+                                    {
                                         println!("Failed to send FileInfo response: {:?}", e);
                                     }
                                 }
-                                ChunkRequest::Chunk { request_id, file_hash, chunk_index } => {
+                                ChunkRequest::Chunk {
+                                    request_id,
+                                    file_hash,
+                                    chunk_index,
+                                } => {
                                     let shared = shared_files.lock().await;
 
                                     let response = if let Some(file_info) = shared.get(&file_hash) {
@@ -2092,7 +2439,10 @@ async fn handle_behaviour_event(
                                                         chunk_index,
                                                         chunk_data: None,
                                                         chunk_hash: String::new(),
-                                                        error: Some(format!("Failed to seek: {}", e)),
+                                                        error: Some(format!(
+                                                            "Failed to seek: {}",
+                                                            e
+                                                        )),
                                                     }
                                                 } else {
                                                     let mut buf = vec![0u8; CHUNK_SIZE];
@@ -2101,7 +2451,8 @@ async fn handle_behaviour_event(
                                                             buf.truncate(bytes_read);
                                                             let mut hasher = Sha256::new();
                                                             hasher.update(&buf);
-                                                            let chunk_hash = hex::encode(hasher.finalize());
+                                                            let chunk_hash =
+                                                                hex::encode(hasher.finalize());
                                                             ChunkResponse::Chunk {
                                                                 request_id,
                                                                 file_hash,
@@ -2117,7 +2468,10 @@ async fn handle_behaviour_event(
                                                             chunk_index,
                                                             chunk_data: None,
                                                             chunk_hash: String::new(),
-                                                            error: Some(format!("Failed to read chunk: {}", e)),
+                                                            error: Some(format!(
+                                                                "Failed to read chunk: {}",
+                                                                e
+                                                            )),
                                                         },
                                                     }
                                                 }
@@ -2143,12 +2497,24 @@ async fn handle_behaviour_event(
                                     };
                                     drop(shared);
 
-                                    if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
+                                    if let Err(e) = swarm
+                                        .behaviour_mut()
+                                        .file_request
+                                        .send_response(channel, response)
+                                    {
                                         println!("Failed to send chunk response: {:?}", e);
                                     }
                                 }
-                                ChunkRequest::PaymentProof { request_id, file_hash, payment_tx, payer_address } => {
-                                    println!("💰 Received payment proof from {}: tx={}, payer={}", peer, payment_tx, payer_address);
+                                ChunkRequest::PaymentProof {
+                                    request_id,
+                                    file_hash,
+                                    payment_tx,
+                                    payer_address,
+                                } => {
+                                    println!(
+                                        "💰 Received payment proof from {}: tx={}, payer={}",
+                                        peer, payment_tx, payer_address
+                                    );
                                     let shared = shared_files.lock().await;
 
                                     let response = if let Some(file_info) = shared.get(&file_hash) {
@@ -2166,17 +2532,29 @@ async fn handle_behaviour_event(
                                             let expected_price = file_info.price_wei;
                                             drop(shared);
 
-                                            match verify_payment_on_chain(&payment_tx, &expected_wallet, expected_price).await {
+                                            match verify_payment_on_chain(
+                                                &payment_tx,
+                                                &expected_wallet,
+                                                expected_price,
+                                            )
+                                            .await
+                                            {
                                                 Ok(true) => {
-                                                    println!("✅ Payment verified for {} from {}", file_hash, payer_address);
+                                                    println!(
+                                                        "✅ Payment verified for {} from {}",
+                                                        file_hash, payer_address
+                                                    );
                                                     let price_wei_str = expected_price.to_string();
-                                                    let _ = app.emit("chiraldrop-payment-received", serde_json::json!({
-                                                        "fileHash": file_hash,
-                                                        "txHash": payment_tx,
-                                                        "priceWei": price_wei_str,
-                                                        "fromWallet": payer_address,
-                                                        "toWallet": expected_wallet,
-                                                    }));
+                                                    let _ = events.emit(
+                                                        "chiraldrop-payment-received",
+                                                        serde_json::json!({
+                                                            "fileHash": file_hash,
+                                                            "txHash": payment_tx,
+                                                            "priceWei": price_wei_str,
+                                                            "fromWallet": payer_address,
+                                                            "toWallet": expected_wallet,
+                                                        }),
+                                                    );
                                                     ChunkResponse::PaymentAck {
                                                         request_id,
                                                         file_hash,
@@ -2185,7 +2563,10 @@ async fn handle_behaviour_event(
                                                     }
                                                 }
                                                 Ok(false) => {
-                                                    println!("❌ Payment verification failed for {}", file_hash);
+                                                    println!(
+                                                        "❌ Payment verification failed for {}",
+                                                        file_hash
+                                                    );
                                                     ChunkResponse::PaymentAck {
                                                         request_id,
                                                         file_hash,
@@ -2194,12 +2575,18 @@ async fn handle_behaviour_event(
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    println!("❌ Payment verification error: {}", e);
+                                                    println!(
+                                                        "❌ Payment verification error: {}",
+                                                        e
+                                                    );
                                                     ChunkResponse::PaymentAck {
                                                         request_id,
                                                         file_hash,
                                                         accepted: false,
-                                                        error: Some(format!("Payment verification error: {}", e)),
+                                                        error: Some(format!(
+                                                            "Payment verification error: {}",
+                                                            e
+                                                        )),
                                                     }
                                                 }
                                             }
@@ -2214,28 +2601,50 @@ async fn handle_behaviour_event(
                                         }
                                     };
 
-                                    if let Err(e) = swarm.behaviour_mut().file_request.send_response(channel, response) {
+                                    if let Err(e) = swarm
+                                        .behaviour_mut()
+                                        .file_request
+                                        .send_response(channel, response)
+                                    {
                                         println!("Failed to send PaymentAck response: {:?}", e);
                                     }
                                 }
                             }
                         }
                         // === DOWNLOADER SIDE: Handle incoming responses ===
-                        request_response::Message::Response { response, request_id: outbound_req_id, .. } => {
+                        request_response::Message::Response {
+                            response,
+                            request_id: outbound_req_id,
+                            ..
+                        } => {
                             // Clean up outbound request mapping
                             outbound_request_map.remove(&outbound_req_id);
 
                             match response {
-                                ChunkResponse::FileInfo { request_id, file_hash, file_name, file_size, chunk_size: _, total_chunks, chunk_hashes, price_wei, wallet_address, error } => {
+                                ChunkResponse::FileInfo {
+                                    request_id,
+                                    file_hash,
+                                    file_name,
+                                    file_size,
+                                    chunk_size: _,
+                                    total_chunks,
+                                    chunk_hashes,
+                                    price_wei,
+                                    wallet_address,
+                                    error,
+                                } => {
                                     if let Some(err) = error {
                                         println!("❌ FileInfo error: {}", err);
                                         let mut tiers = download_tiers.lock().await;
                                         tiers.remove(&request_id);
-                                        let _ = app.emit("file-download-failed", serde_json::json!({
-                                            "requestId": request_id,
-                                            "fileHash": file_hash,
-                                            "error": err
-                                        }));
+                                        let _ = events.emit(
+                                            "file-download-failed",
+                                            serde_json::json!({
+                                                "requestId": request_id,
+                                                "fileHash": file_hash,
+                                                "error": err
+                                            }),
+                                        );
                                         return;
                                     }
 
@@ -2245,22 +2654,31 @@ async fn handle_behaviour_event(
                                     // Get speed tier
                                     let tier = {
                                         let tiers = download_tiers.lock().await;
-                                        tiers.get(&request_id).cloned().unwrap_or(SpeedTier::Standard)
+                                        tiers
+                                            .get(&request_id)
+                                            .cloned()
+                                            .unwrap_or(SpeedTier::Standard)
                                     };
 
                                     // Determine output path
                                     let custom_dir = download_directory.lock().await.clone();
                                     let downloads_dir = if let Some(ref dir) = custom_dir {
                                         let p = PathBuf::from(dir);
-                                        if p.exists() && p.is_dir() { p } else {
-                                            dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
+                                        if p.exists() && p.is_dir() {
+                                            p
+                                        } else {
+                                            dirs::download_dir()
+                                                .unwrap_or_else(|| PathBuf::from("."))
                                         }
                                     } else {
                                         dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
                                     };
 
                                     let output_name = if file_name.is_empty() {
-                                        format!("{}.download", &file_hash[..std::cmp::min(8, file_hash.len())])
+                                        format!(
+                                            "{}.download",
+                                            &file_hash[..std::cmp::min(8, file_hash.len())]
+                                        )
                                     } else {
                                         file_name.clone()
                                     };
@@ -2269,7 +2687,7 @@ async fn handle_behaviour_event(
                                     // Create empty output file
                                     if let Err(e) = std::fs::File::create(&output_path) {
                                         println!("❌ Failed to create output file: {}", e);
-                                        let _ = app.emit("file-download-failed", serde_json::json!({
+                                        let _ = events.emit("file-download-failed", serde_json::json!({
                                             "requestId": request_id,
                                             "fileHash": file_hash,
                                             "error": format!("Failed to create output file: {}", e)
@@ -2303,13 +2721,19 @@ async fn handle_behaviour_event(
 
                                     if price > 0 {
                                         // Paid file: send payment to seeder, then send proof
-                                        println!("💰 File requires payment of {} wei to {}", price, wallet_address);
-                                        let _ = app.emit("file-payment-processing", serde_json::json!({
-                                            "requestId": request_id,
-                                            "fileHash": file_hash,
-                                            "priceWei": price_wei,
-                                            "walletAddress": wallet_address
-                                        }));
+                                        println!(
+                                            "💰 File requires payment of {} wei to {}",
+                                            price, wallet_address
+                                        );
+                                        let _ = events.emit(
+                                            "file-payment-processing",
+                                            serde_json::json!({
+                                                "requestId": request_id,
+                                                "fileHash": file_hash,
+                                                "priceWei": price_wei,
+                                                "walletAddress": wallet_address
+                                            }),
+                                        );
 
                                         // Get download credentials for this request
                                         let creds = {
@@ -2319,7 +2743,8 @@ async fn handle_behaviour_event(
 
                                         if let Some(creds) = creds {
                                             // Convert wei to CHI for send_transaction
-                                            let cost_chi = crate::speed_tiers::format_wei_as_chi(price);
+                                            let cost_chi =
+                                                crate::speed_tiers::format_wei_as_chi(price);
 
                                             // Send payment transaction
                                             match crate::send_payment_transaction(
@@ -2327,21 +2752,29 @@ async fn handle_behaviour_event(
                                                 &wallet_address,
                                                 &cost_chi,
                                                 &creds.private_key,
-                                            ).await {
+                                            )
+                                            .await
+                                            {
                                                 Ok(payment) => {
-                                                    println!("💰 Payment sent: tx={}", payment.tx_hash);
+                                                    println!(
+                                                        "💰 Payment sent: tx={}",
+                                                        payment.tx_hash
+                                                    );
                                                     // Emit event so frontend can track in transaction history
-                                                    let _ = app.emit("chiraldrop-payment-sent", serde_json::json!({
-                                                        "requestId": request_id,
-                                                        "fileHash": file_hash,
-                                                        "fileName": file_name,
-                                                        "txHash": payment.tx_hash,
-                                                        "priceWei": price_wei,
-                                                        "toWallet": wallet_address,
-                                                        "fromWallet": creds.wallet_address,
-                                                        "balanceBefore": payment.balance_before,
-                                                        "balanceAfter": payment.balance_after,
-                                                    }));
+                                                    let _ = events.emit(
+                                                        "chiraldrop-payment-sent",
+                                                        serde_json::json!({
+                                                            "requestId": request_id,
+                                                            "fileHash": file_hash,
+                                                            "fileName": file_name,
+                                                            "txHash": payment.tx_hash,
+                                                            "priceWei": price_wei,
+                                                            "toWallet": wallet_address,
+                                                            "fromWallet": creds.wallet_address,
+                                                            "balanceBefore": payment.balance_before,
+                                                            "balanceAfter": payment.balance_after,
+                                                        }),
+                                                    );
                                                     // Send payment proof to seeder
                                                     let request = ChunkRequest::PaymentProof {
                                                         request_id: request_id.clone(),
@@ -2349,18 +2782,24 @@ async fn handle_behaviour_event(
                                                         payment_tx: payment.tx_hash,
                                                         payer_address: creds.wallet_address.clone(),
                                                     };
-                                                    let req_id = swarm.behaviour_mut().file_request.send_request(&peer, request);
+                                                    let req_id = swarm
+                                                        .behaviour_mut()
+                                                        .file_request
+                                                        .send_request(&peer, request);
                                                     outbound_request_map.insert(req_id, request_id);
                                                 }
                                                 Err(e) => {
                                                     println!("❌ Payment failed: {}", e);
-                                                    let mut downloads = active_downloads.lock().await;
-                                                    if let Some(dl) = downloads.remove(&request_id) {
-                                                        let _ = std::fs::remove_file(&dl.output_path);
+                                                    let mut downloads =
+                                                        active_downloads.lock().await;
+                                                    if let Some(dl) = downloads.remove(&request_id)
+                                                    {
+                                                        let _ =
+                                                            std::fs::remove_file(&dl.output_path);
                                                     }
                                                     let mut tiers = download_tiers.lock().await;
                                                     tiers.remove(&request_id);
-                                                    let _ = app.emit("file-download-failed", serde_json::json!({
+                                                    let _ = events.emit("file-download-failed", serde_json::json!({
                                                         "requestId": request_id,
                                                         "fileHash": file_hash,
                                                         "error": format!("Payment failed: {}", e)
@@ -2375,7 +2814,7 @@ async fn handle_behaviour_event(
                                             }
                                             let mut tiers = download_tiers.lock().await;
                                             tiers.remove(&request_id);
-                                            let _ = app.emit("file-download-failed", serde_json::json!({
+                                            let _ = events.emit("file-download-failed", serde_json::json!({
                                                 "requestId": request_id,
                                                 "fileHash": file_hash,
                                                 "error": "Wallet not connected. Connect your wallet to download paid files."
@@ -2388,25 +2827,48 @@ async fn handle_behaviour_event(
                                             file_hash: file_hash.clone(),
                                             chunk_index: 0,
                                         };
-                                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer, request);
+                                        let req_id = swarm
+                                            .behaviour_mut()
+                                            .file_request
+                                            .send_request(&peer, request);
                                         outbound_request_map.insert(req_id, request_id);
                                     }
                                 }
-                                ChunkResponse::Chunk { request_id, file_hash, chunk_index, chunk_data, chunk_hash, error } => {
+                                ChunkResponse::Chunk {
+                                    request_id,
+                                    file_hash,
+                                    chunk_index,
+                                    chunk_data,
+                                    chunk_hash,
+                                    error,
+                                } => {
                                     if let Some(err) = error {
                                         println!("❌ Chunk {} error: {}", chunk_index, err);
                                         // Check if we should retry
                                         let mut downloads = active_downloads.lock().await;
                                         if let Some(dl) = downloads.get_mut(&request_id) {
                                             dl.retry_counts[chunk_index as usize] += 1;
-                                            if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
-                                                println!("🔄 Retrying chunk {} (attempt {})", chunk_index, dl.retry_counts[chunk_index as usize]);
+                                            if dl.retry_counts[chunk_index as usize]
+                                                <= MAX_CHUNK_RETRIES
+                                            {
+                                                println!(
+                                                    "🔄 Retrying chunk {} (attempt {})",
+                                                    chunk_index,
+                                                    dl.retry_counts[chunk_index as usize]
+                                                );
                                                 let peer_id = dl.peer_id;
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
-                                                let request = ChunkRequest::Chunk { request_id: rid.clone(), file_hash: fh, chunk_index };
-                                                let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                                let request = ChunkRequest::Chunk {
+                                                    request_id: rid.clone(),
+                                                    file_hash: fh,
+                                                    chunk_index,
+                                                };
+                                                let req_id = swarm
+                                                    .behaviour_mut()
+                                                    .file_request
+                                                    .send_request(&peer_id, request);
                                                 outbound_request_map.insert(req_id, rid);
                                             } else {
                                                 // Max retries exceeded — abort
@@ -2415,7 +2877,7 @@ async fn handle_behaviour_event(
                                                 let mut tiers = download_tiers.lock().await;
                                                 tiers.remove(&request_id);
                                                 drop(downloads);
-                                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                                let _ = events.emit("file-download-failed", serde_json::json!({
                                                     "requestId": request_id,
                                                     "fileHash": file_hash,
                                                     "error": format!("Chunk {} failed after {} retries: {}", chunk_index, MAX_CHUNK_RETRIES, err)
@@ -2428,7 +2890,10 @@ async fn handle_behaviour_event(
                                     let chunk_data = match chunk_data {
                                         Some(data) => data,
                                         None => {
-                                            println!("❌ Chunk {} has no data and no error", chunk_index);
+                                            println!(
+                                                "❌ Chunk {} has no data and no error",
+                                                chunk_index
+                                            );
                                             return;
                                         }
                                     };
@@ -2441,17 +2906,34 @@ async fn handle_behaviour_event(
                                         hasher.update(&chunk_data);
                                         let computed_hash = hex::encode(hasher.finalize());
 
-                                        if computed_hash != *expected_hash || computed_hash != chunk_hash {
-                                            println!("❌ Chunk {} hash mismatch! Expected: {}, Got: {}", chunk_index, expected_hash, computed_hash);
+                                        if computed_hash != *expected_hash
+                                            || computed_hash != chunk_hash
+                                        {
+                                            println!(
+                                                "❌ Chunk {} hash mismatch! Expected: {}, Got: {}",
+                                                chunk_index, expected_hash, computed_hash
+                                            );
                                             dl.retry_counts[chunk_index as usize] += 1;
-                                            if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
-                                                println!("🔄 Retrying chunk {} due to hash mismatch", chunk_index);
+                                            if dl.retry_counts[chunk_index as usize]
+                                                <= MAX_CHUNK_RETRIES
+                                            {
+                                                println!(
+                                                    "🔄 Retrying chunk {} due to hash mismatch",
+                                                    chunk_index
+                                                );
                                                 let peer_id = dl.peer_id;
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
-                                                let request = ChunkRequest::Chunk { request_id: rid.clone(), file_hash: fh, chunk_index };
-                                                let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                                let request = ChunkRequest::Chunk {
+                                                    request_id: rid.clone(),
+                                                    file_hash: fh,
+                                                    chunk_index,
+                                                };
+                                                let req_id = swarm
+                                                    .behaviour_mut()
+                                                    .file_request
+                                                    .send_request(&peer_id, request);
                                                 outbound_request_map.insert(req_id, rid);
                                             } else {
                                                 let dl = downloads.remove(&request_id).unwrap();
@@ -2459,7 +2941,7 @@ async fn handle_behaviour_event(
                                                 let mut tiers = download_tiers.lock().await;
                                                 tiers.remove(&request_id);
                                                 drop(downloads);
-                                                let _ = app.emit("file-download-failed", serde_json::json!({
+                                                let _ = events.emit("file-download-failed", serde_json::json!({
                                                     "requestId": request_id,
                                                     "fileHash": file_hash,
                                                     "error": format!("Chunk {} failed integrity check after {} retries", chunk_index, MAX_CHUNK_RETRIES)
@@ -2476,17 +2958,23 @@ async fn handle_behaviour_event(
                                             .and_then(|mut f| f.write_all(&chunk_data));
 
                                         if let Err(e) = write_result {
-                                            println!("❌ Failed to write chunk {}: {}", chunk_index, e);
+                                            println!(
+                                                "❌ Failed to write chunk {}: {}",
+                                                chunk_index, e
+                                            );
                                             let dl = downloads.remove(&request_id).unwrap();
                                             let _ = std::fs::remove_file(&dl.output_path);
                                             let mut tiers = download_tiers.lock().await;
                                             tiers.remove(&request_id);
                                             drop(downloads);
-                                            let _ = app.emit("file-download-failed", serde_json::json!({
-                                                "requestId": request_id,
-                                                "fileHash": file_hash,
-                                                "error": format!("Failed to write chunk: {}", e)
-                                            }));
+                                            let _ = events.emit(
+                                                "file-download-failed",
+                                                serde_json::json!({
+                                                    "requestId": request_id,
+                                                    "fileHash": file_hash,
+                                                    "error": format!("Failed to write chunk: {}", e)
+                                                }),
+                                            );
                                             return;
                                         }
 
@@ -2495,18 +2983,26 @@ async fn handle_behaviour_event(
                                         dl.current_chunk_index = chunk_index + 1;
 
                                         // Emit progress
-                                        let progress = (dl.bytes_written as f64 / dl.file_size as f64) * 100.0;
+                                        let progress =
+                                            (dl.bytes_written as f64 / dl.file_size as f64) * 100.0;
                                         let elapsed = dl.start_time.elapsed().as_secs_f64();
-                                        let speed_bps = if elapsed > 0.0 { (dl.bytes_written as f64 / elapsed) as u64 } else { 0 };
-                                        let _ = app.emit("download-progress", serde_json::json!({
-                                            "requestId": dl.request_id,
-                                            "fileHash": dl.file_hash,
-                                            "fileName": dl.file_name,
-                                            "bytesWritten": dl.bytes_written,
-                                            "totalBytes": dl.file_size,
-                                            "speedBps": speed_bps,
-                                            "progress": progress
-                                        }));
+                                        let speed_bps = if elapsed > 0.0 {
+                                            (dl.bytes_written as f64 / elapsed) as u64
+                                        } else {
+                                            0
+                                        };
+                                        let _ = events.emit(
+                                            "download-progress",
+                                            serde_json::json!({
+                                                "requestId": dl.request_id,
+                                                "fileHash": dl.file_hash,
+                                                "fileName": dl.file_name,
+                                                "bytesWritten": dl.bytes_written,
+                                                "totalBytes": dl.file_size,
+                                                "speedBps": speed_bps,
+                                                "progress": progress
+                                            }),
+                                        );
 
                                         // Check if all chunks received
                                         if dl.current_chunk_index >= dl.total_chunks {
@@ -2523,23 +3019,34 @@ async fn handle_behaviour_event(
                                             drop(downloads);
 
                                             // Verify full file SHA-256
-                                            let app_clone = app.clone();
+                                            let events_clone = events.clone();
                                             tokio::spawn(async move {
                                                 match tokio::task::spawn_blocking(move || {
-                                                    let mut file = std::fs::File::open(&output_path)?;
+                                                    let mut file =
+                                                        std::fs::File::open(&output_path)?;
                                                     let mut hasher = Sha256::new();
                                                     let mut buf = vec![0u8; 256 * 1024];
                                                     loop {
                                                         let n = file.read(&mut buf)?;
-                                                        if n == 0 { break; }
+                                                        if n == 0 {
+                                                            break;
+                                                        }
                                                         hasher.update(&buf[..n]);
                                                     }
-                                                    Ok::<(String, PathBuf), std::io::Error>((hex::encode(hasher.finalize()), output_path))
-                                                }).await {
+                                                    Ok::<(String, PathBuf), std::io::Error>((
+                                                        hex::encode(hasher.finalize()),
+                                                        output_path,
+                                                    ))
+                                                })
+                                                .await
+                                                {
                                                     Ok(Ok((computed_hash, output_path))) => {
                                                         if computed_hash == expected_file_hash {
-                                                            println!("✅ File verified and saved: {:?}", output_path);
-                                                            let _ = app_clone.emit("file-download-complete", serde_json::json!({
+                                                            println!(
+                                                                "✅ File verified and saved: {:?}",
+                                                                output_path
+                                                            );
+                                                            events_clone.emit("file-download-complete", serde_json::json!({
                                                                 "requestId": request_id_clone,
                                                                 "fileHash": expected_file_hash,
                                                                 "fileName": file_name_clone,
@@ -2549,8 +3056,9 @@ async fn handle_behaviour_event(
                                                             }));
                                                         } else {
                                                             println!("❌ Full file hash mismatch! Expected: {}, Got: {}", expected_file_hash, computed_hash);
-                                                            let _ = std::fs::remove_file(&output_path);
-                                                            let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                                            let _ =
+                                                                std::fs::remove_file(&output_path);
+                                                            events_clone.emit("file-download-failed", serde_json::json!({
                                                                 "requestId": request_id_clone,
                                                                 "fileHash": expected_file_hash,
                                                                 "error": "File integrity verification failed — hash mismatch after all chunks received"
@@ -2559,15 +3067,18 @@ async fn handle_behaviour_event(
                                                     }
                                                     Ok(Err(e)) => {
                                                         println!("❌ Failed to verify file: {}", e);
-                                                        let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                                        events_clone.emit("file-download-failed", serde_json::json!({
                                                             "requestId": request_id_clone,
                                                             "fileHash": expected_file_hash,
                                                             "error": format!("Failed to verify file: {}", e)
                                                         }));
                                                     }
                                                     Err(e) => {
-                                                        println!("❌ Verification task panicked: {}", e);
-                                                        let _ = app_clone.emit("file-download-failed", serde_json::json!({
+                                                        println!(
+                                                            "❌ Verification task panicked: {}",
+                                                            e
+                                                        );
+                                                        events_clone.emit("file-download-failed", serde_json::json!({
                                                             "requestId": request_id_clone,
                                                             "fileHash": expected_file_hash,
                                                             "error": format!("Verification task failed: {}", e)
@@ -2585,7 +3096,12 @@ async fn handle_behaviour_event(
                                             drop(downloads);
 
                                             // Apply rate-limit delay
-                                            if let Some(delay) = crate::speed_tiers::chunk_request_delay(CHUNK_SIZE as u32, &tier) {
+                                            if let Some(delay) =
+                                                crate::speed_tiers::chunk_request_delay(
+                                                    CHUNK_SIZE as u32,
+                                                    &tier,
+                                                )
+                                            {
                                                 tokio::time::sleep(delay).await;
                                             }
 
@@ -2594,30 +3110,49 @@ async fn handle_behaviour_event(
                                                 file_hash: fh,
                                                 chunk_index: next_index,
                                             };
-                                            let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                            let req_id = swarm
+                                                .behaviour_mut()
+                                                .file_request
+                                                .send_request(&peer_id, request);
                                             outbound_request_map.insert(req_id, rid);
                                         }
                                     }
                                 }
-                                ChunkResponse::PaymentAck { request_id, file_hash, accepted, error } => {
+                                ChunkResponse::PaymentAck {
+                                    request_id,
+                                    file_hash,
+                                    accepted,
+                                    error,
+                                } => {
                                     if !accepted {
-                                        let err_msg = error.unwrap_or_else(|| "Payment rejected by seeder".to_string());
-                                        println!("❌ Payment rejected for {}: {}", file_hash, err_msg);
+                                        let err_msg = error.unwrap_or_else(|| {
+                                            "Payment rejected by seeder".to_string()
+                                        });
+                                        println!(
+                                            "❌ Payment rejected for {}: {}",
+                                            file_hash, err_msg
+                                        );
                                         let mut downloads = active_downloads.lock().await;
                                         if let Some(dl) = downloads.remove(&request_id) {
                                             let _ = std::fs::remove_file(&dl.output_path);
                                         }
                                         let mut tiers = download_tiers.lock().await;
                                         tiers.remove(&request_id);
-                                        let _ = app.emit("file-download-failed", serde_json::json!({
-                                            "requestId": request_id,
-                                            "fileHash": file_hash,
-                                            "error": err_msg
-                                        }));
+                                        let _ = events.emit(
+                                            "file-download-failed",
+                                            serde_json::json!({
+                                                "requestId": request_id,
+                                                "fileHash": file_hash,
+                                                "error": err_msg
+                                            }),
+                                        );
                                         return;
                                     }
 
-                                    println!("✅ Payment accepted for {}, starting chunk download", file_hash);
+                                    println!(
+                                        "✅ Payment accepted for {}, starting chunk download",
+                                        file_hash
+                                    );
 
                                     // Mark payment confirmed and request first chunk
                                     let mut downloads = active_downloads.lock().await;
@@ -2633,7 +3168,10 @@ async fn handle_behaviour_event(
                                             file_hash: fh,
                                             chunk_index: 0,
                                         };
-                                        let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                        let req_id = swarm
+                                            .behaviour_mut()
+                                            .file_request
+                                            .send_request(&peer_id, request);
                                         outbound_request_map.insert(req_id, rid);
                                     }
                                 }
@@ -2641,7 +3179,12 @@ async fn handle_behaviour_event(
                         }
                     }
                 }
-                Event::OutboundFailure { peer, error, request_id: outbound_req_id, .. } => {
+                Event::OutboundFailure {
+                    peer,
+                    error,
+                    request_id: outbound_req_id,
+                    ..
+                } => {
                     let our_request_id = outbound_request_map.remove(&outbound_req_id);
                     let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
 
@@ -2652,15 +3195,25 @@ async fn handle_behaviour_event(
                             dl.retry_counts[chunk_index as usize] += 1;
 
                             if dl.retry_counts[chunk_index as usize] <= MAX_CHUNK_RETRIES {
-                                println!("🔄 Retrying chunk {} after outbound failure (attempt {})", chunk_index, dl.retry_counts[chunk_index as usize]);
+                                println!(
+                                    "🔄 Retrying chunk {} after outbound failure (attempt {})",
+                                    chunk_index, dl.retry_counts[chunk_index as usize]
+                                );
                                 let peer_id = dl.peer_id;
                                 let fh = dl.file_hash.clone();
                                 let rid = dl.request_id.clone();
                                 drop(downloads);
                                 // Wait before retry
                                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                                let request = ChunkRequest::Chunk { request_id: rid.clone(), file_hash: fh, chunk_index };
-                                let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
+                                let request = ChunkRequest::Chunk {
+                                    request_id: rid.clone(),
+                                    file_hash: fh,
+                                    chunk_index,
+                                };
+                                let req_id = swarm
+                                    .behaviour_mut()
+                                    .file_request
+                                    .send_request(&peer_id, request);
                                 outbound_request_map.insert(req_id, rid);
                                 return;
                             } else {
@@ -2689,10 +3242,13 @@ async fn handle_behaviour_event(
                         }
                     };
                     println!("❌ File request failed to {:?}: {:?}", peer, error);
-                    let _ = app.emit("file-download-failed", serde_json::json!({
-                        "peerId": peer.to_string(),
-                        "error": user_error
-                    }));
+                    let _ = events.emit(
+                        "file-download-failed",
+                        serde_json::json!({
+                            "peerId": peer.to_string(),
+                            "error": user_error
+                        }),
+                    );
                 }
                 Event::InboundFailure { peer, error, .. } => {
                     println!("Inbound file request failed from {:?}: {:?}", peer, error);
@@ -2700,51 +3256,75 @@ async fn handle_behaviour_event(
                 _ => {}
             }
         }
-        DhtBehaviourEvent::RelayClient(event) => {
-            match event {
-                relay::client::Event::ReservationReqAccepted { relay_peer_id, renewal, .. } => {
-                    let action = if renewal { "renewed" } else { "accepted" };
-                    println!("🔄 Relay reservation {} by {}", action, relay_peer_id);
-                    let _ = app.emit("relay-reservation", serde_json::json!({
+        DhtBehaviourEvent::RelayClient(event) => match event {
+            relay::client::Event::ReservationReqAccepted {
+                relay_peer_id,
+                renewal,
+                ..
+            } => {
+                let action = if renewal { "renewed" } else { "accepted" };
+                println!("🔄 Relay reservation {} by {}", action, relay_peer_id);
+                let _ = events.emit(
+                    "relay-reservation",
+                    serde_json::json!({
                         "relayPeerId": relay_peer_id.to_string(),
                         "renewal": renewal,
-                    }));
-                }
-                relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
-                    println!("✅ Outbound relay circuit established via {}", relay_peer_id);
-                    let _ = app.emit("relay-circuit-established", serde_json::json!({
+                    }),
+                );
+            }
+            relay::client::Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+                println!(
+                    "✅ Outbound relay circuit established via {}",
+                    relay_peer_id
+                );
+                let _ = events.emit(
+                    "relay-circuit-established",
+                    serde_json::json!({
                         "relayPeerId": relay_peer_id.to_string(),
                         "direction": "outbound",
-                    }));
-                }
-                relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
-                    println!("✅ Inbound relay circuit from {}", src_peer_id);
-                    let _ = app.emit("relay-circuit-established", serde_json::json!({
+                    }),
+                );
+            }
+            relay::client::Event::InboundCircuitEstablished { src_peer_id, .. } => {
+                println!("✅ Inbound relay circuit from {}", src_peer_id);
+                let _ = events.emit(
+                    "relay-circuit-established",
+                    serde_json::json!({
                         "srcPeerId": src_peer_id.to_string(),
                         "direction": "inbound",
-                    }));
-                }
+                    }),
+                );
             }
-        }
-        DhtBehaviourEvent::Dcutr(event) => {
-            match &event.result {
-                Ok(connection_id) => {
-                    println!("🕳️ DCUtR hole-punch succeeded with {} (conn {:?})", event.remote_peer_id, connection_id);
-                    let _ = app.emit("dcutr-event", serde_json::json!({
+        },
+        DhtBehaviourEvent::Dcutr(event) => match &event.result {
+            Ok(connection_id) => {
+                println!(
+                    "🕳️ DCUtR hole-punch succeeded with {} (conn {:?})",
+                    event.remote_peer_id, connection_id
+                );
+                let _ = events.emit(
+                    "dcutr-event",
+                    serde_json::json!({
                         "remotePeerId": event.remote_peer_id.to_string(),
                         "success": true,
-                    }));
-                }
-                Err(e) => {
-                    println!("🕳️ DCUtR hole-punch failed with {}: {}", event.remote_peer_id, e);
-                    let _ = app.emit("dcutr-event", serde_json::json!({
+                    }),
+                );
+            }
+            Err(e) => {
+                println!(
+                    "🕳️ DCUtR hole-punch failed with {}: {}",
+                    event.remote_peer_id, e
+                );
+                let _ = events.emit(
+                    "dcutr-event",
+                    serde_json::json!({
                         "remotePeerId": event.remote_peer_id.to_string(),
                         "success": false,
                         "error": format!("{}", e),
-                    }));
-                }
+                    }),
+                );
             }
-        }
+        },
         _ => {}
     }
 }
@@ -2791,9 +3371,10 @@ mod tests {
 
     #[test]
     fn test_extract_peer_id_from_valid_multiaddr() {
-        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-            .parse()
-            .unwrap();
+        let addr: Multiaddr =
+            "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
+                .parse()
+                .unwrap();
         let peer_id = extract_peer_id_from_multiaddr(&addr);
         assert!(peer_id.is_some());
         assert_eq!(
@@ -2811,9 +3392,10 @@ mod tests {
 
     #[test]
     fn test_remove_peer_id_from_multiaddr() {
-        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-            .parse()
-            .unwrap();
+        let addr: Multiaddr =
+            "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
+                .parse()
+                .unwrap();
         let transport = remove_peer_id_from_multiaddr(&addr);
         assert_eq!(transport.to_string(), "/ip4/127.0.0.1/tcp/4001");
     }
@@ -2833,9 +3415,10 @@ mod tests {
 
     #[test]
     fn test_extract_peer_id_from_ipv6_multiaddr() {
-        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-            .parse()
-            .unwrap();
+        let addr: Multiaddr =
+            "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
+                .parse()
+                .unwrap();
         let peer_id = extract_peer_id_from_multiaddr(&addr);
         assert!(peer_id.is_some());
         assert_eq!(
@@ -2846,9 +3429,10 @@ mod tests {
 
     #[test]
     fn test_remove_peer_id_from_ipv6_multiaddr() {
-        let addr: Multiaddr = "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
-            .parse()
-            .unwrap();
+        let addr: Multiaddr =
+            "/ip6/::1/tcp/4001/p2p/12D3KooWAHWpUyBsFvgC6fb9jjmtDtKMM1qUChiNjtBDrTTEAY5C"
+                .parse()
+                .unwrap();
         let transport = remove_peer_id_from_multiaddr(&addr);
         assert_eq!(transport.to_string(), "/ip6/::1/tcp/4001");
     }
@@ -2942,7 +3526,11 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
-        if let ChunkRequest::FileInfo { request_id, file_hash } = deserialized {
+        if let ChunkRequest::FileInfo {
+            request_id,
+            file_hash,
+        } = deserialized
+        {
             assert_eq!(request_id, "req-001");
             assert_eq!(file_hash, "abc123def456");
         } else {
@@ -2959,7 +3547,12 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
-        if let ChunkRequest::Chunk { request_id, file_hash, chunk_index } = deserialized {
+        if let ChunkRequest::Chunk {
+            request_id,
+            file_hash,
+            chunk_index,
+        } = deserialized
+        {
             assert_eq!(request_id, "req-001");
             assert_eq!(file_hash, "abc123");
             assert_eq!(chunk_index, 42);
@@ -2977,14 +3570,27 @@ mod tests {
             file_size: 1048576,
             chunk_size: 262144,
             total_chunks: 4,
-            chunk_hashes: vec!["hash0".to_string(), "hash1".to_string(), "hash2".to_string(), "hash3".to_string()],
+            chunk_hashes: vec![
+                "hash0".to_string(),
+                "hash1".to_string(),
+                "hash2".to_string(),
+                "hash3".to_string(),
+            ],
             price_wei: "1000000000000000".to_string(),
             wallet_address: "0x1234567890abcdef".to_string(),
             error: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::FileInfo { total_chunks, chunk_hashes, price_wei, wallet_address, error, .. } = deserialized {
+        if let ChunkResponse::FileInfo {
+            total_chunks,
+            chunk_hashes,
+            price_wei,
+            wallet_address,
+            error,
+            ..
+        } = deserialized
+        {
             assert_eq!(total_chunks, 4);
             assert_eq!(chunk_hashes.len(), 4);
             assert_eq!(price_wei, "1000000000000000");
@@ -3007,7 +3613,14 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::Chunk { chunk_index, chunk_data, chunk_hash, error, .. } = deserialized {
+        if let ChunkResponse::Chunk {
+            chunk_index,
+            chunk_data,
+            chunk_hash,
+            error,
+            ..
+        } = deserialized
+        {
             assert_eq!(chunk_index, 0);
             assert_eq!(chunk_data.unwrap(), vec![10, 20, 30]);
             assert_eq!(chunk_hash, "deadbeef");
@@ -3108,7 +3721,13 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
-        if let ChunkRequest::PaymentProof { request_id, file_hash, payment_tx, payer_address } = deserialized {
+        if let ChunkRequest::PaymentProof {
+            request_id,
+            file_hash,
+            payment_tx,
+            payer_address,
+        } = deserialized
+        {
             assert_eq!(request_id, "req-001");
             assert_eq!(file_hash, "abc123");
             assert_eq!(payment_tx, "0xdeadbeef");
@@ -3128,7 +3747,10 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::PaymentAck { accepted, error, .. } = deserialized {
+        if let ChunkResponse::PaymentAck {
+            accepted, error, ..
+        } = deserialized
+        {
             assert!(accepted);
             assert!(error.is_none());
         } else {
@@ -3146,7 +3768,10 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: ChunkResponse = serde_json::from_str(&json).unwrap();
-        if let ChunkResponse::PaymentAck { accepted, error, .. } = deserialized {
+        if let ChunkResponse::PaymentAck {
+            accepted, error, ..
+        } = deserialized
+        {
             assert!(!accepted);
             assert_eq!(error.unwrap(), "Insufficient payment");
         } else {
@@ -3164,7 +3789,7 @@ mod tests {
 
         let hashes = compute_chunk_hashes(path.to_str().unwrap()).unwrap();
         assert_eq!(hashes.len(), 3); // ceil((2*CHUNK_SIZE + 100) / CHUNK_SIZE) = 3
-        // Each hash should be a 64-char hex string (SHA-256)
+                                     // Each hash should be a 64-char hex string (SHA-256)
         for h in &hashes {
             assert_eq!(h.len(), 64);
         }
