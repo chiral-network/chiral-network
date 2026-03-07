@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tauri::Emitter;
+
+use crate::event_sink::EventSink;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +41,7 @@ impl FileTransferService {
 
     pub async fn send_file(
         &self,
-        app: tauri::AppHandle,
+        events: EventSink,
         peer_id: String,
         file_name: String,
         file_data: Vec<u8>,
@@ -63,12 +64,15 @@ impl FileTransferService {
         }
 
         // Emit file-sent event
-        let _ = app.emit("file-sent", serde_json::json!({
-            "transferId": transfer_id,
-            "peerId": peer_id,
-            "fileName": file_name,
-            "fileSize": file_size
-        }));
+        events.emit(
+            "file-sent",
+            serde_json::json!({
+                "transferId": transfer_id,
+                "peerId": peer_id,
+                "fileName": file_name,
+                "fileSize": file_size
+            }),
+        );
 
         // In a real implementation, this would use libp2p request-response protocol
         // to send the file to the peer. For now, we emit the event and mark as completed.
@@ -82,17 +86,20 @@ impl FileTransferService {
             }
         }
 
-        let _ = app.emit("file-transfer-complete", serde_json::json!({
-            "transferId": transfer_id,
-            "status": "completed"
-        }));
+        events.emit(
+            "file-transfer-complete",
+            serde_json::json!({
+                "transferId": transfer_id,
+                "status": "completed"
+            }),
+        );
 
         Ok(())
     }
 
     pub async fn receive_file_request(
         &self,
-        app: tauri::AppHandle,
+        events: EventSink,
         from_peer_id: String,
         file_name: String,
         file_data: Vec<u8>,
@@ -114,17 +121,25 @@ impl FileTransferService {
         }
 
         // Emit event to frontend for user to accept/decline
-        let _ = app.emit("file-transfer-request", serde_json::json!({
-            "transferId": transfer_id,
-            "fromPeerId": from_peer_id,
-            "fileName": file_name,
-            "fileSize": file_size
-        }));
+        events.emit(
+            "file-transfer-request",
+            serde_json::json!({
+                "transferId": transfer_id,
+                "fromPeerId": from_peer_id,
+                "fileName": file_name,
+                "fileSize": file_size
+            }),
+        );
 
         Ok(())
     }
 
-    pub async fn accept_transfer(&self, app: tauri::AppHandle, transfer_id: String, custom_download_dir: Option<String>) -> Result<String, String> {
+    pub async fn accept_transfer(
+        &self,
+        events: EventSink,
+        transfer_id: String,
+        custom_download_dir: Option<String>,
+    ) -> Result<String, String> {
         let mut incoming = self.pending_incoming.lock().await;
 
         if let Some(transfer) = incoming.get_mut(&transfer_id) {
@@ -133,8 +148,11 @@ impl FileTransferService {
             // Get Downloads folder path
             let downloads_dir = if let Some(ref dir) = custom_download_dir {
                 let p = std::path::PathBuf::from(dir);
-                if p.exists() && p.is_dir() { p } else {
-                    dirs::download_dir().ok_or_else(|| "Could not find Downloads folder".to_string())?
+                if p.exists() && p.is_dir() {
+                    p
+                } else {
+                    dirs::download_dir()
+                        .ok_or_else(|| "Could not find Downloads folder".to_string())?
                 }
             } else {
                 dirs::download_dir().ok_or_else(|| "Could not find Downloads folder".to_string())?
@@ -142,7 +160,7 @@ impl FileTransferService {
 
             // Create file path
             let file_path = downloads_dir.join(&transfer.file_name);
-            
+
             // Save file to disk
             std::fs::write(&file_path, &transfer.file_data)
                 .map_err(|e| format!("Failed to save file: {}", e))?;
@@ -152,12 +170,15 @@ impl FileTransferService {
             let file_path_str = file_path.to_string_lossy().to_string();
 
             // Emit file-received event with file path
-            let _ = app.emit("file-received", serde_json::json!({
-                "transferId": transfer_id,
-                "fileName": transfer.file_name,
-                "fromPeerId": transfer.peer_id,
-                "filePath": file_path_str
-            }));
+            events.emit(
+                "file-received",
+                serde_json::json!({
+                    "transferId": transfer_id,
+                    "fileName": transfer.file_name,
+                    "fromPeerId": transfer.peer_id,
+                    "filePath": file_path_str
+                }),
+            );
 
             Ok(file_path_str)
         } else {
@@ -178,7 +199,8 @@ impl FileTransferService {
 
     pub async fn get_pending_incoming(&self) -> Vec<PendingTransfer> {
         let incoming = self.pending_incoming.lock().await;
-        incoming.values()
+        incoming
+            .values()
             .filter(|t| t.status == TransferStatus::Pending)
             .cloned()
             .collect()
@@ -186,8 +208,11 @@ impl FileTransferService {
 
     pub async fn get_pending_outgoing(&self) -> Vec<PendingTransfer> {
         let outgoing = self.pending_outgoing.lock().await;
-        outgoing.values()
-            .filter(|t| t.status == TransferStatus::Pending || t.status == TransferStatus::InProgress)
+        outgoing
+            .values()
+            .filter(|t| {
+                t.status == TransferStatus::Pending || t.status == TransferStatus::InProgress
+            })
             .cloned()
             .collect()
     }
