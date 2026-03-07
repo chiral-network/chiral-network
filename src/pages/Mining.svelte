@@ -13,19 +13,18 @@
     AlertTriangle,
     Loader2,
     Globe,
-    Gauge,
     Blocks,
     Coins,
     Clock,
     Cpu,
     History,
     ChevronDown,
-    ChevronUp
+    ChevronUp,
+    Monitor
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Mining');
 
-  // Types
   interface GethStatus {
     installed: boolean;
     running: boolean;
@@ -45,6 +44,27 @@
     totalMinedChi: number;
   }
 
+  interface GpuDevice {
+    id: string;
+    name: string;
+  }
+
+  interface GpuMiningCapabilities {
+    supported: boolean;
+    binaryPath: string | null;
+    devices: GpuDevice[];
+    running: boolean;
+    activeDevices: string[];
+    lastError: string | null;
+  }
+
+  interface GpuMiningStatus {
+    running: boolean;
+    hashRate: number;
+    activeDevices: string[];
+    lastError: string | null;
+  }
+
   interface MinedBlock {
     blockNumber: number;
     timestamp: number;
@@ -53,45 +73,83 @@
     difficulty: number;
   }
 
-  // State
+  type MiningMode = 'cpu' | 'gpu';
+
+  const hardwareThreads = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
+  const savedThreads = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-threads') : null;
+  const savedMode = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-mode') : null;
+  const savedGpuDevicesRaw =
+    typeof window !== 'undefined' ? localStorage.getItem('chiral-gpu-devices') : null;
+  let initialGpuDevices: string[] = [];
+  if (savedGpuDevicesRaw) {
+    try {
+      const parsed = JSON.parse(savedGpuDevicesRaw);
+      if (Array.isArray(parsed)) {
+        initialGpuDevices = parsed.filter((v): v is string => typeof v === 'string');
+      }
+    } catch {
+      initialGpuDevices = [];
+    }
+  }
+
   let gethStatus = $state<GethStatus | null>(null);
   let miningStatus = $state<MiningStatus | null>(null);
+  let gpuCapabilities = $state<GpuMiningCapabilities | null>(null);
+  let gpuMiningStatus = $state<GpuMiningStatus | null>(null);
+  let miningMode = $state<MiningMode>(savedMode === 'gpu' ? 'gpu' : 'cpu');
+  let selectedGpuDevices = $state<string[]>(initialGpuDevices);
+
   let minedBlocks = $state<MinedBlock[]>([]);
   let isLoadingHistory = $state(false);
   let showHistory = $state(true);
   let isLoading = $state(true);
   let isStartingMining = $state(false);
-  let maxThreads = $state(navigator.hardwareConcurrency || 4);
+  let maxThreads = $state(hardwareThreads);
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
+  let miningThreads = $state(
+    savedThreads ? Math.min(parseInt(savedThreads, 10) || 1, hardwareThreads) : 1
+  );
 
-  // Load saved thread count from localStorage, default to 1
-  const savedThreads = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-threads') : null;
-  let miningThreads = $state(savedThreads ? Math.min(parseInt(savedThreads, 10) || 1, navigator.hardwareConcurrency || 4) : 1);
-
-  // Mining session tracking
   let miningStartTime = $state<number | null>(null);
   let miningElapsed = $state('00:00:00');
   let elapsedInterval: ReturnType<typeof setInterval> | null = null;
 
+  let activeMiningBackend = $derived(
+    gpuMiningStatus?.running ? 'gpu' : miningStatus?.mining ? 'cpu' : 'none'
+  );
+  let isAnyMining = $derived(activeMiningBackend !== 'none');
+  let displayHashRate = $derived(
+    activeMiningBackend === 'gpu' ? gpuMiningStatus?.hashRate || 0 : miningStatus?.hashRate || 0
+  );
+  let activeGpuCount = $derived(gpuMiningStatus?.activeDevices?.length || 0);
 
-  // Save thread count whenever it changes
   $effect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('chiral-mining-threads', miningThreads.toString());
     }
   });
 
-  // Track mining elapsed time
   $effect(() => {
-    if (miningStatus?.mining && !miningStartTime) {
-      // Restore or start timer
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chiral-mining-mode', miningMode);
+    }
+  });
+
+  $effect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chiral-gpu-devices', JSON.stringify(selectedGpuDevices));
+    }
+  });
+
+  $effect(() => {
+    if (isAnyMining && !miningStartTime) {
       const saved = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-start') : null;
       miningStartTime = saved ? parseInt(saved, 10) : Date.now();
       if (!saved && typeof window !== 'undefined') {
         localStorage.setItem('chiral-mining-start', miningStartTime.toString());
       }
       elapsedInterval = setInterval(updateElapsed, 1000);
-    } else if (!miningStatus?.mining && miningStartTime) {
+    } else if (!isAnyMining && miningStartTime) {
       miningStartTime = null;
       if (typeof window !== 'undefined') {
         localStorage.removeItem('chiral-mining-start');
@@ -104,27 +162,30 @@
     }
   });
 
-
   function updateElapsed() {
     if (!miningStartTime) return;
     const diff = Math.floor((Date.now() - miningStartTime) / 1000);
-    const h = Math.floor(diff / 3600).toString().padStart(2, '0');
-    const m = Math.floor((diff % 3600) / 60).toString().padStart(2, '0');
+    const h = Math.floor(diff / 3600)
+      .toString()
+      .padStart(2, '0');
+    const m = Math.floor((diff % 3600) / 60)
+      .toString()
+      .padStart(2, '0');
     const s = (diff % 60).toString().padStart(2, '0');
     miningElapsed = `${h}:${m}:${s}`;
   }
 
-  // Check if Tauri is available
   function isTauri(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   }
 
-  // Load status on mount
   onMount(async () => {
     if (isTauri()) {
-      await loadStatus();
+      await Promise.all([loadStatus(), loadGpuCapabilities()]);
       loadMinedBlocks();
-      refreshInterval = setInterval(loadStatus, 5000);
+      refreshInterval = setInterval(() => {
+        loadStatus();
+      }, 5000);
     }
     isLoading = false;
   });
@@ -138,7 +199,6 @@
     }
   });
 
-  // Load Geth and mining status
   async function loadStatus() {
     if (!isTauri()) {
       gethStatus = {
@@ -151,17 +211,21 @@
         peerCount: 0,
         chainId: 0
       };
+      miningStatus = null;
+      gpuMiningStatus = null;
       return;
     }
 
     try {
-      const [geth, mining] = await Promise.all([
+      const [geth, mining, gpu] = await Promise.all([
         invoke<GethStatus>('get_geth_status'),
-        invoke<MiningStatus>('get_mining_status').catch(() => null)
+        invoke<MiningStatus>('get_mining_status').catch(() => null),
+        invoke<GpuMiningStatus>('get_gpu_mining_status').catch(() => null)
       ]);
 
       gethStatus = geth;
       miningStatus = mining;
+      gpuMiningStatus = gpu;
     } catch (error) {
       log.error('Failed to load status:', error);
       gethStatus = {
@@ -177,7 +241,31 @@
     }
   }
 
-  // Start Mining
+  async function loadGpuCapabilities() {
+    if (!isTauri()) return;
+
+    try {
+      const caps = await invoke<GpuMiningCapabilities>('get_gpu_mining_capabilities');
+      gpuCapabilities = caps;
+
+      const ids = new Set(caps.devices.map((d) => d.id));
+      selectedGpuDevices = selectedGpuDevices.filter((id) => ids.has(id));
+      if (selectedGpuDevices.length === 0 && caps.devices.length > 0) {
+        selectedGpuDevices = [caps.devices[0].id];
+      }
+    } catch (error) {
+      log.error('Failed to load GPU capabilities:', error);
+      gpuCapabilities = {
+        supported: false,
+        binaryPath: null,
+        devices: [],
+        running: false,
+        activeDevices: [],
+        lastError: String(error)
+      };
+    }
+  }
+
   async function handleStartMining() {
     if (!isTauri()) return;
 
@@ -187,9 +275,27 @@
         await invoke('set_miner_address', { address: $walletAccount.address });
       }
 
-      await invoke('start_mining', { threads: miningThreads });
-      toasts.show(`Mining started with ${miningThreads} thread(s)!`, 'success');
-      await loadStatus();
+      if (miningMode === 'gpu') {
+        if (!gpuCapabilities?.supported) {
+          throw new Error(
+            'GPU miner is not available. Install ethminer or set CHIRAL_GPU_MINER_PATH.'
+          );
+        }
+        await invoke('start_gpu_mining', {
+          deviceIds: selectedGpuDevices.length > 0 ? selectedGpuDevices : null
+        });
+        toasts.show(
+          `GPU mining started${
+            selectedGpuDevices.length > 0 ? ` (${selectedGpuDevices.length} device(s))` : ''
+          }!`,
+          'success'
+        );
+      } else {
+        await invoke('start_mining', { threads: miningThreads });
+        toasts.show(`CPU mining started with ${miningThreads} thread(s)!`, 'success');
+      }
+
+      await Promise.all([loadStatus(), loadGpuCapabilities()]);
     } catch (error) {
       log.error('Failed to start mining:', error);
       toasts.show(`Failed to start mining: ${error}`, 'error');
@@ -198,21 +304,35 @@
     }
   }
 
-  // Stop Mining
   async function handleStopMining() {
     if (!isTauri()) return;
 
     try {
-      await invoke('stop_mining');
+      if (activeMiningBackend === 'gpu') {
+        await invoke('stop_gpu_mining');
+      } else {
+        await invoke('stop_mining');
+      }
       toasts.show('Mining stopped', 'info');
-      await loadStatus();
+      await Promise.all([loadStatus(), loadGpuCapabilities()]);
     } catch (error) {
       log.error('Failed to stop mining:', error);
       toasts.show(`Failed to stop mining: ${error}`, 'error');
     }
   }
 
-  // Load mined blocks history
+  function toggleGpuDevice(id: string) {
+    if (selectedGpuDevices.includes(id)) {
+      selectedGpuDevices = selectedGpuDevices.filter((v) => v !== id);
+      return;
+    }
+    selectedGpuDevices = [...selectedGpuDevices, id];
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadStatus(), loadGpuCapabilities()]);
+  }
+
   async function loadMinedBlocks() {
     if (!isTauri()) return;
     isLoadingHistory = true;
@@ -226,18 +346,13 @@
     }
   }
 
-  // Derived: total rewards from history
-  let totalHistoryReward = $derived(
-    minedBlocks.reduce((sum, b) => sum + b.rewardChi, 0)
-  );
+  let totalHistoryReward = $derived(minedBlocks.reduce((sum, b) => sum + b.rewardChi, 0));
 
-  // Format timestamp to readable date/time
   function formatTimestamp(ts: number): string {
     if (ts === 0) return 'Unknown';
     return new Date(ts * 1000).toLocaleString();
   }
 
-  // Format hash rate
   function formatHashRate(rate: number): string {
     if (rate >= 1e9) return `${(rate / 1e9).toFixed(2)} GH/s`;
     if (rate >= 1e6) return `${(rate / 1e6).toFixed(2)} MH/s`;
@@ -253,7 +368,7 @@
       <p class="text-gray-600 dark:text-gray-400 mt-1">Mine CHI tokens on the Chiral Network</p>
     </div>
     <button
-      onclick={loadStatus}
+      onclick={refreshAll}
       disabled={isLoading}
       class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
       title="Refresh status"
@@ -309,19 +424,19 @@
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <div class="p-2 {miningStatus?.mining ? 'bg-yellow-100 dark:bg-yellow-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
-            <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-600 dark:text-gray-400'}" />
+          <div class="p-2 {isAnyMining ? 'bg-yellow-100 dark:bg-yellow-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+            <Pickaxe class="w-6 h-6 {isAnyMining ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-600 dark:text-gray-400'}" />
           </div>
           <div>
             <h2 class="font-semibold dark:text-white">Mining</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Earn CHI by mining blocks</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Earn CHI by mining blocks with CPU or GPU</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
-          {#if miningStatus?.mining}
+          {#if isAnyMining}
             <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full text-sm">
               <span class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
-              Mining
+              Mining ({activeMiningBackend.toUpperCase()})
             </span>
           {:else}
             <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-sm">
@@ -340,7 +455,7 @@
             <span class="text-sm text-gray-600 dark:text-gray-400">Hash Rate</span>
           </div>
           <p class="text-2xl font-bold dark:text-white">
-            {miningStatus?.mining ? formatHashRate(miningStatus?.hashRate || 0) : '0 H/s'}
+            {isAnyMining ? formatHashRate(displayHashRate) : '0 H/s'}
           </p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
@@ -367,16 +482,25 @@
             <span class="text-sm text-gray-600 dark:text-gray-400">Session Time</span>
           </div>
           <p class="text-2xl font-bold dark:text-white">
-            {miningStatus?.mining ? miningElapsed : '--:--:--'}
+            {isAnyMining ? miningElapsed : '--:--:--'}
           </p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
           <div class="flex items-center gap-2 mb-2">
-            <Cpu class="w-4 h-4 text-green-500" />
-            <span class="text-sm text-gray-600 dark:text-gray-400">Threads Active</span>
+            {#if activeMiningBackend === 'gpu'}
+              <Monitor class="w-4 h-4 text-cyan-500" />
+              <span class="text-sm text-gray-600 dark:text-gray-400">GPUs Active</span>
+            {:else}
+              <Cpu class="w-4 h-4 text-green-500" />
+              <span class="text-sm text-gray-600 dark:text-gray-400">Threads Active</span>
+            {/if}
           </div>
           <p class="text-2xl font-bold dark:text-white">
-            {miningStatus?.mining ? `${miningThreads} / ${maxThreads}` : `0 / ${maxThreads}`}
+            {#if activeMiningBackend === 'gpu'}
+              {isAnyMining ? `${activeGpuCount}` : '0'}
+            {:else}
+              {isAnyMining ? `${miningThreads} / ${maxThreads}` : `0 / ${maxThreads}`}
+            {/if}
           </p>
         </div>
       </div>
@@ -392,29 +516,96 @@
         </p>
       </div>
 
-      <!-- Thread Control -->
+      <!-- Mining Backend Mode -->
       <div class="mb-4">
-        <label for="threads" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Mining Threads ({miningThreads} / {maxThreads})
-        </label>
-        <input
-          id="threads"
-          type="range"
-          min="1"
-          max={maxThreads}
-          bind:value={miningThreads}
-          disabled={miningStatus?.mining}
-          class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
-        />
-        <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-          <span>1 thread</span>
-          <span>{maxThreads} threads (max)</span>
+        <div class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Mining Backend
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <button
+            onclick={() => (miningMode = 'cpu')}
+            disabled={isAnyMining}
+            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'cpu' ? 'bg-primary-100 dark:bg-primary-900/30 border-primary-300 dark:border-primary-700 text-primary-700 dark:text-primary-300' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300'}"
+          >
+            CPU Miner
+          </button>
+          <button
+            onclick={() => (miningMode = 'gpu')}
+            disabled={isAnyMining}
+            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'gpu' ? 'bg-primary-100 dark:bg-primary-900/30 border-primary-300 dark:border-primary-700 text-primary-700 dark:text-primary-300' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300'}"
+          >
+            GPU Miner
+          </button>
         </div>
       </div>
 
+      {#if miningMode === 'cpu'}
+        <!-- Thread Control -->
+        <div class="mb-4">
+          <label for="threads" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            Mining Threads ({miningThreads} / {maxThreads})
+          </label>
+          <input
+            id="threads"
+            type="range"
+            min="1"
+            max={maxThreads}
+            bind:value={miningThreads}
+            disabled={isAnyMining}
+            class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+          />
+          <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <span>1 thread</span>
+            <span>{maxThreads} threads (max)</span>
+          </div>
+        </div>
+      {:else}
+        <!-- GPU Control -->
+        <div class="mb-4">
+          {#if !gpuCapabilities?.supported}
+            <div class="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
+              <p class="text-sm text-amber-800 dark:text-amber-300">
+                GPU miner is unavailable. Install `ethminer` or set `CHIRAL_GPU_MINER_PATH`.
+              </p>
+            </div>
+          {:else}
+            <div class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              GPU Devices ({selectedGpuDevices.length} selected)
+            </div>
+            {#if gpuCapabilities.devices.length === 0}
+              <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700 p-3 text-sm text-gray-600 dark:text-gray-300">
+                No devices were reported by the miner binary. You can still try starting GPU mining with auto-detection.
+              </div>
+            {:else}
+              <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-700">
+                {#each gpuCapabilities.devices as device (device.id)}
+                  <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={selectedGpuDevices.includes(device.id)}
+                      onchange={() => toggleGpuDevice(device.id)}
+                      disabled={isAnyMining}
+                      class="rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                    />
+                    <span class="font-mono text-xs text-gray-500 dark:text-gray-400">[{device.id}]</span>
+                    <span>{device.name}</span>
+                  </label>
+                {/each}
+              </div>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+
+      {#if gpuMiningStatus?.lastError}
+        <div class="mb-4 rounded-lg border border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/20 p-3">
+          <p class="text-sm text-red-700 dark:text-red-300">{gpuMiningStatus.lastError}</p>
+        </div>
+      {/if}
+
       <!-- Mining Controls -->
       <div class="flex gap-3">
-        {#if miningStatus?.mining}
+        {#if isAnyMining}
           <button
             onclick={handleStopMining}
             class="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
@@ -425,7 +616,7 @@
         {:else}
           <button
             onclick={handleStartMining}
-            disabled={isStartingMining}
+            disabled={isStartingMining || (miningMode === 'gpu' && !gpuCapabilities?.supported)}
             class="flex-1 px-4 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {#if isStartingMining}
@@ -433,7 +624,11 @@
               Starting...
             {:else}
               <Pickaxe class="w-5 h-5" />
-              Start Mining
+              {#if miningMode === 'gpu'}
+                Start GPU Mining
+              {:else}
+                Start CPU Mining
+              {/if}
             {/if}
           </button>
         {/if}

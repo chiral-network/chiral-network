@@ -40,6 +40,29 @@ export interface MiningStatus {
   mining: boolean;
   hashRate: number;
   minerAddress: string | null;
+  totalMinedWei?: string;
+  totalMinedChi?: number;
+}
+
+export interface GpuDevice {
+  id: string;
+  name: string;
+}
+
+export interface GpuMiningCapabilities {
+  supported: boolean;
+  binaryPath: string | null;
+  devices: GpuDevice[];
+  running: boolean;
+  activeDevices: string[];
+  lastError: string | null;
+}
+
+export interface GpuMiningStatus {
+  running: boolean;
+  hashRate: number;
+  activeDevices: string[];
+  lastError: string | null;
 }
 
 // ============================================================================
@@ -157,6 +180,36 @@ class GethService {
     const status = await invoke<MiningStatus>('get_mining_status');
     miningStatus.set(status);
     return status;
+  }
+
+  /**
+   * Read GPU mining capabilities and detected devices
+   */
+  async getGpuMiningCapabilities(): Promise<GpuMiningCapabilities> {
+    return await invoke<GpuMiningCapabilities>('get_gpu_mining_capabilities');
+  }
+
+  /**
+   * Start GPU mining with optional device ID allowlist
+   */
+  async startGpuMining(deviceIds?: string[]): Promise<void> {
+    await invoke('start_gpu_mining', {
+      deviceIds: deviceIds && deviceIds.length > 0 ? deviceIds : null,
+    });
+  }
+
+  /**
+   * Stop GPU mining
+   */
+  async stopGpuMining(): Promise<void> {
+    await invoke('stop_gpu_mining');
+  }
+
+  /**
+   * Get current GPU mining runtime status
+   */
+  async getGpuMiningStatus(): Promise<GpuMiningStatus> {
+    return await invoke<GpuMiningStatus>('get_gpu_mining_status');
   }
 
   /**

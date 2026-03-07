@@ -557,7 +557,7 @@ async fn mining_start(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<StartMiningRequest>,
 ) -> Response {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     match geth.start_mining(req.threads.unwrap_or(1)).await {
         Ok(()) => Json(json!({ "status": "started" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
@@ -565,7 +565,7 @@ async fn mining_start(
 }
 
 async fn mining_stop(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     match geth.stop_mining().await {
         Ok(()) => Json(json!({ "status": "stopped" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
