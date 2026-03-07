@@ -1052,6 +1052,20 @@ async fn check_gateway_health(port: u16) -> bool {
     }
 }
 
+async fn check_headless_api(port: u16) -> bool {
+    let url = format!("http://127.0.0.1:{}/api/headless/runtime", port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
+        .build();
+    let Ok(client) = client else {
+        return false;
+    };
+    match client.get(url).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
 fn locate_daemon_binary() -> Result<PathBuf, String> {
     let current =
         std::env::current_exe().map_err(|e| format!("Failed to get current exe: {}", e))?;
@@ -2328,11 +2342,22 @@ async fn handle_daemon(cmd: DaemonCommand) -> Result<(), String> {
                 let existing_pid = read_pid_file(&pid_path)?;
                 if process_exists(existing_pid) {
                     let healthy = check_gateway_health(port).await;
-                    println!(
-                        "Daemon already running (pid={}, health={})",
-                        existing_pid, healthy
-                    );
-                    return Ok(());
+                    let headless_api = check_headless_api(port).await;
+                    if healthy && headless_api {
+                        println!(
+                            "Daemon already running (pid={}, health={}, headless_api={})",
+                            existing_pid, healthy, headless_api
+                        );
+                        return Ok(());
+                    }
+
+                    if healthy && !headless_api {
+                        println!(
+                            "Found incompatible daemon (pid={}) without headless API; restarting...",
+                            existing_pid
+                        );
+                        terminate_process(existing_pid)?;
+                    }
                 }
                 let _ = std::fs::remove_file(&pid_path);
             }
@@ -2372,6 +2397,23 @@ async fn handle_daemon(cmd: DaemonCommand) -> Result<(), String> {
             }
 
             let pid = read_pid_file(&pid_path)?;
+            let mut headless_ready = false;
+            for _ in 0..180 {
+                if check_headless_api(port).await {
+                    headless_ready = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            if !headless_ready {
+                let _ = terminate_process(pid);
+                let _ = std::fs::remove_file(&pid_path);
+                return Err(
+                    "Daemon started but headless API did not become ready. Rebuild `chiral_daemon` and retry."
+                        .to_string(),
+                );
+            }
+
             println!("Daemon started (pid={}) on http://127.0.0.1:{}", pid, port);
             Ok(())
         }
@@ -2398,9 +2440,10 @@ async fn handle_daemon(cmd: DaemonCommand) -> Result<(), String> {
             let pid = read_pid_file(&pid_path)?;
             let alive = process_exists(pid);
             let healthy = check_gateway_health(port).await;
+            let headless_api = check_headless_api(port).await;
             println!(
-                "pid={} alive={} health={} url=http://127.0.0.1:{}",
-                pid, alive, healthy, port
+                "pid={} alive={} health={} headless_api={} url=http://127.0.0.1:{}",
+                pid, alive, healthy, headless_api, port
             );
             Ok(())
         }
