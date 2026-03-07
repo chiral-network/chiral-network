@@ -127,6 +127,6 @@ export const ratingApi = {
         body: JSON.stringify({ wallets }),
       },
     );
-    return resp.reputations;
+    return resp?.reputations && typeof resp.reputations === 'object' ? resp.reputations : {};
   },
 };

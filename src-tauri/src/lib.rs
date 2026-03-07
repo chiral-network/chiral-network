@@ -4165,6 +4165,12 @@ async fn drive_upload_file(
     let dest = files_dir.join(&storage_name);
     std::fs::write(&dest, &data).map_err(|e| format!("Failed to write file: {}", e))?;
 
+    // Compute and persist file hash at upload time so later seeding can be instant.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    let computed_merkle_root = hex::encode(hasher.finalize());
+
     let item = DsItem {
         id: item_id,
         name: file_name.clone(),
@@ -4178,7 +4184,7 @@ async fn drive_upload_file(
         storage_path: Some(storage_name),
         owner,
         is_public: true,
-        merkle_root,
+        merkle_root: merkle_root.or(Some(computed_merkle_root)),
         protocol: None,
         price_chi: None,
         seeding: false,
@@ -4382,8 +4388,8 @@ async fn publish_drive_file(
         return Err("owner required".into());
     }
 
-    // Look up the Drive item from the manifest
-    let (file_name, storage_path, _file_size) = {
+    // Look up the Drive item from the manifest.
+    let (file_name, storage_path, file_size_hint, existing_merkle_root) = {
         let m = state.drive_state.manifest.read().await;
         let item = m
             .items
@@ -4394,7 +4400,12 @@ async fn publish_drive_file(
             .storage_path
             .as_ref()
             .ok_or("Drive file has no storage path")?;
-        (item.name.clone(), sp.clone(), item.size.unwrap_or(0))
+        (
+            item.name.clone(),
+            sp.clone(),
+            item.size,
+            item.merkle_root.clone(),
+        )
     };
 
     // Resolve the full filesystem path
@@ -4405,15 +4416,35 @@ async fn publish_drive_file(
     }
     let full_path_str = full_path.to_string_lossy().to_string();
 
-    // Read file and compute SHA-256 hash
-    let file_data = std::fs::read(&full_path).map_err(|e| format!("Failed to read file: {}", e))?;
-    let actual_size = file_data.len() as u64;
+    let actual_size = match file_size_hint {
+        Some(sz) if sz > 0 => sz,
+        _ => std::fs::metadata(&full_path)
+            .map_err(|e| format!("Failed to stat file: {}", e))?
+            .len(),
+    };
 
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(&file_data);
-    let hash = hasher.finalize();
-    let file_hash = hex::encode(hash);
+    // Reuse persisted hash when available so publishing from Drive is instant.
+    let file_hash = if let Some(root) = existing_merkle_root.clone().filter(|h| !h.trim().is_empty()) {
+        root
+    } else {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+
+        let mut file =
+            std::fs::File::open(&full_path).map_err(|e| format!("Failed to open file: {}", e))?;
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 1024 * 1024];
+        loop {
+            let n = file
+                .read(&mut buf)
+                .map_err(|e| format!("Failed to read file while hashing: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        hex::encode(hasher.finalize())
+    };
 
     let proto = protocol.unwrap_or_else(|| "WebRTC".to_string());
 
@@ -4437,13 +4468,7 @@ async fn publish_drive_file(
         return Err("Wallet address is required when setting a file price".to_string());
     }
 
-    // Store file data in memory for serving to peers
-    {
-        let mut storage = state.file_storage.lock().await;
-        storage.insert(file_hash.clone(), file_data);
-    }
-
-    // Register with DHT and shared files map
+    // Register with DHT/shared-files map by filesystem path (no file upload/copy).
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
         let peer_id = dht.get_peer_id().await.unwrap_or_default();

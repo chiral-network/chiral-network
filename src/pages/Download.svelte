@@ -590,7 +590,9 @@
         seeders.flatMap(s => [s.peerId, s.walletAddress]).filter(Boolean)
       )];
       if (wallets.length === 0) return;
-      const ratings = await ratingApi.getBatchReputation(wallets);
+      const rawRatings = await ratingApi.getBatchReputation(wallets);
+      const ratings: Record<string, BatchReputationEntry> =
+        rawRatings && typeof rawRatings === 'object' ? rawRatings : {};
       seederRatings = ratings;
 
       let changed = false;
@@ -621,13 +623,15 @@
   }
 
   function getSeederReputation(seeder: SeederInfo): BatchReputationEntry | null {
+    if (!seeder) return null;
+    const ratings = seederRatings && typeof seederRatings === 'object' ? seederRatings : {};
     const wallet = seeder.walletAddress?.trim();
-    if (wallet && seederRatings[wallet]) {
-      return seederRatings[wallet];
+    if (wallet && ratings[wallet]) {
+      return ratings[wallet];
     }
     const peer = seeder.peerId?.trim();
-    if (peer && seederRatings[peer]) {
-      return seederRatings[peer];
+    if (peer && ratings[peer]) {
+      return ratings[peer];
     }
     return null;
   }
