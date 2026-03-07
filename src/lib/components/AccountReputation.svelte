@@ -1,22 +1,35 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Star, User, MessageSquare, Loader2, ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import {
+    ShieldCheck,
+    User,
+    MessageSquare,
+    Loader2,
+    ChevronLeft,
+    ChevronRight,
+    CheckCircle2,
+    XCircle,
+    Star,
+  } from 'lucide-svelte';
   import { walletAccount } from '$lib/stores';
-  import { ratingApi, setRatingOwner, type Rating } from '$lib/services/ratingApiService';
+  import { ratingApi, setRatingOwner, type ReputationEvent } from '$lib/services/ratingApiService';
   import { get } from 'svelte/store';
 
-  let ratings = $state<Rating[]>([]);
-  let average = $state(0);
-  let count = $state(0);
+  let events = $state<ReputationEvent[]>([]);
+  let elo = $state(50);
+  let baseElo = $state(50);
+  let completedCount = $state(0);
+  let failedCount = $state(0);
+  let ratingCount = $state(0);
+  let totalEarnedWei = $state('0');
   let loading = $state(true);
   let error = $state<string | null>(null);
 
-  // Pagination
-  const RATINGS_PER_PAGE = 5;
+  const EVENTS_PER_PAGE = 6;
   let currentPage = $state(0);
-  let totalPages = $derived(Math.max(1, Math.ceil(ratings.length / RATINGS_PER_PAGE)));
-  let paginatedRatings = $derived(
-    ratings.slice(currentPage * RATINGS_PER_PAGE, (currentPage + 1) * RATINGS_PER_PAGE)
+  let totalPages = $derived(Math.max(1, Math.ceil(events.length / EVENTS_PER_PAGE)));
+  let paginatedEvents = $derived(
+    events.slice(currentPage * EVENTS_PER_PAGE, (currentPage + 1) * EVENTS_PER_PAGE),
   );
 
   function formatAddr(addr: string): string {
@@ -32,7 +45,18 @@
     });
   }
 
-  async function loadRatings() {
+  function formatWeiAsChi(wei: string): string {
+    try {
+      const whole = BigInt(wei || '0');
+      if (whole === 0n) return '0';
+      const value = Number(whole) / 1e18;
+      return Number.isFinite(value) ? value.toFixed(value >= 1 ? 2 : 6) : '0';
+    } catch {
+      return '0';
+    }
+  }
+
+  async function loadReputation() {
     const wallet = get(walletAccount);
     if (!wallet?.address) {
       loading = false;
@@ -45,26 +69,30 @@
 
     try {
       setRatingOwner(wallet.address);
-      const resp = await ratingApi.getRatings(wallet.address);
-      ratings = resp.ratings.sort((a, b) => b.createdAt - a.createdAt);
-      average = resp.average;
-      count = resp.count;
+      const resp = await ratingApi.getReputation(wallet.address);
+      events = [...resp.events].sort((a, b) => b.createdAt - a.createdAt);
+      elo = resp.elo;
+      baseElo = resp.baseElo;
+      completedCount = resp.completedCount;
+      failedCount = resp.failedCount;
+      ratingCount = resp.ratingCount;
+      totalEarnedWei = resp.totalEarnedWei;
       currentPage = 0;
     } catch (err: any) {
-      error = `Failed to load ratings: ${err.message}`;
+      error = `Failed to load reputation: ${err.message}`;
     } finally {
       loading = false;
     }
   }
 
   onMount(() => {
-    loadRatings();
+    loadReputation();
   });
 
   $effect(() => {
     const wallet = $walletAccount;
     if (wallet) {
-      loadRatings();
+      loadReputation();
     }
   });
 </script>
@@ -75,63 +103,49 @@
   </div>
 {:else if error}
   <div class="text-center py-12">
-    <Star class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+    <ShieldCheck class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
     <p class="text-gray-500 dark:text-gray-400">{error}</p>
   </div>
 {:else}
-  <!-- Score overview -->
   <div class="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-5 mb-5">
-    <div class="flex items-center gap-6">
+    <div class="flex flex-wrap items-center gap-6">
       <div class="flex flex-col items-center">
-        <div class="text-4xl font-bold dark:text-white">
-          {count > 0 ? average.toFixed(1) : '—'}
-        </div>
-        <div class="flex gap-0.5 mt-1">
-          {#each [1, 2, 3, 4, 5] as star}
-            <Star
-              class="w-5 h-5 {count > 0 && average >= star ? 'text-yellow-400 fill-yellow-400' : count > 0 && average >= star - 0.5 ? 'text-yellow-400 fill-yellow-400/50' : 'text-gray-300 dark:text-gray-600'}"
-            />
-          {/each}
-        </div>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          {count} rating{count !== 1 ? 's' : ''}
-        </p>
+        <div class="text-4xl font-bold dark:text-white">{elo.toFixed(1)}</div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Elo (base {baseElo})</p>
       </div>
 
-      {#if count > 0}
-        <div class="flex-1 space-y-1.5">
-          {#each [5, 4, 3, 2, 1] as score}
-            {@const scoreCount = ratings.filter(r => r.score === score).length}
-            {@const pct = count > 0 ? (scoreCount / count) * 100 : 0}
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-gray-500 dark:text-gray-400 w-3 text-right">{score}</span>
-              <Star class="w-3 h-3 text-yellow-400 fill-yellow-400" />
-              <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
-                <div
-                  class="h-full bg-yellow-400 rounded-full transition-all"
-                  style="width: {pct}%"
-                ></div>
-              </div>
-              <span class="text-xs text-gray-400 dark:text-gray-500 w-8">{scoreCount}</span>
-            </div>
-          {/each}
+      <div class="flex-1 grid grid-cols-2 gap-3 text-sm">
+        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Completed</p>
+          <p class="font-semibold text-green-600 dark:text-green-400">{completedCount}</p>
         </div>
-      {/if}
+        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Failed</p>
+          <p class="font-semibold text-red-600 dark:text-red-400">{failedCount}</p>
+        </div>
+        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Ratings</p>
+          <p class="font-semibold text-gray-900 dark:text-white">{ratingCount}</p>
+        </div>
+        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+          <p class="text-xs text-gray-500 dark:text-gray-400">Earned (180d)</p>
+          <p class="font-semibold text-gray-900 dark:text-white">{formatWeiAsChi(totalEarnedWei)} CHI</p>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- Ratings list -->
-  {#if ratings.length === 0}
+  {#if events.length === 0}
     <div class="text-center py-12">
-      <Star class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-      <p class="text-gray-500 dark:text-gray-400">No ratings yet</p>
+      <ShieldCheck class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+      <p class="text-gray-500 dark:text-gray-400">No reputation events yet</p>
       <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">
-        When others download your files and leave a rating, it will appear here
+        Complete downloads and ratings will contribute to your Elo
       </p>
     </div>
   {:else}
     <div class="rounded-xl border border-gray-200 dark:border-gray-600 divide-y divide-gray-100 dark:divide-gray-600">
-      {#each paginatedRatings as rating (rating.id)}
+      {#each paginatedEvents as event (event.id)}
         <div class="p-4">
           <div class="flex items-start justify-between gap-4">
             <div class="flex items-start gap-3 min-w-0">
@@ -141,36 +155,52 @@
               <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
                   <span class="text-sm font-medium text-gray-900 dark:text-white font-mono">
-                    {formatAddr(rating.raterWallet)}
+                    {formatAddr(event.downloaderWallet)}
                   </span>
-                  <div class="flex gap-0.5">
+                  <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full {event.outcome === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}">
+                    {#if event.outcome === 'completed'}
+                      <CheckCircle2 class="w-3.5 h-3.5" />
+                      Completed
+                    {:else}
+                      <XCircle class="w-3.5 h-3.5" />
+                      Failed
+                    {/if}
+                  </span>
+                  <span class="text-xs text-gray-500 dark:text-gray-400">
+                    +{formatWeiAsChi(event.amountWei)} CHI
+                  </span>
+                </div>
+
+                {#if event.ratingScore}
+                  <div class="flex items-center gap-1 mt-1.5">
                     {#each [1, 2, 3, 4, 5] as star}
                       <Star
-                        class="w-3.5 h-3.5 {rating.score >= star ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300 dark:text-gray-600'}"
+                        class="w-3.5 h-3.5 {event.ratingScore >= star ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300 dark:text-gray-600'}"
                       />
                     {/each}
                   </div>
-                </div>
-                {#if rating.comment}
+                {/if}
+
+                {#if event.ratingComment}
                   <div class="flex items-start gap-1.5 mt-1.5">
                     <MessageSquare class="w-3.5 h-3.5 text-gray-400 mt-0.5 flex-shrink-0" />
-                    <p class="text-sm text-gray-600 dark:text-gray-300">{rating.comment}</p>
+                    <p class="text-sm text-gray-600 dark:text-gray-300">{event.ratingComment}</p>
                   </div>
                 {/if}
+
                 <p class="text-xs text-gray-400 dark:text-gray-500 mt-1.5 font-mono">
-                  File: {formatAddr(rating.fileHash)}
+                  File: {formatAddr(event.fileHash)}
                 </p>
               </div>
             </div>
             <span class="text-xs text-gray-400 dark:text-gray-500 whitespace-nowrap flex-shrink-0">
-              {formatDate(rating.createdAt)}
+              {formatDate(event.createdAt)}
             </span>
           </div>
         </div>
       {/each}
     </div>
 
-    <!-- Pagination -->
     {#if totalPages > 1}
       <div class="flex items-center justify-between mt-4">
         <button

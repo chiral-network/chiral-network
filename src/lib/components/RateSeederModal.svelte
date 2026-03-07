@@ -6,13 +6,14 @@
   import { toasts } from '$lib/toastStore';
 
   interface Props {
+    transferId: string;
     seederWallet: string;
     fileHash: string;
     fileName: string;
     onclose: () => void;
   }
 
-  let { seederWallet, fileHash, fileName, onclose }: Props = $props();
+  let { transferId, seederWallet, fileHash, fileName, onclose }: Props = $props();
 
   let selectedScore = $state(0);
   let hoveredScore = $state(0);
@@ -40,6 +41,7 @@
     try {
       setRatingOwner(wallet.address);
       await ratingApi.submitRating(
+        transferId,
         seederWallet,
         fileHash,
         selectedScore,

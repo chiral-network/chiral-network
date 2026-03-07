@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import {
-    Users, Star, HardDrive, Clock, Coins, Shield,
+    Users, HardDrive, Clock, Coins, Shield,
     Check, X, Loader2, RefreshCw, FileText,
     ChevronDown, ChevronUp, Rocket, AlertCircle, Send, FolderOpen
   } from 'lucide-svelte';
@@ -153,10 +153,6 @@
       case 'cancelled': return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400';
       default: return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400';
     }
-  }
-
-  function reputationStars(score: number): number {
-    return Math.round(score * 5 * 10) / 10; // 0-5 scale, 1 decimal
   }
 
   // ── Sorting ──
@@ -793,7 +789,7 @@
             bind:value={sortBy}
             class="text-sm bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 text-gray-700 dark:text-gray-300"
           >
-            <option value="reputation">Reputation</option>
+            <option value="reputation">Reputation (Elo)</option>
             <option value="price">Price (low)</option>
             <option value="storage">Storage (high)</option>
           </select>
@@ -824,7 +820,6 @@
       {:else}
         <div class="space-y-3">
           {#each sortedHostList as host (host.advertisement.peerId)}
-            {@const stars = reputationStars(host.reputationScore)}
             <div class="p-4 rounded-xl border border-gray-100 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:border-gray-200 dark:hover:border-gray-500 transition-colors">
               <div class="flex items-start justify-between gap-4">
                 <div class="min-w-0 flex-1">
@@ -835,11 +830,8 @@
                       {formatPeerId(host.advertisement.peerId)}
                     </span>
                     <!-- Reputation -->
-                    <div class="flex items-center gap-0.5 ml-1">
-                      {#each [1, 2, 3, 4, 5] as s}
-                        <Star class="w-3.5 h-3.5 {stars >= s ? 'text-yellow-400 fill-yellow-400' : stars >= s - 0.5 ? 'text-yellow-400 fill-yellow-400/50' : 'text-gray-300 dark:text-gray-600'}" />
-                      {/each}
-                      <span class="text-xs text-gray-500 dark:text-gray-400 ml-1">{stars.toFixed(1)}</span>
+                    <div class="inline-flex items-center px-2 py-0.5 rounded-full bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 text-xs font-medium">
+                      Elo {host.reputationScore.toFixed(1)}
                     </div>
                   </div>
 

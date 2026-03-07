@@ -30,7 +30,7 @@
     UserPlus,
     X,
     Trash2,
-    Star
+    ShieldCheck
   } from 'lucide-svelte';
   import AccountReputation from '$lib/components/AccountReputation.svelte';
   import { logger } from '$lib/logger';
@@ -935,11 +935,11 @@
     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
-          <Star class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
+          <ShieldCheck class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
         </div>
         <div>
           <h3 class="font-semibold dark:text-white">My Reputation</h3>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Ratings from users who downloaded your files</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Elo score from recent transfers, earnings, and user ratings</p>
         </div>
       </div>
       <AccountReputation />
@@ -999,4 +999,3 @@
     </div>
   </div>
 {/if}
-

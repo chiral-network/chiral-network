@@ -3,11 +3,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { peers } from '$lib/stores';
 
 const mockInvoke = vi.mocked(invoke);
-const getBatchRatingsMock = vi.fn();
+const getBatchReputationMock = vi.fn();
 
 vi.mock('$lib/services/ratingApiService', () => ({
   ratingApi: {
-    getBatchRatings: getBatchRatingsMock,
+    getBatchReputation: getBatchReputationMock,
   },
 }));
 
@@ -76,8 +76,8 @@ describe('hostingService', () => {
     it('filters self/offline/stale peers and maps ratings', async () => {
       (window as any).__TAURI_INTERNALS__ = {};
       peers.set([{ id: 'peer-a', address: 'a', lastSeen: Date.now() }, { id: 'peer-b', address: 'b', lastSeen: Date.now() }]);
-      getBatchRatingsMock.mockResolvedValue({
-        '0xA': { average: 4.5, count: 2 },
+      getBatchReputationMock.mockResolvedValue({
+        '0xA': { elo: 82.4, completedCount: 3, failedCount: 1, transactionCount: 4, ratingCount: 2, totalEarnedWei: '1000' },
       });
 
       const now = Math.floor(Date.now() / 1000);
@@ -127,7 +127,7 @@ describe('hostingService', () => {
       expect(hosts).toHaveLength(1);
       expect(hosts[0].advertisement.peerId).toBe('peer-a');
       expect(hosts[0].availableStorageBytes).toBe(750);
-      expect(hosts[0].reputationScore).toBe(0.9);
+      expect(hosts[0].reputationScore).toBe(82.4);
       expect(hosts[0].isOnline).toBe(true);
     });
 
