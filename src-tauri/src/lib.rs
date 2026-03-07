@@ -1353,7 +1353,8 @@ async fn start_download(
             reachable_seeders = offline_seeders;
         }
 
-        // Try each seeder until one succeeds
+        // Start requests against all candidate seeders. The DHT layer will
+        // keep trying alternatives and only fail when all attempts are exhausted.
         let mut last_error = String::new();
         let mut request_sent = false;
 
@@ -1372,9 +1373,8 @@ async fn start_download(
                 .await
             {
                 Ok(_) => {
-                    println!("✅ File request sent successfully to seeder {}", seeder);
+                    println!("✅ File request started for seeder {}", seeder);
                     request_sent = true;
-                    break;
                 }
                 Err(e) => {
                     println!("❌ Failed to request file from seeder {}: {}", seeder, e);
