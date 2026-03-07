@@ -1,54 +1,55 @@
-# Headless Mode Roadmap
+# Headless Mode
 
 ## Goal
-Run Chiral Network as a command-line-only system with feature parity to the desktop app.
+Run Chiral Network as a command-line-first runtime with a long-running daemon and full CLI coverage across wallet, account, DHT, drive, drop, hosting, market, mining, and geth flows.
 
-## Current Milestone (M1)
-This branch introduces the first working headless foundation:
+## Current State
+Headless mode now includes:
 
-- `chiral` CLI command tree for all feature groups.
-- `chiral_daemon` long-running process.
-- Headless gateway startup (Drive API + Rating API + Hosting routes).
-- Implemented CLI commands:
-  - `chiral daemon start|stop|status`
-  - `chiral settings get|set|reset|path`
-  - `chiral network bootstrap|status`
-  - `chiral reputation show|batch`
-  - `chiral drive ls|mkdir|star|unstar|delete`
-  - `chiral diagnostics report`
-- Remaining command groups are scaffolded and return explicit "not implemented in milestone 1".
+- `chiral_daemon`: persistent runtime process with:
+  - existing gateway routes (Drive API, Ratings API, hosting routes)
+  - headless runtime routes under `/api/headless/*`
+  - in-daemon DHT lifecycle and peer operations
+  - in-daemon geth/mining lifecycle and status operations
+  - drop inbox/accept/decline handlers
+- `chiral`: CLI with implemented handlers for all top-level command groups:
+  - `daemon`, `settings`, `network`, `reputation`, `diagnostics`
+  - `wallet`, `account`
+  - `dht`, `download`, `drive`, `drop`
+  - `hosting`, `market`, `mining`, `geth`
 
-## Planned Parity Map
+## Runtime Notes
+- The daemon is the shared state holder for DHT and geth/mining.
+- The CLI is stateless and calls daemon APIs for runtime operations.
+- Local headless persistence is stored under `~/.local/share/chiral-network/headless` (platform-equivalent `dirs::data_dir()` path).
 
-| Feature Area | CLI Group | Status |
-|---|---|---|
-| Wallet lifecycle | `chiral wallet ...` | Scaffolded |
-| Account / transactions | `chiral account ...` | Scaffolded |
-| Network / DHT operations | `chiral network ...`, `chiral dht ...` | Partial |
-| Download flows | `chiral download ...` | Scaffolded |
-| Drive storage + sharing | `chiral drive ...` | Partial |
-| ChiralDrop transfers | `chiral drop ...` | Scaffolded |
-| Hosting server/site relay | `chiral hosting ...` | Scaffolded |
-| Hosting marketplace | `chiral market ...` | Scaffolded |
-| Mining controls | `chiral mining ...` | Scaffolded |
-| Geth operations | `chiral geth ...` | Scaffolded |
-| Reputation (Elo) | `chiral reputation ...` | Partial |
-| Diagnostics | `chiral diagnostics ...` | Partial |
-| Runtime process management | `chiral daemon ...` | Implemented |
+## Main CLI Workflows
 
-## Next Milestones
+### Start daemon
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon start --port 9419
+```
 
-### M2: Core Runtime Extraction
-- Extract Tauri-independent runtime state builder from `src-tauri/src/lib.rs`.
-- Add headless event bus and replace direct Tauri-only emits where needed.
-- Expose DHT start/stop and peer events from daemon.
+### Start DHT + inspect health
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- dht start --port 9419
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- dht status --port 9419
+```
 
-### M3: Feature Implementations
-- Implement `wallet`, `account`, `geth`, `mining`, `dht`, `download`.
-- Implement `drive`, `hosting`, `market`, `drop` command handlers against daemon API.
+### Wallet/account
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- wallet create
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- account balance
+```
 
-### M4: Stability and Ops
-- PID/lock management hardening.
-- Structured JSON output mode for all commands.
-- Integration tests for end-to-end headless workflows.
-- Documentation and migration guide from GUI workflows to CLI workflows.
+### Drive
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- drive mkdir --owner <wallet> --name docs --port 9419
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- drive ls --owner <wallet> --port 9419
+```
+
+### Mining/geth
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- geth status --port 9419
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- mining status --port 9419
+```
