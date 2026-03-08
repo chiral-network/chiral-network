@@ -53,6 +53,7 @@ pub struct AppState {
 
 /// Cleanup DHT seeder entries and host advertisement on shutdown.
 /// Called from both the Tauri close handler and the SIGINT signal handler.
+#[cfg(unix)]
 async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) {
     let dht_guard = dht_arc.lock().await;
     let dht = match dht_guard.as_ref() {
@@ -3278,7 +3279,6 @@ async fn show_in_folder(path: String) -> Result<(), String> {
 /// Show a Drive item in the system file manager
 #[tauri::command]
 async fn show_drive_item_in_folder(
-    state: tauri::State<'_, AppState>,
     owner: String,
     item_id: String,
 ) -> Result<(), String> {
@@ -4752,11 +4752,13 @@ async fn unpublish_drive_share(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
+    #[cfg(unix)]
     let geth_for_signal = geth.clone();
     let geth_for_exit = geth.clone();
 
     // Create DHT Arc before signal handler so it can be shared
     let dht_arc: Arc<Mutex<Option<Arc<DhtService>>>> = Arc::new(Mutex::new(None));
+    #[cfg(unix)]
     let dht_for_signal = dht_arc.clone();
 
     // Spawn a background task to stop Geth + cleanup DHT on SIGINT (Ctrl+C) or SIGTERM
