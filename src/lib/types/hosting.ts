@@ -81,4 +81,8 @@ export interface HostingConfig {
   pricePerMbPerDayWei: string;
   /** Minimum deposit required in wei */
   minDepositWei: string;
+  /** Auto-accept incoming proposals when proposer Elo meets threshold */
+  autoAcceptByElo: boolean;
+  /** Minimum proposer Elo (0-100) required for auto-accept */
+  minAutoAcceptElo: number;
 }
