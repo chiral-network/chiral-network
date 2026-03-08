@@ -679,7 +679,7 @@ impl GethProcess {
             .bytes()
             .await
             .map_err(|e| format!("Failed reading GPU miner download: {}", e))?;
-        let installed_path = if url.ends_with(".zip") {
+        let _installed_path = if url.ends_with(".zip") {
             Self::extract_gpu_miner_zip(&bytes, &bin_dir)?
         } else if url.ends_with(".tar.gz") {
             Self::extract_gpu_miner_targz(&bytes, &bin_dir)?
@@ -690,11 +690,11 @@ impl GethProcess {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&installed_path)
+            let mut perms = fs::metadata(&_installed_path)
                 .map_err(|e| format!("Failed to read GPU miner metadata: {}", e))?
                 .permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&installed_path, perms)
+            fs::set_permissions(&_installed_path, perms)
                 .map_err(|e| format!("Failed to set GPU miner permissions: {}", e))?;
         }
 
