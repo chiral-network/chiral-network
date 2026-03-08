@@ -5,10 +5,11 @@
     Check, X, Loader2, RefreshCw, FileText,
     ChevronDown, ChevronUp, Rocket, AlertCircle, Send, FolderOpen
   } from 'lucide-svelte';
-  import { walletAccount } from '$lib/stores';
+  import { settings, walletAccount } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
   import { hostingService } from '$lib/services/hostingService';
+  import { ratingApi } from '$lib/services/ratingApiService';
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type {
@@ -19,6 +20,7 @@
   // ── State ──
   let loadingAgreements = $state(true);
   let loadingHosts = $state(true);
+  let hostingPublishing = $state(false);
   let error = $state<string | null>(null);
   let hosts = $state<HostEntry[]>([]);
   let myAgreements = $state<HostingAgreement[]>([]);
@@ -36,6 +38,9 @@
   let driveFiles = $state<{ id: string; name: string; size: number }[]>([]);
   let showDrivePicker = $state(false);
   let publishingDriveFile = $state<string | null>(null);
+  let autoAcceptInFlight = $state<Record<string, boolean>>({});
+  const proposerEloCache = new Map<string, { elo: number; expiresAt: number }>();
+  const ELO_CACHE_TTL_MS = 60000;
 
   async function loadDriveFiles() {
     const wallet = get(walletAccount);
@@ -127,6 +132,131 @@
     } catch {
       return 'Free';
     }
+  }
+
+  function weiToChiNumber(wei: string, fallback: number): number {
+    try {
+      const n = Number(BigInt(wei)) / 1e18;
+      return Number.isFinite(n) && n >= 0 ? n : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function chiToWeiString(chi: number, fallbackWei: string): string {
+    if (!Number.isFinite(chi) || chi < 0) return fallbackWei;
+    return BigInt(Math.round(chi * 1e18)).toString();
+  }
+
+  function updateHostingEnabled(enabled: boolean) {
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        enabled,
+      },
+    }));
+  }
+
+  function updateHostingMaxStorageGb(gb: number) {
+    const boundedGb = Math.max(1, Math.min(10000, Math.floor(gb || 1)));
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        maxStorageBytes: boundedGb * 1024 * 1024 * 1024,
+      },
+    }));
+  }
+
+  function updateHostingPriceChi(chiPerMbPerDay: number) {
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        pricePerMbPerDayWei: chiToWeiString(
+          chiPerMbPerDay,
+          s.hostingConfig.pricePerMbPerDayWei,
+        ),
+      },
+    }));
+  }
+
+  function updateHostingDepositChi(depositChi: number) {
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        minDepositWei: chiToWeiString(depositChi, s.hostingConfig.minDepositWei),
+      },
+    }));
+  }
+
+  function updateAutoAcceptByElo(enabled: boolean) {
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        autoAcceptByElo: enabled,
+      },
+    }));
+  }
+
+  function updateAutoAcceptMinElo(elo: number) {
+    const bounded = Math.max(0, Math.min(100, Math.round(elo || 0)));
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: {
+        ...s.hostingConfig,
+        minAutoAcceptElo: bounded,
+      },
+    }));
+  }
+
+  async function publishHosting() {
+    if (hostingPublishing) return;
+    const wallet = get(walletAccount);
+    if (!wallet?.address) {
+      toasts.show('Connect your wallet first', 'error');
+      return;
+    }
+    hostingPublishing = true;
+    try {
+      await hostingService.publishHostAdvertisement($settings.hostingConfig, wallet.address);
+      toasts.show('Host advertisement published to network', 'success');
+    } catch (err: any) {
+      toasts.show(`Failed to publish: ${err?.message || err}`, 'error');
+    } finally {
+      hostingPublishing = false;
+    }
+  }
+
+  async function unpublishHosting() {
+    if (hostingPublishing) return;
+    hostingPublishing = true;
+    try {
+      await hostingService.unpublishHostAdvertisement();
+      toasts.show('Host advertisement removed', 'info');
+    } catch (err: any) {
+      toasts.show(`Failed to unpublish: ${err?.message || err}`, 'error');
+    } finally {
+      hostingPublishing = false;
+    }
+  }
+
+  async function toggleHostingEnabled() {
+    const nextEnabled = !$settings.hostingConfig.enabled;
+    updateHostingEnabled(nextEnabled);
+    if (nextEnabled) {
+      const wallet = get(walletAccount);
+      if (wallet?.address) {
+        await publishHosting();
+      } else {
+        toasts.show('Hosting enabled. It will auto-publish when wallet is connected.', 'info');
+      }
+      return;
+    }
+    await unpublishHosting();
   }
 
   function formatDuration(secs: number): string {
@@ -264,7 +394,60 @@
     }
   }
 
-  async function respondToAgreement(agreementId: string, accept: boolean) {
+  async function getWalletElo(walletAddress: string): Promise<number> {
+    const key = walletAddress.trim();
+    if (!key) return 50;
+    const now = Date.now();
+    const cached = proposerEloCache.get(key);
+    if (cached && cached.expiresAt > now) return cached.elo;
+    try {
+      const reputations = await ratingApi.getBatchReputation([key]);
+      const elo = reputations?.[key]?.elo;
+      const normalized = Number.isFinite(elo) ? Number(elo) : 50;
+      proposerEloCache.set(key, { elo: normalized, expiresAt: now + ELO_CACHE_TTL_MS });
+      return normalized;
+    } catch {
+      return 50;
+    }
+  }
+
+  async function maybeAutoAcceptAgreement(agreement: HostingAgreement) {
+    if (!myPeerId) return;
+    if (!$settings.hostingConfig.autoAcceptByElo) return;
+    if (agreement.hostPeerId !== myPeerId || agreement.status !== 'proposed') return;
+    if (autoAcceptInFlight[agreement.agreementId]) return;
+
+    autoAcceptInFlight = { ...autoAcceptInFlight, [agreement.agreementId]: true };
+    try {
+      const proposerElo = await getWalletElo(agreement.clientWalletAddress);
+      const threshold = $settings.hostingConfig.minAutoAcceptElo ?? 60;
+      if (proposerElo < threshold) return;
+      await respondToAgreement(agreement.agreementId, true, {
+        silent: true,
+        reason: `Auto-accepted: proposer Elo ${proposerElo.toFixed(1)} >= ${threshold.toFixed(1)}`,
+      });
+    } finally {
+      const next = { ...autoAcceptInFlight };
+      delete next[agreement.agreementId];
+      autoAcceptInFlight = next;
+    }
+  }
+
+  async function maybeAutoAcceptIncomingProposals() {
+    if (!myPeerId || !$settings.hostingConfig.autoAcceptByElo) return;
+    const proposals = myAgreements.filter(
+      (a) => a.hostPeerId === myPeerId && a.status === 'proposed',
+    );
+    for (const proposal of proposals) {
+      await maybeAutoAcceptAgreement(proposal);
+    }
+  }
+
+  async function respondToAgreement(
+    agreementId: string,
+    accept: boolean,
+    options?: { silent?: boolean; reason?: string },
+  ) {
     try {
       const updated = await hostingService.respondToAgreement(agreementId, accept);
       myAgreements = myAgreements.map((a) =>
@@ -272,7 +455,14 @@
           ? { ...a, status: accept ? 'accepted' : 'rejected', respondedAt: Math.floor(Date.now() / 1000) }
           : a
       );
-      toasts.show(accept ? 'Agreement accepted — downloading files...' : 'Agreement rejected', accept ? 'success' : 'info');
+      if (!options?.silent) {
+        toasts.show(
+          accept ? 'Agreement accepted — downloading files...' : 'Agreement rejected',
+          accept ? 'success' : 'info',
+        );
+      } else if (options.reason) {
+        toasts.show(options.reason, 'success');
+      }
 
       // Start downloading files from proposer after accepting
       if (accept && updated) {
@@ -380,6 +570,7 @@
             if (!myAgreements.some((a) => a.agreementId === agreement.agreementId)) {
               myAgreements = [...myAgreements, agreement];
               toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`, 'info');
+              void maybeAutoAcceptAgreement(agreement);
             }
           } catch {
             // Ignore malformed proposals
@@ -526,6 +717,12 @@
     }
     return files;
   });
+
+  $effect(() => {
+    if (!$settings.hostingConfig.autoAcceptByElo) return;
+    if (!myPeerId) return;
+    void maybeAutoAcceptIncomingProposals();
+  });
 </script>
 
 <svelte:head>
@@ -539,6 +736,144 @@
     <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
       Find hosts to store your files in exchange for CHI tokens
     </p>
+  </div>
+
+  <!-- ──────────── Host Marketplace Settings ──────────── -->
+  <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+    <div class="flex items-center justify-between gap-4">
+      <div>
+        <h2 class="font-semibold text-lg dark:text-white">Host Marketplace Settings</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          Configure pricing, deposits, and auto-accept rules for incoming hosting requests
+        </p>
+      </div>
+      <button
+        onclick={toggleHostingEnabled}
+        class="relative w-12 h-6 rounded-full transition-colors
+          {$settings.hostingConfig.enabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+        role="switch"
+        aria-checked={$settings.hostingConfig.enabled}
+        aria-label="Toggle host marketplace"
+      >
+        <span
+          class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
+            {$settings.hostingConfig.enabled ? 'translate-x-6' : 'translate-x-0'}"
+        ></span>
+      </button>
+    </div>
+
+    {#if $settings.hostingConfig.enabled}
+      <div class="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label for="host-max-storage-gb" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Max Storage Offered
+          </label>
+          <div class="flex items-center gap-2">
+            <input
+              id="host-max-storage-gb"
+              type="number"
+              min="1"
+              max="10000"
+              step="1"
+              value={Math.round($settings.hostingConfig.maxStorageBytes / (1024 * 1024 * 1024))}
+              oninput={(e) => updateHostingMaxStorageGb(Number(e.currentTarget.value))}
+              class="w-28 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
+            />
+            <span class="text-sm text-gray-500 dark:text-gray-400">GB</span>
+          </div>
+        </div>
+
+        <div>
+          <label for="host-price-chi" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Hosting Price
+          </label>
+          <div class="flex items-center gap-2">
+            <input
+              id="host-price-chi"
+              type="number"
+              min="0.000001"
+              max="100"
+              step="0.000001"
+              value={weiToChiNumber($settings.hostingConfig.pricePerMbPerDayWei, 0.001)}
+              oninput={(e) => updateHostingPriceChi(Number(e.currentTarget.value))}
+              class="w-36 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
+            />
+            <span class="text-sm text-gray-500 dark:text-gray-400">CHI / MB / day</span>
+          </div>
+        </div>
+
+        <div>
+          <label for="host-deposit-chi" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Required Deposit
+          </label>
+          <div class="flex items-center gap-2">
+            <input
+              id="host-deposit-chi"
+              type="number"
+              min="0"
+              max="100000"
+              step="0.000001"
+              value={weiToChiNumber($settings.hostingConfig.minDepositWei, 0.1)}
+              oninput={(e) => updateHostingDepositChi(Number(e.currentTarget.value))}
+              class="w-36 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
+            />
+            <span class="text-sm text-gray-500 dark:text-gray-400">CHI</span>
+          </div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label for="host-auto-accept-elo" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Auto-Accept by Elo
+            </label>
+            <button
+              onclick={() => updateAutoAcceptByElo(!$settings.hostingConfig.autoAcceptByElo)}
+              class="relative w-10 h-5 rounded-full transition-colors
+                {$settings.hostingConfig.autoAcceptByElo ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+              role="switch"
+              aria-checked={$settings.hostingConfig.autoAcceptByElo}
+              aria-label="Toggle auto accept by Elo"
+            >
+              <span
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform
+                  {$settings.hostingConfig.autoAcceptByElo ? 'translate-x-5' : 'translate-x-0'}"
+              ></span>
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <input
+              id="host-auto-accept-elo"
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              value={$settings.hostingConfig.minAutoAcceptElo}
+              oninput={(e) => updateAutoAcceptMinElo(Number(e.currentTarget.value))}
+              disabled={!$settings.hostingConfig.autoAcceptByElo}
+              class="w-28 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white disabled:opacity-50"
+            />
+            <span class="text-sm text-gray-500 dark:text-gray-400">Minimum proposer Elo</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 flex items-center gap-3">
+        <button
+          onclick={publishHosting}
+          disabled={hostingPublishing}
+          class="px-4 py-2 text-sm bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50"
+        >
+          {hostingPublishing ? 'Publishing...' : 'Publish to Network'}
+        </button>
+        <button
+          onclick={unpublishHosting}
+          disabled={hostingPublishing}
+          class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
+        >
+          Unpublish
+        </button>
+      </div>
+    {/if}
   </div>
 
   {#if error}

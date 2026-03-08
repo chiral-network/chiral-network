@@ -80,13 +80,50 @@ const defaultSettings: AppSettings = {
     maxStorageBytes: 10 * 1024 * 1024 * 1024, // 10 GB
     pricePerMbPerDayWei: '1000000000000000',   // 0.001 CHI per MB/day
     minDepositWei: '100000000000000000',        // 0.1 CHI
+    autoAcceptByElo: false,
+    minAutoAcceptElo: 60,
   }
 };
+
+function normalizeHostingConfig(raw: unknown): HostingConfig {
+  const cfg = (raw || {}) as Partial<HostingConfig>;
+  return {
+    enabled: !!cfg.enabled,
+    maxStorageBytes: Number.isFinite(cfg.maxStorageBytes as number)
+      ? Math.max(1, Number(cfg.maxStorageBytes))
+      : defaultSettings.hostingConfig.maxStorageBytes,
+    pricePerMbPerDayWei: typeof cfg.pricePerMbPerDayWei === 'string' && cfg.pricePerMbPerDayWei
+      ? cfg.pricePerMbPerDayWei
+      : defaultSettings.hostingConfig.pricePerMbPerDayWei,
+    minDepositWei: typeof cfg.minDepositWei === 'string' && cfg.minDepositWei
+      ? cfg.minDepositWei
+      : defaultSettings.hostingConfig.minDepositWei,
+    autoAcceptByElo: !!cfg.autoAcceptByElo,
+    minAutoAcceptElo: Number.isFinite(cfg.minAutoAcceptElo as number)
+      ? Math.min(100, Math.max(0, Number(cfg.minAutoAcceptElo)))
+      : defaultSettings.hostingConfig.minAutoAcceptElo,
+  };
+}
+
+function normalizeSettings(raw: unknown): AppSettings {
+  const parsed = (raw || {}) as Partial<AppSettings>;
+  return {
+    ...defaultSettings,
+    ...parsed,
+    notifications: {
+      ...defaultNotifications,
+      ...(parsed.notifications || {}),
+    },
+    hostingConfig: normalizeHostingConfig(parsed.hostingConfig),
+  };
+}
 
 function createSettingsStore() {
   // Load settings from localStorage
   const stored = browser ? localStorage.getItem('chiral-settings') : null;
-  const initial: AppSettings = stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
+  const initial: AppSettings = stored
+    ? normalizeSettings(JSON.parse(stored))
+    : defaultSettings;
 
   const { subscribe, set, update } = writable<AppSettings>(initial);
 
