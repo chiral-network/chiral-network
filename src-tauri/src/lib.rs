@@ -1062,8 +1062,47 @@ async fn search_file(
                 }))
             }
             Ok(None) => {
-                println!("File not found in DHT: {}", file_hash);
-                Ok(None)
+                // Fallback: if DHT propagation is still converging, return a local
+                // seeding result immediately when this node is already sharing the file.
+                let shared_files = dht.get_shared_files();
+                let local_info = {
+                    let shared = shared_files.lock().await;
+                    shared.get(&file_hash).cloned()
+                };
+
+                if let Some(info) = local_info {
+                    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+                    let seeders = if peer_id.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![SeederInfo {
+                            peer_id,
+                            price_wei: info.price_wei.to_string(),
+                            wallet_address: info.wallet_address.clone(),
+                            multiaddrs: dht.get_listening_addresses().await,
+                        }]
+                    };
+
+                    println!(
+                        "File {} not yet visible in DHT, returning local seeding fallback",
+                        file_hash
+                    );
+                    Ok(Some(SearchResult {
+                        hash: file_hash.clone(),
+                        file_name: info.file_name,
+                        file_size: info.file_size,
+                        seeders,
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                        price_wei: info.price_wei.to_string(),
+                        wallet_address: info.wallet_address,
+                    }))
+                } else {
+                    println!("File not found in DHT: {}", file_hash);
+                    Ok(None)
+                }
             }
             Err(e) => {
                 println!("DHT lookup error: {}", e);
