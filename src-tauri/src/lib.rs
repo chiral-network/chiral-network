@@ -1050,6 +1050,28 @@ async fn search_file(
                         multiaddrs: vec![],
                     });
                 }
+                seeders.retain(|s| !s.peer_id.trim().is_empty());
+
+                // Ensure the local node is discoverable immediately when it is
+                // already sharing this file, even if DHT metadata is stale.
+                let local_shared = {
+                    let shared_files = dht.get_shared_files();
+                    let shared = shared_files.lock().await;
+                    shared.get(&file_hash).cloned()
+                };
+                if let Some(local) = local_shared {
+                    let local_peer_id = dht.get_peer_id().await.unwrap_or_default();
+                    if !local_peer_id.is_empty()
+                        && !seeders.iter().any(|s| s.peer_id == local_peer_id)
+                    {
+                        seeders.push(SeederInfo {
+                            peer_id: local_peer_id,
+                            price_wei: local.price_wei.to_string(),
+                            wallet_address: local.wallet_address,
+                            multiaddrs: dht.get_listening_addresses().await,
+                        });
+                    }
+                }
 
                 Ok(Some(SearchResult {
                     hash: metadata.hash,
@@ -1287,14 +1309,124 @@ async fn start_download(
         }
     }
 
+    // Get DHT service
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    // Local short-circuit: if this node is currently seeding the hash, download
+    // directly from local disk/memory instead of trying network/relay paths.
+    if let Some(dht) = dht.as_ref() {
+        let local_shared = {
+            let shared = dht.get_shared_files();
+            let map = shared.lock().await;
+            map.get(&file_hash).cloned()
+        };
+
+        if let Some(shared_file) = local_shared {
+            println!(
+                "📁 File found in local shared-files map, bypassing network request"
+            );
+
+            let file_data = if shared_file.file_path.starts_with("memory:") {
+                let storage = state.file_storage.lock().await;
+                storage
+                    .get(&file_hash)
+                    .cloned()
+                    .ok_or_else(|| "Local shared file is missing from memory cache".to_string())?
+            } else {
+                std::fs::read(&shared_file.file_path).map_err(|e| {
+                    format!(
+                        "Failed to read locally shared file '{}': {}",
+                        shared_file.file_path, e
+                    )
+                })?
+            };
+
+            let custom_dir = state.download_directory.lock().await.clone();
+            let downloads_dir = get_effective_download_dir(&custom_dir)?;
+            let file_path = downloads_dir.join(&file_name);
+            let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
+            let request_id = format!(
+                "local-{}-{}",
+                file_hash_prefix,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis()
+            );
+
+            let app_clone = app.clone();
+            let tier_clone = tier.clone();
+            let hash_clone = file_hash.clone();
+            let name_clone = file_name.clone();
+            let rid_clone = request_id.clone();
+            let file_data_clone = file_data.clone();
+
+            tokio::spawn(async move {
+                match speed_tiers::rate_limited_write(
+                    &app_clone,
+                    &file_path,
+                    &file_data_clone,
+                    &tier_clone,
+                    &rid_clone,
+                    &hash_clone,
+                    &name_clone,
+                )
+                .await
+                {
+                    Ok(_) => {
+                        println!("📁 Local shared file saved to: {:?}", file_path);
+                        let _ = app_clone.emit(
+                            "file-download-complete",
+                            serde_json::json!({
+                                "requestId": rid_clone,
+                                "fileHash": hash_clone,
+                                "fileName": name_clone,
+                                "filePath": file_path.to_string_lossy(),
+                                "fileSize": file_data_clone.len(),
+                                "status": "completed"
+                            }),
+                        );
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to save local shared file: {}", e);
+                        let _ = app_clone.emit(
+                            "file-download-failed",
+                            serde_json::json!({
+                                "requestId": rid_clone,
+                                "fileHash": hash_clone,
+                                "error": format!("Failed to save file: {}", e)
+                            }),
+                        );
+                    }
+                }
+            });
+
+            return Ok(DownloadStartResult {
+                request_id,
+                status: "downloading".to_string(),
+            });
+        }
+    }
+
     // If not local, request from remote seeders
-    if seeders.is_empty() {
+    let candidate_seeders: Vec<String> = {
+        let mut seen_seeders = std::collections::HashSet::new();
+        seeders
+            .iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .filter(|s| seen_seeders.insert((*s).to_string()))
+            .map(|s| s.to_string())
+            .collect()
+    };
+    if candidate_seeders.is_empty() {
         return Err("No seeders available for this file".to_string());
     }
 
-    // Get DHT service
-    let dht_guard = state.dht.lock().await;
-    if let Some(dht) = dht_guard.as_ref() {
+    if let Some(dht) = dht.as_ref() {
         // Generate a unique request ID
         let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
         let request_id = format!(
@@ -1364,15 +1496,6 @@ async fn start_download(
                 _ => std::collections::HashMap::new(),
             }
         };
-
-        // Start directly against all unique candidate seeders. Connectivity checks are avoided
-        // here because they add latency and request_file() already handles dial+fallback logic.
-        let mut seen_seeders = std::collections::HashSet::new();
-        let candidate_seeders: Vec<String> = seeders
-            .iter()
-            .filter(|s| seen_seeders.insert((*s).clone()))
-            .cloned()
-            .collect();
 
         // Start requests against all candidate seeders. The DHT layer will
         // keep trying alternatives and only fail when all attempts are exhausted.
