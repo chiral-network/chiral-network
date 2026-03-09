@@ -26,6 +26,9 @@
   let hostingAutoPublishedKey = $state<string | null>(null);
   let hostingAutoPublishing = $state(false);
   let hostingAutoPublishRetryTimer = $state<number | null>(null);
+  let autoReseedInFlight = $state(false);
+  let autoReseedCompletedWallet = $state<string | null>(null);
+  let unlistenBootstrapComplete: (() => void) | null = null;
 
   // Apply dark mode class to document
   $effect(() => {
@@ -170,6 +173,8 @@
       window.clearTimeout(hostingAutoPublishRetryTimer);
       hostingAutoPublishRetryTimer = null;
     }
+    unlistenBootstrapComplete?.();
+    unlistenBootstrapComplete = null;
   });
 
   // Auto-reseed AFTER Kademlia bootstrap completes, so DHT puts propagate.
@@ -177,15 +182,28 @@
   onMount(async () => {
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       const { listen } = await import('@tauri-apps/api/event');
-      let hasAutoReseeded = false;
-      await listen('dht-bootstrap-complete', () => {
-        if (!hasAutoReseeded) {
-          hasAutoReseeded = true;
-          autoReseedOnStartup();
-        }
+      unlistenBootstrapComplete = await listen('dht-bootstrap-complete', () => {
+        void maybeAutoReseed(true);
       });
     }
   });
+
+  async function maybeAutoReseed(force = false) {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    if (!$isAuthenticated || !$networkConnected) return;
+    const addr = $walletAccount?.address ?? null;
+    if (!addr) return;
+    if (autoReseedInFlight) return;
+    if (!force && autoReseedCompletedWallet === addr) return;
+
+    autoReseedInFlight = true;
+    try {
+      await autoReseedOnStartup();
+      autoReseedCompletedWallet = addr;
+    } finally {
+      autoReseedInFlight = false;
+    }
+  }
 
   async function autoReseedOnStartup() {
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
@@ -225,7 +243,8 @@
     try {
       const addr = $walletAccount?.address;
       if (addr) {
-        const driveItems = await invoke<any[]>('drive_list_items', { owner: addr, parentId: null });
+        // Use all items (not only root) so seeded files in nested folders are restored too.
+        const driveItems = await invoke<any[]>('drive_list_all_items', { owner: addr });
         let count = 0;
         for (const item of driveItems) {
           if (!item.seeding || !item.merkleRoot) continue;
@@ -434,6 +453,25 @@
     if (!$isAuthenticated) {
       dhtAutoConnected = false;
     }
+  });
+
+  // Fallback auto-reseed trigger when the app is authenticated and the network is up.
+  // This covers sessions where bootstrap-complete may have fired before our listener
+  // or when DHT is already running on app startup.
+  $effect(() => {
+    const canReseed =
+      typeof window !== 'undefined'
+      && '__TAURI_INTERNALS__' in window
+      && $isAuthenticated
+      && $networkConnected
+      && !!$walletAccount?.address;
+
+    if (!canReseed) {
+      autoReseedCompletedWallet = null;
+      return;
+    }
+
+    void maybeAutoReseed(false);
   });
 
   // Auto-publish hosting marketplace on login while enabled.

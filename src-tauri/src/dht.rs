@@ -538,39 +538,59 @@ impl DhtService {
             println!("  Price: Free");
         }
 
-        let chunk_hashes = {
-            let path_for_hashing = file_path.clone();
-            match tokio::task::spawn_blocking(move || compute_chunk_hashes(&path_for_hashing)).await
-            {
-                Ok(Ok(hashes)) => {
-                    println!("  Precomputed {} chunk hashes", hashes.len());
-                    Some(hashes)
-                }
-                Ok(Err(e)) => {
-                    println!("  Failed to precompute chunk hashes: {}", e);
-                    None
-                }
-                Err(e) => {
-                    println!("  Chunk hash precompute task failed: {}", e);
-                    None
-                }
-            }
-        };
-
         let mut shared = self.shared_files.lock().await;
         shared.insert(
             file_hash.clone(),
             SharedFileInfo {
-                file_path,
+                file_path: file_path.clone(),
                 file_name,
                 file_size,
-                chunk_hashes,
+                // Keep seeding registration instant; chunk hashes are computed lazily
+                // on first request (and we also warm them in the background below).
+                chunk_hashes: None,
                 price_wei,
                 wallet_address,
             },
         );
         println!("  Total shared files now: {}", shared.len());
+        println!("  Seeding registration is instant; chunk hashes warming in background");
         println!("================================");
+
+        // Warm chunk hashes in the background so first download request is faster,
+        // without blocking publish/seed operations.
+        let shared_files = self.shared_files.clone();
+        let file_hash_for_task = file_hash;
+        tokio::spawn(async move {
+            let path_for_hashing = file_path;
+            match tokio::task::spawn_blocking(move || compute_chunk_hashes(&path_for_hashing)).await
+            {
+                Ok(Ok(hashes)) => {
+                    let hash_count = hashes.len();
+                    let mut shared = shared_files.lock().await;
+                    if let Some(info) = shared.get_mut(&file_hash_for_task) {
+                        if info.chunk_hashes.is_none() {
+                            info.chunk_hashes = Some(hashes);
+                            println!(
+                                "  Background chunk hash warmup complete for {} ({} chunks)",
+                                file_hash_for_task, hash_count
+                            );
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    println!(
+                        "  Background chunk hash warmup failed for {}: {}",
+                        file_hash_for_task, e
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "  Background chunk hash warmup task failed for {}: {}",
+                        file_hash_for_task, e
+                    );
+                }
+            }
+        });
     }
 
     /// Unregister a shared file
