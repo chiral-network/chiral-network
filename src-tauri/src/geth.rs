@@ -766,30 +766,110 @@ impl GethProcess {
     }
 
     fn parse_gpu_devices_from_text(output: &str) -> Vec<GpuDevice> {
-        let mut out = Vec::new();
-        for line in output.lines() {
-            let trimmed = line.trim();
+        fn parse_bracket_format(trimmed: &str) -> Option<GpuDevice> {
             if !trimmed.starts_with('[') {
-                continue;
+                return None;
             }
-            let Some(end_idx) = trimmed.find(']') else {
-                continue;
-            };
+            let end_idx = trimmed.find(']')?;
             let id = trimmed[1..end_idx].trim();
             if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
-                continue;
+                return None;
             }
             let mut name = trimmed[end_idx + 1..].trim();
             if let Some(stripped) = name.strip_prefix(':') {
                 name = stripped.trim();
             }
             if name.is_empty() {
-                continue;
+                return None;
             }
-            out.push(GpuDevice {
+            Some(GpuDevice {
                 id: id.to_string(),
                 name: name.to_string(),
-            });
+            })
+        }
+
+        fn token_is_numeric(token: &str) -> bool {
+            !token.is_empty()
+                && token
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == ',')
+        }
+
+        fn token_is_size_unit(token: &str) -> bool {
+            matches!(
+                token.to_ascii_lowercase().as_str(),
+                "mb" | "gb" | "kb" | "mib" | "gib" | "kib"
+            )
+        }
+
+        fn parse_tabular_format(trimmed: &str) -> Option<GpuDevice> {
+            let columns: Vec<&str> = trimmed.split_whitespace().collect();
+            if columns.len() < 2 {
+                return None;
+            }
+            if !columns[0].chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+
+            // Common ethminer table formats:
+            //   "<id> <pci> <type> <name...> <metrics...>"
+            //   "<id> <pci> <name...> <metrics...>"
+            //   "<id> <name...>"
+            let looks_like_pci = |token: &str| token.contains(':') || token.contains('.');
+            let start_idx = if columns.len() >= 4
+                && looks_like_pci(columns[1])
+                && columns[2].chars().all(|c| c.is_ascii_alphabetic())
+            {
+                3
+            } else if columns.len() >= 3 && looks_like_pci(columns[1]) {
+                2
+            } else {
+                1
+            };
+            if columns.len() <= start_idx {
+                return None;
+            }
+
+            // Trim known metric suffixes without stripping numeric model names
+            // like "RTX 4090".
+            let mut end_idx = columns.len();
+            if end_idx > start_idx + 1
+                && token_is_size_unit(columns[end_idx - 1])
+                && token_is_numeric(columns[end_idx - 2])
+            {
+                end_idx -= 2; // "... <total_mem> MB"
+            }
+            if end_idx > start_idx {
+                let tail = columns[end_idx - 1].to_ascii_lowercase();
+                if token_is_numeric(&tail) || matches!(tail.as_str(), "n/a" | "na" | "-") {
+                    end_idx -= 1; // "... <cuda_sm>"
+                }
+            }
+            if end_idx <= start_idx {
+                end_idx = columns.len();
+            }
+            let name = columns[start_idx..end_idx].join(" ");
+            if name.is_empty() {
+                return None;
+            }
+
+            Some(GpuDevice {
+                id: columns[0].to_string(),
+                name,
+            })
+        }
+
+        let mut out: Vec<GpuDevice> = Vec::new();
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(device) = parse_bracket_format(trimmed).or_else(|| parse_tabular_format(trimmed)) {
+                if !out.iter().any(|existing| existing.id == device.id && existing.name == device.name) {
+                    out.push(device);
+                }
+            }
         }
         out
     }
@@ -1369,6 +1449,8 @@ impl GethProcess {
                 "GPU miner could not find devices. {}",
                 scan_messages.join(" ; ")
             ));
+        } else {
+            self.gpu_last_error = None;
         }
 
         Ok(GpuMiningCapabilities {
@@ -1416,88 +1498,117 @@ impl GethProcess {
                     .to_string()
             })?;
 
-        if self.gpu_backend.is_none() {
-            let caps = self.get_gpu_mining_capabilities().await?;
-            if !caps.supported {
-                return Err(caps
-                    .last_error
-                    .unwrap_or_else(|| "GPU miner could not detect any compatible devices".to_string()));
-            }
-        }
-        let backend = self
-            .gpu_backend
-            .clone()
-            .unwrap_or_else(|| "opencl".to_string());
-
         let selected = device_ids.unwrap_or_default();
         let log_path = self.gpu_log_path();
         if let Some(parent) = log_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create GPU miner log directory: {}", e))?;
         }
+        let preferred_backend = self.gpu_backend.clone();
+        let mut backend_attempts: Vec<String> = match preferred_backend.as_deref() {
+            Some("cuda") => vec!["cuda".to_string(), "opencl".to_string()],
+            Some("opencl") => vec!["opencl".to_string(), "cuda".to_string()],
+            _ => vec!["cuda".to_string(), "opencl".to_string()],
+        };
+        backend_attempts.dedup();
 
-        let log_file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&log_path)
-            .map_err(|e| format!("Failed to open GPU miner log file: {}", e))?;
-        let log_clone = log_file
-            .try_clone()
-            .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
-
-        let mut cmd = Command::new(&binary);
-        if backend == "cuda" {
-            cmd.arg("-U");
-        } else {
-            cmd.arg("-G");
-        }
-        cmd.arg("-P")
-            .arg("http://127.0.0.1:8545")
-            .arg("--farm-recheck")
-            .arg("200");
-
-        if !selected.is_empty() {
-            let joined = selected.join(",");
-            if backend == "cuda" {
-                cmd.arg("--cuda-devices").arg(&joined);
+        let mut failures: Vec<String> = Vec::new();
+        for backend in backend_attempts {
+            let selection_attempts: Vec<Option<Vec<String>>> = if selected.is_empty() {
+                vec![None]
             } else {
-                cmd.arg("--opencl-devices").arg(&joined);
+                vec![Some(selected.clone()), None]
+            };
+
+            for (attempt_index, selected_override) in selection_attempts.into_iter().enumerate() {
+                let selected_for_attempt = selected_override.unwrap_or_default();
+                let log_file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(failures.is_empty() && attempt_index == 0)
+                    .append(!(failures.is_empty() && attempt_index == 0))
+                    .open(&log_path)
+                    .map_err(|e| format!("Failed to open GPU miner log file: {}", e))?;
+                let log_clone = log_file
+                    .try_clone()
+                    .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
+
+                let mut cmd = Command::new(&binary);
+                if backend == "cuda" {
+                    cmd.arg("-U");
+                } else {
+                    cmd.arg("-G");
+                }
+                cmd.arg("-P")
+                    .arg("http://127.0.0.1:8545")
+                    .arg("--farm-recheck")
+                    .arg("200");
+
+                if !selected_for_attempt.is_empty() {
+                    let joined = selected_for_attempt.join(",");
+                    if backend == "cuda" {
+                        cmd.arg("--cuda-devices").arg(&joined);
+                    } else {
+                        cmd.arg("--opencl-devices").arg(&joined);
+                    }
+                }
+
+                cmd.stdout(Stdio::from(log_clone))
+                    .stderr(Stdio::from(log_file));
+
+                match cmd.spawn() {
+                    Ok(child) => {
+                        self.gpu_miner_child = Some(child);
+                        self.gpu_active_devices = selected_for_attempt.clone();
+                        self.gpu_hash_rate = 0;
+                        self.gpu_last_error = None;
+
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        self.refresh_gpu_runtime();
+                        if self.gpu_miner_child.is_some() {
+                            self.gpu_backend = Some(backend.clone());
+                            return Ok(());
+                        }
+                    }
+                    Err(err) => {
+                        failures.push(format!("{} backend failed to spawn: {}", backend, err));
+                        continue;
+                    }
+                }
+
+                let log_tail = fs::read_to_string(&log_path)
+                    .unwrap_or_default()
+                    .lines()
+                    .rev()
+                    .take(20)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let attempt_note = if selected_for_attempt.is_empty() {
+                    "auto device selection"
+                } else {
+                    "explicit device selection"
+                };
+                failures.push(format!(
+                    "{} backend failed during startup ({})\n{}",
+                    backend, attempt_note, log_tail
+                ));
+                let _ = self.stop_gpu_miner_sync();
             }
         }
 
-        cmd.stdout(Stdio::from(log_clone))
-            .stderr(Stdio::from(log_file));
-
-        let child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to start GPU miner: {}", e))?;
-
-        self.gpu_miner_child = Some(child);
-        self.gpu_active_devices = selected;
-        self.gpu_hash_rate = 0;
-        self.gpu_last_error = None;
-
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        self.refresh_gpu_runtime();
-        if self.gpu_miner_child.is_none() {
-            let log_tail = fs::read_to_string(&log_path)
-                .unwrap_or_default()
-                .lines()
-                .rev()
-                .take(20)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Err(format!(
-                "GPU miner exited during startup. Check configuration/binary. Recent log output:\n{}",
-                log_tail
-            ));
-        }
-
-        Ok(())
+        let message = if failures.is_empty() {
+            "GPU miner could not start with any backend".to_string()
+        } else {
+            format!(
+                "GPU miner failed to start with available backends. Details:\n{}",
+                failures.join("\n\n")
+            )
+        };
+        self.gpu_last_error = Some(message.clone());
+        Err(message)
     }
 
     pub async fn stop_gpu_mining(&mut self) -> Result<(), String> {
@@ -2285,6 +2396,50 @@ mod tests {
         let restored: GpuDevice = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.id, "0");
         assert_eq!(restored.name, "NVIDIA RTX");
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_bracket_format() {
+        let output = r#"
+[0] : NVIDIA GeForce RTX 4090
+[1] : NVIDIA GeForce RTX 3080
+"#;
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].id, "0");
+        assert_eq!(devices[0].name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(devices[1].id, "1");
+        assert_eq!(devices[1].name, "NVIDIA GeForce RTX 3080");
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_tabular_format() {
+        let output = r#"
+ethminer 0.18.0
+Build: windows/release/msvc
+
+Id Pci Id Type Name CUDA SM Total Memory
+0 01:00.0 Gpu NVIDIA GeForce RTX 4090 8.9 24564 MB
+1 02:00.0 Gpu NVIDIA GeForce RTX 3080 8.6 10018 MB
+"#;
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].id, "0");
+        assert_eq!(devices[0].name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(devices[1].id, "1");
+        assert_eq!(devices[1].name, "NVIDIA GeForce RTX 3080");
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_tabular_without_metrics() {
+        let output = r#"
+Id Pci Id Type Name
+0 03:00.0 Gpu AMD Radeon RX 7800 XT
+"#;
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].id, "0");
+        assert_eq!(devices[0].name, "AMD Radeon RX 7800 XT");
     }
 
     #[test]

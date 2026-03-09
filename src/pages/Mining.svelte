@@ -276,7 +276,7 @@
       }
 
       if (miningMode === 'gpu') {
-        if (!gpuCapabilities?.supported) {
+        if (!gpuCapabilities?.binaryPath) {
           throw new Error(
             gpuCapabilities?.lastError ||
               'GPU miner is still being prepared. Wait a moment and refresh.'
@@ -563,11 +563,11 @@
       {:else}
         <!-- GPU Control -->
         <div class="mb-4">
-          {#if !gpuCapabilities?.supported}
+          {#if !gpuCapabilities?.binaryPath}
             <div class="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
               {#if gpuCapabilities?.lastError}
                 <p class="text-sm text-amber-800 dark:text-amber-300">
-                  Automatic GPU miner download failed: {gpuCapabilities.lastError}
+                  GPU miner is unavailable: {gpuCapabilities.lastError}
                 </p>
                 <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
                   You can still set `CHIRAL_GPU_MINER_PATH` manually and refresh.
@@ -579,6 +579,16 @@
               {/if}
             </div>
           {:else}
+            {#if gpuCapabilities?.lastError}
+              <div class="mb-3 rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
+                <p class="text-sm text-amber-800 dark:text-amber-300">
+                  GPU probe warning: {gpuCapabilities.lastError}
+                </p>
+                <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                  You can still start GPU mining and the app will retry with backend fallbacks automatically.
+                </p>
+              </div>
+            {/if}
             <div class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               GPU Devices ({selectedGpuDevices.length} selected)
             </div>
@@ -626,7 +636,7 @@
         {:else}
           <button
             onclick={handleStartMining}
-            disabled={isStartingMining || (miningMode === 'gpu' && !gpuCapabilities?.supported)}
+            disabled={isStartingMining || (miningMode === 'gpu' && !gpuCapabilities?.binaryPath)}
             class="flex-1 px-4 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
           >
             {#if isStartingMining}
