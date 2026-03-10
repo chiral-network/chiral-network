@@ -239,29 +239,36 @@
     }
 
     // 2. Re-register Drive files that were being seeded
-    // Note: Rust struct uses #[serde(rename_all = "camelCase")] so fields are camelCase
     try {
       const addr = $walletAccount?.address;
       if (addr) {
         // Use all items (not only root) so seeded files in nested folders are restored too.
         const driveItems = await invoke<any[]>('drive_list_all_items', { owner: addr });
         let count = 0;
+        let seededCandidates = 0;
         for (const item of driveItems) {
-          if (!item.seeding || !item.merkleRoot) continue;
+          const seeding = Boolean(item?.seeding);
+          const merkleRoot = (item?.merkleRoot || item?.merkle_root || '').toString();
+          const protocol = item?.protocol || item?.Protocol || null;
+          const priceChi = item?.priceChi ?? item?.price_chi ?? null;
+          if (!seeding || !merkleRoot) continue;
+          seededCandidates++;
           try {
             await invoke('publish_drive_file', {
               owner: addr,
               itemId: item.id,
-              protocol: item.protocol || null,
-              priceChi: item.priceChi || null,
-              walletAddress: item.priceChi && item.priceChi !== '0' ? addr : null,
+              protocol,
+              priceChi,
+              walletAddress: priceChi && priceChi !== '0' ? addr : null,
             });
             count++;
           } catch {
             // File may no longer exist — skip
           }
         }
-        if (count > 0) console.log(`✅ Auto-reseeded ${count} Drive file(s)`);
+        if (count > 0) {
+          console.log(`✅ Auto-reseeded ${count}/${seededCandidates} Drive file(s)`);
+        }
       }
     } catch {
       // Drive manifest may not exist yet — skip

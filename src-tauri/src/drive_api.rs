@@ -341,36 +341,57 @@ async fn delete_item(
         Some(o) => o,
         None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
     };
-    let mut m = state.manifest.write().await;
+    // Snapshot owned items to avoid holding the lock during filesystem I/O.
+    let (to_delete, file_paths): (HashSet<String>, Vec<std::path::PathBuf>) = {
+        let m = state.manifest.read().await;
+        let owned_items: Vec<DriveItem> = m
+            .items
+            .iter()
+            .filter(|i| i.owner == owner)
+            .cloned()
+            .collect();
 
-    // Check exists and belongs to owner
-    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
-        return (StatusCode::NOT_FOUND, "Item not found").into_response();
-    }
+        if !owned_items.iter().any(|i| i.id == item_id) {
+            return (StatusCode::NOT_FOUND, "Item not found").into_response();
+        }
 
-    // Collect all IDs to delete (recursive)
-    let to_delete: HashSet<String> = collect_descendants(&item_id, &m.items)
-        .into_iter()
-        .collect();
+        let to_delete: HashSet<String> = collect_descendants(&item_id, &owned_items)
+            .into_iter()
+            .collect();
 
-    // Delete files from disk
-    if let Some(files_dir) = drive_storage::drive_files_dir() {
-        for id in &to_delete {
-            if let Some(item) = m.items.iter().find(|i| &i.id == id) {
-                if let Some(sp) = &item.storage_path {
-                    let path = files_dir.join(sp);
-                    let _ = std::fs::remove_file(&path);
-                }
-            }
+        let files = if let Some(files_dir) = drive_storage::drive_files_dir() {
+            owned_items
+                .iter()
+                .filter(|i| to_delete.contains(&i.id) && i.item_type == "file")
+                .filter_map(|i| i.storage_path.as_ref().map(|sp| files_dir.join(sp)))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        (to_delete, files)
+    };
+
+    let mut errors = Vec::new();
+    for path in file_paths {
+        match std::fs::remove_file(&path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => errors.push(format!("{}: {}", path.display(), e)),
         }
     }
 
-    // Remove items
+    if !errors.is_empty() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to delete file(s): {}", errors.join(" | ")),
+        )
+            .into_response();
+    }
+
+    let mut m = state.manifest.write().await;
     m.items.retain(|i| !to_delete.contains(&i.id));
-
-    // Remove any share links pointing to deleted items
     m.shares.retain(|s| !to_delete.contains(&s.item_id));
-
     drop(m);
     state.persist().await;
 
