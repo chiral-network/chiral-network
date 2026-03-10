@@ -46,7 +46,7 @@
   let seedingUploadPriceChi = $state('');
 
   // Seeding count for tab badge
-  const seedingCount = $derived(driveStore.getSeedingItems(manifest).length);
+  const seedingCount = $derived($networkConnected ? driveStore.getSeedingItems(manifest).length : 0);
 
   // Drag and drop
   let isDragging = $state(false);
