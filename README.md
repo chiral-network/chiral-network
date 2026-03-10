@@ -1,82 +1,97 @@
-# Chiral Network V2
+# Chiral Network
 
-A fresh rebuild of the Chiral Network from scratch, focusing on clean architecture and simplicity.
+Chiral Network is a Tauri desktop application for peer-to-peer file sharing, local Drive seeding, hosting marketplace coordination, and CHI-based payments.
 
-## Tech Stack
+## Stack
 
-- **Frontend**: Svelte 5 + TypeScript + Vite
-- **Styling**: Tailwind CSS
-- **Desktop**: Tauri 2 (Rust)
+- Frontend: Svelte 5 + TypeScript + Tailwind
+- Desktop runtime: Tauri 2
+- Backend: Rust (`src-tauri`)
+- Networking: libp2p (DHT, relay, chunked transfer)
+- Chain integration: Core-Geth lifecycle + RPC helpers
+
+## Core Features
+
+- Wallet creation/import and account management
+- DHT peer connectivity and discovery
+- Drive with folders, sharing, and instant local seeding publish
+- Download by hash, magnet, and torrent
+- ChiralDrop direct transfers
+- Hosting and Hosts marketplace flow
+- CPU and GPU mining controls
+- Local relay-aware gateway server (Drive/Hosting)
 
 ## Development
 
 Install dependencies:
+
 ```bash
 npm install
 ```
 
-Run in development mode:
+Run desktop app in dev mode:
+
 ```bash
 npm run tauri:dev
 ```
 
-Build for production:
+Build frontend:
+
+```bash
+npm run build
+```
+
+Build desktop app:
+
 ```bash
 npm run tauri:build
 ```
 
-## Headless CLI
+## Testing
 
-The repository includes a headless daemon + CLI runtime (`chiral_daemon` + `chiral`).
+Frontend tests:
 
-Build binaries:
+```bash
+npm test
+```
+
+Rust tests:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+## Headless CLI Mode
+
+The repo includes:
+
+- `chiral_daemon` (runtime daemon)
+- `chiral` (CLI client)
+
+Build:
 
 ```bash
 cargo build --manifest-path src-tauri/Cargo.toml --bin chiral --bin chiral_daemon
 ```
 
-Start the daemon:
-
-```bash
-src-tauri/target/debug/chiral daemon start --port 9419
-src-tauri/target/debug/chiral daemon status --port 9419
-```
-
-Or via `cargo run`:
+Start daemon (recommended form):
 
 ```bash
 cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon start --port 9419
+```
+
+Status:
+
+```bash
 cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon status --port 9419
 ```
 
-Status should show `headless_api=true`.
-
-Stop daemon:
+Stop:
 
 ```bash
-src-tauri/target/debug/chiral daemon stop --port 9419
+cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- daemon stop --port 9419
 ```
 
-CLI help:
+If your shell cannot resolve a binary path directly (for example on Windows), use the `cargo run --bin chiral -- ...` form above.
 
-```bash
-src-tauri/target/debug/chiral --help
-src-tauri/target/debug/chiral <group> --help
-```
-
-Example workflows:
-
-```bash
-# DHT lifecycle
-src-tauri/target/debug/chiral dht start --port 9419
-src-tauri/target/debug/chiral dht status --port 9419
-
-# Wallet/account
-src-tauri/target/debug/chiral wallet create
-src-tauri/target/debug/chiral account balance
-
-# Drive
-src-tauri/target/debug/chiral drive ls --owner <wallet> --port 9419
-```
-
-Full headless documentation: `docs/headless-mode.md`.
+See [docs/headless-mode.md](docs/headless-mode.md) for full command coverage.

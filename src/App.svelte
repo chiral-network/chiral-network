@@ -50,7 +50,7 @@
 
   // Unpublish shared files from DHT when the window is closing
   // + Auto-register hosted files as seeded when downloads complete
-  // + Auto-reseed uploaded files and hosted files on startup
+  // + Auto-reseed legacy uploads and hosted files on startup
   onMount(async () => {
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -238,43 +238,7 @@
       // localStorage parse error — skip
     }
 
-    // 2. Re-register Drive files that were being seeded
-    try {
-      const addr = $walletAccount?.address;
-      if (addr) {
-        // Use all items (not only root) so seeded files in nested folders are restored too.
-        const driveItems = await invoke<any[]>('drive_list_all_items', { owner: addr });
-        let count = 0;
-        let seededCandidates = 0;
-        for (const item of driveItems) {
-          const seeding = Boolean(item?.seeding);
-          const merkleRoot = (item?.merkleRoot || item?.merkle_root || '').toString();
-          const protocol = item?.protocol || item?.Protocol || null;
-          const priceChi = item?.priceChi ?? item?.price_chi ?? null;
-          if (!seeding || !merkleRoot) continue;
-          seededCandidates++;
-          try {
-            await invoke('publish_drive_file', {
-              owner: addr,
-              itemId: item.id,
-              protocol,
-              priceChi,
-              walletAddress: priceChi && priceChi !== '0' ? addr : null,
-            });
-            count++;
-          } catch {
-            // File may no longer exist — skip
-          }
-        }
-        if (count > 0) {
-          console.log(`✅ Auto-reseeded ${count}/${seededCandidates} Drive file(s)`);
-        }
-      }
-    } catch {
-      // Drive manifest may not exist yet — skip
-    }
-
-    // 3. Re-register hosted files from active agreements
+    // 2. Re-register hosted files from active agreements
     try {
       const hostedEntries = await invoke<{ fileHash: string; agreementId: string; clientPeerId: string }[]>(
         'get_active_hosted_files'
