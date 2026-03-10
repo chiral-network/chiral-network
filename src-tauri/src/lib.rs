@@ -28,6 +28,7 @@ use speed_tiers::SpeedTier;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::Emitter;
+use tauri::Manager;
 use tiny_keccak::{Hasher, Keccak};
 use tokio::sync::Mutex;
 
@@ -106,14 +107,17 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
     println!("✅ Unpublished host advertisement from DHT");
 }
 
-#[tauri::command]
-async fn start_dht(
+async fn start_dht_internal(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
+    state: &AppState,
+    allow_already_running: bool,
 ) -> Result<String, String> {
     let mut dht_guard = state.dht.lock().await;
 
     if dht_guard.is_some() {
+        if allow_already_running {
+            return Ok("DHT already running".to_string());
+        }
         return Err("DHT already running".to_string());
     }
 
@@ -123,7 +127,8 @@ async fn start_dht(
         state.download_directory.clone(),
         state.download_credentials.clone(),
     ));
-    let result = dht.start(app.clone()).await?;
+    let app_for_delayed_reseed = app.clone();
+    let result = dht.start(app).await?;
     *dht_guard = Some(dht);
     drop(dht_guard);
 
@@ -132,9 +137,25 @@ async fn start_dht(
 
     // Restore persisted Drive seeding registrations (root + nested folders)
     // as soon as DHT comes online so "seeding=true" reflects actual availability.
-    auto_reseed_drive_files(state.inner()).await;
+    auto_reseed_drive_files(state).await;
+
+    // Run a second reseed pass after bootstrap/relay setup has had time to settle.
+    // This improves discoverability after restart by republishing once routing is warm.
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+        let app_state = app_for_delayed_reseed.state::<AppState>();
+        auto_reseed_drive_files(app_state.inner()).await;
+    });
 
     Ok(result)
+}
+
+#[tauri::command]
+async fn start_dht(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    start_dht_internal(app, state.inner(), false).await
 }
 
 fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
@@ -340,8 +361,9 @@ async fn auto_reseed_drive_files(state: &AppState) {
             multiaddrs: our_multiaddrs.clone(),
         };
         if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei;
-            existing.wallet_address = our_seeder.wallet_address;
+            existing.price_wei = our_seeder.price_wei.clone();
+            existing.wallet_address = our_seeder.wallet_address.clone();
+            existing.multiaddrs = our_seeder.multiaddrs.clone();
         } else {
             metadata.seeders.push(our_seeder);
         }
@@ -411,6 +433,14 @@ async fn auto_reseed_drive_files(state: &AppState) {
     if reseeded > 0 {
         println!("[DRIVE] Auto-reseeded {} Drive file(s)", reseeded);
     }
+}
+
+#[tauri::command]
+async fn reseed_drive_files(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // Reload disk state first to avoid stale in-memory manifests after app restart.
+    state.drive_state.load_from_disk_async().await;
+    auto_reseed_drive_files(state.inner()).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1171,8 +1201,9 @@ async fn publish_file(
 
         // Upsert our seeder entry (add or update by peer_id)
         if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei;
-            existing.wallet_address = our_seeder.wallet_address;
+            existing.price_wei = our_seeder.price_wei.clone();
+            existing.wallet_address = our_seeder.wallet_address.clone();
+            existing.multiaddrs = our_seeder.multiaddrs.clone();
         } else {
             metadata.seeders.push(our_seeder);
         }
@@ -1311,8 +1342,9 @@ async fn publish_file_data(
 
         // Upsert our seeder entry
         if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei;
-            existing.wallet_address = our_seeder.wallet_address;
+            existing.price_wei = our_seeder.price_wei.clone();
+            existing.wallet_address = our_seeder.wallet_address.clone();
+            existing.multiaddrs = our_seeder.multiaddrs.clone();
         } else {
             metadata.seeders.push(our_seeder);
         }
@@ -2083,8 +2115,9 @@ async fn republish_shared_file(
 
             // Upsert our seeder entry
             if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-                existing.price_wei = our_seeder.price_wei;
-                existing.wallet_address = our_seeder.wallet_address;
+                existing.price_wei = our_seeder.price_wei.clone();
+                existing.wallet_address = our_seeder.wallet_address.clone();
+                existing.multiaddrs = our_seeder.multiaddrs.clone();
             } else {
                 metadata.seeders.push(our_seeder);
             }
@@ -5093,8 +5126,9 @@ async fn publish_drive_file(
     };
 
     if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-        existing.price_wei = our_seeder.price_wei;
-        existing.wallet_address = our_seeder.wallet_address;
+        existing.price_wei = our_seeder.price_wei.clone();
+        existing.wallet_address = our_seeder.wallet_address.clone();
+        existing.multiaddrs = our_seeder.multiaddrs.clone();
     } else {
         metadata.seeders.push(our_seeder);
     }
@@ -5420,6 +5454,7 @@ pub fn run() {
         })
         .setup(|app| {
             use tauri::Manager;
+            let app_handle = app.handle().clone();
             // Auto-start local server with Drive routes on port 9419
             let state = app.state::<AppState>();
             let hosting: Arc<hosting_server::HostingServerState> =
@@ -5431,9 +5466,18 @@ pub fn run() {
                 Arc::clone(&state.hosting_server_shutdown);
             let tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>> =
                 Arc::clone(&state.tunnel_handles);
+            let app_for_boot = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 hosting.load_from_disk().await;
                 drive.load_from_disk_async().await;
+
+                // Always start DHT on app launch so seeding resumes immediately after restart.
+                let app_state = app_for_boot.state::<AppState>();
+                match start_dht_internal(app_for_boot.clone(), app_state.inner(), true).await {
+                    Ok(msg) => println!("[DHT] Auto-start on launch: {}", msg),
+                    Err(err) => eprintln!("[DHT] Auto-start on launch failed: {}", err),
+                }
+
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 // Local server: has drive routes, no relay share proxy
                 match hosting_server::start_gateway_server(
@@ -5479,6 +5523,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // DHT commands
             start_dht,
+            reseed_drive_files,
             stop_dht,
             get_dht_peers,
             get_network_stats,
