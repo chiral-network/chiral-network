@@ -35,7 +35,7 @@
     New Folder
   </button>
 
-  <div class="flex-1" />
+  <div class="flex-1"></div>
 
   <div class="relative">
     <Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
