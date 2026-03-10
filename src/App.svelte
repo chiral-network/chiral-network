@@ -63,17 +63,14 @@
         if (isClosing) return; // guard against re-entrant calls
         isClosing = true;
         event.preventDefault(); // take control of the close sequence
-        try {
-          await Promise.race([
-            Promise.all([
-              invoke('unpublish_all_shared_files'),
-              invoke('unpublish_host_advertisement').catch(() => {}),
-            ]),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
-          ]);
-        } catch {
-          // DHT may already be stopped or timed out — proceed with close
-        }
+        // Keep close responsive: run cleanup best-effort with a short cap.
+        await Promise.race([
+          Promise.allSettled([
+            invoke('unpublish_all_shared_files'),
+            invoke('unpublish_host_advertisement'),
+          ]),
+          new Promise((resolve) => setTimeout(resolve, 800)),
+        ]);
         // Use backend exit_app command which calls AppHandle::exit(0)
         // This triggers RunEvent::Exit for Geth cleanup and fully terminates the process.
         await invoke('exit_app');

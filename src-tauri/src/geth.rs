@@ -1279,6 +1279,45 @@ impl GethProcess {
         Ok(())
     }
 
+    /// Fast stop used during app shutdown.
+    /// Prioritizes quick process termination over graceful wait loops.
+    pub fn stop_fast(&mut self) -> Result<(), String> {
+        let _ = self.stop_gpu_miner_sync();
+
+        if let Some(mut child) = self.child.take() {
+            LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+
+            let pid = child.id();
+            let _ = Command::new("kill").arg(pid.to_string()).output();
+
+            // Only wait briefly; if still running, force kill immediately.
+            let mut exited = false;
+            for _ in 0..2 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        exited = true;
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        exited = true;
+                        break;
+                    }
+                }
+            }
+
+            if !exited {
+                let _ = child.kill();
+            }
+
+            let pid_path = self.data_dir.join("geth.pid");
+            let _ = fs::remove_file(&pid_path);
+            println!("✅ Geth stopped (fast)");
+        }
+        Ok(())
+    }
+
     /// Get current Geth status via RPC
     pub async fn get_status(&mut self) -> Result<GethStatus, String> {
         // Check if the local Geth process has exited unexpectedly

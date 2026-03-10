@@ -5645,7 +5645,7 @@ pub fn run() {
                 println!("🛑 App exiting — stopping Geth and mining");
                 match geth_for_exit.try_lock() {
                     Ok(mut geth) => {
-                        let _ = geth.stop();
+                        let _ = geth.stop_fast();
                     }
                     Err(_) => {
                         // Mutex is held — use synchronous force-kill as fallback
@@ -5661,7 +5661,6 @@ pub fn run() {
                                 let _ = std::process::Command::new("kill")
                                     .arg(pid.to_string())
                                     .output();
-                                std::thread::sleep(std::time::Duration::from_millis(500));
                                 let _ = std::process::Command::new("kill")
                                     .args(["-9", &pid.to_string()])
                                     .output();
