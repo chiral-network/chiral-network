@@ -125,8 +125,259 @@ async fn start_dht(
     ));
     let result = dht.start(app.clone()).await?;
     *dht_guard = Some(dht);
+    drop(dht_guard);
+
+    // Restore persisted Drive seeding registrations (root + nested folders)
+    // as soon as DHT comes online so "seeding=true" reflects actual availability.
+    auto_reseed_drive_files(state.inner()).await;
 
     Ok(result)
+}
+
+fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| format!("Failed to open file for hashing '{}': {}", path.display(), e))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 1024 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Failed to read file for hashing '{}': {}", path.display(), e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+async fn auto_reseed_drive_files(state: &AppState) {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+    let Some(dht) = dht else {
+        return;
+    };
+
+    let files_dir = match ds::drive_files_dir() {
+        Some(dir) => dir,
+        None => {
+            println!("[DRIVE] Cannot determine drive files directory for auto-reseed");
+            return;
+        }
+    };
+
+    let candidates = {
+        let manifest = state.drive_state.manifest.read().await;
+        manifest
+            .items
+            .iter()
+            .filter(|item| item.item_type == "file" && item.seeding)
+            .filter_map(|item| {
+                let storage_path = item.storage_path.clone()?;
+                Some((
+                    item.id.clone(),
+                    item.owner.clone(),
+                    item.name.clone(),
+                    storage_path,
+                    item.size,
+                    item.merkle_root.clone(),
+                    item.protocol.clone(),
+                    item.price_chi.clone(),
+                ))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        println!("[DRIVE] Skipping auto-reseed: local peer ID unavailable");
+        return;
+    }
+
+    let our_multiaddrs = dht.get_listening_addresses().await;
+    let mut hash_updates: Vec<(String, String)> = Vec::new();
+    let mut reseeded = 0usize;
+
+    for (
+        item_id,
+        owner,
+        file_name,
+        storage_path,
+        file_size_hint,
+        existing_merkle_root,
+        protocol,
+        price_chi,
+    ) in candidates
+    {
+        let full_path = files_dir.join(&storage_path);
+        if !full_path.exists() {
+            println!(
+                "[DRIVE] Auto-reseed skipped missing file: {} ({})",
+                file_name,
+                full_path.display()
+            );
+            continue;
+        }
+
+        let file_size = match file_size_hint {
+            Some(sz) if sz > 0 => sz,
+            _ => match std::fs::metadata(&full_path) {
+                Ok(meta) => meta.len(),
+                Err(e) => {
+                    println!(
+                        "[DRIVE] Auto-reseed failed to stat {}: {}",
+                        full_path.display(),
+                        e
+                    );
+                    continue;
+                }
+            },
+        };
+
+        let file_hash = match existing_merkle_root
+            .clone()
+            .filter(|h| !h.trim().is_empty())
+        {
+            Some(root) => root,
+            None => match compute_sha256_file(&full_path) {
+                Ok(hash) => {
+                    hash_updates.push((item_id.clone(), hash.clone()));
+                    hash
+                }
+                Err(e) => {
+                    println!("[DRIVE] Auto-reseed failed to hash {}: {}", file_name, e);
+                    continue;
+                }
+            },
+        };
+
+        let price_wei = match price_chi.as_deref() {
+            Some(price) if !price.trim().is_empty() && price.trim() != "0" => {
+                match parse_chi_to_wei(price) {
+                    Ok(wei) => wei,
+                    Err(e) => {
+                        println!(
+                            "[DRIVE] Auto-reseed invalid price for {} ({}): {}",
+                            file_name, price, e
+                        );
+                        continue;
+                    }
+                }
+            }
+            _ => 0u128,
+        };
+        let wallet_addr = if price_wei > 0 {
+            owner.clone()
+        } else {
+            String::new()
+        };
+
+        dht.register_shared_file(
+            file_hash.clone(),
+            full_path.to_string_lossy().to_string(),
+            file_name.clone(),
+            file_size,
+            price_wei,
+            wallet_addr.clone(),
+        )
+        .await;
+
+        let dht_key = format!("chiral_file_{}", file_hash);
+        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+            Ok(Some(json)) => {
+                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+                    hash: file_hash.clone(),
+                    file_name: file_name.clone(),
+                    file_size,
+                    protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                })
+            }
+            _ => FileMetadata {
+                hash: file_hash.clone(),
+                file_name: file_name.clone(),
+                file_size,
+                protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        let our_seeder = SeederInfo {
+            peer_id: peer_id.clone(),
+            price_wei: price_wei.to_string(),
+            wallet_address: wallet_addr.clone(),
+            multiaddrs: our_multiaddrs.clone(),
+        };
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei;
+            existing.wallet_address = our_seeder.wallet_address;
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        metadata.peer_id = peer_id.clone();
+        metadata.price_wei = price_wei.to_string();
+        metadata.wallet_address = wallet_addr;
+
+        let metadata_json = match serde_json::to_string(&metadata) {
+            Ok(json) => json,
+            Err(e) => {
+                println!(
+                    "[DRIVE] Auto-reseed failed to serialize metadata for {}: {}",
+                    file_name, e
+                );
+                continue;
+            }
+        };
+        if let Err(e) = dht.put_dht_value(dht_key, metadata_json).await {
+            println!(
+                "[DRIVE] Auto-reseed failed to publish metadata for {}: {}",
+                file_name, e
+            );
+            continue;
+        }
+
+        reseeded += 1;
+    }
+
+    if !hash_updates.is_empty() {
+        let mut manifest = state.drive_state.manifest.write().await;
+        let now = ds::now_secs();
+        for (item_id, hash) in hash_updates {
+            if let Some(item) = manifest.items.iter_mut().find(|i| i.id == item_id) {
+                item.merkle_root = Some(hash);
+                item.modified_at = now;
+            }
+        }
+        drop(manifest);
+        state.drive_state.persist().await;
+    }
+
+    if reseeded > 0 {
+        println!("[DRIVE] Auto-reseeded {} Drive file(s)", reseeded);
+    }
 }
 
 #[tauri::command]
@@ -4397,22 +4648,88 @@ async fn drive_delete_item(
     if owner.is_empty() {
         return Err("owner required".into());
     }
-    let mut m = state.drive_state.manifest.write().await;
-    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
-        return Err("Item not found".into());
+
+    // Snapshot owned items so we can do I/O without holding the manifest lock.
+    let (to_delete, file_entries): (
+        std::collections::HashSet<String>,
+        Vec<(String, Option<String>, Option<String>)>,
+    ) = {
+        let m = state.drive_state.manifest.read().await;
+        let owned_items: Vec<DsItem> = m
+            .items
+            .iter()
+            .filter(|i| i.owner == owner)
+            .cloned()
+            .collect();
+
+        if !owned_items.iter().any(|i| i.id == item_id) {
+            return Err("Item not found".into());
+        }
+
+        let to_delete: std::collections::HashSet<String> =
+            ds::collect_descendants(&item_id, &owned_items)
+                .into_iter()
+                .collect();
+
+        let files = owned_items
+            .iter()
+            .filter(|i| to_delete.contains(&i.id) && i.item_type == "file")
+            .map(|i| (i.id.clone(), i.storage_path.clone(), i.merkle_root.clone()))
+            .collect::<Vec<_>>();
+
+        (to_delete, files)
+    };
+
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+
+    // Remove from active seeding first so file deletion is not blocked by local serving.
+    for (_, _, merkle_root) in &file_entries {
+        if let (Some(dht), Some(hash)) = (dht.as_ref(), merkle_root.as_ref()) {
+            dht.unregister_shared_file(hash).await;
+        }
     }
-    let to_delete: std::collections::HashSet<String> = ds::collect_descendants(&item_id, &m.items)
-        .into_iter()
-        .collect();
-    if let Some(files_dir) = ds::drive_files_dir() {
-        for id in &to_delete {
-            if let Some(item) = m.items.iter().find(|i| &i.id == id) {
-                if let Some(sp) = &item.storage_path {
-                    let _ = std::fs::remove_file(files_dir.join(sp));
-                }
+    if !file_entries.is_empty() {
+        let mut storage = state.file_storage.lock().await;
+        for (_, _, merkle_root) in &file_entries {
+            if let Some(hash) = merkle_root {
+                storage.remove(hash);
             }
         }
     }
+
+    // Remove physical files from Drive storage.
+    let mut delete_errors: Vec<String> = Vec::new();
+    if let Some(files_dir) = ds::drive_files_dir() {
+        for (id, storage_path, _) in &file_entries {
+            let Some(sp) = storage_path.as_ref() else {
+                continue;
+            };
+            let full_path = files_dir.join(sp);
+            match std::fs::remove_file(&full_path) {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => delete_errors.push(format!(
+                    "{} (item {}): {}",
+                    full_path.display(),
+                    id,
+                    e
+                )),
+            }
+        }
+    }
+
+    if !delete_errors.is_empty() {
+        return Err(format!(
+            "Failed to delete {} file(s): {}",
+            delete_errors.len(),
+            delete_errors.join(" | ")
+        ));
+    }
+
+    let mut m = state.drive_state.manifest.write().await;
     m.items.retain(|i| !to_delete.contains(&i.id));
     m.shares.retain(|s| !to_delete.contains(&s.item_id));
     drop(m);
@@ -4618,47 +4935,42 @@ async fn publish_drive_file(
     }
 
     // Register with DHT/shared-files map by filesystem path (no file upload/copy).
-    let dht_guard = state.dht.lock().await;
-    if let Some(dht) = dht_guard.as_ref() {
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    // If DHT is not running, fail fast so the UI doesn't show a false "seeding" state.
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard
+            .as_ref()
+            .cloned()
+            .ok_or("DHT not running. Connect to the network before seeding.")?
+    };
 
-        dht.register_shared_file(
-            file_hash.clone(),
-            full_path_str,
-            file_name.clone(),
-            actual_size,
-            price_wei_val,
-            wallet_addr.clone(),
-        )
-        .await;
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return Err("DHT peer ID unavailable. Try reconnecting to the network.".to_string());
+    }
 
-        let our_multiaddrs = dht.get_listening_addresses().await;
-        let our_seeder = SeederInfo {
-            peer_id: peer_id.clone(),
-            price_wei: price_wei_val.to_string(),
-            wallet_address: wallet_addr,
-            multiaddrs: our_multiaddrs,
-        };
+    dht.register_shared_file(
+        file_hash.clone(),
+        full_path_str,
+        file_name.clone(),
+        actual_size,
+        price_wei_val,
+        wallet_addr.clone(),
+    )
+    .await;
 
-        let dht_key = format!("chiral_file_{}", file_hash);
-        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-            Ok(Some(json)) => {
-                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-                    hash: file_hash.clone(),
-                    file_name: file_name.clone(),
-                    file_size: actual_size,
-                    protocol: proto.clone(),
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    peer_id: String::new(),
-                    price_wei: String::new(),
-                    wallet_address: String::new(),
-                    seeders: Vec::new(),
-                })
-            }
-            _ => FileMetadata {
+    let our_multiaddrs = dht.get_listening_addresses().await;
+    let our_seeder = SeederInfo {
+        peer_id: peer_id.clone(),
+        price_wei: price_wei_val.to_string(),
+        wallet_address: wallet_addr.clone(),
+        multiaddrs: our_multiaddrs,
+    };
+
+    let dht_key = format!("chiral_file_{}", file_hash);
+    let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+        Ok(Some(json)) => {
+            serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
                 hash: file_hash.clone(),
                 file_name: file_name.clone(),
                 file_size: actual_size,
@@ -4671,22 +4983,37 @@ async fn publish_drive_file(
                 price_wei: String::new(),
                 wallet_address: String::new(),
                 seeders: Vec::new(),
-            },
-        };
-
-        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei;
-            existing.wallet_address = our_seeder.wallet_address;
-        } else {
-            metadata.seeders.push(our_seeder);
+            })
         }
-        metadata.peer_id = peer_id;
-        metadata.price_wei = price_wei_val.to_string();
+        _ => FileMetadata {
+            hash: file_hash.clone(),
+            file_name: file_name.clone(),
+            file_size: actual_size,
+            protocol: proto.clone(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            peer_id: String::new(),
+            price_wei: String::new(),
+            wallet_address: String::new(),
+            seeders: Vec::new(),
+        },
+    };
 
-        let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        dht.put_dht_value(dht_key, metadata_json).await?;
+    if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+        existing.price_wei = our_seeder.price_wei;
+        existing.wallet_address = our_seeder.wallet_address;
+    } else {
+        metadata.seeders.push(our_seeder);
     }
+    metadata.peer_id = peer_id;
+    metadata.price_wei = price_wei_val.to_string();
+    metadata.wallet_address = wallet_addr;
+
+    let metadata_json = serde_json::to_string(&metadata)
+        .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+    dht.put_dht_value(dht_key, metadata_json).await?;
 
     // Update the Drive manifest with seeding metadata
     let updated_item = {
@@ -4694,7 +5021,7 @@ async fn publish_drive_file(
         let item = m
             .items
             .iter_mut()
-            .find(|i| i.id == item_id)
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
             .ok_or("Drive item not found in manifest")?;
         item.merkle_root = Some(file_hash);
         item.protocol = Some(proto);
@@ -4702,9 +5029,9 @@ async fn publish_drive_file(
         item.seeding = true;
         item.modified_at = ds::now_secs();
         let cloned = item.clone();
-        ds::save_manifest(&m);
         cloned
     };
+    state.drive_state.persist().await;
 
     Ok(updated_item)
 }
