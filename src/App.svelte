@@ -409,20 +409,15 @@
     }
   });
 
-  // Auto-connect DHT once when user logs in
+  // Auto-connect DHT once on app launch.
   let dhtAutoConnected = false;
   $effect(() => {
-    if ($isAuthenticated && !dhtAutoConnected) {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+    if (!dhtAutoConnected) {
       dhtAutoConnected = true;
       dhtService.start().catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('already running')) {
-          networkConnected.set(true);
-        }
+        console.warn('DHT auto-start failed:', err);
       });
-    }
-    if (!$isAuthenticated) {
-      dhtAutoConnected = false;
     }
   });
 

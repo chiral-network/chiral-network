@@ -34,39 +34,30 @@ class DhtService {
     try {
       const result = await invoke<string>('start_dht');
       log.ok('DHT started:', result);
-      networkConnected.set(true);
-      
-      // Listen for peer discovery events
-      this.peerDiscoveryUnlisten = await listen<PeerInfo[]>('peer-discovered', (event) => {
-        log.info('Peers discovered:', event.payload);
-        // The payload already has the correct structure from Rust
-        peers.set(event.payload);
-      });
-      
-      // Listen for ping events
-      this.pingSentUnlisten = await listen<string>('ping-sent', (event) => {
-        toasts.show('Ping sent to peer', 'success');
-      });
-      
-      this.pingReceivedUnlisten = await listen<string>('ping-received', (event) => {
-        toasts.show('Ping received from peer', 'info');
-      });
-      
-      this.pongReceivedUnlisten = await listen<string>('pong-received', (event) => {
-        toasts.show('Pong received from peer', 'success');
-      });
-      
-      // Start polling for network stats
-      this.startPolling();
-      
-      // Get and log our peer ID
-      const peerId = await this.getPeerId();
-      if (peerId) {
-        log.info('Our Peer ID:', peerId);
-      }
     } catch (error) {
-      log.error('Failed to start DHT:', error);
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes('already running')) {
+        log.error('Failed to start DHT:', error);
+        throw error;
+      }
+      log.info('DHT already running; attaching UI listeners');
+    }
+
+    networkConnected.set(true);
+    await this.ensureRuntimeWiring();
+
+    // Ensure persisted Drive files are re-registered after restart, even when
+    // DHT was auto-started before the UI attached.
+    try {
+      await invoke('reseed_drive_files');
+    } catch (error) {
+      log.warn('Drive reseed refresh failed:', error);
+    }
+
+    // Get and log our peer ID
+    const peerId = await this.getPeerId();
+    if (peerId) {
+      log.info('Our Peer ID:', peerId);
     }
   }
 
@@ -133,6 +124,35 @@ class DhtService {
       log.error('Failed to get DHT health:', error);
       throw error;
     }
+  }
+
+  private async ensureRuntimeWiring(): Promise<void> {
+    if (!this.peerDiscoveryUnlisten) {
+      this.peerDiscoveryUnlisten = await listen<PeerInfo[]>('peer-discovered', (event) => {
+        log.info('Peers discovered:', event.payload);
+        peers.set(event.payload);
+      });
+    }
+
+    if (!this.pingSentUnlisten) {
+      this.pingSentUnlisten = await listen<string>('ping-sent', () => {
+        toasts.show('Ping sent to peer', 'success');
+      });
+    }
+
+    if (!this.pingReceivedUnlisten) {
+      this.pingReceivedUnlisten = await listen<string>('ping-received', () => {
+        toasts.show('Ping received from peer', 'info');
+      });
+    }
+
+    if (!this.pongReceivedUnlisten) {
+      this.pongReceivedUnlisten = await listen<string>('pong-received', () => {
+        toasts.show('Pong received from peer', 'success');
+      });
+    }
+
+    this.startPolling();
   }
 
   private startPolling(): void {
