@@ -20,7 +20,7 @@
   let expandedFileId = $state<string | null>(null);
   let priceDrafts = $state<Record<string, string>>({});
 
-  const seedingItems = $derived(driveStore.getSeedingItems(manifest));
+  const seedingItems = $derived($networkConnected ? driveStore.getSeedingItems(manifest) : []);
 
   function formatFileSize(bytes?: number): string {
     if (!bytes) return '0 B';

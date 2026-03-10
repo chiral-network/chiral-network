@@ -127,6 +127,9 @@ async fn start_dht(
     *dht_guard = Some(dht);
     drop(dht_guard);
 
+    // Ensure latest Drive manifest is in-memory before reseed to avoid startup races.
+    state.drive_state.load_from_disk_async().await;
+
     // Restore persisted Drive seeding registrations (root + nested folders)
     // as soon as DHT comes online so "seeding=true" reflects actual availability.
     auto_reseed_drive_files(state.inner()).await;
@@ -176,7 +179,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
         manifest
             .items
             .iter()
-            .filter(|item| item.item_type == "file" && item.seeding)
+            .filter(|item| item.item_type == "file" && (item.seed_enabled || item.seeding))
             .filter_map(|item| {
                 let storage_path = item.storage_path.clone()?;
                 Some((
@@ -205,6 +208,9 @@ async fn auto_reseed_drive_files(state: &AppState) {
 
     let our_multiaddrs = dht.get_listening_addresses().await;
     let mut hash_updates: Vec<(String, String)> = Vec::new();
+    let mut attempted_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut activated_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut disabled_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut reseeded = 0usize;
 
     for (
@@ -218,6 +224,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
         price_chi,
     ) in candidates
     {
+        attempted_ids.insert(item_id.clone());
         let full_path = files_dir.join(&storage_path);
         if !full_path.exists() {
             println!(
@@ -225,6 +232,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
                 file_name,
                 full_path.display()
             );
+            disabled_ids.insert(item_id.clone());
             continue;
         }
 
@@ -359,12 +367,37 @@ async fn auto_reseed_drive_files(state: &AppState) {
             continue;
         }
 
+        activated_ids.insert(item_id.clone());
         reseeded += 1;
     }
 
-    if !hash_updates.is_empty() {
+    if !hash_updates.is_empty() || !attempted_ids.is_empty() {
         let mut manifest = state.drive_state.manifest.write().await;
         let now = ds::now_secs();
+        for item in manifest
+            .items
+            .iter_mut()
+            .filter(|i| i.item_type == "file" && attempted_ids.contains(&i.id))
+        {
+            if disabled_ids.contains(&item.id) {
+                item.seed_enabled = false;
+                item.seeding = false;
+                item.modified_at = now;
+                continue;
+            }
+
+            // Migrate legacy manifests where seeding intent lived only in `seeding`.
+            if !item.seed_enabled {
+                item.seed_enabled = true;
+                item.modified_at = now;
+            }
+
+            let active = activated_ids.contains(&item.id);
+            if item.seeding != active {
+                item.seeding = active;
+                item.modified_at = now;
+            }
+        }
         for (item_id, hash) in hash_updates {
             if let Some(item) = manifest.items.iter_mut().find(|i| i.id == item_id) {
                 item.merkle_root = Some(hash);
@@ -383,9 +416,65 @@ async fn auto_reseed_drive_files(state: &AppState) {
 #[tauri::command]
 async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut dht_guard = state.dht.lock().await;
+    let mut was_running = false;
 
     if let Some(dht) = dht_guard.take() {
+        // Best-effort cleanup: remove our seeder entries so DHT reflects that
+        // we're no longer actively seeding when users disconnect.
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        if !peer_id.is_empty() {
+            let shared = dht.get_shared_files();
+            let file_hashes: Vec<String> = {
+                let map = shared.lock().await;
+                map.keys().cloned().collect()
+            };
+            for file_hash in &file_hashes {
+                let dht_key = format!("chiral_file_{}", file_hash);
+                if let Ok(Some(json)) = dht.get_dht_value(dht_key.clone()).await {
+                    if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
+                        metadata.seeders.retain(|s| s.peer_id != peer_id);
+                        if metadata.peer_id == peer_id {
+                            metadata.peer_id = String::new();
+                        }
+                        if metadata.wallet_address.is_empty() {
+                            metadata.wallet_address = metadata
+                                .seeders
+                                .first()
+                                .map(|s| s.wallet_address.clone())
+                                .unwrap_or_default();
+                        }
+                        if let Ok(updated_json) = serde_json::to_string(&metadata) {
+                            let _ = dht.put_dht_value(dht_key, updated_json).await;
+                        }
+                    }
+                }
+            }
+        }
+
         dht.stop().await?;
+        was_running = true;
+    }
+    drop(dht_guard);
+
+    // DHT is offline: clear active-seeding runtime state in Drive manifest.
+    if was_running {
+        let mut changed = false;
+        let now = ds::now_secs();
+        {
+            let mut manifest = state.drive_state.manifest.write().await;
+            for item in manifest
+                .items
+                .iter_mut()
+                .filter(|i| i.item_type == "file" && i.seeding)
+            {
+                item.seeding = false;
+                item.modified_at = now;
+                changed = true;
+            }
+        }
+        if changed {
+            state.drive_state.persist().await;
+        }
     }
 
     Ok(())
@@ -4523,6 +4612,7 @@ async fn drive_create_folder(
         merkle_root: None,
         protocol: None,
         price_chi: None,
+        seed_enabled: false,
         seeding: false,
     };
     {
@@ -4587,6 +4677,7 @@ async fn drive_upload_file(
         merkle_root: merkle_root.or(Some(computed_merkle_root)),
         protocol: None,
         price_chi: None,
+        seed_enabled: false,
         seeding: false,
     };
     {
@@ -5026,6 +5117,7 @@ async fn publish_drive_file(
         item.merkle_root = Some(file_hash);
         item.protocol = Some(proto);
         item.price_chi = price_chi;
+        item.seed_enabled = true;
         item.seeding = true;
         item.modified_at = ds::now_secs();
         let cloned = item.clone();
@@ -5052,7 +5144,7 @@ async fn drive_stop_seeding(
         let item = m
             .items
             .iter()
-            .find(|i| i.id == item_id && i.owner == owner)
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
             .ok_or("Drive item not found")?;
         item.merkle_root.clone()
     };
@@ -5074,14 +5166,15 @@ async fn drive_stop_seeding(
         let item = m
             .items
             .iter_mut()
-            .find(|i| i.id == item_id)
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
             .ok_or("Drive item not found in manifest")?;
+        item.seed_enabled = false;
         item.seeding = false;
         item.modified_at = ds::now_secs();
         let cloned = item.clone();
-        ds::save_manifest(&m);
         cloned
     };
+    state.drive_state.persist().await;
 
     Ok(updated_item)
 }

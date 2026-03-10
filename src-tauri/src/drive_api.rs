@@ -170,6 +170,7 @@ async fn create_folder(
         merkle_root: None,
         protocol: None,
         price_chi: None,
+        seed_enabled: false,
         seeding: false,
     };
     {
@@ -281,6 +282,7 @@ async fn upload_file(
         merkle_root: None,
         protocol: None,
         price_chi: None,
+        seed_enabled: false,
         seeding: false,
     };
 

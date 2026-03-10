@@ -41,7 +41,12 @@ pub struct DriveItem {
     /// Price in CHI tokens (as string, "0" = free).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_chi: Option<String>,
+    /// Whether this file should auto-seed whenever DHT is running.
+    /// This is persisted user intent.
+    #[serde(default)]
+    pub seed_enabled: bool,
     /// Whether the file is actively being seeded on the P2P network.
+    /// This is runtime state and may be false while DHT is offline.
     #[serde(default)]
     pub seeding: bool,
 }
@@ -235,6 +240,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                seed_enabled: false,
                 seeding: false,
             },
             DriveItem {
@@ -253,6 +259,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                seed_enabled: false,
                 seeding: false,
             },
             DriveItem {
@@ -271,6 +278,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                seed_enabled: false,
                 seeding: false,
             },
             DriveItem {
@@ -289,6 +297,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                seed_enabled: false,
                 seeding: false,
             },
         ];
