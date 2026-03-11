@@ -139,12 +139,27 @@ async fn start_dht_internal(
     // as soon as DHT comes online so "seeding=true" reflects actual availability.
     auto_reseed_drive_files(state).await;
 
-    // Run a second reseed pass after bootstrap/relay setup has had time to settle.
-    // This improves discoverability after restart by republishing once routing is warm.
+    // Run follow-up reseed passes after startup to absorb timing races between
+    // bootstrap, relay reservation, and Drive manifest load/refresh.
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(12)).await;
-        let app_state = app_for_delayed_reseed.state::<AppState>();
-        auto_reseed_drive_files(app_state.inner()).await;
+        // Use staggered retries over several minutes so reseed converges even on
+        // slow or unstable startups.
+        let retry_delays_secs = [2u64, 5, 10, 20, 30, 45, 60];
+        for delay_secs in retry_delays_secs {
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+
+            let app_state = app_for_delayed_reseed.state::<AppState>();
+            let dht_running = {
+                let dht_guard = app_state.dht.lock().await;
+                dht_guard.is_some()
+            };
+            if !dht_running {
+                break;
+            }
+
+            app_state.drive_state.load_from_disk_async().await;
+            auto_reseed_drive_files(app_state.inner()).await;
+        }
     });
 
     Ok(result)
@@ -223,16 +238,22 @@ async fn auto_reseed_drive_files(state: &AppState) {
 
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     if peer_id.is_empty() {
-        println!("[DRIVE] Skipping auto-reseed: local peer ID unavailable");
-        return;
+        println!(
+            "[DRIVE] Auto-reseed: peer ID unavailable; registering local seeds and deferring DHT metadata publish"
+        );
     }
 
-    let our_multiaddrs = dht.get_listening_addresses().await;
+    let our_multiaddrs = if peer_id.is_empty() {
+        Vec::new()
+    } else {
+        dht.get_listening_addresses().await
+    };
     let mut hash_updates: Vec<(String, String)> = Vec::new();
     let mut attempted_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut activated_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut disabled_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut reseeded = 0usize;
+    let mut reseeded_local = 0usize;
+    let mut reseeded_dht_metadata = 0usize;
 
     for (
         item_id,
@@ -320,6 +341,15 @@ async fn auto_reseed_drive_files(state: &AppState) {
         )
         .await;
 
+        activated_ids.insert(item_id.clone());
+        reseeded_local += 1;
+
+        // Keep local reseeding instant even when DHT identity/bootstrap is not
+        // ready yet. Metadata will be refreshed on follow-up reseed passes.
+        if peer_id.is_empty() {
+            continue;
+        }
+
         let dht_key = format!("chiral_file_{}", file_hash);
         let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
             Ok(Some(json)) => {
@@ -389,8 +419,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
             continue;
         }
 
-        activated_ids.insert(item_id.clone());
-        reseeded += 1;
+        reseeded_dht_metadata += 1;
     }
 
     if !hash_updates.is_empty() || !attempted_ids.is_empty() {
@@ -430,8 +459,18 @@ async fn auto_reseed_drive_files(state: &AppState) {
         state.drive_state.persist().await;
     }
 
-    if reseeded > 0 {
-        println!("[DRIVE] Auto-reseeded {} Drive file(s)", reseeded);
+    if reseeded_local > 0 {
+        if peer_id.is_empty() {
+            println!(
+                "[DRIVE] Auto-reseeded {} Drive file(s) locally (metadata publish deferred)",
+                reseeded_local
+            );
+        } else {
+            println!(
+                "[DRIVE] Auto-reseeded {} Drive file(s); refreshed metadata for {}",
+                reseeded_local, reseeded_dht_metadata
+            );
+        }
     }
 }
 
@@ -1496,7 +1535,7 @@ async fn try_repair_local_drive_seed(
     dht.register_shared_file(
         file_hash.to_string(),
         full_path.to_string_lossy().to_string(),
-        candidate.file_name,
+        candidate.file_name.clone(),
         file_size,
         price_wei,
         wallet_addr.clone(),
@@ -1504,34 +1543,42 @@ async fn try_repair_local_drive_seed(
     .await;
 
     // Best-effort metadata republish for remote discoverability.
-    let peer_id = dht.get_peer_id().await.unwrap_or_default();
-    if !peer_id.is_empty() {
+    // Keep search path fast: local repair should return immediately, while DHT
+    // publish retries happen in the background.
+    let dht_for_publish = dht.clone();
+    let file_hash_for_publish = file_hash.to_string();
+    let file_name_for_publish = candidate.file_name.clone();
+    let protocol_for_publish = candidate
+        .protocol
+        .clone()
+        .unwrap_or_else(|| "WebRTC".to_string());
+    let wallet_for_publish = wallet_addr.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let peer_id = dht_for_publish.get_peer_id().await.unwrap_or_default();
+        if peer_id.is_empty() {
+            return;
+        }
+
         let our_multiaddrs = tokio::time::timeout(
-            std::time::Duration::from_millis(400),
-            dht.get_listening_addresses(),
+            std::time::Duration::from_secs(2),
+            dht_for_publish.get_listening_addresses(),
         )
         .await
         .unwrap_or_default();
 
-        let dht_key = format!("chiral_file_{}", file_hash);
+        let dht_key = format!("chiral_file_{}", file_hash_for_publish);
         let mut metadata = match tokio::time::timeout(
-            std::time::Duration::from_millis(1200),
-            dht.get_dht_value(dht_key.clone()),
+            std::time::Duration::from_secs(2),
+            dht_for_publish.get_dht_value(dht_key.clone()),
         )
         .await
         {
             Ok(Ok(Some(json))) => serde_json::from_str::<FileMetadata>(&json).unwrap_or(FileMetadata {
-                hash: file_hash.to_string(),
-                file_name: full_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(file_hash)
-                    .to_string(),
+                hash: file_hash_for_publish.clone(),
+                file_name: file_name_for_publish.clone(),
                 file_size,
-                protocol: candidate
-                    .protocol
-                    .clone()
-                    .unwrap_or_else(|| "WebRTC".to_string()),
+                protocol: protocol_for_publish.clone(),
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -1542,17 +1589,10 @@ async fn try_repair_local_drive_seed(
                 seeders: Vec::new(),
             }),
             _ => FileMetadata {
-                hash: file_hash.to_string(),
-                file_name: full_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(file_hash)
-                    .to_string(),
+                hash: file_hash_for_publish.clone(),
+                file_name: file_name_for_publish.clone(),
                 file_size,
-                protocol: candidate
-                    .protocol
-                    .clone()
-                    .unwrap_or_else(|| "WebRTC".to_string()),
+                protocol: protocol_for_publish.clone(),
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -1567,7 +1607,7 @@ async fn try_repair_local_drive_seed(
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei.to_string(),
-            wallet_address: wallet_addr.clone(),
+            wallet_address: wallet_for_publish.clone(),
             multiaddrs: our_multiaddrs,
         };
         if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
@@ -1579,16 +1619,16 @@ async fn try_repair_local_drive_seed(
         }
         metadata.peer_id = peer_id;
         metadata.price_wei = price_wei.to_string();
-        metadata.wallet_address = wallet_addr;
+        metadata.wallet_address = wallet_for_publish;
 
         if let Ok(json) = serde_json::to_string(&metadata) {
             let _ = tokio::time::timeout(
-                std::time::Duration::from_millis(1200),
-                dht.put_dht_value(dht_key, json),
+                std::time::Duration::from_secs(2),
+                dht_for_publish.put_dht_value(dht_key, json),
             )
             .await;
         }
-    }
+    });
 
     // Keep runtime Drive state consistent with repaired registration.
     {
@@ -1622,6 +1662,10 @@ async fn search_file(
         dht_guard.as_ref().cloned()
     };
     if let Some(dht) = dht.as_ref() {
+        // Refresh manifest snapshot first so startup/local-repair checks see the
+        // latest persisted Drive seeding intent.
+        state.drive_state.load_from_disk_async().await;
+
         // Fast path: if we are locally seeding this hash, return immediately.
         // This avoids restart races where Kademlia lookups can time out while
         // local seeding is already active.
