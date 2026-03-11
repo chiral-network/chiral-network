@@ -1397,6 +1397,9 @@ async fn build_local_search_result(
     }?;
 
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    // Local-first search should never block on address discovery.
+    // `multiaddrs` are optional for local-device downloads because start_download
+    // already short-circuits against shared_files map.
     let seeders = if peer_id.is_empty() {
         Vec::new()
     } else {
@@ -1404,7 +1407,7 @@ async fn build_local_search_result(
             peer_id,
             price_wei: local_info.price_wei.to_string(),
             wallet_address: local_info.wallet_address.clone(),
-            multiaddrs: dht.get_listening_addresses().await,
+            multiaddrs: Vec::new(),
         }]
     };
 
@@ -1422,6 +1425,190 @@ async fn build_local_search_result(
     })
 }
 
+#[derive(Clone)]
+struct LocalDriveSeedCandidate {
+    item_id: String,
+    owner: String,
+    file_name: String,
+    storage_path: String,
+    file_size_hint: Option<u64>,
+    protocol: Option<String>,
+    price_chi: Option<String>,
+}
+
+async fn try_repair_local_drive_seed(
+    state: &AppState,
+    dht: &Arc<DhtService>,
+    file_hash: &str,
+) -> Option<SearchResult> {
+    let candidate = {
+        let manifest = state.drive_state.manifest.read().await;
+        manifest
+            .items
+            .iter()
+            .find(|item| {
+                item.item_type == "file"
+                    && item
+                        .merkle_root
+                        .as_deref()
+                        .map(|h| h.eq_ignore_ascii_case(file_hash))
+                        .unwrap_or(false)
+                    && (item.seed_enabled || item.seeding)
+            })
+            .and_then(|item| {
+                item.storage_path
+                    .as_ref()
+                    .map(|sp| LocalDriveSeedCandidate {
+                        item_id: item.id.clone(),
+                        owner: item.owner.clone(),
+                        file_name: item.name.clone(),
+                        storage_path: sp.clone(),
+                        file_size_hint: item.size,
+                        protocol: item.protocol.clone(),
+                        price_chi: item.price_chi.clone(),
+                    })
+            })
+    }?;
+
+    let files_dir = ds::drive_files_dir()?;
+    let full_path = files_dir.join(&candidate.storage_path);
+    if !full_path.exists() {
+        return None;
+    }
+
+    let file_size = match candidate.file_size_hint {
+        Some(size) if size > 0 => size,
+        _ => std::fs::metadata(&full_path).ok()?.len(),
+    };
+
+    let price_wei = match candidate.price_chi.as_deref() {
+        Some(price) if !price.trim().is_empty() && price.trim() != "0" => {
+            parse_chi_to_wei(price).unwrap_or(0)
+        }
+        _ => 0u128,
+    };
+    let wallet_addr = if price_wei > 0 {
+        candidate.owner.clone()
+    } else {
+        String::new()
+    };
+
+    dht.register_shared_file(
+        file_hash.to_string(),
+        full_path.to_string_lossy().to_string(),
+        candidate.file_name,
+        file_size,
+        price_wei,
+        wallet_addr.clone(),
+    )
+    .await;
+
+    // Best-effort metadata republish for remote discoverability.
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if !peer_id.is_empty() {
+        let our_multiaddrs = tokio::time::timeout(
+            std::time::Duration::from_millis(400),
+            dht.get_listening_addresses(),
+        )
+        .await
+        .unwrap_or_default();
+
+        let dht_key = format!("chiral_file_{}", file_hash);
+        let mut metadata = match tokio::time::timeout(
+            std::time::Duration::from_millis(1200),
+            dht.get_dht_value(dht_key.clone()),
+        )
+        .await
+        {
+            Ok(Ok(Some(json))) => serde_json::from_str::<FileMetadata>(&json).unwrap_or(FileMetadata {
+                hash: file_hash.to_string(),
+                file_name: full_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(file_hash)
+                    .to_string(),
+                file_size,
+                protocol: candidate
+                    .protocol
+                    .clone()
+                    .unwrap_or_else(|| "WebRTC".to_string()),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            }),
+            _ => FileMetadata {
+                hash: file_hash.to_string(),
+                file_name: full_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(file_hash)
+                    .to_string(),
+                file_size,
+                protocol: candidate
+                    .protocol
+                    .clone()
+                    .unwrap_or_else(|| "WebRTC".to_string()),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        };
+
+        let our_seeder = SeederInfo {
+            peer_id: peer_id.clone(),
+            price_wei: price_wei.to_string(),
+            wallet_address: wallet_addr.clone(),
+            multiaddrs: our_multiaddrs,
+        };
+        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+            existing.price_wei = our_seeder.price_wei.clone();
+            existing.wallet_address = our_seeder.wallet_address.clone();
+            existing.multiaddrs = our_seeder.multiaddrs.clone();
+        } else {
+            metadata.seeders.push(our_seeder);
+        }
+        metadata.peer_id = peer_id;
+        metadata.price_wei = price_wei.to_string();
+        metadata.wallet_address = wallet_addr;
+
+        if let Ok(json) = serde_json::to_string(&metadata) {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_millis(1200),
+                dht.put_dht_value(dht_key, json),
+            )
+            .await;
+        }
+    }
+
+    // Keep runtime Drive state consistent with repaired registration.
+    {
+        let mut manifest = state.drive_state.manifest.write().await;
+        if let Some(item) = manifest.items.iter_mut().find(|i| i.id == candidate.item_id) {
+            if !item.seeding {
+                item.seeding = true;
+                item.modified_at = ds::now_secs();
+            }
+            if !item.seed_enabled {
+                item.seed_enabled = true;
+                item.modified_at = ds::now_secs();
+            }
+        }
+    }
+
+    state.drive_state.persist().await;
+    build_local_search_result(dht, file_hash).await
+}
+
 #[tauri::command]
 async fn search_file(
     state: tauri::State<'_, AppState>,
@@ -1430,8 +1617,11 @@ async fn search_file(
     println!("Searching for file: {}", file_hash);
 
     // Get DHT service
-    let dht_guard = state.dht.lock().await;
-    if let Some(dht) = dht_guard.as_ref() {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard.as_ref().cloned()
+    };
+    if let Some(dht) = dht.as_ref() {
         // Fast path: if we are locally seeding this hash, return immediately.
         // This avoids restart races where Kademlia lookups can time out while
         // local seeding is already active.
@@ -1441,6 +1631,16 @@ async fn search_file(
                 file_hash
             );
             return Ok(Some(local));
+        }
+
+        // Self-heal path: if manifest says this file should be seeded but runtime
+        // shared-files map is missing it (restart race/crash), repair and return.
+        if let Some(repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
+            println!(
+                "Repaired missing local seed registration for {} from Drive manifest",
+                file_hash
+            );
+            return Ok(Some(repaired));
         }
 
         // Search for file metadata in DHT
@@ -1508,6 +1708,14 @@ async fn search_file(
                         file_hash
                     );
                     Ok(Some(local))
+                } else if let Some(repaired) =
+                    try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                {
+                    println!(
+                        "Returning repaired local fallback for {} despite DHT lookup error",
+                        file_hash
+                    );
+                    Ok(Some(repaired))
                 } else {
                     Err(e)
                 }
