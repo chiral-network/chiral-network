@@ -1499,8 +1499,48 @@ async fn search_file(
                 }
             }
             Err(e) => {
-                println!("DHT lookup error: {}", e);
-                Err(e)
+                println!("DHT lookup error: {}. Trying local seeding fallback.", e);
+
+                // Even if DHT GET fails (e.g. bootstrap race), this node may still
+                // be actively seeding the file from local state.
+                let shared_files = dht.get_shared_files();
+                let local_info = {
+                    let shared = shared_files.lock().await;
+                    shared.get(&file_hash).cloned()
+                };
+
+                if let Some(info) = local_info {
+                    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+                    let seeders = if peer_id.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![SeederInfo {
+                            peer_id,
+                            price_wei: info.price_wei.to_string(),
+                            wallet_address: info.wallet_address.clone(),
+                            multiaddrs: dht.get_listening_addresses().await,
+                        }]
+                    };
+
+                    println!(
+                        "Returning local fallback for {} despite DHT lookup error",
+                        file_hash
+                    );
+                    Ok(Some(SearchResult {
+                        hash: file_hash.clone(),
+                        file_name: info.file_name,
+                        file_size: info.file_size,
+                        seeders,
+                        created_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                        price_wei: info.price_wei.to_string(),
+                        wallet_address: info.wallet_address,
+                    }))
+                } else {
+                    Err(e)
+                }
             }
         }
     } else {
