@@ -1386,6 +1386,42 @@ struct SearchResult {
     wallet_address: String,
 }
 
+async fn build_local_search_result(
+    dht: &Arc<DhtService>,
+    file_hash: &str,
+) -> Option<SearchResult> {
+    let shared_files = dht.get_shared_files();
+    let local_info = {
+        let shared = shared_files.lock().await;
+        shared.get(file_hash).cloned()
+    }?;
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    let seeders = if peer_id.is_empty() {
+        Vec::new()
+    } else {
+        vec![SeederInfo {
+            peer_id,
+            price_wei: local_info.price_wei.to_string(),
+            wallet_address: local_info.wallet_address.clone(),
+            multiaddrs: dht.get_listening_addresses().await,
+        }]
+    };
+
+    Some(SearchResult {
+        hash: file_hash.to_string(),
+        file_name: local_info.file_name,
+        file_size: local_info.file_size,
+        seeders,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        price_wei: local_info.price_wei.to_string(),
+        wallet_address: local_info.wallet_address,
+    })
+}
+
 #[tauri::command]
 async fn search_file(
     state: tauri::State<'_, AppState>,
@@ -1396,11 +1432,34 @@ async fn search_file(
     // Get DHT service
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
+        // Fast path: if we are locally seeding this hash, return immediately.
+        // This avoids restart races where Kademlia lookups can time out while
+        // local seeding is already active.
+        if let Some(local) = build_local_search_result(dht, &file_hash).await {
+            println!(
+                "Returning immediate local seeding result for {}",
+                file_hash
+            );
+            return Ok(Some(local));
+        }
+
         // Search for file metadata in DHT
         let dht_key = format!("chiral_file_{}", file_hash);
         println!("Looking up DHT key: {}", dht_key);
 
-        match dht.get_dht_value(dht_key.clone()).await {
+        let dht_lookup = tokio::time::timeout(
+            tokio::time::Duration::from_millis(3000),
+            dht.get_dht_value(dht_key.clone()),
+        )
+        .await;
+
+        match dht_lookup {
+            Err(_) => {
+                println!("DHT lookup timed out for key: {}", dht_key);
+                // Timeout should not fail search hard; return not-found quickly.
+                Ok(None)
+            }
+            Ok(lookup_result) => match lookup_result {
             Ok(Some(metadata_json)) => {
                 // Parse metadata from JSON
                 let metadata: FileMetadata = serde_json::from_str(&metadata_json)
@@ -1424,27 +1483,6 @@ async fn search_file(
                 }
                 seeders.retain(|s| !s.peer_id.trim().is_empty());
 
-                // Ensure the local node is discoverable immediately when it is
-                // already sharing this file, even if DHT metadata is stale.
-                let local_shared = {
-                    let shared_files = dht.get_shared_files();
-                    let shared = shared_files.lock().await;
-                    shared.get(&file_hash).cloned()
-                };
-                if let Some(local) = local_shared {
-                    let local_peer_id = dht.get_peer_id().await.unwrap_or_default();
-                    if !local_peer_id.is_empty()
-                        && !seeders.iter().any(|s| s.peer_id == local_peer_id)
-                    {
-                        seeders.push(SeederInfo {
-                            peer_id: local_peer_id,
-                            price_wei: local.price_wei.to_string(),
-                            wallet_address: local.wallet_address,
-                            multiaddrs: dht.get_listening_addresses().await,
-                        });
-                    }
-                }
-
                 Ok(Some(SearchResult {
                     hash: metadata.hash,
                     file_name: metadata.file_name,
@@ -1456,92 +1494,25 @@ async fn search_file(
                 }))
             }
             Ok(None) => {
-                // Fallback: if DHT propagation is still converging, return a local
-                // seeding result immediately when this node is already sharing the file.
-                let shared_files = dht.get_shared_files();
-                let local_info = {
-                    let shared = shared_files.lock().await;
-                    shared.get(&file_hash).cloned()
-                };
-
-                if let Some(info) = local_info {
-                    let peer_id = dht.get_peer_id().await.unwrap_or_default();
-                    let seeders = if peer_id.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![SeederInfo {
-                            peer_id,
-                            price_wei: info.price_wei.to_string(),
-                            wallet_address: info.wallet_address.clone(),
-                            multiaddrs: dht.get_listening_addresses().await,
-                        }]
-                    };
-
-                    println!(
-                        "File {} not yet visible in DHT, returning local seeding fallback",
-                        file_hash
-                    );
-                    Ok(Some(SearchResult {
-                        hash: file_hash.clone(),
-                        file_name: info.file_name,
-                        file_size: info.file_size,
-                        seeders,
-                        created_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        price_wei: info.price_wei.to_string(),
-                        wallet_address: info.wallet_address,
-                    }))
-                } else {
-                    println!("File not found in DHT: {}", file_hash);
-                    Ok(None)
-                }
+                println!("File not found in DHT: {}", file_hash);
+                Ok(None)
             }
             Err(e) => {
                 println!("DHT lookup error: {}. Trying local seeding fallback.", e);
 
                 // Even if DHT GET fails (e.g. bootstrap race), this node may still
                 // be actively seeding the file from local state.
-                let shared_files = dht.get_shared_files();
-                let local_info = {
-                    let shared = shared_files.lock().await;
-                    shared.get(&file_hash).cloned()
-                };
-
-                if let Some(info) = local_info {
-                    let peer_id = dht.get_peer_id().await.unwrap_or_default();
-                    let seeders = if peer_id.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![SeederInfo {
-                            peer_id,
-                            price_wei: info.price_wei.to_string(),
-                            wallet_address: info.wallet_address.clone(),
-                            multiaddrs: dht.get_listening_addresses().await,
-                        }]
-                    };
-
+                if let Some(local) = build_local_search_result(dht, &file_hash).await {
                     println!(
                         "Returning local fallback for {} despite DHT lookup error",
                         file_hash
                     );
-                    Ok(Some(SearchResult {
-                        hash: file_hash.clone(),
-                        file_name: info.file_name,
-                        file_size: info.file_size,
-                        seeders,
-                        created_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        price_wei: info.price_wei.to_string(),
-                        wallet_address: info.wallet_address,
-                    }))
+                    Ok(Some(local))
                 } else {
                     Err(e)
                 }
             }
+        },
         }
     } else {
         Err("DHT not running".to_string())
@@ -5716,6 +5687,9 @@ pub fn run() {
 #[cfg(test)]
 mod multi_seeder_tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     // --- Serialization / Deserialization ---
 
@@ -5736,6 +5710,50 @@ mod multi_seeder_tests {
         assert_eq!(deserialized.peer_id, "12D3KooWTest1");
         assert_eq!(deserialized.price_wei, "1000000000000000");
         assert_eq!(deserialized.wallet_address, "0xabc123");
+    }
+
+    #[tokio::test]
+    async fn build_local_search_result_reads_local_shared_file() {
+        let dht = Arc::new(DhtService::new(
+            Arc::new(Mutex::new(FileTransferService::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(HashMap::new())),
+        ));
+
+        let tmp_path = std::env::temp_dir().join("chiral-local-search-test.bin");
+        std::fs::write(&tmp_path, b"hello").unwrap();
+
+        let file_hash = "localhash123".to_string();
+        dht.register_shared_file(
+            file_hash.clone(),
+            tmp_path.to_string_lossy().to_string(),
+            "hello.bin".to_string(),
+            5,
+            0,
+            String::new(),
+        )
+        .await;
+
+        let result = build_local_search_result(&dht, &file_hash).await;
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.hash, file_hash);
+        assert_eq!(result.file_name, "hello.bin");
+        assert_eq!(result.file_size, 5);
+    }
+
+    #[tokio::test]
+    async fn build_local_search_result_returns_none_for_missing_hash() {
+        let dht = Arc::new(DhtService::new(
+            Arc::new(Mutex::new(FileTransferService::new())),
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(HashMap::new())),
+        ));
+
+        let result = build_local_search_result(&dht, "does-not-exist").await;
+        assert!(result.is_none());
     }
 
     #[test]
