@@ -1301,6 +1301,253 @@ fn take_next_backup_peer(download: &mut ActiveChunkedDownload) -> Option<PeerId>
     None
 }
 
+fn looks_like_file_metadata(value: &serde_json::Value) -> bool {
+    value
+        .as_object()
+        .map(|obj| {
+            obj.get("hash").and_then(|v| v.as_str()).is_some()
+                && obj.get("fileName").and_then(|v| v.as_str()).is_some()
+                && obj.get("fileSize").and_then(|v| v.as_u64()).is_some()
+        })
+        .unwrap_or(false)
+}
+
+fn merge_seeder_record(existing: &mut serde_json::Value, candidate: &serde_json::Value) {
+    let Some(existing_obj) = existing.as_object_mut() else {
+        *existing = candidate.clone();
+        return;
+    };
+    let Some(candidate_obj) = candidate.as_object() else {
+        return;
+    };
+
+    let existing_addr_count = existing_obj
+        .get("multiaddrs")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let candidate_addr_count = candidate_obj
+        .get("multiaddrs")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+
+    let mut merged_addr_set = std::collections::HashSet::new();
+    let mut merged_addrs = Vec::new();
+
+    let existing_addrs = existing_obj
+        .get("multiaddrs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let candidate_addrs = candidate_obj
+        .get("multiaddrs")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for addr in existing_addrs.iter().chain(candidate_addrs.iter()) {
+        let Some(addr_str) = addr.as_str() else {
+            continue;
+        };
+        let trimmed = addr_str.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if merged_addr_set.insert(trimmed.to_string()) {
+            merged_addrs.push(serde_json::Value::String(trimmed.to_string()));
+        }
+    }
+    existing_obj.insert("multiaddrs".to_string(), serde_json::Value::Array(merged_addrs));
+
+    let existing_price = existing_obj
+        .get("priceWei")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let candidate_price = candidate_obj
+        .get("priceWei")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !candidate_price.is_empty()
+        && (existing_price.is_empty() || candidate_addr_count > existing_addr_count)
+    {
+        existing_obj.insert(
+            "priceWei".to_string(),
+            serde_json::Value::String(candidate_price.to_string()),
+        );
+    }
+
+    let existing_wallet = existing_obj
+        .get("walletAddress")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let candidate_wallet = candidate_obj
+        .get("walletAddress")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !candidate_wallet.is_empty()
+        && (existing_wallet.is_empty() || candidate_addr_count > existing_addr_count)
+    {
+        existing_obj.insert(
+            "walletAddress".to_string(),
+            serde_json::Value::String(candidate_wallet.to_string()),
+        );
+    }
+}
+
+fn merge_file_metadata_records(records: &[String]) -> Option<String> {
+    let mut parsed_records: Vec<serde_json::Value> = Vec::new();
+    let mut target_hash: Option<String> = None;
+
+    for raw in records {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+            continue;
+        };
+        if !looks_like_file_metadata(&value) {
+            continue;
+        }
+        let hash = value
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())?
+            .to_string();
+
+        if let Some(existing_hash) = target_hash.as_ref() {
+            if existing_hash != &hash {
+                continue;
+            }
+        } else {
+            target_hash = Some(hash);
+        }
+
+        parsed_records.push(value);
+    }
+
+    if parsed_records.is_empty() {
+        return None;
+    }
+
+    let mut base = parsed_records
+        .iter()
+        .max_by_key(|record| record.get("createdAt").and_then(|v| v.as_u64()).unwrap_or(0))
+        .cloned()
+        .unwrap_or_else(|| parsed_records[0].clone());
+
+    let mut seeders_by_peer: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+
+    for record in &parsed_records {
+        if let Some(seeders) = record.get("seeders").and_then(|v| v.as_array()) {
+            for seeder in seeders {
+                let Some(peer_id) = seeder
+                    .get("peerId")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.trim())
+                    .filter(|v| !v.is_empty())
+                else {
+                    continue;
+                };
+
+                let candidate = seeder.clone();
+                seeders_by_peer
+                    .entry(peer_id.to_string())
+                    .and_modify(|existing| merge_seeder_record(existing, &candidate))
+                    .or_insert(candidate);
+            }
+        }
+
+        // Legacy single-seeder metadata support.
+        if let Some(peer_id) = record
+            .get("peerId")
+            .and_then(|v| v.as_str())
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+        {
+            let legacy = serde_json::json!({
+                "peerId": peer_id,
+                "priceWei": record.get("priceWei").and_then(|v| v.as_str()).unwrap_or(""),
+                "walletAddress": record.get("walletAddress").and_then(|v| v.as_str()).unwrap_or(""),
+                "multiaddrs": [],
+            });
+            seeders_by_peer
+                .entry(peer_id.to_string())
+                .and_modify(|existing| merge_seeder_record(existing, &legacy))
+                .or_insert(legacy);
+        }
+    }
+
+    let mut merged_seeders: Vec<serde_json::Value> = seeders_by_peer.into_values().collect();
+    merged_seeders.sort_by(|a, b| {
+        let a_peer = a.get("peerId").and_then(|v| v.as_str()).unwrap_or("");
+        let b_peer = b.get("peerId").and_then(|v| v.as_str()).unwrap_or("");
+        a_peer.cmp(b_peer)
+    });
+
+    if let Some(base_obj) = base.as_object_mut() {
+        base_obj.insert(
+            "seeders".to_string(),
+            serde_json::Value::Array(merged_seeders.clone()),
+        );
+
+        if let Some(primary) = merged_seeders.iter().find_map(|s| {
+            s.get("peerId")
+                .and_then(|v| v.as_str())
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_string())
+        }) {
+            base_obj.insert(
+                "peerId".to_string(),
+                serde_json::Value::String(primary.clone()),
+            );
+
+            if let Some(primary_seeder) = merged_seeders.iter().find(|s| {
+                s.get("peerId")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.trim())
+                    == Some(primary.as_str())
+            }) {
+                if let Some(price) = primary_seeder.get("priceWei").and_then(|v| v.as_str()) {
+                    base_obj.insert(
+                        "priceWei".to_string(),
+                        serde_json::Value::String(price.to_string()),
+                    );
+                }
+                if let Some(wallet) = primary_seeder.get("walletAddress").and_then(|v| v.as_str())
+                {
+                    base_obj.insert(
+                        "walletAddress".to_string(),
+                        serde_json::Value::String(wallet.to_string()),
+                    );
+                }
+            }
+        } else {
+            base_obj.insert(
+                "peerId".to_string(),
+                serde_json::Value::String(String::new()),
+            );
+        }
+    }
+
+    serde_json::to_string(&base).ok()
+}
+
+fn select_best_get_record_value(results: Vec<String>) -> Option<String> {
+    if results.is_empty() {
+        return None;
+    }
+
+    // For file metadata keys, merge all observed copies to avoid stale seeder
+    // addresses after restart/republish races.
+    if let Some(merged) = merge_file_metadata_records(&results) {
+        return Some(merged);
+    }
+
+    // Generic fallback for non-file records.
+    results.into_iter().max_by_key(|record| record.len())
+}
+
 async fn event_loop(
     mut swarm: Swarm<DhtBehaviour>,
     peers: Arc<Mutex<Vec<PeerInfo>>>,
@@ -2277,17 +2524,7 @@ async fn handle_behaviour_event(
                     println!("DHT get finished for query {:?}", id);
                     if let Some(tx) = pending_get_queries.remove(&id) {
                         let results = pending_get_results.remove(&id).unwrap_or_default();
-                        if results.is_empty() {
-                            let _ = tx.send(Ok(None));
-                        } else {
-                            // Pick the longest record as "best" — records with more seeders
-                            // are longer, so this resolves stale-local-copy vs fresh-remote.
-                            let best = results
-                                .into_iter()
-                                .max_by_key(|r: &String| r.len())
-                                .unwrap();
-                            let _ = tx.send(Ok(Some(best)));
-                        }
+                        let _ = tx.send(Ok(select_best_get_record_value(results)));
                     } else {
                         pending_get_results.remove(&id);
                     }
@@ -2297,15 +2534,7 @@ async fn handle_behaviour_event(
                     if let Some(tx) = pending_get_queries.remove(&id) {
                         // Some records may have been found before the error (e.g. QuorumFailed)
                         let results = pending_get_results.remove(&id).unwrap_or_default();
-                        if results.is_empty() {
-                            let _ = tx.send(Ok(None));
-                        } else {
-                            let best = results
-                                .into_iter()
-                                .max_by_key(|r: &String| r.len())
-                                .unwrap();
-                            let _ = tx.send(Ok(Some(best)));
-                        }
+                        let _ = tx.send(Ok(select_best_get_record_value(results)));
                     } else {
                         pending_get_results.remove(&id);
                     }
@@ -3702,6 +3931,117 @@ async fn handle_behaviour_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_select_best_get_record_value_merges_seeder_multiaddrs() {
+        let stale = serde_json::json!({
+            "hash": "abc123",
+            "fileName": "demo.bin",
+            "fileSize": 1024,
+            "protocol": "WebRTC",
+            "createdAt": 100,
+            "peerId": "peer-a",
+            "priceWei": "0",
+            "walletAddress": "",
+            "seeders": [{
+                "peerId": "peer-a",
+                "priceWei": "0",
+                "walletAddress": "",
+                "multiaddrs": ["/ip4/10.0.0.1/tcp/4001/p2p/peer-a"]
+            }]
+        });
+        let fresh = serde_json::json!({
+            "hash": "abc123",
+            "fileName": "demo.bin",
+            "fileSize": 1024,
+            "protocol": "WebRTC",
+            "createdAt": 200,
+            "peerId": "peer-a",
+            "priceWei": "5",
+            "walletAddress": "0xabc",
+            "seeders": [
+                {
+                    "peerId": "peer-a",
+                    "priceWei": "5",
+                    "walletAddress": "0xabc",
+                    "multiaddrs": ["/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-a"]
+                },
+                {
+                    "peerId": "peer-b",
+                    "priceWei": "0",
+                    "walletAddress": "",
+                    "multiaddrs": ["/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-b"]
+                }
+            ]
+        });
+
+        let selected = select_best_get_record_value(vec![stale.to_string(), fresh.to_string()])
+            .expect("expected merged value");
+        let parsed: serde_json::Value = serde_json::from_str(&selected).unwrap();
+        let seeders = parsed.get("seeders").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(seeders.len(), 2);
+
+        let peer_a = seeders
+            .iter()
+            .find(|s| s.get("peerId").and_then(|v| v.as_str()) == Some("peer-a"))
+            .expect("peer-a seeder missing");
+        let peer_a_addrs = peer_a
+            .get("multiaddrs")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert!(
+            peer_a_addrs
+                .iter()
+                .any(|a| a.as_str() == Some("/ip4/10.0.0.1/tcp/4001/p2p/peer-a"))
+        );
+        assert!(
+            peer_a_addrs
+                .iter()
+                .any(|a| a.as_str() == Some("/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-a"))
+        );
+
+        assert_eq!(
+            parsed.get("createdAt").and_then(|v| v.as_u64()),
+            Some(200),
+            "newer metadata should be selected as base"
+        );
+    }
+
+    #[test]
+    fn test_select_best_get_record_value_promotes_legacy_peer_id() {
+        let legacy = serde_json::json!({
+            "hash": "legacy-hash",
+            "fileName": "legacy.dat",
+            "fileSize": 42,
+            "protocol": "WebRTC",
+            "createdAt": 10,
+            "peerId": "legacy-peer",
+            "priceWei": "9",
+            "walletAddress": "0xlegacy"
+        });
+
+        let selected =
+            select_best_get_record_value(vec![legacy.to_string()]).expect("expected value");
+        let parsed: serde_json::Value = serde_json::from_str(&selected).unwrap();
+        let seeders = parsed.get("seeders").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(seeders.len(), 1);
+        let only = &seeders[0];
+        assert_eq!(only.get("peerId").and_then(|v| v.as_str()), Some("legacy-peer"));
+        assert_eq!(only.get("priceWei").and_then(|v| v.as_str()), Some("9"));
+        assert_eq!(
+            only.get("walletAddress").and_then(|v| v.as_str()),
+            Some("0xlegacy")
+        );
+    }
+
+    #[test]
+    fn test_select_best_get_record_value_falls_back_to_longest_for_non_file_records() {
+        let short = serde_json::json!({"foo": "bar"}).to_string();
+        let long = serde_json::json!({"foo": "this is a much longer generic record"}).to_string();
+        let selected =
+            select_best_get_record_value(vec![short.clone(), long.clone()]).expect("expected best");
+        assert_eq!(selected, long);
+    }
 
     #[test]
     fn test_bootstrap_nodes_not_empty() {
