@@ -1700,8 +1700,18 @@ async fn search_file(
         match dht_lookup {
             Err(_) => {
                 println!("DHT lookup timed out for key: {}", dht_key);
-                // Timeout should not fail search hard; return not-found quickly.
-                Ok(None)
+                // Timeout should not fail search hard when local Drive state says
+                // this file should be seeded. Try a targeted self-heal before
+                // reporting not-found.
+                if let Some(repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
+                    println!(
+                        "Recovered local seed registration for {} after DHT timeout",
+                        file_hash
+                    );
+                    Ok(Some(repaired))
+                } else {
+                    Ok(None)
+                }
             }
             Ok(lookup_result) => match lookup_result {
             Ok(Some(metadata_json)) => {
@@ -1739,7 +1749,17 @@ async fn search_file(
             }
             Ok(None) => {
                 println!("File not found in DHT: {}", file_hash);
-                Ok(None)
+                // DHT can lag behind local intent right after restart. Attempt
+                // local repair before returning not-found.
+                if let Some(repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
+                    println!(
+                        "Recovered local seed registration for {} after DHT miss",
+                        file_hash
+                    );
+                    Ok(Some(repaired))
+                } else {
+                    Ok(None)
+                }
             }
             Err(e) => {
                 println!("DHT lookup error: {}. Trying local seeding fallback.", e);
@@ -1953,11 +1973,22 @@ async fn start_download(
     // Local short-circuit: if this node is currently seeding the hash, download
     // directly from local disk/memory instead of trying network/relay paths.
     if let Some(dht) = dht.as_ref() {
-        let local_shared = {
+        let mut local_shared = {
             let shared = dht.get_shared_files();
             let map = shared.lock().await;
             map.get(&file_hash).cloned()
         };
+
+        // Restart race guard: if shared-files map is missing this hash but Drive
+        // manifest says it should be seeded, repair registration on-demand.
+        if local_shared.is_none() {
+            let _ = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await;
+            local_shared = {
+                let shared = dht.get_shared_files();
+                let map = shared.lock().await;
+                map.get(&file_hash).cloned()
+            };
+        }
 
         if let Some(shared_file) = local_shared {
             println!(
