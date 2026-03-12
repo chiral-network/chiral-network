@@ -75,8 +75,8 @@
     {#if item.type === 'file' && item.size}
       <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{formatSize(item.size)}</p>
     {/if}
-    {@const priceLabel = getPriceLabel(item)}
-    {#if priceLabel}
+    {#if getPriceLabel(item)}
+      {@const priceLabel = getPriceLabel(item)}
       <p class="text-[11px] text-amber-700 dark:text-amber-300 font-medium mt-0.5">{priceLabel}</p>
     {/if}
     {#if item.seeding && $networkConnected}
