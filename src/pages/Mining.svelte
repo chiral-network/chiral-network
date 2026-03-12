@@ -55,6 +55,7 @@
     devices: GpuDevice[];
     running: boolean;
     activeDevices: string[];
+    utilizationPercent: number;
     lastError: string | null;
   }
 
@@ -62,6 +63,7 @@
     running: boolean;
     hashRate: number;
     activeDevices: string[];
+    utilizationPercent: number;
     lastError: string | null;
   }
 
@@ -74,9 +76,20 @@
   }
 
   type MiningMode = 'cpu' | 'gpu';
+  const MIN_UTILIZATION_PERCENT = 10;
+  const MAX_UTILIZATION_PERCENT = 100;
+
+  function clampUtilizationPercent(value: number): number {
+    if (!Number.isFinite(value)) return MAX_UTILIZATION_PERCENT;
+    return Math.max(MIN_UTILIZATION_PERCENT, Math.min(MAX_UTILIZATION_PERCENT, Math.round(value)));
+  }
 
   const hardwareThreads = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
   const savedThreads = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-threads') : null;
+  const savedCpuUtilizationRaw =
+    typeof window !== 'undefined' ? localStorage.getItem('chiral-cpu-utilization-percent') : null;
+  const savedGpuUtilizationRaw =
+    typeof window !== 'undefined' ? localStorage.getItem('chiral-gpu-utilization-percent') : null;
   const savedMode = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-mode') : null;
   const savedGpuDevicesRaw =
     typeof window !== 'undefined' ? localStorage.getItem('chiral-gpu-devices') : null;
@@ -106,8 +119,24 @@
   let isStartingMining = $state(false);
   let maxThreads = $state(hardwareThreads);
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
-  let miningThreads = $state(
-    savedThreads ? Math.min(parseInt(savedThreads, 10) || 1, hardwareThreads) : 1
+  const initialCpuUtilization = (() => {
+    if (savedCpuUtilizationRaw) {
+      return clampUtilizationPercent(parseInt(savedCpuUtilizationRaw, 10));
+    }
+    if (savedThreads) {
+      const parsedThreads = Math.max(1, Math.min(parseInt(savedThreads, 10) || 1, hardwareThreads));
+      return clampUtilizationPercent((parsedThreads / hardwareThreads) * 100);
+    }
+    return clampUtilizationPercent((1 / hardwareThreads) * 100);
+  })();
+  let cpuUtilizationPercent = $state(initialCpuUtilization);
+  let gpuUtilizationPercent = $state(
+    savedGpuUtilizationRaw
+      ? clampUtilizationPercent(parseInt(savedGpuUtilizationRaw, 10))
+      : MAX_UTILIZATION_PERCENT
+  );
+  let miningThreads = $derived(
+    Math.max(1, Math.min(maxThreads, Math.round((maxThreads * cpuUtilizationPercent) / 100)))
   );
 
   let miningStartTime = $state<number | null>(null);
@@ -122,9 +151,13 @@
     activeMiningBackend === 'gpu' ? gpuMiningStatus?.hashRate || 0 : miningStatus?.hashRate || 0
   );
   let activeGpuCount = $derived(gpuMiningStatus?.activeDevices?.length || 0);
+  let activeGpuUtilization = $derived(
+    gpuMiningStatus?.running ? gpuMiningStatus.utilizationPercent : gpuUtilizationPercent
+  );
 
   $effect(() => {
     if (typeof window !== 'undefined') {
+      localStorage.setItem('chiral-cpu-utilization-percent', cpuUtilizationPercent.toString());
       localStorage.setItem('chiral-mining-threads', miningThreads.toString());
     }
   });
@@ -138,6 +171,12 @@
   $effect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('chiral-gpu-devices', JSON.stringify(selectedGpuDevices));
+    }
+  });
+
+  $effect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chiral-gpu-utilization-percent', gpuUtilizationPercent.toString());
     }
   });
 
@@ -261,6 +300,7 @@
         devices: [],
         running: false,
         activeDevices: [],
+        utilizationPercent: gpuUtilizationPercent,
         lastError: String(error)
       };
     }
@@ -283,17 +323,21 @@
           );
         }
         await invoke('start_gpu_mining', {
-          deviceIds: selectedGpuDevices.length > 0 ? selectedGpuDevices : null
+          deviceIds: selectedGpuDevices.length > 0 ? selectedGpuDevices : null,
+          utilizationPercent: gpuUtilizationPercent
         });
         toasts.show(
           `GPU mining started${
             selectedGpuDevices.length > 0 ? ` (${selectedGpuDevices.length} device(s))` : ''
-          }!`,
+          } at ${gpuUtilizationPercent}% utilization target!`,
           'success'
         );
       } else {
         await invoke('start_mining', { threads: miningThreads });
-        toasts.show(`CPU mining started with ${miningThreads} thread(s)!`, 'success');
+        toasts.show(
+          `CPU mining started with ${miningThreads} thread(s) (${cpuUtilizationPercent}% target)!`,
+          'success'
+        );
       }
 
       await Promise.all([loadStatus(), loadGpuCapabilities()]);
@@ -503,6 +547,13 @@
               {isAnyMining ? `${miningThreads} / ${maxThreads}` : `0 / ${maxThreads}`}
             {/if}
           </p>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {#if activeMiningBackend === 'gpu'}
+              Target {activeGpuUtilization}%
+            {:else}
+              Target {cpuUtilizationPercent}%
+            {/if}
+          </p>
         </div>
       </div>
 
@@ -541,26 +592,51 @@
       </div>
 
       {#if miningMode === 'cpu'}
-        <!-- Thread Control -->
+        <!-- CPU Utilization Control -->
         <div class="mb-4">
-          <label for="threads" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Mining Threads ({miningThreads} / {maxThreads})
+          <label for="cpu-utilization" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            CPU Utilization Target ({cpuUtilizationPercent}%)
           </label>
           <input
-            id="threads"
+            id="cpu-utilization"
             type="range"
-            min="1"
-            max={maxThreads}
-            bind:value={miningThreads}
+            min={MIN_UTILIZATION_PERCENT}
+            max={MAX_UTILIZATION_PERCENT}
+            step="1"
+            bind:value={cpuUtilizationPercent}
             disabled={isAnyMining}
             class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
           />
           <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-            <span>1 thread</span>
-            <span>{maxThreads} threads (max)</span>
+            <span>{MIN_UTILIZATION_PERCENT}%</span>
+            <span>{MAX_UTILIZATION_PERCENT}%</span>
           </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            Effective CPU threads: <span class="font-medium">{miningThreads}</span> of {maxThreads}
+          </p>
         </div>
       {:else}
+        <!-- GPU Utilization Control -->
+        <div class="mb-4">
+          <label for="gpu-utilization" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            GPU Utilization Target ({gpuUtilizationPercent}%)
+          </label>
+          <input
+            id="gpu-utilization"
+            type="range"
+            min={MIN_UTILIZATION_PERCENT}
+            max={MAX_UTILIZATION_PERCENT}
+            step="1"
+            bind:value={gpuUtilizationPercent}
+            disabled={isAnyMining}
+            class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+          />
+          <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <span>{MIN_UTILIZATION_PERCENT}%</span>
+            <span>{MAX_UTILIZATION_PERCENT}%</span>
+          </div>
+        </div>
+
         <!-- GPU Control -->
         <div class="mb-4">
           {#if !gpuCapabilities?.binaryPath}

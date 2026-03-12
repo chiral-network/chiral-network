@@ -4233,9 +4233,10 @@ async fn list_gpu_devices(state: tauri::State<'_, AppState>) -> Result<Vec<GpuDe
 async fn start_gpu_mining(
     state: tauri::State<'_, AppState>,
     device_ids: Option<Vec<String>>,
+    utilization_percent: Option<u8>,
 ) -> Result<(), String> {
     let mut geth = state.geth.lock().await;
-    geth.start_gpu_mining(device_ids).await
+    geth.start_gpu_mining(device_ids, utilization_percent).await
 }
 
 #[tauri::command]

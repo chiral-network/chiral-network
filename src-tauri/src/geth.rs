@@ -149,6 +149,7 @@ pub struct GpuMiningCapabilities {
     pub devices: Vec<GpuDevice>,
     pub running: bool,
     pub active_devices: Vec<String>,
+    pub utilization_percent: u8,
     pub last_error: Option<String>,
 }
 
@@ -158,6 +159,7 @@ pub struct GpuMiningStatus {
     pub running: bool,
     pub hash_rate: u64,
     pub active_devices: Vec<String>,
+    pub utilization_percent: u8,
     pub last_error: Option<String>,
 }
 
@@ -383,6 +385,7 @@ pub struct GethProcess {
     gpu_auto_install_attempted: bool,
     gpu_backend: Option<String>,
     gpu_active_devices: Vec<String>,
+    gpu_utilization_percent: u8,
     gpu_hash_rate: u64,
     gpu_last_error: Option<String>,
     /// Last observed block number for hashrate estimation
@@ -407,6 +410,7 @@ impl GethProcess {
             gpu_auto_install_attempted: false,
             gpu_backend: None,
             gpu_active_devices: Vec::new(),
+            gpu_utilization_percent: 100,
             gpu_hash_rate: 0,
             gpu_last_error: None,
             last_block: 0,
@@ -891,6 +895,99 @@ impl GethProcess {
         Ok((devices, text))
     }
 
+    fn clamp_gpu_utilization_percent(utilization_percent: Option<u8>) -> u8 {
+        utilization_percent.unwrap_or(100).clamp(10, 100)
+    }
+
+    fn gpu_tuning_args(backend: &str, utilization_percent: u8) -> Vec<String> {
+        if utilization_percent >= 100 {
+            return Vec::new();
+        }
+
+        if backend == "cuda" {
+            // Lower grid size/stream count to cap GPU occupancy.
+            let mut grid = 32_768u32.saturating_mul(utilization_percent as u32) / 100;
+            if grid < 1_024 {
+                grid = 1_024;
+            }
+            grid = (grid / 256).max(1) * 256;
+            let streams = if utilization_percent >= 70 { 2 } else { 1 };
+            vec![
+                "--cuda-grid-size".to_string(),
+                grid.to_string(),
+                "--cuda-streams".to_string(),
+                streams.to_string(),
+            ]
+        } else {
+            // Lower OpenCL global/local work size to reduce device pressure.
+            let mut global_work = 32_768u32.saturating_mul(utilization_percent as u32) / 100;
+            if global_work < 4_096 {
+                global_work = 4_096;
+            }
+            global_work = (global_work / 64).max(1) * 64;
+            let local_work = if utilization_percent >= 70 { 128 } else { 64 };
+            vec![
+                "--opencl-global-work".to_string(),
+                global_work.to_string(),
+                "--opencl-local-work".to_string(),
+                local_work.to_string(),
+            ]
+        }
+    }
+
+    fn read_log_tail(path: &Path, max_lines: usize) -> String {
+        let Ok(contents) = fs::read_to_string(path) else {
+            return String::new();
+        };
+        let mut tail = contents.lines().rev().take(max_lines).collect::<Vec<_>>();
+        tail.reverse();
+        tail.join("\n")
+    }
+
+    fn gpu_log_indicates_activity(contents: &str) -> bool {
+        let activity_markers = [
+            "new job",
+            "job:",
+            "got work package",
+            "searching for solutions",
+            "solution",
+            "accepted",
+            "epoch",
+            "dag",
+        ];
+        contents.lines().any(|line| {
+            if Self::parse_hash_rate_from_line(line).is_some() {
+                return true;
+            }
+            let lower = line.to_ascii_lowercase();
+            activity_markers.iter().any(|m| lower.contains(m))
+        })
+    }
+
+    fn gpu_log_fatal_error(contents: &str) -> Option<String> {
+        let fatal_markers = [
+            "unrecognized option",
+            "invalid argument",
+            "unknown option",
+            "no usable mining devices found",
+            "no opencl platforms found",
+            "no cuda-capable device",
+            "cuda error",
+            "opencl error",
+            "clcreatecontext",
+            "failed to initialize",
+            "json-rpc problem",
+            "connection refused",
+        ];
+        for line in contents.lines().rev().take(80) {
+            let lower = line.to_ascii_lowercase();
+            if fatal_markers.iter().any(|m| lower.contains(m)) {
+                return Some(line.trim().to_string());
+            }
+        }
+        None
+    }
+
     fn parse_hash_rate_from_line(line: &str) -> Option<u64> {
         let lower = line.to_ascii_lowercase();
         let units = [
@@ -903,8 +1000,10 @@ impl GethProcess {
             if let Some(idx) = lower.rfind(unit) {
                 let before = &lower[..idx];
                 if let Some(token) = before.split_whitespace().last() {
-                    let cleaned = token.trim_matches(|c: char| !(c.is_ascii_digit() || c == '.'));
-                    if let Ok(value) = cleaned.parse::<f64>() {
+                    let cleaned =
+                        token.trim_matches(|c: char| !(c.is_ascii_digit() || c == '.' || c == ','));
+                    let normalized = cleaned.replace(',', ".");
+                    if let Ok(value) = normalized.parse::<f64>() {
                         let h = (value * mult) as u64;
                         if h > 0 {
                             return Some(h);
@@ -962,6 +1061,7 @@ impl GethProcess {
         self.gpu_backend = None;
         self.gpu_hash_rate = 0;
         self.gpu_active_devices.clear();
+        self.gpu_utilization_percent = 100;
         Ok(())
     }
 
@@ -1456,6 +1556,7 @@ impl GethProcess {
                 devices: Vec::new(),
                 running: false,
                 active_devices: self.gpu_active_devices.clone(),
+                utilization_percent: self.gpu_utilization_percent,
                 last_error: self.gpu_last_error.clone(),
             });
         };
@@ -1498,6 +1599,7 @@ impl GethProcess {
             devices,
             running: self.gpu_miner_child.is_some(),
             active_devices: self.gpu_active_devices.clone(),
+            utilization_percent: self.gpu_utilization_percent,
             last_error: self.gpu_last_error.clone(),
         })
     }
@@ -1506,7 +1608,11 @@ impl GethProcess {
         Ok(self.get_gpu_mining_capabilities().await?.devices)
     }
 
-    pub async fn start_gpu_mining(&mut self, device_ids: Option<Vec<String>>) -> Result<(), String> {
+    pub async fn start_gpu_mining(
+        &mut self,
+        device_ids: Option<Vec<String>>,
+        utilization_percent: Option<u8>,
+    ) -> Result<(), String> {
         if self.child.is_none() {
             return Err(
                 "Cannot start GPU miner: local Geth node is not running. Start the node from the Network page first."
@@ -1519,8 +1625,8 @@ impl GethProcess {
             return Err("GPU miner is already running".to_string());
         }
 
-        // CPU and GPU mining modes are mutually exclusive.
-        let _ = self.stop_mining().await;
+        // Keep the geth sealing pipeline active for external work packages.
+        // Stopping geth mining here can leave ethminer running without work.
 
         if self.gpu_binary_path.is_none() {
             let binary = self
@@ -1538,6 +1644,7 @@ impl GethProcess {
             })?;
 
         let selected = device_ids.unwrap_or_default();
+        let utilization_percent = Self::clamp_gpu_utilization_percent(utilization_percent);
         let log_path = self.gpu_log_path();
         if let Some(parent) = log_path.parent() {
             fs::create_dir_all(parent)
@@ -1561,80 +1668,118 @@ impl GethProcess {
 
             for (attempt_index, selected_override) in selection_attempts.into_iter().enumerate() {
                 let selected_for_attempt = selected_override.unwrap_or_default();
-                let log_file = OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(failures.is_empty() && attempt_index == 0)
-                    .append(!(failures.is_empty() && attempt_index == 0))
-                    .open(&log_path)
-                    .map_err(|e| format!("Failed to open GPU miner log file: {}", e))?;
-                let log_clone = log_file
-                    .try_clone()
-                    .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
-
-                let mut cmd = Command::new(&binary);
-                if backend == "cuda" {
-                    cmd.arg("-U");
+                let tuning_args = Self::gpu_tuning_args(&backend, utilization_percent);
+                let tuning_attempts: Vec<(Vec<String>, &str)> = if tuning_args.is_empty() {
+                    vec![(Vec::new(), "default tuning")]
                 } else {
-                    cmd.arg("-G");
-                }
-                cmd.arg("-P")
-                    .arg("http://127.0.0.1:8545")
-                    .arg("--farm-recheck")
-                    .arg("200");
+                    vec![
+                        (tuning_args, "requested utilization"),
+                        (Vec::new(), "fallback without tuning"),
+                    ]
+                };
 
-                if !selected_for_attempt.is_empty() {
-                    let joined = selected_for_attempt.join(",");
+                for (tuning_index, (extra_args, tuning_note)) in
+                    tuning_attempts.into_iter().enumerate()
+                {
+                    let log_file = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(failures.is_empty() && attempt_index == 0 && tuning_index == 0)
+                        .append(!(failures.is_empty() && attempt_index == 0 && tuning_index == 0))
+                        .open(&log_path)
+                        .map_err(|e| format!("Failed to open GPU miner log file: {}", e))?;
+                    let log_clone = log_file
+                        .try_clone()
+                        .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
+
+                    let mut cmd = Command::new(&binary);
                     if backend == "cuda" {
-                        cmd.arg("--cuda-devices").arg(&joined);
+                        cmd.arg("-U");
                     } else {
-                        cmd.arg("--opencl-devices").arg(&joined);
+                        cmd.arg("-G");
                     }
-                }
+                    cmd.arg("-P")
+                        .arg("http://127.0.0.1:8545")
+                        .arg("--farm-recheck")
+                        .arg("200")
+                        .args(&extra_args);
 
-                cmd.stdout(Stdio::from(log_clone))
-                    .stderr(Stdio::from(log_file));
-
-                match cmd.spawn() {
-                    Ok(child) => {
-                        self.gpu_miner_child = Some(child);
-                        self.gpu_active_devices = selected_for_attempt.clone();
-                        self.gpu_hash_rate = 0;
-                        self.gpu_last_error = None;
-
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        self.refresh_gpu_runtime();
-                        if self.gpu_miner_child.is_some() {
-                            self.gpu_backend = Some(backend.clone());
-                            return Ok(());
+                    if !selected_for_attempt.is_empty() {
+                        let joined = selected_for_attempt.join(",");
+                        if backend == "cuda" {
+                            cmd.arg("--cuda-devices").arg(&joined);
+                        } else {
+                            cmd.arg("--opencl-devices").arg(&joined);
                         }
                     }
-                    Err(err) => {
-                        failures.push(format!("{} backend failed to spawn: {}", backend, err));
-                        continue;
-                    }
-                }
 
-                let log_tail = fs::read_to_string(&log_path)
-                    .unwrap_or_default()
-                    .lines()
-                    .rev()
-                    .take(20)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let attempt_note = if selected_for_attempt.is_empty() {
-                    "auto device selection"
-                } else {
-                    "explicit device selection"
-                };
-                failures.push(format!(
-                    "{} backend failed during startup ({})\n{}",
-                    backend, attempt_note, log_tail
-                ));
-                let _ = self.stop_gpu_miner_sync();
+                    cmd.stdout(Stdio::from(log_clone))
+                        .stderr(Stdio::from(log_file));
+
+                    match cmd.spawn() {
+                        Ok(child) => {
+                            self.gpu_miner_child = Some(child);
+                            self.gpu_active_devices = selected_for_attempt.clone();
+                            self.gpu_utilization_percent = utilization_percent;
+                            self.gpu_hash_rate = 0;
+                            self.gpu_last_error = None;
+                        }
+                        Err(err) => {
+                            failures.push(format!(
+                                "{} backend failed to spawn ({}): {}",
+                                backend, tuning_note, err
+                            ));
+                            continue;
+                        }
+                    }
+
+                    let mut startup_verified = false;
+                    let mut startup_error: Option<String> = None;
+                    for _ in 0..25 {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        self.refresh_gpu_runtime();
+                        let log_tail = Self::read_log_tail(&log_path, 80);
+
+                        if let Some(fatal_line) = Self::gpu_log_fatal_error(&log_tail) {
+                            startup_error = Some(fatal_line);
+                            break;
+                        }
+                        if self.gpu_miner_child.is_none() {
+                            break;
+                        }
+                        if self.gpu_hash_rate > 0 || Self::gpu_log_indicates_activity(&log_tail) {
+                            startup_verified = true;
+                            break;
+                        }
+                    }
+
+                    if startup_verified && self.gpu_miner_child.is_some() {
+                        self.gpu_backend = Some(backend.clone());
+                        self.gpu_last_error = None;
+                        return Ok(());
+                    }
+
+                    let log_tail = Self::read_log_tail(&log_path, 40);
+                    let attempt_note = if selected_for_attempt.is_empty() {
+                        "auto device selection"
+                    } else {
+                        "explicit device selection"
+                    };
+                    let reason = if let Some(line) = startup_error {
+                        format!("startup error: {}", line)
+                    } else if let Some(err) = self.gpu_last_error.clone() {
+                        err
+                    } else if self.gpu_miner_child.is_none() {
+                        "GPU miner process exited during startup".to_string()
+                    } else {
+                        "No job/hashrate activity detected within startup window".to_string()
+                    };
+                    failures.push(format!(
+                        "{} backend failed during startup ({}, {}, target {}%)\nReason: {}\n{}",
+                        backend, attempt_note, tuning_note, utilization_percent, reason, log_tail
+                    ));
+                    let _ = self.stop_gpu_miner_sync();
+                }
             }
         }
 
@@ -1660,6 +1805,7 @@ impl GethProcess {
             running: self.gpu_miner_child.is_some(),
             hash_rate: self.gpu_hash_rate,
             active_devices: self.gpu_active_devices.clone(),
+            utilization_percent: self.gpu_utilization_percent,
             last_error: self.gpu_last_error.clone(),
         })
     }
@@ -2482,6 +2628,29 @@ Id Pci Id Type Name
     }
 
     #[test]
+    fn test_gpu_utilization_clamp() {
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(None), 100);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(100)), 100);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(75)), 75);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(1)), 10);
+    }
+
+    #[test]
+    fn test_gpu_log_activity_detection() {
+        let log = r#"
+m 12:00:01|cuda-0  got work package 0xabc123
+m 12:00:12|cuda-0  Speed 41.25 Mh/s
+"#;
+        assert!(GethProcess::gpu_log_indicates_activity(log));
+    }
+
+    #[test]
+    fn test_gpu_log_fatal_error_detection() {
+        let log = "FATAL: unrecognized option '--opencl-global-work'";
+        assert!(GethProcess::gpu_log_fatal_error(log).is_some());
+    }
+
+    #[test]
     fn test_gpu_mining_capabilities_serialization() {
         let caps = GpuMiningCapabilities {
             supported: true,
@@ -2492,14 +2661,17 @@ Id Pci Id Type Name
             }],
             running: false,
             active_devices: vec!["0".to_string()],
+            utilization_percent: 90,
             last_error: None,
         };
         let json = serde_json::to_string(&caps).unwrap();
         assert!(json.contains("binaryPath"));
         assert!(json.contains("activeDevices"));
+        assert!(json.contains("utilizationPercent"));
         let restored: GpuMiningCapabilities = serde_json::from_str(&json).unwrap();
         assert!(restored.supported);
         assert_eq!(restored.devices.len(), 1);
+        assert_eq!(restored.utilization_percent, 90);
     }
 
     #[test]
@@ -2508,6 +2680,7 @@ Id Pci Id Type Name
             running: true,
             hash_rate: 123_000_000,
             active_devices: vec!["0".to_string(), "1".to_string()],
+            utilization_percent: 80,
             last_error: None,
         };
         let json = serde_json::to_string(&status).unwrap();
@@ -2515,6 +2688,7 @@ Id Pci Id Type Name
         let restored: GpuMiningStatus = serde_json::from_str(&json).unwrap();
         assert!(restored.running);
         assert_eq!(restored.active_devices.len(), 2);
+        assert_eq!(restored.utilization_percent, 80);
     }
 
     #[test]
