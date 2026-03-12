@@ -142,9 +142,9 @@ async fn start_dht_internal(
     // Run follow-up reseed passes after startup to absorb timing races between
     // bootstrap, relay reservation, and Drive manifest load/refresh.
     tauri::async_runtime::spawn(async move {
-        // Use staggered retries over several minutes so reseed converges even on
-        // slow or unstable startups.
-        let retry_delays_secs = [2u64, 5, 10, 20, 30, 45, 60];
+        // Use staggered retries over an extended startup window so reseed
+        // converges even when relay/bootstrap connectivity is delayed.
+        let retry_delays_secs = [2u64, 5, 10, 20, 30, 45, 60, 90, 120, 180, 240, 300];
         for delay_secs in retry_delays_secs {
             tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
 
@@ -325,11 +325,14 @@ async fn auto_reseed_drive_files(state: &AppState) {
             }
             _ => 0u128,
         };
-        let wallet_addr = if price_wei > 0 {
-            owner.clone()
-        } else {
-            String::new()
-        };
+        let wallet_addr = owner.trim().to_string();
+        if price_wei > 0 && wallet_addr.is_empty() {
+            println!(
+                "[DRIVE] Auto-reseed skipped paid file with missing owner wallet: {}",
+                file_name
+            );
+            continue;
+        }
 
         dht.register_shared_file(
             file_hash.clone(),
@@ -422,6 +425,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
         reseeded_dht_metadata += 1;
     }
 
+    let mut manifest_changed = false;
     if !hash_updates.is_empty() || !attempted_ids.is_empty() {
         let mut manifest = state.drive_state.manifest.write().await;
         let now = ds::now_secs();
@@ -431,9 +435,12 @@ async fn auto_reseed_drive_files(state: &AppState) {
             .filter(|i| i.item_type == "file" && attempted_ids.contains(&i.id))
         {
             if disabled_ids.contains(&item.id) {
-                item.seed_enabled = false;
-                item.seeding = false;
-                item.modified_at = now;
+                if item.seed_enabled || item.seeding {
+                    item.seed_enabled = false;
+                    item.seeding = false;
+                    item.modified_at = now;
+                    manifest_changed = true;
+                }
                 continue;
             }
 
@@ -441,22 +448,29 @@ async fn auto_reseed_drive_files(state: &AppState) {
             if !item.seed_enabled {
                 item.seed_enabled = true;
                 item.modified_at = now;
+                manifest_changed = true;
             }
 
             let active = activated_ids.contains(&item.id);
             if item.seeding != active {
                 item.seeding = active;
                 item.modified_at = now;
+                manifest_changed = true;
             }
         }
         for (item_id, hash) in hash_updates {
             if let Some(item) = manifest.items.iter_mut().find(|i| i.id == item_id) {
-                item.merkle_root = Some(hash);
-                item.modified_at = now;
+                if item.merkle_root.as_deref() != Some(hash.as_str()) {
+                    item.merkle_root = Some(hash);
+                    item.modified_at = now;
+                    manifest_changed = true;
+                }
             }
         }
         drop(manifest);
-        state.drive_state.persist().await;
+        if manifest_changed {
+            state.drive_state.persist().await;
+        }
     }
 
     if reseeded_local > 0 {
@@ -1526,11 +1540,10 @@ async fn try_repair_local_drive_seed(
         }
         _ => 0u128,
     };
-    let wallet_addr = if price_wei > 0 {
-        candidate.owner.clone()
-    } else {
-        String::new()
-    };
+    let wallet_addr = candidate.owner.trim().to_string();
+    if price_wei > 0 && wallet_addr.is_empty() {
+        return None;
+    }
 
     dht.register_shared_file(
         file_hash.to_string(),
@@ -5347,7 +5360,11 @@ async fn publish_drive_file(
     } else {
         0u128
     };
-    let wallet_addr = wallet_address.unwrap_or_default();
+    let wallet_addr = wallet_address
+        .filter(|addr| !addr.trim().is_empty())
+        .unwrap_or_else(|| owner.clone())
+        .trim()
+        .to_string();
     if price_wei_val > 0 && wallet_addr.is_empty() {
         return Err("Wallet address is required when setting a file price".to_string());
     }

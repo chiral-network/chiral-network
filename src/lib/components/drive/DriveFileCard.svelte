@@ -21,6 +21,14 @@
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
+
+  function getPriceLabel(item: DriveItem): string | null {
+    if (item.type !== 'file') return null;
+    const raw = item.priceChi?.trim();
+    if (raw && raw !== '0') return `${raw} CHI`;
+    if (item.seeding || raw === '0') return 'Free';
+    return null;
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -66,6 +74,10 @@
     </p>
     {#if item.type === 'file' && item.size}
       <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{formatSize(item.size)}</p>
+    {/if}
+    {@const priceLabel = getPriceLabel(item)}
+    {#if priceLabel}
+      <p class="text-[11px] text-amber-700 dark:text-amber-300 font-medium mt-0.5">{priceLabel}</p>
     {/if}
     {#if item.seeding && $networkConnected}
       <div class="flex items-center justify-center gap-1 mt-1">

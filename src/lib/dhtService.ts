@@ -29,6 +29,7 @@ class DhtService {
   private pingSentUnlisten: (() => void) | null = null;
   private pingReceivedUnlisten: (() => void) | null = null;
   private pongReceivedUnlisten: (() => void) | null = null;
+  private bootstrapCompleteUnlisten: (() => void) | null = null;
 
   async start(): Promise<void> {
     try {
@@ -91,6 +92,11 @@ class DhtService {
         this.pongReceivedUnlisten();
         this.pongReceivedUnlisten = null;
       }
+
+      if (this.bootstrapCompleteUnlisten) {
+        this.bootstrapCompleteUnlisten();
+        this.bootstrapCompleteUnlisten = null;
+      }
     } catch (error) {
       log.error('Failed to stop DHT:', error);
       throw error;
@@ -149,6 +155,14 @@ class DhtService {
     if (!this.pongReceivedUnlisten) {
       this.pongReceivedUnlisten = await listen<string>('pong-received', () => {
         toasts.show('Pong received from peer', 'success');
+      });
+    }
+
+    if (!this.bootstrapCompleteUnlisten) {
+      this.bootstrapCompleteUnlisten = await listen('dht-bootstrap-complete', () => {
+        void invoke('reseed_drive_files').catch((error) => {
+          log.warn('Drive reseed refresh after bootstrap failed:', error);
+        });
       });
     }
 

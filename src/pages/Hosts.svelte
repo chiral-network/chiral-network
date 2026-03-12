@@ -66,7 +66,7 @@
       // publish_drive_file returns a full DriveItem object (not a string)
       const item = await invoke<{ merkleRoot?: string }>('publish_drive_file', {
         owner: wallet.address, itemId: fileId,
-        protocol: null, priceChi: null, walletAddress: null,
+        protocol: null, priceChi: null, walletAddress: wallet.address,
       });
       const hash = item.merkleRoot;
       if (!hash) {
@@ -543,6 +543,7 @@
           'get_active_hosted_files'
         );
         const downloadDir = await invoke<string>('get_download_directory');
+        const wallet = get(walletAccount);
         for (const entry of hostedEntries) {
           try {
             await invoke('republish_shared_file', {
@@ -551,7 +552,7 @@
               fileName: entry.fileHash,
               fileSize: 0,
               priceChi: null,
-              walletAddress: null,
+              walletAddress: wallet?.address ?? null,
             });
           } catch {
             // File may not exist on disk — skip

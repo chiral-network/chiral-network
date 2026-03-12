@@ -25,6 +25,14 @@
   function formatDate(ts: number): string {
     return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   }
+
+  function getPriceLabel(item: DriveItem): string | null {
+    if (item.type !== 'file') return null;
+    const raw = item.priceChi?.trim();
+    if (raw && raw !== '0') return `${raw} CHI`;
+    if (item.seeding || raw === '0') return 'Free';
+    return null;
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -56,6 +64,12 @@
         <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 shrink-0">
           <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
           Seeding
+        </span>
+      {/if}
+      {@const priceLabel = getPriceLabel(item)}
+      {#if priceLabel}
+        <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 shrink-0">
+          {priceLabel}
         </span>
       {/if}
     </div>
