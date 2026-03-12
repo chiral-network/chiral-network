@@ -949,6 +949,9 @@ impl GethProcess {
             "new job",
             "job:",
             "got work package",
+            "work package",
+            "mining on",
+            "speed",
             "searching for solutions",
             "solution",
             "accepted",
@@ -1625,8 +1628,16 @@ impl GethProcess {
             return Err("GPU miner is already running".to_string());
         }
 
-        // Keep the geth sealing pipeline active for external work packages.
-        // Stopping geth mining here can leave ethminer running without work.
+        // Ensure geth serves fresh work packages for external miners.
+        let client = reqwest::Client::new();
+        self.rpc_call(&client, "miner_start", serde_json::json!([1]))
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to enable local mining work packages for GPU miner: {}",
+                    e
+                )
+            })?;
 
         if self.gpu_binary_path.is_none() {
             let binary = self
@@ -1756,6 +1767,18 @@ impl GethProcess {
                     if startup_verified && self.gpu_miner_child.is_some() {
                         self.gpu_backend = Some(backend.clone());
                         self.gpu_last_error = None;
+                        return Ok(());
+                    }
+
+                    // Some systems are slow to emit hashrate/work logs (DAG build, buffered logs).
+                    // If the process is still alive and we didn't observe a fatal error, treat startup
+                    // as successful and keep a warning instead of failing fast.
+                    if self.gpu_miner_child.is_some() && startup_error.is_none() {
+                        self.gpu_backend = Some(backend.clone());
+                        self.gpu_last_error = Some(
+                            "GPU miner started, but hashrate is not visible yet. This can happen during DAG initialization."
+                                .to_string(),
+                        );
                         return Ok(());
                     }
 
