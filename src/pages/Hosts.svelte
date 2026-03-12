@@ -420,7 +420,9 @@
     autoAcceptInFlight = { ...autoAcceptInFlight, [agreement.agreementId]: true };
     try {
       const proposerElo = await getWalletElo(agreement.clientWalletAddress);
-      const threshold = $settings.hostingConfig.minAutoAcceptElo ?? 60;
+      const threshold = Number.isFinite($settings.hostingConfig.minAutoAcceptElo)
+        ? Number($settings.hostingConfig.minAutoAcceptElo)
+        : 60;
       if (proposerElo < threshold) return;
       await respondToAgreement(agreement.agreementId, true, {
         silent: true,
@@ -568,11 +570,18 @@
           try {
             const agreement: HostingAgreement = JSON.parse(event.payload.agreementJson);
             hostingService.storeAndIndex(agreement);
-            if (!myAgreements.some((a) => a.agreementId === agreement.agreementId)) {
+            const exists = myAgreements.some((a) => a.agreementId === agreement.agreementId);
+            if (exists) {
+              myAgreements = myAgreements.map((a) =>
+                a.agreementId === agreement.agreementId ? agreement : a,
+              );
+            } else {
               myAgreements = [...myAgreements, agreement];
               toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`, 'info');
-              void maybeAutoAcceptAgreement(agreement);
             }
+            // Always attempt auto-accept when a proposal arrives so handshake
+            // still completes for re-delivered or updated proposal payloads.
+            void maybeAutoAcceptAgreement(agreement);
           } catch {
             // Ignore malformed proposals
           }
@@ -825,7 +834,7 @@
         <div>
           <div class="flex items-center justify-between mb-1">
             <label for="host-auto-accept-elo" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Auto-Accept by Elo
+              Auto-Accept by Provider Reputation
             </label>
             <button
               onclick={() => updateAutoAcceptByElo(!$settings.hostingConfig.autoAcceptByElo)}
@@ -853,8 +862,11 @@
               disabled={!$settings.hostingConfig.autoAcceptByElo}
               class="w-28 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white disabled:opacity-50"
             />
-            <span class="text-sm text-gray-500 dark:text-gray-400">Minimum proposer Elo</span>
+            <span class="text-sm text-gray-500 dark:text-gray-400">Minimum provider Elo</span>
           </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            Incoming proposals are accepted automatically when provider Elo is at or above this threshold.
+          </p>
         </div>
       </div>
 
