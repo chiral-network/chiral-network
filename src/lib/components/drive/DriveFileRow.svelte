@@ -66,8 +66,8 @@
           Seeding
         </span>
       {/if}
-      {@const priceLabel = getPriceLabel(item)}
-      {#if priceLabel}
+      {#if getPriceLabel(item)}
+        {@const priceLabel = getPriceLabel(item)}
         <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 shrink-0">
           {priceLabel}
         </span>
