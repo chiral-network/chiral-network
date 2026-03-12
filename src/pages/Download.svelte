@@ -612,6 +612,12 @@
       }
       nextContexts[context.transferId] = updated;
       transferReputationContexts = nextContexts;
+
+      // Refresh cached reputation so Elo updates are visible after transfer events.
+      reputationCache.delete(context.seederWallet);
+      await fetchSeederRatings([
+        { peerId: '', walletAddress: context.seederWallet, priceWei: context.amountWei || '0' },
+      ]);
     } catch (err) {
       log.warn('Failed to record transfer outcome for reputation:', err);
     }
