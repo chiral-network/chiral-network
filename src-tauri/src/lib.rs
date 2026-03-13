@@ -12,6 +12,7 @@ pub mod rating_api;
 pub mod rating_storage;
 pub mod relay_share_proxy;
 mod speed_tiers;
+pub mod wallet_backup_api;
 
 use dht::DhtService;
 use encryption::EncryptionKeypair;
@@ -177,14 +178,23 @@ fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("Failed to open file for hashing '{}': {}", path.display(), e))?;
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        format!(
+            "Failed to open file for hashing '{}': {}",
+            path.display(),
+            e
+        )
+    })?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 1024 * 1024];
     loop {
-        let n = file
-            .read(&mut buf)
-            .map_err(|e| format!("Failed to read file for hashing '{}': {}", path.display(), e))?;
+        let n = file.read(&mut buf).map_err(|e| {
+            format!(
+                "Failed to read file for hashing '{}': {}",
+                path.display(),
+                e
+            )
+        })?;
         if n == 0 {
             break;
         }
@@ -1439,10 +1449,7 @@ struct SearchResult {
     wallet_address: String,
 }
 
-async fn build_local_search_result(
-    dht: &Arc<DhtService>,
-    file_hash: &str,
-) -> Option<SearchResult> {
+async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Option<SearchResult> {
     let shared_files = dht.get_shared_files();
     let local_info = {
         let shared = shared_files.lock().await;
@@ -1587,20 +1594,22 @@ async fn try_repair_local_drive_seed(
         )
         .await
         {
-            Ok(Ok(Some(json))) => serde_json::from_str::<FileMetadata>(&json).unwrap_or(FileMetadata {
-                hash: file_hash_for_publish.clone(),
-                file_name: file_name_for_publish.clone(),
-                file_size,
-                protocol: protocol_for_publish.clone(),
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                peer_id: String::new(),
-                price_wei: String::new(),
-                wallet_address: String::new(),
-                seeders: Vec::new(),
-            }),
+            Ok(Ok(Some(json))) => {
+                serde_json::from_str::<FileMetadata>(&json).unwrap_or(FileMetadata {
+                    hash: file_hash_for_publish.clone(),
+                    file_name: file_name_for_publish.clone(),
+                    file_size,
+                    protocol: protocol_for_publish.clone(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    peer_id: String::new(),
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    seeders: Vec::new(),
+                })
+            }
             _ => FileMetadata {
                 hash: file_hash_for_publish.clone(),
                 file_name: file_name_for_publish.clone(),
@@ -1646,7 +1655,11 @@ async fn try_repair_local_drive_seed(
     // Keep runtime Drive state consistent with repaired registration.
     {
         let mut manifest = state.drive_state.manifest.write().await;
-        if let Some(item) = manifest.items.iter_mut().find(|i| i.id == candidate.item_id) {
+        if let Some(item) = manifest
+            .items
+            .iter_mut()
+            .find(|i| i.id == candidate.item_id)
+        {
             if !item.seeding {
                 item.seeding = true;
                 item.modified_at = ds::now_secs();
@@ -1683,10 +1696,7 @@ async fn search_file(
         // This avoids restart races where Kademlia lookups can time out while
         // local seeding is already active.
         if let Some(local) = build_local_search_result(dht, &file_hash).await {
-            println!(
-                "Returning immediate local seeding result for {}",
-                file_hash
-            );
+            println!("Returning immediate local seeding result for {}", file_hash);
             return Ok(Some(local));
         }
 
@@ -1716,7 +1726,9 @@ async fn search_file(
                 // Timeout should not fail search hard when local Drive state says
                 // this file should be seeded. Try a targeted self-heal before
                 // reporting not-found.
-                if let Some(repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
+                if let Some(repaired) =
+                    try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                {
                     println!(
                         "Recovered local seed registration for {} after DHT timeout",
                         file_hash
@@ -1727,77 +1739,79 @@ async fn search_file(
                 }
             }
             Ok(lookup_result) => match lookup_result {
-            Ok(Some(metadata_json)) => {
-                // Parse metadata from JSON
-                let metadata: FileMetadata = serde_json::from_str(&metadata_json)
-                    .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
+                Ok(Some(metadata_json)) => {
+                    // Parse metadata from JSON
+                    let metadata: FileMetadata = serde_json::from_str(&metadata_json)
+                        .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
 
-                println!(
-                    "Found file in DHT: {} ({})",
-                    metadata.file_name, metadata.hash
-                );
-
-                // Build seeder list: use seeders vec if present, fall back to legacy peer_id
-                let mut seeders = metadata.seeders;
-                if seeders.is_empty() && !metadata.peer_id.is_empty() {
-                    // Legacy record: single peer_id with file-level price/wallet
-                    seeders.push(SeederInfo {
-                        peer_id: metadata.peer_id,
-                        price_wei: metadata.price_wei.clone(),
-                        wallet_address: metadata.wallet_address.clone(),
-                        multiaddrs: vec![],
-                    });
-                }
-                seeders.retain(|s| !s.peer_id.trim().is_empty());
-
-                Ok(Some(SearchResult {
-                    hash: metadata.hash,
-                    file_name: metadata.file_name,
-                    file_size: metadata.file_size,
-                    seeders,
-                    created_at: metadata.created_at,
-                    price_wei: metadata.price_wei,
-                    wallet_address: metadata.wallet_address,
-                }))
-            }
-            Ok(None) => {
-                println!("File not found in DHT: {}", file_hash);
-                // DHT can lag behind local intent right after restart. Attempt
-                // local repair before returning not-found.
-                if let Some(repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
                     println!(
-                        "Recovered local seed registration for {} after DHT miss",
-                        file_hash
+                        "Found file in DHT: {} ({})",
+                        metadata.file_name, metadata.hash
                     );
-                    Ok(Some(repaired))
-                } else {
-                    Ok(None)
-                }
-            }
-            Err(e) => {
-                println!("DHT lookup error: {}. Trying local seeding fallback.", e);
 
-                // Even if DHT GET fails (e.g. bootstrap race), this node may still
-                // be actively seeding the file from local state.
-                if let Some(local) = build_local_search_result(dht, &file_hash).await {
-                    println!(
-                        "Returning local fallback for {} despite DHT lookup error",
-                        file_hash
-                    );
-                    Ok(Some(local))
-                } else if let Some(repaired) =
-                    try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
-                {
-                    println!(
-                        "Returning repaired local fallback for {} despite DHT lookup error",
-                        file_hash
-                    );
-                    Ok(Some(repaired))
-                } else {
-                    Err(e)
+                    // Build seeder list: use seeders vec if present, fall back to legacy peer_id
+                    let mut seeders = metadata.seeders;
+                    if seeders.is_empty() && !metadata.peer_id.is_empty() {
+                        // Legacy record: single peer_id with file-level price/wallet
+                        seeders.push(SeederInfo {
+                            peer_id: metadata.peer_id,
+                            price_wei: metadata.price_wei.clone(),
+                            wallet_address: metadata.wallet_address.clone(),
+                            multiaddrs: vec![],
+                        });
+                    }
+                    seeders.retain(|s| !s.peer_id.trim().is_empty());
+
+                    Ok(Some(SearchResult {
+                        hash: metadata.hash,
+                        file_name: metadata.file_name,
+                        file_size: metadata.file_size,
+                        seeders,
+                        created_at: metadata.created_at,
+                        price_wei: metadata.price_wei,
+                        wallet_address: metadata.wallet_address,
+                    }))
                 }
-            }
-        },
+                Ok(None) => {
+                    println!("File not found in DHT: {}", file_hash);
+                    // DHT can lag behind local intent right after restart. Attempt
+                    // local repair before returning not-found.
+                    if let Some(repaired) =
+                        try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                    {
+                        println!(
+                            "Recovered local seed registration for {} after DHT miss",
+                            file_hash
+                        );
+                        Ok(Some(repaired))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                Err(e) => {
+                    println!("DHT lookup error: {}. Trying local seeding fallback.", e);
+
+                    // Even if DHT GET fails (e.g. bootstrap race), this node may still
+                    // be actively seeding the file from local state.
+                    if let Some(local) = build_local_search_result(dht, &file_hash).await {
+                        println!(
+                            "Returning local fallback for {} despite DHT lookup error",
+                            file_hash
+                        );
+                        Ok(Some(local))
+                    } else if let Some(repaired) =
+                        try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+                    {
+                        println!(
+                            "Returning repaired local fallback for {} despite DHT lookup error",
+                            file_hash
+                        );
+                        Ok(Some(repaired))
+                    } else {
+                        Err(e)
+                    }
+                }
+            },
         }
     } else {
         Err("DHT not running".to_string())
@@ -2004,9 +2018,7 @@ async fn start_download(
         }
 
         if let Some(shared_file) = local_shared {
-            println!(
-                "📁 File found in local shared-files map, bypassing network request"
-            );
+            println!("📁 File found in local shared-files map, bypassing network request");
 
             let file_data = if shared_file.file_path.starts_with("memory:") {
                 let storage = state.file_storage.lock().await;
@@ -2190,7 +2202,13 @@ async fn start_download(
             let addrs = seeder_addrs.get(&seeder).cloned().unwrap_or_default();
             let total = candidate_seeders.len();
             request_tasks.push(async move {
-                println!("Trying seeder {}/{}: {} for file {}", i + 1, total, seeder, fh);
+                println!(
+                    "Trying seeder {}/{}: {} for file {}",
+                    i + 1,
+                    total,
+                    seeder,
+                    fh
+                );
                 let result = dht.request_file(seeder.clone(), fh, rid, addrs).await;
                 (seeder, result)
             });
@@ -4120,10 +4138,7 @@ async fn show_in_folder(path: String) -> Result<(), String> {
 
 /// Show a Drive item in the system file manager
 #[tauri::command]
-async fn show_drive_item_in_folder(
-    owner: String,
-    item_id: String,
-) -> Result<(), String> {
+async fn show_drive_item_in_folder(owner: String, item_id: String) -> Result<(), String> {
     let manifest = ds::load_manifest();
     let item = manifest
         .items
@@ -5143,12 +5158,9 @@ async fn drive_delete_item(
             match std::fs::remove_file(&full_path) {
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => delete_errors.push(format!(
-                    "{} (item {}): {}",
-                    full_path.display(),
-                    id,
-                    e
-                )),
+                Err(e) => {
+                    delete_errors.push(format!("{} (item {}): {}", full_path.display(), id, e))
+                }
             }
         }
     }
@@ -5322,7 +5334,10 @@ async fn publish_drive_file(
     };
 
     // Reuse persisted hash when available so publishing from Drive is instant.
-    let file_hash = if let Some(root) = existing_merkle_root.clone().filter(|h| !h.trim().is_empty()) {
+    let file_hash = if let Some(root) = existing_merkle_root
+        .clone()
+        .filter(|h| !h.trim().is_empty())
+    {
         root
     } else {
         use sha2::{Digest, Sha256};
