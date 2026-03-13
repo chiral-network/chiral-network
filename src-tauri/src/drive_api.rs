@@ -1058,7 +1058,7 @@ fn payment_page(item: &DriveItem, token: &str, share: &ShareLink, reason: &str) 
   const recipient = "{recipient_js}";
   const priceChi = "{price_js}";
   const redirectBase = `/drive/${{token}}`;
-  const rpcUrl = "/api/chain/rpc";
+  const rpcUrl = new URL("/api/chain/rpc", window.location.origin).toString();
   const storageKey = `chiral-share-wallet-${{token}}`;
 
   const pkInput = document.getElementById("pk");
