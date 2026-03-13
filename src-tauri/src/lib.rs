@@ -1,3 +1,4 @@
+pub mod chain_rpc_api;
 pub mod dht;
 pub mod drive_api;
 pub mod drive_storage;
@@ -5186,24 +5187,45 @@ async fn drive_create_share(
     state: tauri::State<'_, AppState>,
     owner: String,
     item_id: String,
-    password: Option<String>,
+    price_chi: Option<String>,
     is_public: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     if owner.is_empty() {
         return Err("owner required".into());
     }
     let mut m = state.drive_state.manifest.write().await;
-    if !m.items.iter().any(|i| i.id == item_id && i.owner == owner) {
-        return Err("Item not found".into());
+    let item = m
+        .items
+        .iter()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .cloned()
+        .ok_or("Item not found")?;
+
+    if item.owner.len() != 42
+        || !item.owner.starts_with("0x")
+        || !item.owner[2..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err("Item owner wallet must be a valid 0x address".into());
     }
+
+    let requested_price = price_chi
+        .or_else(|| item.price_chi.clone())
+        .unwrap_or_default();
+    let normalized_price = requested_price.trim().to_string();
+    let price_wei = parse_chi_to_wei(&normalized_price)?;
+    if price_wei == 0 {
+        return Err("Share price must be greater than 0 CHI".into());
+    }
+
     let token = ds::generate_share_token();
     let share = DsShareLink {
         id: token.clone(),
         item_id: item_id.clone(),
         created_at: ds::now_secs(),
         expires_at: None,
-        password_hash: password.as_deref().map(ds::hash_password),
-        is_public: is_public.unwrap_or(false),
+        price_chi: normalized_price,
+        recipient_wallet: item.owner,
+        is_public: is_public.unwrap_or(true),
         download_count: 0,
     };
     m.shares.push(share.clone());
@@ -5214,7 +5236,8 @@ async fn drive_create_share(
         "itemId": item_id,
         "url": format!("/drive/{}", share.id),
         "isPublic": share.is_public,
-        "hasPassword": share.password_hash.is_some(),
+        "priceChi": share.price_chi,
+        "recipientWallet": share.recipient_wallet,
         "createdAt": share.created_at,
         "downloadCount": 0,
     }))
@@ -5250,7 +5273,8 @@ async fn drive_list_shares(
                 "itemId": s.item_id,
                 "url": format!("/drive/{}", s.id),
                 "isPublic": s.is_public,
-                "hasPassword": s.password_hash.is_some(),
+                "priceChi": s.price_chi,
+                "recipientWallet": s.recipient_wallet,
                 "createdAt": s.created_at,
                 "downloadCount": s.download_count,
             })

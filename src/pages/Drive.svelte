@@ -315,7 +315,8 @@
     if (existingShares.length > 0) {
       url = driveStore.getShareUrl(existingShares[0].id);
     } else {
-      const share = await driveStore.createShareLink(item.id, undefined, true);
+      const fallbackPrice = item.priceChi && parseFloat(item.priceChi) > 0 ? item.priceChi : '0.001';
+      const share = await driveStore.createShareLink(item.id, fallbackPrice, true);
       if (!share) {
         toasts.show('Failed to create share link', 'error');
         return;
