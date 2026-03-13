@@ -27,12 +27,16 @@
   let toggling = $state(false);
 
   $effect(() => {
-    const candidate = item.priceChi?.trim() ?? '';
+    const candidate = normalizePriceInput(item.priceChi);
     sharePriceChi = isValidPrice(candidate) ? candidate : '0.001';
   });
 
-  function isValidPrice(value: string): boolean {
-    const parsed = Number(value.trim());
+  function normalizePriceInput(value: unknown): string {
+    return `${value ?? ''}`.trim();
+  }
+
+  function isValidPrice(value: unknown): boolean {
+    const parsed = Number(normalizePriceInput(value));
     return Number.isFinite(parsed) && parsed > 0;
   }
 
@@ -47,7 +51,7 @@
   }
 
   async function createLink() {
-    const price = sharePriceChi.trim();
+    const price = normalizePriceInput(sharePriceChi);
     if (!isValidPrice(price)) {
       toasts.show('Enter a share price greater than 0 CHI', 'error');
       return;
