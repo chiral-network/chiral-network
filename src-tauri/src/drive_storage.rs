@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 /// A single item (file or folder) in the Drive.
@@ -31,7 +30,6 @@ pub struct DriveItem {
     pub is_public: bool,
 
     // ── Seeding metadata (optional, only set for files published to DHT) ──
-
     /// SHA-256 Merkle root from DHT publishing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merkle_root: Option<String>,
@@ -66,13 +64,20 @@ pub struct ShareLink {
     pub created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<u64>,
-    /// SHA-256 hex of the password, if password-protected
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub password_hash: Option<String>,
+    /// Required payment in CHI to unlock this share in browser.
+    #[serde(default = "default_share_price")]
+    pub price_chi: String,
+    /// Recipient wallet that receives share-link payments.
+    #[serde(default)]
+    pub recipient_wallet: String,
     #[serde(default)]
     pub is_public: bool,
     #[serde(default)]
     pub download_count: u64,
+}
+
+fn default_share_price() -> String {
+    "0".to_string()
 }
 
 /// Persisted drive manifest.
@@ -146,13 +151,6 @@ pub fn generate_share_token() -> String {
         .collect()
 }
 
-/// Hash a password with SHA-256 and return hex string.
-pub fn hash_password(password: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(password.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
 /// Current Unix timestamp in seconds.
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -213,12 +211,6 @@ mod tests {
         let token = generate_share_token();
         assert_eq!(token.len(), 16);
         assert!(token.chars().all(|c| c.is_ascii_alphanumeric()));
-    }
-
-    #[test]
-    fn test_hash_password() {
-        let h = hash_password("test123");
-        assert_eq!(h.len(), 64); // SHA-256 hex
     }
 
     #[test]

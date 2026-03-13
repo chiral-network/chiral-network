@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::chain_rpc_api;
 use crate::drive_api::{self, DriveState};
 use crate::hosting::{self, HostedSite, SiteFile};
 use crate::rating_api;
@@ -393,7 +394,9 @@ pub fn create_gateway_router(
     relay_share_state: Option<Arc<RelayShareRegistry>>,
 ) -> Router {
     // Base: health check is always present
-    let mut app = Router::new().route("/health", get(health_check));
+    let mut app = Router::new()
+        .route("/health", get(health_check))
+        .merge(chain_rpc_api::chain_rpc_routes());
 
     if relay_share_state.is_some() {
         // Relay mode: /sites/* and /drive/* handled by proxy routes below.

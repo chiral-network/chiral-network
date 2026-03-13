@@ -335,10 +335,10 @@ function createDriveStore() {
       }
     },
 
-    async createShareLink(itemId: string, password?: string, isPublic?: boolean): Promise<ShareLink | null> {
+    async createShareLink(itemId: string, priceChi: string, isPublic?: boolean): Promise<ShareLink | null> {
       const owner = syncOwner();
       try {
-        const share = await driveApi.createShareLink(itemId, password, isPublic);
+        const share = await driveApi.createShareLink(itemId, priceChi, isPublic);
         update(m => {
           m.shares.push(share);
           const item = m.items.find(i => i.id === itemId);
