@@ -1,12 +1,17 @@
 <script lang="ts">
   import { generateMnemonic, createWalletFromMnemonic } from '$lib/walletService';
   import { walletAccount, isAuthenticated } from '$lib/stores';
-  import { Copy, RefreshCw, Download, ArrowLeft, Check } from 'lucide-svelte';
+  import { walletBackupService } from '$lib/services/walletBackupService';
+  import { toasts } from '$lib/toastStore';
+  import { Copy, RefreshCw, Download, ArrowLeft, Check, Mail } from 'lucide-svelte';
 
   export let onBack: () => void;
   export let onComplete: () => void;
 
-  let step: 'generate' | 'verify' = 'generate';
+  type WalletCreationStep = 'generate' | 'verify' | 'email';
+  type PendingWallet = { address: string; privateKey: string };
+
+  let step: WalletCreationStep = 'generate';
   let mnemonic = '';
   let mnemonicWords: string[] = [];
   let copied = false;
@@ -14,9 +19,19 @@
   let userInputs: string[] = ['', ''];
   let verificationError = '';
 
+  let pendingWallet: PendingWallet | null = null;
+  let emailInput = '';
+  let emailError = '';
+  let sendingEmail = false;
+
   function generateNewMnemonic() {
     mnemonic = generateMnemonic();
     mnemonicWords = mnemonic.split(' ');
+    verificationError = '';
+    emailError = '';
+    userInputs = ['', ''];
+    pendingWallet = null;
+    emailInput = '';
   }
 
   function copyToClipboard() {
@@ -38,19 +53,20 @@
   }
 
   function proceedToVerification() {
-    // Select 2 random words to verify
     const indices = new Set<number>();
     while (indices.size < 2) {
       indices.add(Math.floor(Math.random() * 12));
     }
     verificationIndices = Array.from(indices).sort((a, b) => a - b);
+    verificationError = '';
+    emailError = '';
+    userInputs = ['', ''];
     step = 'verify';
   }
 
-  function verifyAndCreateWallet() {
+  function verifyAndContinue() {
     verificationError = '';
 
-    // Check if user entered the correct words
     for (let i = 0; i < verificationIndices.length; i++) {
       const expectedWord = mnemonicWords[verificationIndices[i]];
       const userInput = userInputs[i].trim().toLowerCase();
@@ -61,17 +77,53 @@
       }
     }
 
-    // Create wallet from mnemonic
-    const wallet = createWalletFromMnemonic(mnemonic);
-    walletAccount.set({
-      address: wallet.address,
-      privateKey: wallet.privateKey
-    });
-    isAuthenticated.set(true);
-    onComplete();
+    pendingWallet = createWalletFromMnemonic(mnemonic);
+    emailError = '';
+    step = 'email';
   }
 
-  // Initialize with a mnemonic
+  function isValidEmail(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+  }
+
+  async function sendBackupAndComplete() {
+    emailError = '';
+
+    const email = emailInput.trim();
+    if (!isValidEmail(email)) {
+      emailError = 'Please enter a valid email address';
+      return;
+    }
+    if (!pendingWallet) {
+      emailError = 'Wallet verification expired. Please verify your recovery phrase again.';
+      step = 'verify';
+      return;
+    }
+
+    sendingEmail = true;
+    try {
+      await walletBackupService.sendBackupEmail({
+        email,
+        recoveryPhrase: mnemonic,
+        walletAddress: pendingWallet.address,
+        privateKey: pendingWallet.privateKey,
+      });
+
+      walletAccount.set({
+        address: pendingWallet.address,
+        privateKey: pendingWallet.privateKey,
+      });
+      isAuthenticated.set(true);
+      emailInput = '';
+      toasts.show('Backup email sent. Wallet created successfully.', 'success');
+      onComplete();
+    } catch (error) {
+      emailError = walletBackupService.formatError(error);
+    } finally {
+      sendingEmail = false;
+    }
+  }
+
   generateNewMnemonic();
 </script>
 
@@ -152,7 +204,7 @@
         </button>
       </div>
     </div>
-  {:else}
+  {:else if step === 'verify'}
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
       <h2 class="text-2xl font-bold mb-6 dark:text-white">Verify Recovery Phrase</h2>
 
@@ -189,12 +241,71 @@
           Back
         </button>
         <button
-          on:click={verifyAndCreateWallet}
+          on:click={verifyAndContinue}
           class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
         >
-          Create Wallet
+          Continue
+        </button>
+      </div>
+    </div>
+  {:else}
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
+      <div class="flex items-center gap-2 mb-3">
+        <Mail class="w-5 h-5 text-primary-600 dark:text-primary-400" />
+        <h2 class="text-2xl font-bold dark:text-white">One-Time Email Backup</h2>
+      </div>
+
+      <p class="text-gray-600 dark:text-gray-400 mb-3">
+        Enter your email to receive a one-time copy of your recovery phrase and wallet credentials.
+      </p>
+
+      <div class="bg-blue-50 dark:bg-blue-900/30 border-l-4 border-blue-400 dark:border-blue-600 p-4 mb-6">
+        <p class="text-sm text-blue-900 dark:text-blue-200">
+          This email address is only used to send this backup now. Chiral does not store it.
+        </p>
+      </div>
+
+      <div class="mb-4">
+        <label for="backup-email" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Backup Email Address
+        </label>
+        <input
+          id="backup-email"
+          type="email"
+          bind:value={emailInput}
+          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-white"
+          placeholder="you@example.com"
+          autocomplete="email"
+        />
+      </div>
+
+      {#if emailError}
+        <div class="bg-red-50 dark:bg-red-900/30 border-l-4 border-red-400 dark:border-red-600 p-4 mb-4">
+          <p class="text-sm text-red-800 dark:text-red-200">{emailError}</p>
+        </div>
+      {/if}
+
+      <div class="flex gap-3">
+        <button
+          on:click={() => step = 'verify'}
+          class="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
+          disabled={sendingEmail}
+        >
+          Back
+        </button>
+        <button
+          on:click={sendBackupAndComplete}
+          class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
+          disabled={sendingEmail}
+        >
+          {#if sendingEmail}
+            Sending...
+          {:else}
+            Send Email & Create Wallet
+          {/if}
         </button>
       </div>
     </div>
   {/if}
 </div>
+
