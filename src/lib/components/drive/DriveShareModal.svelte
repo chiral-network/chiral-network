@@ -27,7 +27,8 @@
   let toggling = $state(false);
 
   $effect(() => {
-    const candidate = normalizePriceInput(item.priceChi);
+    const price = currentItem?.priceChi ?? item.priceChi;
+    const candidate = normalizePriceInput(price);
     sharePriceChi = isValidPrice(candidate) ? candidate : '0.001';
   });
 
