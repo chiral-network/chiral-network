@@ -63,7 +63,7 @@
       {#if item.seeding && $networkConnected}
         <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 shrink-0">
           <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-          Seeding
+          Seeding{#if item.protocol} ({item.protocol}){/if}
         </span>
       {/if}
       {#if getPriceLabel(item)}

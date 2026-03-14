@@ -16,7 +16,7 @@
   import DriveContextMenu from '$lib/components/drive/DriveContextMenu.svelte';
   import DriveShareModal from '$lib/components/drive/DriveShareModal.svelte';
   import DriveMoveModal from '$lib/components/drive/DriveMoveModal.svelte';
-  import DriveSeedingPanel from '$lib/components/drive/DriveSeedingPanel.svelte';
+
 
   let manifest = $state<DriveManifest>({ version: 1, items: [], shares: [], lastModified: 0 });
   let currentFolderId = $state<string | null>(null);
@@ -40,13 +40,10 @@
   let renameValue = $state('');
   let deleteConfirmItem = $state<DriveItem | null>(null);
 
-  // Tab state
-  let activeTab = $state<'files' | 'seeding'>('files');
-  let seedingUploadProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
-  let seedingUploadPriceChi = $state('');
-
-  // Seeding count for tab badge
-  const seedingCount = $derived($networkConnected ? driveStore.getSeedingItems(manifest).length : 0);
+  // Seed modal
+  let seedModalItem = $state<DriveItem | null>(null);
+  let seedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
+  let seedPrice = $state('');
 
   // Drag and drop
   let isDragging = $state(false);
@@ -411,11 +408,6 @@
     return raw;
   }
 
-  function handleSeedingOptionsChange(protocol: 'WebRTC' | 'BitTorrent', priceChi: string) {
-    seedingUploadProtocol = protocol;
-    seedingUploadPriceChi = normalizePriceChi(priceChi);
-  }
-
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
@@ -430,37 +422,6 @@
     }
 
     // Web/browser mode — use File objects
-    if (activeTab === 'seeding') {
-      if (!$networkConnected) {
-        toasts.show('Please connect to the network first', 'error');
-        return;
-      }
-      uploading = true;
-      const priceChi = normalizePriceChi(seedingUploadPriceChi);
-      let count = 0;
-      try {
-        for (const file of e.dataTransfer.files) {
-          const driveItem = await driveStore.uploadFile(file, currentFolderId);
-          if (driveItem) {
-            const result = await driveStore.seedFile(
-              driveItem.id,
-              seedingUploadProtocol,
-              priceChi || undefined,
-            );
-            if (result) count++;
-          }
-        }
-        if (count > 0) {
-          toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${seedingUploadProtocol}`, 'success');
-        }
-      } catch (e) {
-        toasts.show('Upload failed: ' + (e as Error).message, 'error');
-      } finally {
-        uploading = false;
-      }
-      return;
-    }
-
     uploading = true;
     let count = 0;
     try {
@@ -480,14 +441,24 @@
 
   // --- Seeding actions (from context menu or seeding panel) ---
 
-  async function handleSeedToNetwork(item: DriveItem) {
+  function handleSeedToNetwork(item: DriveItem) {
     if (!$networkConnected) {
       toasts.show('Please connect to the network first', 'error');
       return;
     }
-    const result = await driveStore.seedFile(item.id, 'WebRTC', item.priceChi || undefined);
+    seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
+    seedPrice = item.priceChi || '';
+    seedModalItem = item;
+  }
+
+  async function confirmSeed() {
+    if (!seedModalItem) return;
+    const item = seedModalItem;
+    seedModalItem = null;
+    const priceChi = normalizePriceChi(seedPrice) || undefined;
+    const result = await driveStore.seedFile(item.id, seedProtocol, priceChi);
     if (result) {
-      toasts.show(`Now seeding "${item.name}"`, 'success');
+      toasts.show(`Now seeding "${item.name}" via ${seedProtocol}`, 'success');
     } else {
       toasts.show(`Failed to seed "${item.name}"`, 'error');
     }
@@ -551,39 +522,7 @@
     }
   }
 
-  /** Called from DriveSeedingPanel "Add Files to Seed" — opens file picker, uploads to Drive, then seeds */
-  async function handleAddFilesToSeed(protocol: 'WebRTC' | 'BitTorrent', priceChi: string) {
-    if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
-      return;
-    }
-    const normalizedPrice = normalizePriceChi(priceChi);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const paths: string[] | null = await invoke('open_file_dialog', { multiple: true });
-      if (!paths || paths.length === 0) return;
-      uploading = true;
-      let count = 0;
-      for (const path of paths) {
-        // Upload to Drive storage first
-        const driveItem = await driveStore.uploadFile(path, currentFolderId);
-        if (driveItem) {
-          // Then publish to DHT for seeding
-          const result = await driveStore.seedFile(driveItem.id, protocol, normalizedPrice || undefined);
-          if (result) count++;
-        }
-      }
-      if (count > 0) {
-        toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${protocol}`, 'success');
-      }
-    } catch (e) {
-      toasts.show('Failed to add files: ' + (e as Error).message, 'error');
-    } finally {
-      uploading = false;
-    }
-  }
-
-  // Tauri native drag-drop support (only for seeding tab)
+  // Tauri native drag-drop support
   let unlistenDragDrop: (() => void) | null = null;
   onMount(async () => {
     const isTauriEnv = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -594,50 +533,18 @@
       const unlistenFn = await appWindow.onDragDropEvent(async (event: any) => {
         if (event.payload.type === 'drop' && event.payload.paths?.length > 0) {
           isDragging = false;
-          if (activeTab === 'seeding') {
-            // Seed mode: upload + publish to DHT
-            if (!$networkConnected) {
-              toasts.show('Please connect to the network first', 'error');
-              return;
+          uploading = true;
+          let count = 0;
+          try {
+            for (const path of event.payload.paths) {
+              const result = await driveStore.uploadFile(path as string, currentFolderId);
+              if (result) count++;
             }
-            uploading = true;
-            const normalizedPrice = normalizePriceChi(seedingUploadPriceChi);
-            let count = 0;
-            try {
-              for (const path of event.payload.paths) {
-                const driveItem = await driveStore.uploadFile(path as string, currentFolderId);
-                if (driveItem) {
-                  const result = await driveStore.seedFile(
-                    driveItem.id,
-                    seedingUploadProtocol,
-                    normalizedPrice || undefined,
-                  );
-                  if (result) count++;
-                }
-              }
-              if (count > 0) {
-                toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${seedingUploadProtocol}`, 'success');
-              }
-            } catch (e) {
-              toasts.show('Failed: ' + (e as Error).message, 'error');
-            } finally {
-              uploading = false;
-            }
-          } else {
-            // Files mode: upload to Drive only
-            uploading = true;
-            let count = 0;
-            try {
-              for (const path of event.payload.paths) {
-                const result = await driveStore.uploadFile(path as string, currentFolderId);
-                if (result) count++;
-              }
-              if (count > 0) toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
-            } catch (e) {
-              toasts.show('Upload failed: ' + (e as Error).message, 'error');
-            } finally {
-              uploading = false;
-            }
+            if (count > 0) toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+          } catch (e) {
+            toasts.show('Upload failed: ' + (e as Error).message, 'error');
+          } finally {
+            uploading = false;
           }
         } else if (event.payload.type === 'enter') {
           isDragging = true;
@@ -692,45 +599,6 @@
     onSearchChange={(q) => searchQuery = q}
   />
 
-  <!-- Tab bar -->
-  <div class="flex border-b border-gray-200 dark:border-gray-700" role="tablist">
-    <button
-      onclick={() => activeTab = 'files'}
-      role="tab"
-      aria-selected={activeTab === 'files'}
-      class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px
-        {activeTab === 'files'
-          ? 'text-primary-600 dark:text-primary-400 border-primary-600 dark:border-primary-400'
-          : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
-    >
-      All Files
-    </button>
-    <button
-      onclick={() => activeTab = 'seeding'}
-      role="tab"
-      aria-selected={activeTab === 'seeding'}
-      class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px flex items-center gap-1.5
-        {activeTab === 'seeding'
-          ? 'text-primary-600 dark:text-primary-400 border-primary-600 dark:border-primary-400'
-          : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
-    >
-      Seeding
-      {#if seedingCount > 0}
-        <span class="px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-          {seedingCount}
-        </span>
-      {/if}
-    </button>
-  </div>
-
-  {#if activeTab === 'seeding'}
-    <!-- Seeding tab -->
-    <DriveSeedingPanel
-      {manifest}
-      onAddFiles={handleAddFilesToSeed}
-      onOptionsChange={handleSeedingOptionsChange}
-    />
-  {:else}
   <!-- Breadcrumb -->
   {#if !searchQuery}
     <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
@@ -870,7 +738,6 @@
       </table>
     </div>
   {/if}
-  {/if}
 </div>
 
 <!-- Context menu -->
@@ -899,6 +766,76 @@
 <!-- Share modal -->
 {#if shareItem}
   <DriveShareModal item={shareItem} {manifest} onClose={() => shareItem = null} />
+{/if}
+
+<!-- Seed to network modal -->
+{#if seedModalItem}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    onclick={() => seedModalItem = null}
+    onkeydown={(e) => { if (e.key === 'Escape') seedModalItem = null; }}
+  >
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Seed to Network</h3>
+      <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        Share <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
+      </p>
+
+      <div class="space-y-4">
+        <!-- Protocol picker -->
+        <div>
+          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Protocol</label>
+          <div class="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
+            <button
+              onclick={() => seedProtocol = 'WebRTC'}
+              class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'WebRTC'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
+            >
+              WebRTC
+            </button>
+            <button
+              onclick={() => seedProtocol = 'BitTorrent'}
+              class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'BitTorrent'
+                ? 'bg-green-600 text-white'
+                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
+            >
+              BitTorrent
+            </button>
+          </div>
+        </div>
+
+        <!-- Price input -->
+        <div>
+          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Price (CHI)</label>
+          <input
+            type="number"
+            step="0.001"
+            min="0"
+            placeholder="Free"
+            bind:value={seedPrice}
+            class="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-3 mt-5">
+        <button
+          onclick={() => seedModalItem = null}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+        >Cancel</button>
+        <button
+          onclick={confirmSeed}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition"
+        >Start Seeding</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <!-- Move modal -->
