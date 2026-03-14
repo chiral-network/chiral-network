@@ -352,11 +352,7 @@ async fn tunnel_ws_handler(
     ws.on_upgrade(move |socket| handle_tunnel_ws(socket, key, tunnel_reg))
 }
 
-async fn handle_tunnel_ws(
-    socket: WebSocket,
-    key: String,
-    tunnel_reg: Arc<TunnelRegistry>,
-) {
+async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<TunnelRegistry>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Channel for the proxy handlers to send requests into this tunnel
@@ -439,10 +435,7 @@ fn build_query_string(params: &HashMap<String, String>) -> String {
     if params.is_empty() {
         return String::new();
     }
-    let qs: Vec<String> = params
-        .iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
+    let qs: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     format!("?{}", qs.join("&"))
 }
 
@@ -637,11 +630,7 @@ async fn proxy_site_redirect(
     Path(site_id): Path<String>,
 ) -> Response {
     if state.lookup_site(&site_id).await.is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Html(offline_page("Site not found")),
-        )
-            .into_response();
+        return (StatusCode::NOT_FOUND, Html(offline_page("Site not found"))).into_response();
     }
     (
         StatusCode::MOVED_PERMANENTLY,
@@ -660,11 +649,7 @@ async fn proxy_site_root(
     let reg = match state.lookup_site(&site_id).await {
         Some(r) => r,
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Html(offline_page("Site not found")),
-            )
-                .into_response()
+            return (StatusCode::NOT_FOUND, Html(offline_page("Site not found"))).into_response()
         }
     };
     let path = format!("/sites/{}/", site_id);
@@ -682,11 +667,7 @@ async fn proxy_site_path(
     let reg = match state.lookup_site(&site_id).await {
         Some(r) => r,
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Html(offline_page("Site not found")),
-            )
-                .into_response()
+            return (StatusCode::NOT_FOUND, Html(offline_page("Site not found"))).into_response()
         }
     };
     let path = format!("/sites/{}/{}", site_id, subpath);
@@ -730,10 +711,7 @@ pub fn relay_share_routes(
     Router::new()
         // Drive share registration API
         .route("/api/drive/relay-register", post(register_share))
-        .route(
-            "/api/drive/relay-register/:token",
-            delete(unregister_share),
-        )
+        .route("/api/drive/relay-register/:token", delete(unregister_share))
         // Drive share proxy routes
         .route("/drive/:token", get(proxy_share_root))
         .route("/drive/:token/*path", get(proxy_share_path))
@@ -751,4 +729,239 @@ pub fn relay_share_routes(
         .route("/api/tunnel/ws", get(tunnel_ws_handler))
         .layer(Extension(state))
         .layer(Extension(tunnel_reg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    // -----------------------------------------------------------------------
+    // fix_origin_url
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fix_origin_url_replaces_quad_zero() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+        assert_eq!(
+            fix_origin_url("http://0.0.0.0:9419", ip),
+            "http://203.0.113.5:9419"
+        );
+    }
+
+    #[test]
+    fn test_fix_origin_url_replaces_localhost() {
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(
+            fix_origin_url("http://localhost:9419", ip),
+            "http://10.0.0.1:9419"
+        );
+    }
+
+    #[test]
+    fn test_fix_origin_url_replaces_loopback() {
+        let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42));
+        assert_eq!(
+            fix_origin_url("http://127.0.0.1:9419/path", ip),
+            "http://192.168.1.42:9419/path"
+        );
+    }
+
+    #[test]
+    fn test_fix_origin_url_noop_when_no_placeholder() {
+        let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(
+            fix_origin_url("http://203.0.113.5:9419", ip),
+            "http://203.0.113.5:9419"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // build_query_string
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_query_string_empty() {
+        let params: HashMap<String, String> = HashMap::new();
+        assert_eq!(build_query_string(&params), "");
+    }
+
+    #[test]
+    fn test_build_query_string_single_param() {
+        let mut params = HashMap::new();
+        params.insert("page".to_string(), "1".to_string());
+        let qs = build_query_string(&params);
+        assert_eq!(qs, "?page=1");
+    }
+
+    #[test]
+    fn test_build_query_string_multiple_params() {
+        let mut params = HashMap::new();
+        params.insert("a".to_string(), "1".to_string());
+        params.insert("b".to_string(), "2".to_string());
+        let qs = build_query_string(&params);
+        // HashMap iteration order is not guaranteed, so check both possibilities
+        assert!(qs == "?a=1&b=2" || qs == "?b=2&a=1");
+    }
+
+    // -----------------------------------------------------------------------
+    // now_secs
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_now_secs_reasonable_timestamp() {
+        let ts = now_secs();
+        // Should be after 2024-01-01 (1704067200) and before 2100-01-01 (4102444800)
+        assert!(ts > 1_704_067_200, "timestamp {} is too far in the past", ts);
+        assert!(
+            ts < 4_102_444_800,
+            "timestamp {} is too far in the future",
+            ts
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RelayShareRegistry
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_registry_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+        let shares = registry.shares.read().await;
+        let sites = registry.sites.read().await;
+        assert!(shares.is_empty());
+        assert!(sites.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_registry_register_and_lookup_share() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+
+        let reg = ShareRegistration {
+            token: "abc123".to_string(),
+            origin_url: "http://10.0.0.1:9419".to_string(),
+            owner_wallet: "0xWALLET".to_string(),
+            registered_at: now_secs(),
+        };
+        registry.register(reg).await;
+
+        let found = registry.lookup("abc123").await;
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.token, "abc123");
+        assert_eq!(found.origin_url, "http://10.0.0.1:9419");
+        assert_eq!(found.owner_wallet, "0xWALLET");
+    }
+
+    #[tokio::test]
+    async fn test_registry_lookup_missing_share() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+        assert!(registry.lookup("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_registry_unregister_share() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+
+        let reg = ShareRegistration {
+            token: "tok1".to_string(),
+            origin_url: "http://10.0.0.1:9419".to_string(),
+            owner_wallet: "0xWALLET".to_string(),
+            registered_at: now_secs(),
+        };
+        registry.register(reg).await;
+
+        assert!(registry.unregister("tok1").await);
+        assert!(registry.lookup("tok1").await.is_none());
+        // Unregistering again returns false
+        assert!(!registry.unregister("tok1").await);
+    }
+
+    #[tokio::test]
+    async fn test_registry_register_and_lookup_site() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+
+        let reg = SiteRegistration {
+            site_id: "my-site".to_string(),
+            origin_url: "http://10.0.0.1:9419".to_string(),
+            owner_wallet: "0xSITEOWNER".to_string(),
+            registered_at: now_secs(),
+        };
+        registry.register_site(reg).await;
+
+        let found = registry.lookup_site("my-site").await;
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.site_id, "my-site");
+        assert_eq!(found.origin_url, "http://10.0.0.1:9419");
+        assert_eq!(found.owner_wallet, "0xSITEOWNER");
+    }
+
+    #[tokio::test]
+    async fn test_registry_lookup_missing_site() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+        assert!(registry.lookup_site("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_registry_unregister_site() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+
+        let reg = SiteRegistration {
+            site_id: "site-1".to_string(),
+            origin_url: "http://10.0.0.1:9419".to_string(),
+            owner_wallet: "0xOWNER".to_string(),
+            registered_at: now_secs(),
+        };
+        registry.register_site(reg).await;
+
+        assert!(registry.unregister_site("site-1").await);
+        assert!(registry.lookup_site("site-1").await.is_none());
+        assert!(!registry.unregister_site("site-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_registry_persist_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Register a share and a site, then drop the registry
+        {
+            let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+            registry
+                .register(ShareRegistration {
+                    token: "persist-tok".to_string(),
+                    origin_url: "http://1.2.3.4:9419".to_string(),
+                    owner_wallet: "0xW".to_string(),
+                    registered_at: 1000,
+                })
+                .await;
+            registry
+                .register_site(SiteRegistration {
+                    site_id: "persist-site".to_string(),
+                    origin_url: "http://1.2.3.4:9419".to_string(),
+                    owner_wallet: "0xS".to_string(),
+                    registered_at: 2000,
+                })
+                .await;
+        }
+
+        // Create a fresh registry and load from disk
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+        registry.load_from_disk().await;
+
+        let share = registry.lookup("persist-tok").await;
+        assert!(share.is_some());
+        assert_eq!(share.unwrap().owner_wallet, "0xW");
+
+        let site = registry.lookup_site("persist-site").await;
+        assert!(site.is_some());
+        assert_eq!(site.unwrap().owner_wallet, "0xS");
+    }
 }
