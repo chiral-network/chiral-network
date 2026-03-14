@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     ShieldCheck,
     User,
@@ -10,6 +10,7 @@
     CheckCircle2,
     XCircle,
     Star,
+    RefreshCw,
   } from 'lucide-svelte';
   import { walletAccount } from '$lib/stores';
   import { ratingApi, setRatingOwner, type ReputationEvent } from '$lib/services/ratingApiService';
@@ -88,8 +89,18 @@
     }
   }
 
+  let refreshInterval: ReturnType<typeof setInterval> | undefined;
+
   onMount(() => {
     loadReputation();
+    // Auto-refresh every 30 seconds so Elo updates are visible after transfers
+    refreshInterval = setInterval(() => {
+      if (!loading) loadReputation();
+    }, 30_000);
+  });
+
+  onDestroy(() => {
+    if (refreshInterval) clearInterval(refreshInterval);
   });
 
   $effect(() => {
@@ -116,6 +127,14 @@
         <div class="text-4xl font-bold dark:text-white">{elo.toFixed(1)}</div>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Elo (base {baseElo})</p>
       </div>
+      <button
+        onclick={() => loadReputation()}
+        disabled={loading}
+        class="ml-auto p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40"
+        title="Refresh reputation"
+      >
+        <RefreshCw class="w-4 h-4 {loading ? 'animate-spin' : ''}" />
+      </button>
 
       <div class="flex-1 grid grid-cols-2 gap-3 text-sm">
         <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">

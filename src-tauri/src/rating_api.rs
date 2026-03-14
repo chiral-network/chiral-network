@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::rating_storage::{
-    self, compute_reputation_for_wallet, ReputationEvent, RatingState, TransferOutcome,
+    self, compute_reputation_for_wallet, RatingState, ReputationEvent, TransferOutcome,
     LOOKBACK_SECS,
 };
 
@@ -82,9 +82,7 @@ fn get_owner(headers: &HeaderMap) -> Option<String> {
 }
 
 fn is_valid_wallet(addr: &str) -> bool {
-    addr.len() == 42
-        && addr.starts_with("0x")
-        && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+    addr.len() == 42 && addr.starts_with("0x") && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn parse_wei(value: &str) -> Result<u128, String> {
@@ -219,19 +217,20 @@ async fn submit_transfer(
         let tx_hash = match req.tx_hash.as_deref() {
             Some(v) if !v.trim().is_empty() => v.trim(),
             _ => {
-                return (StatusCode::BAD_REQUEST, "txHash required for paid transfers")
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "txHash required for paid transfers",
+                )
                     .into_response()
             }
         };
-        if let Err(err) = verify_payment_tx(
-            tx_hash,
-            &downloader_wallet,
-            &req.seeder_wallet,
-            amount_wei,
-        )
-        .await
+        if let Err(err) =
+            verify_payment_tx(tx_hash, &downloader_wallet, &req.seeder_wallet, amount_wei).await
         {
-            return (StatusCode::BAD_REQUEST, format!("Payment verification failed: {}", err))
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Payment verification failed: {}", err),
+            )
                 .into_response();
         }
     }
@@ -305,7 +304,10 @@ async fn submit_rating(
     }
     if let Some(ref c) = req.comment {
         if c.len() > 500 {
-            return (StatusCode::BAD_REQUEST, "Comment must be 500 characters or less")
+            return (
+                StatusCode::BAD_REQUEST,
+                "Comment must be 500 characters or less",
+            )
                 .into_response();
         }
     }
@@ -324,7 +326,11 @@ async fn submit_rating(
     };
 
     if existing.outcome != TransferOutcome::Completed {
-        return (StatusCode::BAD_REQUEST, "Ratings require a completed transfer").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "Ratings require a completed transfer",
+        )
+            .into_response();
     }
 
     existing.rating_score = Some(req.score);
@@ -348,7 +354,10 @@ async fn get_reputation(
     let mut events: Vec<ReputationEvent> = m
         .events
         .iter()
-        .filter(|e| e.seeder_wallet.eq_ignore_ascii_case(&wallet))
+        .filter(|e| {
+            e.seeder_wallet.eq_ignore_ascii_case(&wallet)
+                || e.downloader_wallet.eq_ignore_ascii_case(&wallet)
+        })
         .filter(|e| now.saturating_sub(e.created_at) <= LOOKBACK_SECS)
         .cloned()
         .collect();

@@ -592,7 +592,13 @@
     context: TransferReputationContext,
     outcome: 'completed' | 'failed',
   ) {
-    if (context.outcomeReported || !context.seederWallet || !$walletAccount?.address) {
+    if (context.outcomeReported) return;
+    if (!context.seederWallet) {
+      log.warn('Skipping reputation report: seeder wallet address is empty (transferId=%s, fileHash=%s)', context.transferId, context.fileHash);
+      return;
+    }
+    if (!$walletAccount?.address) {
+      log.warn('Skipping reputation report: own wallet not connected');
       return;
     }
     try {
@@ -627,7 +633,7 @@
   async function fetchSeederRatings(seeders: SeederInfo[]) {
     try {
       const wallets = [...new Set(
-        seeders.flatMap(s => [s.peerId, s.walletAddress]).filter(Boolean)
+        seeders.map(s => s.walletAddress).filter(Boolean)
       )];
       if (wallets.length === 0) return;
       const now = Date.now();
