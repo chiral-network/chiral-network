@@ -200,7 +200,7 @@ describe('gethService', () => {
 
       await gethService.startGpuMining(['0', '1']);
 
-      expect(mockInvoke).toHaveBeenCalledWith('start_gpu_mining', { deviceIds: ['0', '1'] });
+      expect(mockInvoke).toHaveBeenCalledWith('start_gpu_mining', { deviceIds: ['0', '1'], utilizationPercent: 100 });
     });
 
     it('startGpuMining should pass null when no devices selected', async () => {
@@ -209,7 +209,7 @@ describe('gethService', () => {
 
       await gethService.startGpuMining();
 
-      expect(mockInvoke).toHaveBeenCalledWith('start_gpu_mining', { deviceIds: null });
+      expect(mockInvoke).toHaveBeenCalledWith('start_gpu_mining', { deviceIds: null, utilizationPercent: 100 });
     });
 
     it('stopGpuMining should invoke command', async () => {

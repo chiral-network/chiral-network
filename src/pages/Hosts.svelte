@@ -490,7 +490,7 @@
       } else {
         // Accepted/active — waiting for other party
         myAgreements = myAgreements.map((a) =>
-          a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId } : a
+          a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId ?? undefined } : a
         );
         toasts.show('Cancellation requested — waiting for other party', 'info');
       }
@@ -593,8 +593,8 @@
         'hosting_response_received',
         (event) => {
           const { agreementId, status } = event.payload;
-          myAgreements = myAgreements.map((a) =>
-            a.agreementId === agreementId ? { ...a, status: status as any } : a
+          myAgreements = myAgreements.map((a): HostingAgreement =>
+            a.agreementId === agreementId ? { ...a, status: status as HostingAgreement['status'] } : a
           );
           if (status === 'accepted') {
             toasts.show('Agreement accepted by host!', 'success');
