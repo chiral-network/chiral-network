@@ -323,7 +323,7 @@
           ...h,
           completedAt: new Date(h.completedAt)
         }));
-        const normalizedHistory = normalizeUniqueIds(mappedHistory, 'history');
+        const normalizedHistory = normalizeUniqueIds(mappedHistory as HistoryEntry[], 'history');
         downloadHistory = normalizedHistory.items;
         idsChanged = idsChanged || normalizedHistory.changed;
       }
@@ -337,7 +337,7 @@
           startedAt: new Date(d.startedAt),
           completedAt: d.completedAt ? new Date(d.completedAt) : undefined
         }));
-        const normalizedDownloads = normalizeUniqueIds(mappedDownloads, 'download');
+        const normalizedDownloads = normalizeUniqueIds(mappedDownloads as DownloadItem[], 'download');
         downloads = normalizedDownloads.items;
         idsChanged = idsChanged || normalizedDownloads.changed;
       }
@@ -677,7 +677,7 @@
       downloads = downloads.map((download) => {
         const wallet = download.seederWallet?.trim();
         const nextElo = wallet ? ratings[wallet]?.elo : undefined;
-        if (Number.isFinite(nextElo) && download.seederElo !== nextElo) {
+        if (typeof nextElo === 'number' && Number.isFinite(nextElo) && download.seederElo !== nextElo) {
           changed = true;
           return { ...download, seederElo: nextElo };
         }
@@ -686,7 +686,7 @@
       downloadHistory = downloadHistory.map((entry) => {
         const wallet = entry.seederWallet?.trim();
         const nextElo = wallet ? ratings[wallet]?.elo : undefined;
-        if (Number.isFinite(nextElo) && entry.seederElo !== nextElo) {
+        if (typeof nextElo === 'number' && Number.isFinite(nextElo) && entry.seederElo !== nextElo) {
           changed = true;
           return { ...entry, seederElo: nextElo };
         }
@@ -716,7 +716,7 @@
 
   function getSeederElo(seeder: SeederInfo): number {
     const score = getSeederReputation(seeder)?.elo;
-    return Number.isFinite(score) ? score : BASE_ELO;
+    return typeof score === 'number' && Number.isFinite(score) ? score : BASE_ELO;
   }
 
   function getBestSeederElo(seeders: SeederInfo[]): number | null {
