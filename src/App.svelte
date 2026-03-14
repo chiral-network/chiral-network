@@ -17,9 +17,9 @@
   import MiningPage from './pages/Mining.svelte';
   import DiagnosticsPage from './pages/Diagnostics.svelte';
   import SettingsPage from './pages/Settings.svelte';
-  import HostingPage from './pages/Hosting.svelte';
-  import DrivePage from './pages/Drive.svelte';
   import HostsPage from './pages/Hosts.svelte';
+  import DrivePage from './pages/Drive.svelte';
+
 
   let currentPath = $state('/wallet');
   let sidebarCollapsed = $state(false);
@@ -342,18 +342,14 @@
       component: DiagnosticsPage
     },
     {
-      path: '/hosting',
-      component: HostingPage
+      path: '/hosts',
+      component: HostsPage
     },
     {
       path: '/drive',
       component: DrivePage
     },
-    {
-      path: '/hosts',
-      component: HostsPage
-    },
-    {
+{
       path: '/settings',
       component: SettingsPage
     },
