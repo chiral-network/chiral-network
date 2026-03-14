@@ -1032,7 +1032,7 @@ fn payment_page(item: &DriveItem, token: &str, share: &ShareLink, reason: &str) 
       <div class="bg-gray-900/60 border border-gray-700 rounded-lg p-3">
         <p class="text-gray-400 text-xs mb-1">Unlock Price</p>
         <p class="font-semibold text-green-300">{price} CHI</p>
-        <p class="text-gray-500 text-xs mt-1">Recipient: {recipient}</p>
+        <p class="text-gray-500 text-xs mt-1 break-all">Recipient: {recipient}</p>
       </div>
     </div>
 

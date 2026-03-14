@@ -498,6 +498,27 @@
     toasts.show(`Stopped seeding "${item.name}"`, 'info');
   }
 
+  async function handleEditPrice(item: DriveItem) {
+    const currentPrice = item.priceChi || '';
+    const input = prompt('Enter new price in CHI (leave empty for Free):', currentPrice);
+    if (input === null) return; // cancelled
+    const priceChi = input.trim() || undefined;
+    if (priceChi !== undefined) {
+      const parsed = Number(priceChi);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        toasts.show('Invalid price', 'error');
+        return;
+      }
+    }
+    const protocol = item.protocol === 'BitTorrent' ? 'BitTorrent' as const : 'WebRTC' as const;
+    const updated = await driveStore.seedFile(item.id, protocol, priceChi);
+    if (updated) {
+      toasts.show(priceChi ? `Updated "${item.name}" to ${priceChi} CHI` : `Updated "${item.name}" to Free`, 'success');
+    } else {
+      toasts.show(`Failed to update price for "${item.name}"`, 'error');
+    }
+  }
+
   async function handleCopyMerkleHash(item: DriveItem) {
     if (!item.merkleRoot) return;
     try {
@@ -863,7 +884,6 @@
     onMove={handleMoveAction}
     onShare={handleShare}
     onCopyLink={handleCopyLink}
-    onDownload={handleDownload}
     onToggleStar={handleToggleStar}
     onToggleVisibility={handleToggleVisibility}
     onDelete={handleDelete}
@@ -872,6 +892,7 @@
     onCopyHash={handleCopyMerkleHash}
     onCopyMagnet={handleCopyMagnetLink}
     onShowInExplorer={handleShowInExplorer}
+    onEditPrice={handleEditPrice}
   />
 {/if}
 

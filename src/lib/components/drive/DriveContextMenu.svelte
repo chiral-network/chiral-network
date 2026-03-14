@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Download, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2 } from 'lucide-svelte';
+  import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2, Coins } from 'lucide-svelte';
   import type { DriveItem } from '$lib/stores/driveStore';
   import { computeContextMenuPlacement } from '$lib/utils/uiPositioning';
 
@@ -12,7 +12,6 @@
     onMove,
     onShare,
     onCopyLink,
-    onDownload,
     onToggleStar,
     onToggleVisibility,
     onDelete,
@@ -21,6 +20,7 @@
     onCopyHash,
     onCopyMagnet,
     onShowInExplorer,
+    onEditPrice,
   }: {
     item: DriveItem;
     x: number;
@@ -30,7 +30,6 @@
     onMove: (item: DriveItem) => void;
     onShare: (item: DriveItem) => void;
     onCopyLink: (item: DriveItem) => void;
-    onDownload: (item: DriveItem) => void;
     onToggleStar: (item: DriveItem) => void;
     onToggleVisibility: (item: DriveItem) => void;
     onDelete: (item: DriveItem) => void;
@@ -39,6 +38,7 @@
     onCopyHash?: (item: DriveItem) => void;
     onCopyMagnet?: (item: DriveItem) => void;
     onShowInExplorer?: (item: DriveItem) => void;
+    onEditPrice?: (item: DriveItem) => void;
   } = $props();
 
   let menuEl = $state<HTMLDivElement | null>(null);
@@ -97,9 +97,6 @@
   const menuItems = $derived([
     { label: 'Rename', icon: Pencil, action: action(onRename) },
     { label: 'Move to...', icon: FolderInput, action: action(onMove) },
-    ...(item.type === 'file'
-      ? [{ label: 'Download', icon: Download, action: action(onDownload) }]
-      : []),
     ...(onShowInExplorer
       ? [{ label: 'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
       : []),
@@ -117,6 +114,9 @@
       : []),
     ...(item.merkleRoot && onCopyMagnet
       ? [{ label: 'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
+      : []),
+    ...(item.seeding && onEditPrice
+      ? [{ label: 'Edit Price', icon: Coins, action: action(onEditPrice) }]
       : []),
     ...(item.shared
       ? [{ label: item.isPublic ? 'Make Private' : 'Make Public', icon: item.isPublic ? EyeOff : Eye, action: action(onToggleVisibility) }]
