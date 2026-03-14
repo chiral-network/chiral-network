@@ -128,14 +128,16 @@
   }
 </script>
 
-<div class="p-6">
-  <div class="mb-8">
-    <h1 class="text-3xl font-bold dark:text-white">Settings</h1>
+<svelte:head><title>Settings | Chiral Network</title></svelte:head>
+
+<div class="p-4 sm:p-6 max-w-6xl mx-auto">
+  <div class="mb-6">
+    <h1 class="text-2xl font-bold dark:text-white">Settings</h1>
     <p class="text-gray-600 dark:text-gray-400 mt-1">Customize your Chiral Network experience</p>
   </div>
 
   <!-- Appearance Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <div class="flex items-center gap-3 mb-6">
       <div class="p-2 bg-purple-100 dark:bg-purple-900 rounded-lg">
         <Palette class="w-5 h-5 text-purple-600 dark:text-purple-400" />
@@ -268,7 +270,7 @@
         <div class="grid grid-cols-2 gap-3">
           <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
             <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
-            <p class="text-lg font-bold text-gray-900 dark:text-white">100.00 CHI</p>
+            <p class="text-lg font-bold text-gray-900 dark:text-white tabular-nums">100.00 CHI</p>
           </div>
           <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
             <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>
@@ -281,7 +283,7 @@
 
   <!-- Storage Section -->
   {#if isTauri}
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
       <div class="flex items-center gap-3 mb-6">
         <div class="p-2 bg-primary-100 dark:bg-primary-900 rounded-lg">
           <HardDrive class="w-5 h-5 text-primary-600 dark:text-primary-400" />
@@ -304,7 +306,7 @@
           </div>
           <button
             onclick={browseDownloadDirectory}
-            class="px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors flex-shrink-0"
+            class="px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             Browse
           </button>
@@ -330,7 +332,7 @@
   {/if}
 
   <!-- Notification Settings Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-amber-100 dark:bg-amber-900 rounded-lg">
         <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
@@ -364,7 +366,7 @@
   </div>
 
   <!-- Reset Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
     <div class="flex items-center justify-between">
       <div>
         <h3 class="font-semibold text-gray-900 dark:text-white">Reset Settings</h3>
@@ -372,7 +374,7 @@
       </div>
       <button
         onclick={resetSettings}
-        class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+        class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/30"
       >
         <RotateCcw class="w-4 h-4" />
         Reset

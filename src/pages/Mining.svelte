@@ -406,16 +406,18 @@
   }
 </script>
 
-<div class="p-6 space-y-6">
+<svelte:head><title>Mining | Chiral Network</title></svelte:head>
+
+<div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold dark:text-white">Mining</h1>
+      <h1 class="text-2xl font-bold dark:text-white">Mining</h1>
       <p class="text-gray-600 dark:text-gray-400 mt-1">Mine CHI tokens on the Chiral Network</p>
     </div>
     <button
       onclick={refreshAll}
       disabled={isLoading}
-      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
+      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoading ? 'animate-spin' : ''}" />
@@ -428,7 +430,7 @@
     </div>
   {:else if !gethStatus?.installed || !gethStatus?.localRunning}
     <!-- Geth Not Running Locally - Direct to Network Page -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
           <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
@@ -466,7 +468,7 @@
     </div>
   {:else}
     <!-- Mining Control Card -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <div class="p-2 {isAnyMining ? 'bg-yellow-100 dark:bg-yellow-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
@@ -499,7 +501,7 @@
             <Zap class="w-4 h-4 text-yellow-500" />
             <span class="text-sm text-gray-600 dark:text-gray-400">Hash Rate</span>
           </div>
-          <p class="text-2xl font-bold dark:text-white">
+          <p class="text-2xl font-bold tabular-nums dark:text-white">
             {isAnyMining ? formatHashRate(displayHashRate) : '0 H/s'}
           </p>
         </div>
@@ -508,7 +510,7 @@
             <Blocks class="w-4 h-4 text-red-500" />
             <span class="text-sm text-gray-600 dark:text-gray-400">Block Height</span>
           </div>
-          <p class="text-2xl font-bold dark:text-white">
+          <p class="text-2xl font-bold tabular-nums dark:text-white">
             {gethStatus?.currentBlock?.toLocaleString() ?? '0'}
           </p>
         </div>
@@ -517,7 +519,7 @@
             <Coins class="w-4 h-4 text-amber-500" />
             <span class="text-sm text-gray-600 dark:text-gray-400">Total Mined</span>
           </div>
-          <p class="text-2xl font-bold dark:text-white">
+          <p class="text-2xl font-bold tabular-nums dark:text-white">
             {(miningStatus?.totalMinedChi ?? 0).toFixed(4)} CHI
           </p>
         </div>
@@ -526,7 +528,7 @@
             <Clock class="w-4 h-4 text-purple-500" />
             <span class="text-sm text-gray-600 dark:text-gray-400">Session Time</span>
           </div>
-          <p class="text-2xl font-bold dark:text-white">
+          <p class="text-2xl font-bold tabular-nums dark:text-white">
             {isAnyMining ? miningElapsed : '--:--:--'}
           </p>
         </div>
@@ -540,7 +542,7 @@
               <span class="text-sm text-gray-600 dark:text-gray-400">Threads Active</span>
             {/if}
           </div>
-          <p class="text-2xl font-bold dark:text-white">
+          <p class="text-2xl font-bold tabular-nums dark:text-white">
             {#if activeMiningBackend === 'gpu'}
               {isAnyMining ? `${activeGpuCount}` : '0'}
             {:else}
@@ -704,7 +706,7 @@
         {#if isAnyMining}
           <button
             onclick={handleStopMining}
-            class="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+            class="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500/30"
           >
             <Square class="w-5 h-5" />
             Stop Mining
@@ -713,7 +715,7 @@
           <button
             onclick={handleStartMining}
             disabled={isStartingMining || (miningMode === 'gpu' && !gpuCapabilities?.binaryPath)}
-            class="flex-1 px-4 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            class="flex-1 px-4 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
           >
             {#if isStartingMining}
               <Loader2 class="w-5 h-5 animate-spin" />
@@ -732,7 +734,7 @@
     </div>
 
     <!-- Mining History -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
       <button
         onclick={() => showHistory = !showHistory}
         class="w-full flex items-center justify-between p-6 text-left"
@@ -816,16 +818,16 @@
                 <tbody>
                   {#each minedBlocks as block (block.blockNumber)}
                     <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                      <td class="py-2 px-3 font-mono text-xs dark:text-gray-300">
+                      <td class="py-2 px-3 font-mono text-xs tabular-nums dark:text-gray-300">
                         #{block.blockNumber.toLocaleString()}
                       </td>
                       <td class="py-2 px-3 text-xs text-gray-600 dark:text-gray-400">
                         {formatTimestamp(block.timestamp)}
                       </td>
-                      <td class="py-2 px-3 text-right text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                      <td class="py-2 px-3 text-right text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
                         +{block.rewardChi} CHI
                       </td>
-                      <td class="py-2 px-3 text-right text-xs text-gray-500 dark:text-gray-400 font-mono">
+                      <td class="py-2 px-3 text-right text-xs tabular-nums text-gray-500 dark:text-gray-400 font-mono">
                         {block.difficulty.toLocaleString()}
                       </td>
                     </tr>

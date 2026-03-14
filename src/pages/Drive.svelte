@@ -637,8 +637,10 @@
   }
 </script>
 
+<svelte:head><title>Drive | Chiral Network</title></svelte:head>
+
 <div
-  class="p-6 space-y-6"
+  class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
@@ -646,7 +648,7 @@
 >
   <!-- Header -->
   <div>
-    <h1 class="text-3xl font-bold text-gray-900 dark:text-white">My Drive</h1>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">My Drive</h1>
     <p class="text-muted-foreground mt-2">
       Cloud storage with shareable links
       {#if manifest.items.length > 0}
@@ -668,21 +670,25 @@
   />
 
   <!-- Tab bar -->
-  <div class="flex border-b border-gray-200 dark:border-gray-700">
+  <div class="flex border-b border-gray-200 dark:border-gray-700" role="tablist">
     <button
       onclick={() => activeTab = 'files'}
+      role="tab"
+      aria-selected={activeTab === 'files'}
       class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px
         {activeTab === 'files'
-          ? 'text-blue-600 dark:text-blue-400 border-blue-600 dark:border-blue-400'
+          ? 'text-primary-600 dark:text-primary-400 border-primary-600 dark:border-primary-400'
           : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
     >
       All Files
     </button>
     <button
       onclick={() => activeTab = 'seeding'}
+      role="tab"
+      aria-selected={activeTab === 'seeding'}
       class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px flex items-center gap-1.5
         {activeTab === 'seeding'
-          ? 'text-blue-600 dark:text-blue-400 border-blue-600 dark:border-blue-400'
+          ? 'text-primary-600 dark:text-primary-400 border-primary-600 dark:border-primary-400'
           : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
     >
       Seeding
@@ -765,14 +771,14 @@
         <div class="flex gap-3">
           <button
             onclick={handleUpload}
-            class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium"
+            class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <Upload class="w-4 h-4" />
             Upload File
           </button>
           <button
             onclick={handleNewFolder}
-            class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium"
+            class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <FolderPlus class="w-4 h-4" />
             New Folder
@@ -892,7 +898,7 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>
