@@ -22,6 +22,8 @@
   }
 </script>
 
+<svelte:head><title>Chiral Network</title></svelte:head>
+
 {#if mode === 'select'}
   <div class="flex items-center justify-center min-h-screen bg-white dark:bg-gray-950 p-6">
     <div class="max-w-md w-full">
@@ -41,8 +43,8 @@
         <h2 class="text-2xl font-semibold text-gray-900 dark:text-white mb-6">Get Started</h2>
 
         <button
-          on:click={handleCreateWallet}
-          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-sm"
+          onclick={handleCreateWallet}
+          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30"
         >
           <div class="flex-shrink-0 mt-0.5 p-2 bg-white/20 rounded-lg">
             <Plus class="w-5 h-5" />
@@ -54,8 +56,8 @@
         </button>
 
         <button
-          on:click={handleUseExisting}
-          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-xl transition-all"
+          onclick={handleUseExisting}
+          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-gray-400/30"
         >
           <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-200 dark:bg-gray-600 rounded-lg">
             <KeyRound class="w-5 h-5" />

@@ -563,11 +563,13 @@
   }
 </script>
 
+<svelte:head><title>ChiralDrop | Chiral Network</title></svelte:head>
+
 <div class="p-4 sm:p-6 h-[calc(100vh-64px)] flex flex-col gap-4 sm:gap-6">
   <!-- Header -->
   <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
     <div class="space-y-1">
-      <h1 class="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">ChiralDrop</h1>
+      <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">ChiralDrop</h1>
       <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400">
         Your alias:
         <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
@@ -584,7 +586,7 @@
       {/if}
       <button
         onclick={() => showHistory = !showHistory}
-        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
       >
         <History class="h-4 w-4" />
         <span>{showHistory ? 'Hide History' : 'Show History'}</span>
@@ -711,7 +713,7 @@
                 <div class="mt-3 flex gap-2">
                   <button
                     onclick={() => handleAccept(transfer)}
-                    class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600"
+                    class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                   >
                     <span class="inline-flex items-center justify-center gap-1">
                       <Check class="h-4 w-4" />
@@ -722,7 +724,7 @@
                   </button>
                   <button
                     onclick={() => handleDecline(transfer)}
-                    class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600"
+                    class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
                   >
                     <span class="inline-flex items-center justify-center gap-1">
                       <X class="h-4 w-4" />
@@ -782,7 +784,7 @@
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600"
+            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />

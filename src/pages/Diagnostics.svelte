@@ -402,10 +402,12 @@
   }
 </script>
 
-<div class="p-6 space-y-6">
+<svelte:head><title>Diagnostics | Chiral Network</title></svelte:head>
+
+<div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-3xl font-bold dark:text-white">Diagnostics</h1>
+      <h1 class="text-2xl font-bold dark:text-white">Diagnostics</h1>
       <p class="text-gray-600 dark:text-gray-400 mt-1">Developer tools for debugging and monitoring</p>
     </div>
     <div class="flex items-center gap-3">
@@ -415,7 +417,7 @@
       </label>
       <button
         onclick={refreshAll}
-        class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors dark:text-gray-300"
+        class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
         title="Refresh all"
       >
         <RefreshCw class="w-5 h-5" />
@@ -424,7 +426,7 @@
   </div>
 
   <!-- DHT Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
     <button
       onclick={() => showDhtSection = !showDhtSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -472,15 +474,15 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
-              <p class="text-sm font-bold dark:text-white">{dhtHealth.connectedPeerCount}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.connectedPeerCount}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
-              <p class="text-sm font-bold dark:text-white">{dhtHealth.kademliaPeers}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.kademliaPeers}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
-              <p class="text-sm font-bold dark:text-white">{dhtHealth.sharedFiles}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.sharedFiles}</p>
             </div>
           </div>
 
@@ -541,7 +543,7 @@
   </div>
 
   <!-- Bootstrap Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
     <button
       onclick={() => showBootstrapSection = !showBootstrapSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -589,7 +591,7 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Healthy Nodes</p>
-              <p class="text-sm font-bold dark:text-white">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
@@ -609,7 +611,7 @@
                 </div>
                 <div class="text-right shrink-0">
                   {#if node.reachable && node.latencyMs}
-                    <span class="text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
+                    <span class="text-green-600 dark:text-green-400 tabular-nums">{node.latencyMs}ms</span>
                   {:else if node.error}
                     <span class="text-red-500 dark:text-red-400">{node.error}</span>
                   {:else}
@@ -631,7 +633,7 @@
   </div>
 
   <!-- Geth Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
     <button
       onclick={() => showGethSection = !showGethSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -689,23 +691,23 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Chain ID</p>
-              <p class="text-sm font-bold dark:text-white">{gethStatus.chainId || 'N/A'}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.chainId || 'N/A'}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Current Block</p>
-              <p class="text-sm font-bold dark:text-white">{gethStatus.currentBlock.toLocaleString()}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.currentBlock.toLocaleString()}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Highest Block</p>
-              <p class="text-sm font-bold dark:text-white">{gethStatus.highestBlock.toLocaleString()}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.highestBlock.toLocaleString()}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-              <p class="text-sm font-bold dark:text-white">{gethStatus.peerCount}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.peerCount}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Sync Progress</p>
-              <p class="text-sm font-bold dark:text-white">
+              <p class="text-sm font-bold dark:text-white tabular-nums">
                 {#if gethStatus.syncing && gethStatus.highestBlock > 0}
                   {((gethStatus.currentBlock / gethStatus.highestBlock) * 100).toFixed(1)}%
                 {:else if gethStatus.running}
@@ -726,7 +728,7 @@
   </div>
 
   <!-- Mining Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
     <button
       onclick={() => showMiningSection = !showMiningSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -774,15 +776,15 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Hash Rate</p>
-              <p class="text-sm font-bold dark:text-white">{formatHashRate(miningStatus.hashRate)}</p>
+              <p class="text-sm font-bold dark:text-white tabular-nums">{formatHashRate(miningStatus.hashRate)}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined</p>
-              <p class="text-sm font-bold text-amber-600 dark:text-amber-400">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
+              <p class="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined (Wei)</p>
-              <p class="text-sm font-bold dark:text-white font-mono">{miningStatus.totalMinedWei}</p>
+              <p class="text-sm font-bold dark:text-white font-mono tabular-nums">{miningStatus.totalMinedWei}</p>
             </div>
           </div>
 
@@ -806,7 +808,7 @@
   </div>
 
   <!-- Geth Log Viewer -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
     <button
       onclick={() => showGethLogSection = !showGethLogSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -905,7 +907,7 @@
   </div>
 
   <!-- Event Logs -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
     <button
       onclick={() => showLogsSection = !showLogsSection}
       class="w-full flex items-center justify-between p-6 text-left"

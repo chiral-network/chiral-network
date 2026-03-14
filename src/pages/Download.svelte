@@ -1321,9 +1321,11 @@
   }
 </script>
 
-<div class="p-6 space-y-6">
+<svelte:head><title>Download | Chiral Network</title></svelte:head>
+
+<div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
   <div>
-    <h1 class="text-3xl font-bold dark:text-white">Download</h1>
+    <h1 class="text-2xl font-bold dark:text-white">Download</h1>
     <p class="text-gray-600 dark:text-gray-400 mt-2">Search and download files from the Chiral Network</p>
   </div>
 
@@ -1343,7 +1345,7 @@
   {/if}
 
   <!-- Add New Download Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6">
     <div class="flex items-center gap-2 mb-4">
       <Plus class="w-5 h-5 text-gray-600 dark:text-gray-400" />
       <h2 class="text-lg font-semibold dark:text-white">Add New Download</h2>
@@ -1382,7 +1384,7 @@
         <button
           onclick={handleTorrentFile}
           disabled={!$networkConnected}
-          class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
         >
           Select .torrent File
         </button>
@@ -1405,7 +1407,7 @@
           <button
             onclick={searchFile}
             disabled={isSearching || !$networkConnected}
-            class="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all"
+            class="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
           >
             {#if isSearching}
               <Loader2 class="w-5 h-5 animate-spin" />
@@ -1441,15 +1443,15 @@
             <h3 class="text-lg font-semibold truncate dark:text-white">{searchResult.fileName}</h3>
             <div class="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
               {#if searchResult.fileSize > 0}
-                <span>{formatFileSize(searchResult.fileSize)}</span>
+                <span class="tabular-nums">{formatFileSize(searchResult.fileSize)}</span>
               {/if}
-              <span class="{searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
+              <span class="tabular-nums {searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
               </span>
               {#if searchResult.seeders.length > 0}
                 {@const bestSeederElo = getBestSeederElo(searchResult.seeders)}
                 {#if bestSeederElo !== null}
-                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
                     Top Elo {bestSeederElo.toFixed(1)}
                   </span>
                 {/if}
@@ -1486,11 +1488,11 @@
                     <span class="font-mono text-xs truncate max-w-[180px]" title={seeder.peerId}>
                       {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
                     </span>
-                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 flex-shrink-0">
+                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 flex-shrink-0 tabular-nums">
                       Elo {seederElo.toFixed(1)}
                     </span>
                   </div>
-                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 flex-shrink-0">
+                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 flex-shrink-0 tabular-nums">
                     {formatPriceWei(seeder.priceWei || '0')}
                   </span>
                 </button>
@@ -1504,10 +1506,10 @@
             <span class="font-mono text-xs truncate" title={seeder.peerId}>
               Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
             </span>
-            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
               Elo {seederElo.toFixed(1)}
             </span>
-            <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+            <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 tabular-nums">
               {formatPriceWei(seeder.priceWei || '0')}
             </span>
           </div>
@@ -1579,13 +1581,13 @@
                 {/if}
                 {#if $walletAccount}
                   <span class="text-gray-400 mx-1">•</span>
-                  Balance: <span class="font-medium">{parseFloat(walletBalance).toFixed(4)} CHI</span>
+                  Balance: <span class="font-medium tabular-nums">{parseFloat(walletBalance).toFixed(4)} CHI</span>
                 {/if}
               </div>
             <button
               onclick={() => startDownload(searchResult!)}
               disabled={!isTauri || isProcessingPayment}
-              class="px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-all font-medium"
+              class="px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-all font-medium focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
             >
               {#if isProcessingPayment}
                 <Loader2 class="w-4 h-4 animate-spin" />
@@ -1613,7 +1615,7 @@
   </div>
 
   <!-- Downloads -->
-  <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700">
     <!-- Tabs -->
     <div class="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 px-4">
       <div class="flex">
@@ -1698,20 +1700,20 @@
                   <!-- Stats row -->
                   <div class="flex items-center gap-3 mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                     {#if download.size > 0}
-                      <span class="flex items-center gap-1">
+                      <span class="flex items-center gap-1 tabular-nums">
                         {formatFileSize(download.size)}
                       </span>
                     {/if}
                     {#if isActive}
-                      <span class="text-primary-600 dark:text-primary-400 font-medium">{download.speed}</span>
-                      <span>{download.eta}</span>
+                      <span class="text-primary-600 dark:text-primary-400 font-medium tabular-nums">{download.speed}</span>
+                      <span class="tabular-nums">{download.eta}</span>
                     {/if}
                     {#if download.status === 'completed' && download.startedAt && download.completedAt}
-                      <span>Took {formatDuration(download.startedAt, download.completedAt)}</span>
+                      <span class="tabular-nums">Took {formatDuration(download.startedAt, download.completedAt)}</span>
                     {/if}
-                    <span>{download.seeders} seeder{download.seeders !== 1 ? 's' : ''}</span>
+                    <span class="tabular-nums">{download.seeders} seeder{download.seeders !== 1 ? 's' : ''}</span>
                     {#if typeof download.seederElo === 'number'}
-                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
                         Elo {download.seederElo.toFixed(1)}
                       </span>
                     {/if}
@@ -1798,7 +1800,7 @@
                         style="width: {download.progress}%"
                       ></div>
                     </div>
-                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right">{(download.progress ?? 0).toFixed(1)}%</span>
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400 w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
                   </div>
                 </div>
               {/if}
@@ -1861,16 +1863,16 @@
 
                   <div class="flex items-center gap-3 mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                     {#if entry.fileSize > 0}
-                      <span>{formatFileSize(entry.fileSize)}</span>
+                      <span class="tabular-nums">{formatFileSize(entry.fileSize)}</span>
                     {/if}
                     {#if entry.status === 'completed' && entry.startedAt && entry.completedAt}
-                      <span>Took {formatDuration(new Date(entry.startedAt), new Date(entry.completedAt))}</span>
+                      <span class="tabular-nums">Took {formatDuration(new Date(entry.startedAt), new Date(entry.completedAt))}</span>
                     {/if}
                     {#if entry.seeders}
-                      <span>{entry.seeders} seeder{entry.seeders !== 1 ? 's' : ''}</span>
+                      <span class="tabular-nums">{entry.seeders} seeder{entry.seeders !== 1 ? 's' : ''}</span>
                     {/if}
                     {#if typeof entry.seederElo === 'number'}
-                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300">
+                      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
                         Elo {entry.seederElo.toFixed(1)}
                       </span>
                     {/if}
@@ -2036,7 +2038,7 @@
           <p class="text-sm text-gray-500 dark:text-gray-400">File</p>
           <p class="font-medium dark:text-white truncate">{pendingDownload.result.fileName}</p>
           {#if pendingDownload.result.fileSize > 0}
-            <p class="text-xs text-gray-400 mt-0.5">{formatFileSize(pendingDownload.result.fileSize)}</p>
+            <p class="text-xs text-gray-400 mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
           {/if}
         </div>
 

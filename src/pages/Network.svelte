@@ -506,16 +506,18 @@
   }
 </script>
 
-<div class="p-6">
+<svelte:head><title>Network | Chiral Network</title></svelte:head>
+
+<div class="max-w-6xl mx-auto p-4 sm:p-6">
   <div class="flex items-center justify-between mb-6">
     <div>
-      <h1 class="text-3xl font-bold dark:text-white">Network</h1>
+      <h1 class="text-2xl font-bold dark:text-white">Network</h1>
       <p class="text-gray-600 dark:text-gray-400 mt-1">Manage blockchain and P2P network connections</p>
     </div>
     <button
       onclick={loadGethStatus}
       disabled={isLoadingGeth}
-      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
+      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoadingGeth ? 'animate-spin' : ''}" />
@@ -532,7 +534,7 @@
   {/if}
 
   <!-- Blockchain Node Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
         <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
@@ -611,19 +613,19 @@
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.peerCount || 0}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.peerCount || 0}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Chain ID</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.chainId || 'N/A'}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.chainId || 'N/A'}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Sync Status</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
         </div>
       </div>
 
@@ -632,7 +634,7 @@
         {#if gethStatus?.running}
           <button
             onclick={handleStopGeth}
-            class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+            class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
           >
             <Square class="w-4 h-4" />
             Stop Node
@@ -641,7 +643,7 @@
           <button
             onclick={handleStartGeth}
             disabled={isStartingGeth}
-            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
           >
             {#if isStartingGeth}
               <Loader2 class="w-4 h-4 animate-spin" />
@@ -695,11 +697,11 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
               <p class="text-xs text-gray-500 dark:text-gray-400">Healthy Nodes</p>
-              <p class="text-sm font-bold dark:text-white">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
+              <p class="text-sm font-bold tabular-nums dark:text-white">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
               <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
-              <p class="text-sm font-bold dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
+              <p class="text-sm font-bold tabular-nums dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
             </div>
           </div>
 
@@ -729,7 +731,7 @@
                   </div>
                   <div class="text-right shrink-0">
                     {#if node.reachable && node.latencyMs}
-                      <span class="text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
+                      <span class="tabular-nums text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
                     {:else if node.error}
                       <span class="text-red-500 dark:text-red-400">{node.error}</span>
                     {:else}
@@ -761,7 +763,7 @@
   </div>
 
   <!-- P2P Network (DHT) Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <!-- Header with status and controls -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
@@ -785,19 +787,19 @@
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
         <p class="text-xs text-gray-500 dark:text-gray-400">DHT Peers</p>
-        <p class="text-lg font-bold dark:text-white">{$networkStats.connectedPeers}</p>
+        <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.connectedPeers}</p>
       </div>
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
         <p class="text-xs text-gray-500 dark:text-gray-400">Discovered Peers</p>
-        <p class="text-lg font-bold dark:text-white">{$networkStats.totalPeers}</p>
+        <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.totalPeers}</p>
       </div>
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
         <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-        <p class="text-lg font-bold dark:text-white">{gethStatus?.peerCount || 0}</p>
+        <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.peerCount || 0}</p>
       </div>
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
         <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
-        <p class="text-lg font-bold dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+        <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
       </div>
     </div>
 
@@ -814,7 +816,7 @@
       {#if $networkConnected}
         <button
           onclick={disconnectFromNetwork}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
         >
           <Square class="w-4 h-4" />
           <span>Disconnect</span>
@@ -823,7 +825,7 @@
         <button
           onclick={connectToNetwork}
           disabled={isConnecting}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
         >
           {#if isConnecting}
             <Loader2 class="w-4 h-4 animate-spin" />
@@ -867,15 +869,15 @@
           </div>
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
-            <p class="text-sm font-bold dark:text-white">{dhtHealth.connectedPeerCount}</p>
+            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.connectedPeerCount}</p>
           </div>
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
-            <p class="text-sm font-bold dark:text-white">{dhtHealth.kademliaPeers}</p>
+            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.kademliaPeers}</p>
           </div>
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
-            <p class="text-sm font-bold dark:text-white">{dhtHealth.sharedFiles}</p>
+            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.sharedFiles}</p>
           </div>
         </div>
 
@@ -970,28 +972,28 @@
             <ArrowDownToLine class="w-3.5 h-3.5 text-green-500" />
             <p class="text-xs text-gray-500 dark:text-gray-400">Download Speed</p>
           </div>
-          <p class="text-lg font-bold dark:text-white">{formatSpeed(trafficStats.downloadSpeed)}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{formatSpeed(trafficStats.downloadSpeed)}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-1">
             <ArrowUpFromLine class="w-3.5 h-3.5 text-blue-500" />
             <p class="text-xs text-gray-500 dark:text-gray-400">Upload Speed</p>
           </div>
-          <p class="text-lg font-bold dark:text-white">{formatSpeed(trafficStats.uploadSpeed)}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{formatSpeed(trafficStats.uploadSpeed)}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-1">
             <Download class="w-3.5 h-3.5 text-green-500" />
             <p class="text-xs text-gray-500 dark:text-gray-400">Total Downloaded</p>
           </div>
-          <p class="text-lg font-bold dark:text-white">{formatBytes(trafficStats.totalDownloaded)}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{formatBytes(trafficStats.totalDownloaded)}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-1">
             <Upload class="w-3.5 h-3.5 text-blue-500" />
             <p class="text-xs text-gray-500 dark:text-gray-400">Total Uploaded</p>
           </div>
-          <p class="text-lg font-bold dark:text-white">{formatBytes(trafficStats.totalUploaded)}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{formatBytes(trafficStats.totalUploaded)}</p>
         </div>
       </div>
     </div>
@@ -1091,7 +1093,7 @@
   </div>
 
   <!-- Blacklist Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-6">
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
         <ShieldBan class="w-5 h-5 text-red-600 dark:text-red-400" />
