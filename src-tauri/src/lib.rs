@@ -4168,6 +4168,30 @@ async fn show_drive_item_in_folder(owner: String, item_id: String) -> Result<(),
     show_in_folder(path_str).await
 }
 
+#[tauri::command]
+async fn get_drive_file_path(owner: String, item_id: String) -> Result<String, String> {
+    let manifest = ds::load_manifest();
+    let item = manifest
+        .items
+        .iter()
+        .find(|i| i.id == item_id && i.owner == owner)
+        .ok_or("Item not found")?;
+
+    let storage = item
+        .storage_path
+        .as_ref()
+        .ok_or("No storage path for this item")?;
+    let path = ds::drive_files_dir()
+        .ok_or("Cannot determine storage directory")?
+        .join(storage);
+
+    if !path.exists() {
+        return Err(format!("File not found on disk: {}", path.display()));
+    }
+
+    Ok(path.to_string_lossy().to_string())
+}
+
 // ============================================================================
 // Geth Commands
 // ============================================================================
@@ -5906,6 +5930,7 @@ pub fn run() {
             open_file,
             show_in_folder,
             show_drive_item_in_folder,
+            get_drive_file_path,
             // Wallet commands
             get_wallet_balance,
             send_transaction,
