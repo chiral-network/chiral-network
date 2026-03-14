@@ -590,7 +590,7 @@ impl GethProcess {
         match (std::env::consts::OS, std::env::consts::ARCH) {
             ("windows", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda10.0-windows-amd64.zip"),
             ("linux", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-linux-x86_64.tar.gz"),
-            ("macos", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-darwin-x86_64.tar.gz"),
+            ("macos", "x86_64") | ("macos", "aarch64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-darwin-x86_64.tar.gz"),
             _ => Err(format!(
                 "GPU miner auto-install is not supported on platform {} {}",
                 std::env::consts::OS,
