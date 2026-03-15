@@ -21,7 +21,7 @@
 <div class="flex flex-wrap items-center gap-2">
   <button
     onclick={onUpload}
-    class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium"
+    class="flex items-center gap-2 px-4 py-2 bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-lg transition text-sm font-medium"
   >
     <Upload class="w-4 h-4" />
     Upload File
@@ -29,7 +29,7 @@
 
   <button
     onclick={onNewFolder}
-    class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium"
+    class="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-cyan-500/15 text-gray-300 rounded-lg transition text-sm font-medium"
   >
     <FolderPlus class="w-4 h-4" />
     New Folder
@@ -44,24 +44,24 @@
       placeholder="Search files..."
       value={searchQuery}
       oninput={(e) => onSearchChange((e.target as HTMLInputElement).value)}
-      class="pl-9 pr-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 w-48 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      class="pl-9 pr-3 py-2 bg-gray-800 border border-cyan-500/20 rounded-lg text-sm text-gray-100 placeholder-gray-400 w-48 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
     />
   </div>
 
-  <div class="flex items-center bg-gray-100 dark:bg-gray-700 rounded-lg p-0.5">
+  <div class="flex items-center bg-gray-800 rounded-lg p-0.5">
     <button
       onclick={() => onViewModeChange('grid')}
-      class="p-1.5 rounded transition {viewMode === 'grid' ? 'bg-white dark:bg-gray-600 shadow-sm' : 'hover:bg-gray-200 dark:hover:bg-gray-600'}"
+      class="p-1.5 rounded transition {viewMode === 'grid' ? 'bg-gray-900 shadow-[0_0_10px_rgba(6,182,212,0.05)]' : 'hover:bg-cyan-500/15'}"
       title="Grid view"
     >
-      <LayoutGrid class="w-4 h-4 text-gray-700 dark:text-gray-300" />
+      <LayoutGrid class="w-4 h-4 text-gray-300" />
     </button>
     <button
       onclick={() => onViewModeChange('list')}
-      class="p-1.5 rounded transition {viewMode === 'list' ? 'bg-white dark:bg-gray-600 shadow-sm' : 'hover:bg-gray-200 dark:hover:bg-gray-600'}"
+      class="p-1.5 rounded transition {viewMode === 'list' ? 'bg-gray-900 shadow-[0_0_10px_rgba(6,182,212,0.05)]' : 'hover:bg-cyan-500/15'}"
       title="List view"
     >
-      <List class="w-4 h-4 text-gray-700 dark:text-gray-300" />
+      <List class="w-4 h-4 text-gray-300" />
     </button>
   </div>
 </div>

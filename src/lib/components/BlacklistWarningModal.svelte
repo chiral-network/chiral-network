@@ -23,33 +23,33 @@
   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') oncancel(); }}
   onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) oncancel(); }}
 >
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 p-6 max-w-md w-full mx-4">
+  <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6 max-w-md w-full mx-4">
     <!-- Header -->
     <div class="flex items-center gap-3 mb-4">
-      <div class="p-2.5 bg-red-100 dark:bg-red-900/30 rounded-full">
-        <ShieldBan class="w-6 h-6 text-red-600 dark:text-red-400" />
+      <div class="p-2.5 bg-red-500/10 rounded-full">
+        <ShieldBan class="w-6 h-6 text-red-600" />
       </div>
       <div>
-        <h3 class="font-semibold text-lg text-gray-900 dark:text-white">Blacklisted Address</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400">This address is on your blacklist</p>
+        <h3 class="font-semibold text-lg text-gray-100">Blacklisted Address</h3>
+        <p class="text-sm text-gray-500">This address is on your blacklist</p>
       </div>
     </div>
 
     <!-- Details -->
-    <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 mb-4 space-y-2">
+    <div class="bg-gray-900/50 rounded-lg p-4 mb-4 space-y-2">
       <div class="flex justify-between items-start gap-2">
-        <span class="text-xs text-gray-500 dark:text-gray-400 shrink-0">Address</span>
-        <span class="text-sm font-mono text-gray-900 dark:text-gray-200 text-right break-all">{formatAddr(address)}</span>
+        <span class="text-xs text-gray-500 shrink-0">Address</span>
+        <span class="text-sm font-mono text-gray-100 text-right break-all">{formatAddr(address)}</span>
       </div>
       <div class="flex justify-between items-start gap-2">
-        <span class="text-xs text-gray-500 dark:text-gray-400 shrink-0">Reason</span>
-        <span class="text-sm text-gray-900 dark:text-gray-200 text-right">{reason}</span>
+        <span class="text-xs text-gray-500 shrink-0">Reason</span>
+        <span class="text-sm text-gray-100 text-right">{reason}</span>
       </div>
     </div>
 
     <!-- Warning -->
-    <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mb-5">
-      <p class="text-sm text-amber-800 dark:text-amber-300">
+    <div class="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mb-5">
+      <p class="text-sm text-amber-400">
         Are you sure you want to <strong>{action}</strong>?
       </p>
     </div>
@@ -58,7 +58,7 @@
     <div class="flex gap-3">
       <button
         onclick={oncancel}
-        class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+        class="flex-1 px-4 py-2.5 border border-cyan-500/20 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-900 transition-colors"
       >
         Cancel
       </button>

@@ -340,7 +340,7 @@
     switch (level) {
       case 'error': return 'text-red-500';
       case 'warn': return 'text-yellow-500';
-      case 'info': return 'text-blue-500';
+      case 'info': return 'text-cyan-400';
       case 'debug': return 'text-gray-500';
       default: return 'text-gray-500';
     }
@@ -348,23 +348,23 @@
 
   function levelBg(level: string): string {
     switch (level) {
-      case 'error': return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400';
-      case 'warn': return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
-      case 'info': return 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400';
-      case 'debug': return 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400';
-      default: return 'bg-gray-100 dark:bg-gray-700';
+      case 'error': return 'bg-red-500/10 text-red-400';
+      case 'warn': return 'bg-yellow-500/10 text-yellow-400';
+      case 'info': return 'bg-blue-500/10 text-blue-400';
+      case 'debug': return 'bg-gray-800 text-gray-400';
+      default: return 'bg-gray-800';
     }
   }
 
   function sourceBg(source: string): string {
     const normalized = source.toLowerCase();
     switch (normalized) {
-      case 'geth': return 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300';
-      case 'mining': return 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300';
-      case 'dht': return 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300';
-      case 'bootstrap': return 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300';
-      case 'system': return 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300';
-      default: return 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300';
+      case 'geth': return 'bg-cyan-500/10 text-cyan-700';
+      case 'mining': return 'bg-amber-500/10 text-amber-400';
+      case 'dht': return 'bg-emerald-500/10 text-emerald-400';
+      case 'bootstrap': return 'bg-orange-500/10 text-orange-400';
+      case 'system': return 'bg-violet-500/10 text-violet-300';
+      default: return 'bg-gray-800 text-gray-300';
     }
   }
 
@@ -407,17 +407,17 @@
 <div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-2xl font-bold dark:text-white">Diagnostics</h1>
-      <p class="text-gray-600 dark:text-gray-400 mt-1">Developer tools for debugging and monitoring</p>
+      <h1 class="text-2xl font-bold text-gray-100">Diagnostics</h1>
+      <p class="text-gray-400 mt-1">Developer tools for debugging and monitoring</p>
     </div>
     <div class="flex items-center gap-3">
-      <label class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+      <label class="flex items-center gap-2 text-xs text-gray-500">
         <input type="checkbox" checked={autoRefreshEnabled} onchange={toggleAutoRefresh} class="rounded" />
         Auto-refresh ({autoRefreshSeconds}s)
       </label>
       <button
         onclick={refreshAll}
-        class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+        class="p-2 hover:bg-cyan-500/10 rounded-lg transition-colors text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         title="Refresh all"
       >
         <RefreshCw class="w-5 h-5" />
@@ -426,18 +426,18 @@
   </div>
 
   <!-- DHT Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
     <button
       onclick={() => showDhtSection = !showDhtSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
-          <Globe class="w-6 h-6 {$networkConnected ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
+        <div class="p-2 {$networkConnected ? 'bg-emerald-500/10' : 'bg-gray-800'} rounded-lg">
+          <Globe class="w-6 h-6 {$networkConnected ? 'text-emerald-400' : 'text-gray-400'}" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">DHT Diagnostics</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">P2P network status and peer information</p>
+          <h2 class="font-semibold text-gray-100">DHT Diagnostics</h2>
+          <p class="text-sm text-gray-500">P2P network status and peer information</p>
         </div>
       </div>
       {#if showDhtSection}
@@ -453,7 +453,7 @@
           <button
             onclick={loadDhtHealth}
             disabled={isLoadingDht}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingDht}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -466,50 +466,50 @@
 
         {#if dhtHealth}
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-              <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Status</p>
+              <p class="text-sm font-bold {dhtHealth.running ? 'text-emerald-400' : 'text-red-400'}">
                 {dhtHealth.running ? 'Running' : 'Stopped'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.connectedPeerCount}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Connected Peers</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{dhtHealth.connectedPeerCount}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.kademliaPeers}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Kademlia Peers</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{dhtHealth.kademliaPeers}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.sharedFiles}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Shared Files</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{dhtHealth.sharedFiles}</p>
             </div>
           </div>
 
           {#if dhtHealth.peerId}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Peer ID</p>
-              <p class="font-mono text-xs break-all dark:text-gray-300">{dhtHealth.peerId}</p>
+            <div class="p-3 bg-gray-800 rounded-lg">
+              <p class="text-xs text-gray-500 mb-1">Peer ID</p>
+              <p class="font-mono text-xs break-all text-gray-300">{dhtHealth.peerId}</p>
             </div>
           {/if}
 
           {#if dhtHealth.listeningAddresses.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
+            <div class="p-3 bg-gray-800 rounded-lg">
+              <p class="text-xs text-gray-500 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
               <div class="space-y-1">
                 {#each dhtHealth.listeningAddresses as addr}
-                  <p class="font-mono text-xs break-all dark:text-gray-300">{addr}</p>
+                  <p class="font-mono text-xs break-all text-gray-300">{addr}</p>
                 {/each}
               </div>
             </div>
           {/if}
 
           {#if dhtHealth.protocols.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Active Protocols ({dhtHealth.protocols.length})</p>
+            <div class="p-3 bg-gray-800 rounded-lg">
+              <p class="text-xs text-gray-500 mb-2">Active Protocols ({dhtHealth.protocols.length})</p>
               <div class="flex flex-wrap gap-1.5">
                 {#each dhtHealth.protocols as protocol}
-                  <span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded-full font-mono">
+                  <span class="px-2 py-0.5 bg-blue-500/10 text-blue-400 text-xs rounded-full font-mono">
                     {protocol}
                   </span>
                 {/each}
@@ -518,14 +518,14 @@
           {/if}
 
           {#if dhtHealth.bootstrapNodes.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">DHT Bootstrap Nodes</p>
+            <div class="p-3 bg-gray-800 rounded-lg">
+              <p class="text-xs text-gray-500 mb-2">DHT Bootstrap Nodes</p>
               <div class="space-y-1.5">
                 {#each dhtHealth.bootstrapNodes as node}
                   <div class="flex items-center gap-2 text-xs">
-                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                    <span class="font-mono break-all dark:text-gray-300">{node.address}</span>
-                    <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} shrink-0">
+                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-emerald-500' : 'bg-red-500/100'} shrink-0"></div>
+                    <span class="font-mono break-all text-gray-300">{node.address}</span>
+                    <span class="{node.reachable ? 'text-emerald-400' : 'text-red-400'} shrink-0">
                       {node.reachable ? 'Reachable' : 'Unreachable'}
                     </span>
                   </div>
@@ -534,7 +534,7 @@
             </div>
           {/if}
         {:else}
-          <p class="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+          <p class="text-sm text-gray-500 text-center py-4">
             Click "Refresh" to load DHT diagnostics
           </p>
         {/if}
@@ -543,18 +543,18 @@
   </div>
 
   <!-- Bootstrap Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
     <button
       onclick={() => showBootstrapSection = !showBootstrapSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
-          <Activity class="w-6 h-6 text-orange-600 dark:text-orange-400" />
+        <div class="p-2 bg-orange-500/10 rounded-lg">
+          <Activity class="w-6 h-6 text-orange-400" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">Bootstrap Diagnostics</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Bootstrap node connectivity and latency</p>
+          <h2 class="font-semibold text-gray-100">Bootstrap Diagnostics</h2>
+          <p class="text-sm text-gray-500">Bootstrap node connectivity and latency</p>
         </div>
       </div>
       {#if showBootstrapSection}
@@ -570,7 +570,7 @@
           <button
             onclick={runBootstrapCheck}
             disabled={isLoadingBootstrap}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingBootstrap}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -583,39 +583,39 @@
 
         {#if bootstrapHealth}
           <div class="grid grid-cols-3 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-              <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Status</p>
+              <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-emerald-400' : 'text-red-400'}">
                 {bootstrapHealth.isHealthy ? 'Healthy' : 'Degraded'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Healthy Nodes</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Healthy Nodes</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
-              <p class="text-sm font-bold dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Last Checked</p>
+              <p class="text-sm font-bold text-gray-100">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
             </div>
           </div>
 
           <div class="space-y-2">
             {#each bootstrapHealth.nodes as node}
-              <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
+              <div class="flex items-center justify-between p-3 bg-gray-800 rounded-lg text-xs">
                 <div class="flex items-center gap-2">
-                  <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+                  <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-emerald-500' : 'bg-red-500/100'} shrink-0"></div>
                   <div>
-                    <span class="font-medium dark:text-white text-sm">{node.name}</span>
-                    <span class="text-gray-500 dark:text-gray-400 ml-1">({node.region})</span>
+                    <span class="font-medium text-gray-100 text-sm">{node.name}</span>
+                    <span class="text-gray-500 ml-1">({node.region})</span>
                   </div>
                 </div>
                 <div class="text-right shrink-0">
                   {#if node.reachable && node.latencyMs}
-                    <span class="text-green-600 dark:text-green-400 tabular-nums">{node.latencyMs}ms</span>
+                    <span class="text-emerald-400 tabular-nums">{node.latencyMs}ms</span>
                   {:else if node.error}
-                    <span class="text-red-500 dark:text-red-400">{node.error}</span>
+                    <span class="text-red-500">{node.error}</span>
                   {:else}
-                    <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+                    <span class="{node.reachable ? 'text-emerald-400' : 'text-red-400'}">
                       {node.reachable ? 'Reachable' : 'Unreachable'}
                     </span>
                   {/if}
@@ -624,7 +624,7 @@
             {/each}
           </div>
         {:else}
-          <p class="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+          <p class="text-sm text-gray-500 text-center py-4">
             Click "Run Check" to test bootstrap node connectivity
           </p>
         {/if}
@@ -633,18 +633,18 @@
   </div>
 
   <!-- Geth Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
     <button
       onclick={() => showGethSection = !showGethSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
-          <Server class="w-6 h-6 {gethStatus?.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
+        <div class="p-2 {gethStatus?.running ? 'bg-emerald-500/10' : 'bg-gray-800'} rounded-lg">
+          <Server class="w-6 h-6 {gethStatus?.running ? 'text-emerald-400' : 'text-gray-400'}" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">Geth Diagnostics</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Blockchain node status and sync info</p>
+          <h2 class="font-semibold text-gray-100">Geth Diagnostics</h2>
+          <p class="text-sm text-gray-500">Blockchain node status and sync info</p>
         </div>
       </div>
       {#if showGethSection}
@@ -660,7 +660,7 @@
           <button
             onclick={loadGethStatus}
             disabled={isLoadingGeth}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingGeth}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -673,41 +673,41 @@
 
         {#if gethStatus}
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Installed</p>
-              <p class="text-sm font-bold {gethStatus.installed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Installed</p>
+              <p class="text-sm font-bold {gethStatus.installed ? 'text-emerald-400' : 'text-red-400'}">
                 {gethStatus.installed ? 'Yes' : 'No'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-              <p class="text-sm font-bold {gethStatus.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}">
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Status</p>
+              <p class="text-sm font-bold {gethStatus.running ? 'text-emerald-400' : 'text-gray-400'}">
                 {gethStatus.running ? 'Running' : 'Stopped'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Syncing</p>
-              <p class="text-sm font-bold dark:text-white">{gethStatus.syncing ? 'Yes' : 'No'}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Syncing</p>
+              <p class="text-sm font-bold text-gray-100">{gethStatus.syncing ? 'Yes' : 'No'}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Chain ID</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.chainId || 'N/A'}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Chain ID</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{gethStatus.chainId || 'N/A'}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Current Block</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.currentBlock.toLocaleString()}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Current Block</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{gethStatus.currentBlock.toLocaleString()}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Highest Block</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.highestBlock.toLocaleString()}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Highest Block</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{gethStatus.highestBlock.toLocaleString()}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.peerCount}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Blockchain Peers</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{gethStatus.peerCount}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Sync Progress</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Sync Progress</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">
                 {#if gethStatus.syncing && gethStatus.highestBlock > 0}
                   {((gethStatus.currentBlock / gethStatus.highestBlock) * 100).toFixed(1)}%
                 {:else if gethStatus.running}
@@ -719,7 +719,7 @@
             </div>
           </div>
         {:else}
-          <p class="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+          <p class="text-sm text-gray-500 text-center py-4">
             Click "Refresh" to load Geth diagnostics
           </p>
         {/if}
@@ -728,18 +728,18 @@
   </div>
 
   <!-- Mining Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
     <button
       onclick={() => showMiningSection = !showMiningSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 {miningStatus?.mining ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
-          <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}" />
+        <div class="p-2 {miningStatus?.mining ? 'bg-amber-500/10' : 'bg-gray-800'} rounded-lg">
+          <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-amber-400' : 'text-gray-400'}" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">Mining Diagnostics</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Mining status, hashrate, and rewards</p>
+          <h2 class="font-semibold text-gray-100">Mining Diagnostics</h2>
+          <p class="text-sm text-gray-500">Mining status, hashrate, and rewards</p>
         </div>
       </div>
       {#if showMiningSection}
@@ -755,7 +755,7 @@
           <button
             onclick={loadMiningStatus}
             disabled={isLoadingMining}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingMining}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -768,38 +768,38 @@
 
         {#if miningStatus}
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-              <p class="text-sm font-bold {miningStatus.mining ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}">
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Status</p>
+              <p class="text-sm font-bold {miningStatus.mining ? 'text-amber-400' : 'text-gray-400'}">
                 {miningStatus.mining ? 'Mining' : 'Inactive'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Hash Rate</p>
-              <p class="text-sm font-bold dark:text-white tabular-nums">{formatHashRate(miningStatus.hashRate)}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Hash Rate</p>
+              <p class="text-sm font-bold text-gray-100 tabular-nums">{formatHashRate(miningStatus.hashRate)}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined</p>
-              <p class="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Total Mined</p>
+              <p class="text-sm font-bold text-amber-400 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined (Wei)</p>
-              <p class="text-sm font-bold dark:text-white font-mono tabular-nums">{miningStatus.totalMinedWei}</p>
+            <div class="bg-gray-800 rounded-lg p-3">
+              <p class="text-xs text-gray-500">Total Mined (Wei)</p>
+              <p class="text-sm font-bold text-gray-100 font-mono tabular-nums">{miningStatus.totalMinedWei}</p>
             </div>
           </div>
 
           {#if miningStatus.minerAddress}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Miner Address (Coinbase)</p>
-              <p class="font-mono text-xs break-all dark:text-gray-300">{miningStatus.minerAddress}</p>
+            <div class="p-3 bg-gray-800 rounded-lg">
+              <p class="text-xs text-gray-500 mb-1">Miner Address (Coinbase)</p>
+              <p class="font-mono text-xs break-all text-gray-300">{miningStatus.minerAddress}</p>
             </div>
           {:else}
-            <div class="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-              <p class="text-xs text-yellow-700 dark:text-yellow-400">No miner address set. Set your wallet address to receive mining rewards.</p>
+            <div class="p-3 bg-yellow-500/10 rounded-lg">
+              <p class="text-xs text-yellow-400">No miner address set. Set your wallet address to receive mining rewards.</p>
             </div>
           {/if}
         {:else}
-          <p class="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+          <p class="text-sm text-gray-500 text-center py-4">
             Click "Refresh" to load mining diagnostics
           </p>
         {/if}
@@ -808,18 +808,18 @@
   </div>
 
   <!-- Geth Log Viewer -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
     <button
       onclick={() => showGethLogSection = !showGethLogSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 bg-cyan-100 dark:bg-cyan-900/30 rounded-lg">
-          <FileText class="w-6 h-6 text-cyan-600 dark:text-cyan-400" />
+        <div class="p-2 bg-cyan-500/10 rounded-lg">
+          <FileText class="w-6 h-6 text-cyan-400" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">Geth Log</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Live Geth process output (geth.log)</p>
+          <h2 class="font-semibold text-gray-100">Geth Log</h2>
+          <p class="text-sm text-gray-500">Live Geth process output (geth.log)</p>
         </div>
       </div>
       {#if showGethLogSection}
@@ -833,12 +833,12 @@
       <div class="px-6 pb-6 space-y-4">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <label for="geth-log-lines" class="text-xs text-gray-500 dark:text-gray-400">Lines:</label>
+            <label for="geth-log-lines" class="text-xs text-gray-500">Lines:</label>
             <select
               id="geth-log-lines"
               bind:value={gethLogLines}
               onchange={() => loadGethLog()}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 border border-cyan-500/20 rounded text-gray-300"
             >
               <option value={50}>50</option>
               <option value={100}>100</option>
@@ -855,7 +855,7 @@
                   });
                 }
               }}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 text-gray-300"
             >
               <Copy class="w-3 h-3" />
               Copy
@@ -863,7 +863,7 @@
             <button
               onclick={loadGethLog}
               disabled={isLoadingGethLog}
-              class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+              class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
             >
               {#if isLoadingGethLog}
                 <Loader2 class="w-3 h-3 animate-spin" />
@@ -907,18 +907,18 @@
   </div>
 
   <!-- Event Logs -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
     <button
       onclick={() => showLogsSection = !showLogsSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-          <Terminal class="w-6 h-6 text-purple-600 dark:text-purple-400" />
+        <div class="p-2 bg-purple-500/10 rounded-lg">
+          <Terminal class="w-6 h-6 text-purple-400" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">Event Logs</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Real-time events and log messages ({logEntries.length} entries)</p>
+          <h2 class="font-semibold text-gray-100">Event Logs</h2>
+          <p class="text-sm text-gray-500">Real-time events and log messages ({logEntries.length} entries)</p>
         </div>
       </div>
       {#if showLogsSection}
@@ -936,7 +936,7 @@
             <Filter class="w-4 h-4 text-gray-400" />
             <select
               bind:value={logFilter}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 border border-cyan-500/20 rounded text-gray-300"
             >
               <option value="all">All Levels</option>
               <option value="info">Info</option>
@@ -946,7 +946,7 @@
             </select>
             <select
               bind:value={sourceFilter}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 border border-cyan-500/20 rounded text-gray-300"
             >
               <option value="all">All Sources</option>
               <option value="dht">DHT</option>
@@ -957,13 +957,13 @@
             </select>
           </div>
           <div class="flex items-center gap-2 ml-auto">
-            <label class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+            <label class="flex items-center gap-1.5 text-xs text-gray-500">
               <input type="checkbox" bind:checked={autoScroll} class="rounded" />
               Auto-scroll
             </label>
             <button
               onclick={copyLogs}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 text-gray-300"
               title="Copy logs to clipboard"
             >
               <Copy class="w-3 h-3" />
@@ -971,7 +971,7 @@
             </button>
             <button
               onclick={exportLogs}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 text-gray-300"
               title="Export logs as file"
             >
               <Download class="w-3 h-3" />
@@ -979,7 +979,7 @@
             </button>
             <button
               onclick={clearLogs}
-              class="text-xs px-2 py-1 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 rounded transition-colors flex items-center gap-1"
+              class="text-xs px-2 py-1 bg-red-500/10 hover:bg-red-500/15 text-red-400 rounded transition-colors flex items-center gap-1"
               title="Clear logs"
             >
               <Trash2 class="w-3 h-3" />

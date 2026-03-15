@@ -581,7 +581,7 @@
 >
   <!-- Header -->
   <div>
-    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">My Drive</h1>
+    <h1 class="text-2xl font-bold text-gray-100">My Drive</h1>
     <p class="text-muted-foreground mt-2">
       Cloud storage with shareable links
       {#if manifest.items.length > 0}
@@ -606,7 +606,7 @@
   {#if !searchQuery}
     <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
   {:else}
-    <p class="text-sm text-gray-500 dark:text-gray-400">
+    <p class="text-sm text-gray-500">
       Search results for "<span class="font-medium">{searchQuery}</span>" — {currentItems.length} result{currentItems.length !== 1 ? 's' : ''}
     </p>
   {/if}
@@ -621,16 +621,16 @@
         placeholder="Folder name"
         bind:value={newFolderName}
         onkeydown={(e) => { if (e.key === 'Enter') confirmNewFolder(); if (e.key === 'Escape') cancelNewFolder(); }}
-        class="px-3 py-1.5 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+        class="px-3 py-1.5 bg-gray-800 border border-cyan-500/25 rounded-lg text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40 w-64"
       />
-      <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition">Create</button>
-      <button onclick={cancelNewFolder} class="px-3 py-1.5 text-gray-600 dark:text-gray-400 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">Cancel</button>
+      <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-cyan-600/80 text-white text-sm rounded-lg hover:bg-cyan-500/90 transition">Create</button>
+      <button onclick={cancelNewFolder} class="px-3 py-1.5 text-gray-400 text-sm hover:bg-cyan-500/10 rounded-lg transition">Cancel</button>
     </div>
   {/if}
 
   <!-- Upload progress -->
   {#if uploading}
-    <div class="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
+    <div class="flex items-center gap-2 text-sm text-cyan-400">
       <Loader2 class="w-4 h-4 animate-spin" />
       Uploading files to server...
     </div>
@@ -638,41 +638,41 @@
 
   <!-- Drag overlay -->
   {#if isDragging}
-    <div class="border-2 border-dashed border-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-xl p-12 text-center">
-      <Upload class="w-10 h-10 mx-auto text-blue-500 mb-2" />
-      <p class="text-blue-600 dark:text-blue-400 font-medium">Drop files here to upload</p>
+    <div class="border-2 border-dashed border-cyan-500/40 bg-cyan-500/10 rounded-xl p-12 text-center">
+      <Upload class="w-10 h-10 mx-auto text-cyan-400 mb-2" />
+      <p class="text-cyan-400 font-medium">Drop files here to upload</p>
     </div>
   {/if}
 
   <!-- Loading -->
   {#if loading}
     <div class="flex items-center justify-center py-16">
-      <Loader2 class="w-8 h-8 animate-spin text-blue-500" />
+      <Loader2 class="w-8 h-8 animate-spin text-cyan-400" />
     </div>
   {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
     <!-- Empty state -->
     <div class="flex flex-col items-center justify-center py-16 text-center">
-      <div class="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
+      <div class="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mb-4">
         <HardDrive class="w-8 h-8 text-gray-400" />
       </div>
-      <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-1">
+      <h3 class="text-lg font-medium text-gray-100 mb-1">
         {searchQuery ? 'No files found' : 'This folder is empty'}
       </h3>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+      <p class="text-sm text-gray-500 mb-6">
         {searchQuery ? 'Try a different search term' : 'Upload files or create a folder to get started'}
       </p>
       {#if !searchQuery}
         <div class="flex gap-3">
           <button
             onclick={handleUpload}
-            class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            class="flex items-center gap-2 px-4 py-2 bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             <Upload class="w-4 h-4" />
             Upload File
           </button>
           <button
             onclick={handleNewFolder}
-            class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            class="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-cyan-500/15 text-gray-300 rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             <FolderPlus class="w-4 h-4" />
             New Folder
@@ -684,14 +684,14 @@
     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {#each currentItems as item (item.id)}
         {#if renamingId === item.id}
-          <div class="bg-white dark:bg-gray-800 border border-blue-400 rounded-xl p-4">
+          <div class="bg-gray-900/80 border border-cyan-500/40 rounded-xl p-4">
             <input
               id="rename-input"
               type="text"
               bind:value={renameValue}
               onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
               onblur={confirmRename}
-              class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full px-2 py-1 text-sm bg-gray-800 border border-cyan-500/25 rounded text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
             />
           </div>
         {:else}
@@ -704,20 +704,20 @@
       {/each}
     </div>
   {:else}
-    <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+    <div class="bg-gray-900/80 rounded-xl border border-cyan-500/20 overflow-hidden">
       <table class="w-full">
         <thead>
-          <tr class="border-b border-gray-200 dark:border-gray-700 text-left">
-            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Name</th>
-            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide w-24">Size</th>
-            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide w-32">Modified</th>
+          <tr class="border-b border-cyan-500/20 text-left">
+            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Name</th>
+            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wide w-24">Size</th>
+            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wide w-32">Modified</th>
             <th class="py-2.5 px-3 w-12"></th>
           </tr>
         </thead>
         <tbody>
           {#each currentItems as item (item.id)}
             {#if renamingId === item.id}
-              <tr class="border-b border-gray-100 dark:border-gray-700/50">
+              <tr class="border-b border-cyan-500/10">
                 <td colspan="4" class="py-2 px-3">
                   <input
                     id="rename-input"
@@ -725,7 +725,7 @@
                     bind:value={renameValue}
                     onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
                     onblur={confirmRename}
-                    class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    class="w-full px-2 py-1 text-sm bg-gray-800 border border-cyan-500/25 rounded text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
                   />
                 </td>
               </tr>
@@ -781,24 +781,24 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      class="bg-gray-900/80 rounded-2xl shadow-[0_0_30px_rgba(6,182,212,0.15)] p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
-      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
-      <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
+      <h3 class="text-lg font-semibold text-gray-100 mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
+      <p class="text-sm text-gray-400 mb-4">
+        {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-100">"{seedModalItem.name}"</strong> on the network.
       </p>
 
       <div class="space-y-4">
         <!-- Protocol picker -->
         <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Protocol</label>
-          <div class="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">Protocol</label>
+          <div class="flex rounded-lg overflow-hidden border border-cyan-500/20">
             <button
               onclick={() => seedProtocol = 'WebRTC'}
               class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'WebRTC'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
+                ? 'bg-cyan-600/80 text-white'
+                : 'bg-gray-800 text-gray-300 hover:bg-cyan-500/10'}"
             >
               WebRTC
             </button>
@@ -806,7 +806,7 @@
               onclick={() => seedProtocol = 'BitTorrent'}
               class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'BitTorrent'
                 ? 'bg-green-600 text-white'
-                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
+                : 'bg-gray-800 text-gray-300 hover:bg-cyan-500/10'}"
             >
               BitTorrent
             </button>
@@ -815,14 +815,14 @@
 
         <!-- Price input -->
         <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Price (CHI)</label>
+          <label class="block text-xs font-medium text-gray-500 mb-1.5">Price (CHI)</label>
           <input
             type="number"
             step="0.001"
             min="0"
             placeholder="Free"
             bind:value={seedPrice}
-            class="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="w-full px-3 py-1.5 text-sm bg-gray-800 border border-cyan-500/20 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
           />
         </div>
       </div>
@@ -830,11 +830,11 @@
       <div class="flex justify-end gap-3 mt-5">
         <button
           onclick={() => seedModalItem = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-300 bg-gray-800 hover:bg-cyan-500/15 transition"
         >Cancel</button>
         <button
           onclick={confirmSeed}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-cyan-600/80 hover:bg-cyan-500/90 transition"
         >{seedModalItem?.seeding ? 'Update' : 'Start Seeding'}</button>
       </div>
     </div>
@@ -861,22 +861,22 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      class="bg-gray-900/80 rounded-2xl shadow-[0_0_30px_rgba(6,182,212,0.15)] p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
-      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>
-      <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
-        Are you sure you want to delete <strong class="text-gray-900 dark:text-white">"{deleteConfirmItem.name}"</strong>?
+      <h3 class="text-lg font-semibold text-gray-100 mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>
+      <p class="text-sm text-gray-400 mb-1">
+        Are you sure you want to delete <strong class="text-gray-100">"{deleteConfirmItem.name}"</strong>?
       </p>
       {#if deleteConfirmItem.type === 'folder'}
-        <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This will delete all contents inside the folder.</p>
+        <p class="text-sm text-amber-400 mb-4">This will delete all contents inside the folder.</p>
       {:else}
-        <p class="text-sm text-gray-500 dark:text-gray-500 mb-4">This will remove it from your Drive.</p>
+        <p class="text-sm text-gray-500 mb-4">This will remove it from your Drive.</p>
       {/if}
       <div class="flex justify-end gap-3">
         <button
           onclick={() => deleteConfirmItem = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-300 bg-gray-800 hover:bg-cyan-500/15 transition"
         >Cancel</button>
         <button
           onclick={confirmDelete}

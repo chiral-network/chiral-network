@@ -130,7 +130,7 @@
 <div class="space-y-4">
   <!-- Installation Status -->
   {#if !isInstalled}
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-primary-100 rounded-lg">
           <Download class="w-6 h-6 text-primary-600" />
@@ -147,7 +147,7 @@
             <span>{$downloadProgress?.status || 'Downloading...'}</span>
             <span>{$downloadProgress?.percentage?.toFixed(1) || 0}%</span>
           </div>
-          <div class="w-full bg-gray-200 rounded-full h-2">
+          <div class="w-full bg-gray-700 rounded-full h-2">
             <div
               class="bg-primary-600 h-2 rounded-full transition-all"
               style="width: {$downloadProgress?.percentage || 0}%"
@@ -166,10 +166,10 @@
     </div>
   {:else}
     <!-- Geth Status Card -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+    <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <div class="p-2 {$gethStatus?.running ? 'bg-green-100' : 'bg-gray-100'} rounded-lg">
+          <div class="p-2 {$gethStatus?.running ? 'bg-emerald-500/10' : 'bg-gray-800'} rounded-lg">
             <Server class="w-6 h-6 {$gethStatus?.running ? 'text-green-600' : 'text-gray-400'}" />
           </div>
           <div>
@@ -192,7 +192,7 @@
           <button
             onclick={handleStop}
             disabled={isStopping}
-            class="px-4 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors flex items-center gap-2 disabled:opacity-50"
+            class="px-4 py-2 bg-red-500/10 text-red-600 rounded-lg hover:bg-red-500/15 transition-colors flex items-center gap-2 disabled:opacity-50"
           >
             {#if isStopping}
               <Loader2 class="w-4 h-4 animate-spin" />
@@ -219,17 +219,17 @@
 
       {#if $gethStatus?.running}
         <div class="grid grid-cols-3 gap-4 mt-4">
-          <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div class="bg-gray-900 rounded-lg p-3 text-center">
             <Users class="w-5 h-5 mx-auto text-gray-400 mb-1" />
             <p class="text-lg font-semibold">{$gethStatus?.peerCount || 0}</p>
             <p class="text-xs text-gray-500">Peers</p>
           </div>
-          <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div class="bg-gray-900 rounded-lg p-3 text-center">
             <Box class="w-5 h-5 mx-auto text-gray-400 mb-1" />
             <p class="text-lg font-semibold">{$gethStatus?.currentBlock?.toLocaleString() || 0}</p>
             <p class="text-xs text-gray-500">Block</p>
           </div>
-          <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div class="bg-gray-900 rounded-lg p-3 text-center">
             {#if $gethStatus?.syncing}
               <Loader2 class="w-5 h-5 mx-auto text-yellow-500 mb-1 animate-spin" />
               <p class="text-lg font-semibold text-yellow-600">Syncing</p>
@@ -245,10 +245,10 @@
 
     <!-- Mining Card -->
     {#if $gethStatus?.running}
-      <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
-            <div class="p-2 {$miningStatus?.mining ? 'bg-yellow-100' : 'bg-gray-100'} rounded-lg">
+            <div class="p-2 {$miningStatus?.mining ? 'bg-yellow-100' : 'bg-gray-800'} rounded-lg">
               <Pickaxe class="w-6 h-6 {$miningStatus?.mining ? 'text-yellow-600' : 'text-gray-400'}" />
             </div>
             <div>
@@ -266,7 +266,7 @@
           {#if $miningStatus?.mining}
             <button
               onclick={handleStopMining}
-              class="px-4 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors flex items-center gap-2"
+              class="px-4 py-2 bg-red-500/10 text-red-600 rounded-lg hover:bg-red-500/15 transition-colors flex items-center gap-2"
             >
               <Square class="w-4 h-4" />
               Stop Mining
@@ -275,7 +275,7 @@
             <div class="flex items-center gap-2">
               <select
                 bind:value={miningThreads}
-                class="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                class="px-3 py-2 border border-cyan-500/20 rounded-lg text-sm"
               >
                 {#each [1, 2, 4, 8] as threads}
                   <option value={threads}>{threads} thread{threads > 1 ? 's' : ''}</option>
@@ -299,8 +299,8 @@
         </div>
 
         {#if $miningStatus?.mining}
-          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mt-4">
-            <div class="flex items-center gap-2 text-yellow-800">
+          <div class="bg-yellow-500/10 border border-yellow-200 rounded-lg p-3 mt-4">
+            <div class="flex items-center gap-2 text-yellow-400">
               <Cpu class="w-4 h-4" />
               <span class="text-sm">
                 Mining to: <span class="font-mono text-xs">{$miningStatus?.minerAddress || 'Not set'}</span>
@@ -308,8 +308,8 @@
             </div>
           </div>
         {:else if !$walletAccount}
-          <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 mt-4">
-            <p class="text-sm text-gray-600">
+          <div class="bg-gray-900 border border-cyan-500/20 rounded-lg p-3 mt-4">
+            <p class="text-sm text-gray-400">
               Connect your wallet on the Account page to start mining and earn CHI.
             </p>
           </div>

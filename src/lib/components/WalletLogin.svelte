@@ -59,18 +59,18 @@
 </script>
 
 <div class="max-w-2xl mx-auto p-6">
-  <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
+  <div class="bg-gray-900 rounded-lg border border-cyan-500/20 p-8">
     <div class="flex items-center mb-6">
-      <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
-        <ArrowLeft class="w-5 h-5 dark:text-gray-300" />
+      <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-800 rounded-lg transition">
+        <ArrowLeft class="w-5 h-5" />
       </button>
-      <h2 class="text-2xl font-bold dark:text-white">Use Existing Wallet</h2>
+      <h2 class="text-2xl font-bold">Use Existing Wallet</h2>
     </div>
 
     <div class="flex gap-3 mb-6">
       <button
         on:click={() => method = 'privateKey'}
-        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'privateKey' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
+        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'privateKey' ? 'bg-primary-600 text-white' : 'bg-gray-800 hover:bg-gray-700'}"
       >
         <KeyRound class="w-5 h-5" />
         <span>Private Key</span>
@@ -78,7 +78,7 @@
 
       <button
         on:click={() => method = 'mnemonic'}
-        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'mnemonic' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
+        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'mnemonic' ? 'bg-primary-600 text-white' : 'bg-gray-800 hover:bg-gray-700'}"
       >
         <FileText class="w-5 h-5" />
         <span>Recovery Phrase</span>
@@ -87,7 +87,7 @@
 
     {#if method === 'privateKey'}
       <div class="mb-6">
-        <label for="private-key-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+        <label for="private-key-input" class="block text-sm font-medium text-gray-300 mb-2">
           Private Key
         </label>
         <input
@@ -95,41 +95,41 @@
           type="password"
           bind:value={privateKeyInput}
           on:keydown={(e) => e.key === 'Enter' && handleLogin()}
-          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 dark:text-white"
+          class="w-full px-4 py-2 border border-cyan-500/20 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-gray-900"
           placeholder="Enter your private key (with or without 0x prefix)"
         />
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+        <p class="text-xs text-gray-500 mt-2">
           Your private key should be a 64-character hexadecimal string
         </p>
       </div>
     {:else}
       <div class="mb-6">
-        <label for="mnemonic-input" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+        <label for="mnemonic-input" class="block text-sm font-medium text-gray-300 mb-2">
           Recovery Phrase (12 words)
         </label>
         <textarea
           id="mnemonic-input"
           bind:value={mnemonicInput}
           rows="3"
-          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-white"
+          class="w-full px-4 py-2 border border-cyan-500/20 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-gray-900"
           placeholder="Enter your 12-word recovery phrase"
         ></textarea>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+        <p class="text-xs text-gray-500 mt-2">
           Enter all 12 words separated by spaces
         </p>
       </div>
     {/if}
 
     {#if error}
-      <div class="bg-red-50 dark:bg-red-900/30 border-l-4 border-red-400 dark:border-red-600 p-4 mb-6">
-        <p class="text-sm text-red-800 dark:text-red-200">{error}</p>
+      <div class="bg-red-500/10 border-l-4 border-red-400 p-4 mb-6">
+        <p class="text-sm text-red-400">{error}</p>
       </div>
     {/if}
 
     <div class="flex gap-3">
       <button
         on:click={onBack}
-        class="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
+        class="flex-1 px-6 py-3 border border-cyan-500/20 rounded-lg hover:bg-gray-900 transition"
       >
         Cancel
       </button>

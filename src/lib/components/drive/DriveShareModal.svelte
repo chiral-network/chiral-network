@@ -82,33 +82,33 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={onClose}>
   <div
-    class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6"
+    class="bg-gray-900/80 rounded-xl shadow-[0_0_30px_rgba(6,182,212,0.15)] w-full max-w-lg mx-4 p-6"
     onclick={(e) => e.stopPropagation()}
   >
     <div class="flex items-center justify-between mb-4">
-      <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Share "{item.name}"</h3>
-      <button onclick={onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
+      <h3 class="text-lg font-semibold text-gray-100">Share "{item.name}"</h3>
+      <button onclick={onClose} class="p-1 hover:bg-cyan-500/10 rounded-lg transition">
         <X class="w-5 h-5 text-gray-500" />
       </button>
     </div>
 
     {#if existingShares.length > 0}
-      <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg mb-4">
+      <div class="flex items-center justify-between p-3 bg-gray-800 rounded-lg mb-4">
         <div class="flex items-center gap-2">
           {#if isItemPublic}
             <Eye class="w-4 h-4 text-green-500" />
-            <span class="text-sm text-gray-700 dark:text-gray-300">Public — share links are active</span>
+            <span class="text-sm text-gray-300">Public — share links are active</span>
           {:else}
             <EyeOff class="w-4 h-4 text-orange-500" />
-            <span class="text-sm text-gray-700 dark:text-gray-300">Private — share links are blocked</span>
+            <span class="text-sm text-gray-300">Private — share links are blocked</span>
           {/if}
         </div>
         <button
           onclick={toggleVisibility}
           disabled={toggling}
           class="px-3 py-1.5 text-sm font-medium rounded-lg transition disabled:opacity-50 {isItemPublic
-            ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 hover:bg-orange-200 dark:hover:bg-orange-900/50'
-            : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 hover:bg-green-200 dark:hover:bg-green-900/50'}"
+            ? 'bg-orange-500/10 text-orange-400 hover:bg-orange-500/15'
+            : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15'}"
         >
           {isItemPublic ? 'Make Private' : 'Make Public'}
         </button>
@@ -116,9 +116,9 @@
     {/if}
 
     <div class="space-y-3 mb-6">
-      <p class="text-sm text-gray-600 dark:text-gray-400">
+      <p class="text-sm text-gray-400">
         {#if hasPrice}
-          Share at <strong class="text-emerald-600 dark:text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
+          Share at <strong class="text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
         {:else}
           Share for free. Use "Edit Price" from the right-click menu to set a price.
         {/if}
@@ -127,7 +127,7 @@
       <button
         onclick={createLink}
         disabled={creating}
-        class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
+        class="flex items-center gap-2 px-4 py-2 bg-cyan-600/80 hover:bg-cyan-500/90 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
       >
         {#if creating}
           <Loader2 class="w-4 h-4 animate-spin" />
@@ -139,17 +139,17 @@
       </button>
 
       {#if !isItemPublic}
-        <div class="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-          <p class="text-xs text-yellow-700 dark:text-yellow-300">
+        <div class="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+          <p class="text-xs text-yellow-400">
             This file is currently private. Share links won't work until you make it public.
           </p>
         </div>
       {/if}
 
       {#if justCreatedUrl}
-        <div class="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+        <div class="flex items-center gap-2 p-3 bg-emerald-500/10 border border-green-200 rounded-lg">
           <Check class="w-4 h-4 text-green-500 shrink-0" />
-          <code class="flex-1 text-xs font-mono text-green-800 dark:text-green-300 break-all select-all">{justCreatedUrl}</code>
+          <code class="flex-1 text-xs font-mono text-green-800 break-all select-all">{justCreatedUrl}</code>
           <button
             onclick={async () => {
               try {
@@ -159,25 +159,25 @@
                 toasts.show('Failed to copy', 'error');
               }
             }}
-            class="p-1.5 hover:bg-green-100 dark:hover:bg-green-800 rounded transition shrink-0"
+            class="p-1.5 hover:bg-emerald-500/10 rounded transition shrink-0"
             title="Copy link"
           >
-            <Copy class="w-4 h-4 text-green-600 dark:text-green-400" />
+            <Copy class="w-4 h-4 text-emerald-400" />
           </button>
         </div>
       {/if}
     </div>
 
     {#if existingShares.length > 0}
-      <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-        <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+      <div class="border-t border-cyan-500/20 pt-4">
+        <h4 class="text-sm font-medium text-gray-300 mb-3">
           Active Links ({existingShares.length})
         </h4>
         <div class="space-y-2 max-h-48 overflow-y-auto">
           {#each existingShares as share (share.id)}
-            <div class="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <div class="flex items-center gap-2 p-2 bg-gray-800 rounded-lg">
               <div class="flex-1 min-w-0">
-                <code class="text-xs text-gray-600 dark:text-gray-400 font-mono truncate block">
+                <code class="text-xs text-gray-400 font-mono truncate block">
                   {driveStore.getShareUrl(share.id)}
                 </code>
                 <div class="flex flex-wrap items-center gap-2 mt-0.5">
@@ -200,7 +200,7 @@
               </div>
               <button
                 onclick={() => copyUrl(share)}
-                class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition"
+                class="p-1.5 hover:bg-cyan-500/15 rounded transition"
                 title="Copy link"
               >
                 {#if copied === share.id}
@@ -211,7 +211,7 @@
               </button>
               <button
                 onclick={() => revokeLink(share)}
-                class="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded transition"
+                class="p-1.5 hover:bg-red-500/10 rounded transition"
                 title="Revoke link"
               >
                 <Trash2 class="w-4 h-4 text-red-500" />
@@ -222,11 +222,11 @@
       </div>
     {/if}
 
-    <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-      <p class="text-xs text-blue-700 dark:text-blue-300">
+    <div class="mt-4 p-3 bg-cyan-500/10 rounded-lg">
+      <p class="text-xs text-cyan-300">
         <strong>File:</strong> {item.name}
         {#if item.size}
-          <span class="ml-2 text-blue-500">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
+          <span class="ml-2 text-cyan-400">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
         {/if}
       </p>
     </div>

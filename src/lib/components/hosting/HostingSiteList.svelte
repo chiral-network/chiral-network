@@ -50,44 +50,44 @@
   }
 </script>
 
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
-  <h2 class="mb-4 text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-700/50">
-      <Globe class="h-3.5 w-3.5 text-gray-500 dark:text-gray-400" />
+<div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 p-5 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm">
+  <h2 class="mb-4 text-base font-semibold text-gray-100 flex items-center gap-2">
+    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-800">
+      <Globe class="h-3.5 w-3.5 text-gray-500" />
     </div>
     Hosted Sites
     {#if sites.length > 0}
-      <span class="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/40 dark:text-primary-300">
+      <span class="rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-cyan-300">
         {sites.length}
       </span>
     {/if}
   </h2>
 
   {#if sites.length === 0}
-    <div class="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-500">
-      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700/40 mb-4">
+    <div class="flex flex-col items-center justify-center py-16 text-gray-500">
+      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 mb-4">
         <Server class="h-8 w-8 opacity-40" />
       </div>
-      <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No hosted sites yet</p>
-      <p class="text-xs mt-1 text-gray-400 dark:text-gray-500">Create a site above to start hosting</p>
+      <p class="text-sm font-medium text-gray-500">No hosted sites yet</p>
+      <p class="text-xs mt-1 text-gray-500">Create a site above to start hosting</p>
     </div>
   {:else}
     <div class="space-y-3">
       {#each sites as site (site.id)}
-        <div class="group rounded-xl border border-gray-100 bg-gray-50/50 p-4 transition-all
-          hover:border-gray-200 hover:shadow-sm
-          dark:border-gray-700/50 dark:bg-gray-700/30 dark:hover:border-gray-600">
+        <div class="group rounded-xl border border-cyan-500/10 bg-gray-800 p-4 transition-all
+          hover:border-cyan-500/15 hover:shadow-[0_0_10px_rgba(6,182,212,0.05)]
+         /50">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
-                <h3 class="font-semibold text-gray-900 dark:text-white">{site.name}</h3>
+                <h3 class="font-semibold text-gray-100">{site.name}</h3>
                 {#if site.relayUrl}
-                  <span class="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold text-green-700 dark:bg-green-900/40 dark:text-green-300 uppercase tracking-wide">
+                  <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-green-400 uppercase tracking-wide">
                     <Check class="h-2.5 w-2.5" />
                     Published
                   </span>
                 {:else}
-                  <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-400 uppercase tracking-wide">
+                  <span class="inline-flex items-center rounded-full bg-gray-800 px-2 py-0.5 text-[10px] font-medium text-gray-500 text-gray-400 uppercase tracking-wide">
                     Local
                   </span>
                 {/if}
@@ -95,16 +95,16 @@
 
               <!-- URL -->
               <p class="mt-1 font-mono text-xs truncate
-                {site.relayUrl ? 'text-green-600 dark:text-green-400' : 'text-primary-600 dark:text-primary-400'}">
+                {site.relayUrl ? 'text-emerald-400' : 'text-cyan-400'}">
                 {site.relayUrl || siteUrl(site)}
               </p>
 
               <!-- Meta -->
-              <div class="mt-2 flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500">
+              <div class="mt-2 flex items-center gap-3 text-xs text-gray-500">
                 <span>{site.files.length} file{site.files.length === 1 ? '' : 's'}</span>
-                <span aria-hidden="true" class="text-gray-300 dark:text-gray-600">|</span>
+                <span aria-hidden="true" class="text-gray-300">|</span>
                 <span class="tabular-nums">{formatFileSize(totalSize(site.files))}</span>
-                <span aria-hidden="true" class="text-gray-300 dark:text-gray-600">|</span>
+                <span aria-hidden="true" class="text-gray-300">|</span>
                 <span>Created {timeAgo(site.createdAt)}</span>
               </div>
 
@@ -112,12 +112,12 @@
               {#if site.files.length > 0}
                 <div class="mt-2.5 flex flex-wrap gap-1.5">
                   {#each site.files.slice(0, 5) as file}
-                    <span class="rounded-md bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-600/50 dark:text-gray-400">
+                    <span class="rounded-md bg-gray-800 px-1.5 py-0.5 text-[10px] font-medium text-gray-500/50 text-gray-400">
                       {file.path}
                     </span>
                   {/each}
                   {#if site.files.length > 5}
-                    <span class="rounded-md bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-400 dark:bg-gray-600/50">
+                    <span class="rounded-md bg-gray-800 px-1.5 py-0.5 text-[10px] font-medium text-gray-400/50">
                       +{site.files.length - 5} more
                     </span>
                   {/if}
@@ -133,11 +133,11 @@
                   disabled={publishingStates[site.id]}
                   title="Unpublish from network"
                   aria-label="Unpublish {site.name} from network"
-                  class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-orange-50 hover:text-orange-500 dark:hover:bg-orange-900/30 dark:hover:text-orange-400
+                  class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-orange-50 hover:text-orange-500
                     focus:outline-none focus:ring-2 focus:ring-orange-400/30 disabled:opacity-50"
                 >
                   {#if publishingStates[site.id]}
-                    <div class="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-orange-500"></div>
+                    <div class="h-4 w-4 animate-spin rounded-full border-2 border-cyan-500/20 border-t-orange-500"></div>
                   {:else}
                     <CloudOff class="h-4 w-4" />
                   {/if}
@@ -148,11 +148,11 @@
                   disabled={publishingStates[site.id]}
                   title="Publish to network"
                   aria-label="Publish {site.name} to network"
-                  class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-green-50 hover:text-green-500 dark:hover:bg-green-900/30 dark:hover:text-green-400
+                  class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-emerald-500/10 hover:text-green-500
                     focus:outline-none focus:ring-2 focus:ring-green-400/30 disabled:opacity-50"
                 >
                   {#if publishingStates[site.id]}
-                    <div class="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-green-500"></div>
+                    <div class="h-4 w-4 animate-spin rounded-full border-2 border-cyan-500/20 border-t-green-500"></div>
                   {:else}
                     <Upload class="h-4 w-4" />
                   {/if}
@@ -163,8 +163,8 @@
                 onclick={() => onCopyUrl(site)}
                 title="Copy URL"
                 aria-label="Copy URL for {site.name}"
-                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600
-                  dark:hover:bg-gray-600/50 dark:hover:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-cyan-500/10 hover:text-gray-400
+                 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
               >
                 <Copy class="h-4 w-4" />
               </button>
@@ -172,8 +172,8 @@
                 onclick={() => onOpenSite(site)}
                 title="Open in browser"
                 aria-label="Open {site.name} in browser"
-                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-500
-                  dark:hover:bg-blue-900/30 dark:hover:text-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-cyan-500/10 hover:text-cyan-400
+                  focus:outline-none focus:ring-2 focus:ring-blue-400/30"
               >
                 <ExternalLink class="h-4 w-4" />
               </button>
@@ -181,8 +181,8 @@
                 onclick={() => onDeleteSite(site.id, site.name)}
                 title="Delete site"
                 aria-label="Delete {site.name}"
-                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500
-                  dark:hover:bg-red-900/30 dark:hover:text-red-400 focus:outline-none focus:ring-2 focus:ring-red-400/30"
+                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-red-500/10 hover:text-red-500
+                  focus:outline-none focus:ring-2 focus:ring-red-400/30"
               >
                 <Trash2 class="h-4 w-4" />
               </button>

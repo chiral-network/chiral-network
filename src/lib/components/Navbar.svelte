@@ -95,13 +95,13 @@
   const isMoreActive = $derived(moreItems.some(item => item.path === currentPage));
 </script>
 
-<nav class="sticky top-0 z-50 bg-white dark:bg-gray-800 shadow-md border-b border-gray-200 dark:border-gray-700">
+<nav class="sticky top-0 z-50 bg-gray-900/80 shadow-[0_0_15px_rgba(6,182,212,0.08)] border-b border-cyan-500/20">
   <div class="max-w-7xl mx-auto px-3 sm:px-4">
     <div class="flex items-center justify-between h-14 gap-2">
       <!-- Logo -->
       <div class="flex items-center gap-2 shrink-0">
         <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg" />
-        <span class="text-lg font-bold dark:text-white hidden sm:inline">Chiral Network</span>
+        <span class="text-lg font-bold text-gray-100 hidden sm:inline">Chiral Network</span>
       </div>
 
       <!-- Desktop nav: icon-only, all items (md to xl) -->
@@ -111,8 +111,8 @@
             onclick={() => navigate(item.path)}
             class="flex items-center px-2 py-1.5 rounded-lg transition text-sm
               {currentPage === item.path
-                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+                ? 'bg-cyan-500/10 text-cyan-400'
+                : 'text-gray-300 hover:bg-cyan-500/10'}"
             title={item.label}
           >
             <svelte:component this={item.icon} class="w-4 h-4" />
@@ -127,8 +127,8 @@
             onclick={() => navigate(item.path)}
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap
               {currentPage === item.path
-                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+                ? 'bg-cyan-500/10 text-cyan-400'
+                : 'text-gray-300 hover:bg-cyan-500/10'}"
             title={item.label}
           >
             <svelte:component this={item.icon} class="w-4 h-4 shrink-0" />
@@ -143,8 +143,8 @@
               onclick={() => moreMenuOpen = !moreMenuOpen}
               class="flex items-center gap-1 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap
                 {isMoreActive
-                  ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+                  ? 'bg-cyan-500/10 text-cyan-400'
+                  : 'text-gray-300 hover:bg-cyan-500/10'}"
               title="More"
             >
               <span class="font-medium">More</span>
@@ -153,7 +153,7 @@
 
             {#if moreMenuOpen}
               <div
-                class="fixed w-48 overflow-y-auto bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50"
+                class="fixed w-48 overflow-y-auto bg-gray-900/80 rounded-lg shadow-[0_0_20px_rgba(6,182,212,0.1)] border border-cyan-500/20 py-1 z-50"
                 style="left: {moreMenuLeft}px; top: {moreMenuTop}px; max-height: {moreMenuMaxHeight}px;"
               >
                 {#each moreItems as item}
@@ -161,8 +161,8 @@
                     onclick={() => navigate(item.path)}
                     class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition
                       {currentPage === item.path
-                        ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                        : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+                        ? 'bg-cyan-500/10 text-cyan-400'
+                        : 'text-gray-300 hover:bg-cyan-500/10'}"
                   >
                     <svelte:component this={item.icon} class="w-4 h-4" />
                     <span class="font-medium">{item.label}</span>
@@ -178,7 +178,7 @@
       <div class="flex items-center gap-2 sm:gap-3 shrink-0">
         <button
           onclick={handleLogout}
-          class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
+          class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-gray-300 hover:bg-cyan-500/10 rounded-lg transition text-sm"
           title="Logout"
         >
           <LogOut class="w-4 h-4" />
@@ -187,13 +187,13 @@
 
         <div class="flex items-center gap-1.5 px-2 py-1 rounded-full
           {$networkConnected
-            ? 'bg-green-50 dark:bg-green-900/30'
-            : 'bg-red-50 dark:bg-red-900/30'}">
-          <div class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500' : 'bg-red-500'}"></div>
+            ? 'bg-emerald-500/10'
+            : 'bg-red-500/10'}">
+          <div class="w-2 h-2 rounded-full {$networkConnected ? 'bg-emerald-500' : 'bg-red-500/100'}"></div>
           <span class="text-xs font-medium hidden sm:inline
             {$networkConnected
-              ? 'text-green-700 dark:text-green-400'
-              : 'text-red-700 dark:text-red-400'}">
+              ? 'text-emerald-400'
+              : 'text-red-400'}">
             {$networkConnected ? 'Connected' : 'Offline'}
           </span>
         </div>
@@ -201,7 +201,7 @@
         <!-- Mobile hamburger -->
         <button
           onclick={() => mobileMenuOpen = !mobileMenuOpen}
-          class="md:hidden p-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
+          class="md:hidden p-1.5 text-gray-300 hover:bg-cyan-500/10 rounded-lg transition"
         >
           {#if mobileMenuOpen}
             <X class="w-5 h-5" />
@@ -215,24 +215,24 @@
 
   <!-- Mobile menu dropdown -->
   {#if mobileMenuOpen}
-    <div class="md:hidden border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 max-h-[calc(100vh-3.5rem)] overflow-y-auto">
+    <div class="md:hidden border-t border-cyan-500/20 bg-gray-900/80 max-h-[calc(100vh-3.5rem)] overflow-y-auto">
       <div class="px-3 py-2 space-y-1">
         {#each navItems as item}
           <button
             onclick={() => navigate(item.path)}
             class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm
               {currentPage === item.path
-                ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400'
-                : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+                ? 'bg-cyan-500/10 text-cyan-400'
+                : 'text-gray-300 hover:bg-cyan-500/10'}"
           >
             <svelte:component this={item.icon} class="w-4 h-4" />
             <span class="font-medium">{item.label}</span>
           </button>
         {/each}
-        <hr class="border-gray-200 dark:border-gray-700" />
+        <hr class="border-cyan-500/20" />
         <button
           onclick={handleLogout}
-          class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
+          class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-300 hover:bg-cyan-500/10 rounded-lg transition text-sm"
         >
           <LogOut class="w-4 h-4" />
           <span class="font-medium">Logout</span>

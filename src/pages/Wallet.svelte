@@ -25,28 +25,28 @@
 <svelte:head><title>Chiral Network</title></svelte:head>
 
 {#if mode === 'select'}
-  <div class="flex items-center justify-center min-h-screen bg-white dark:bg-gray-950 p-6">
+  <div class="flex items-center justify-center min-h-screen bg-black p-6">
     <div class="max-w-md w-full">
       <!-- Logo and title -->
       <div class="text-center mb-10">
         <div class="inline-flex items-center justify-center w-20 h-20 mb-6">
-          <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-shadow-lg" />
+          <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-shadow-[0_0_20px_rgba(6,182,212,0.1)]" />
         </div>
-        <h1 class="text-4xl font-bold text-gray-900 dark:text-white mb-3">
+        <h1 class="text-4xl font-bold text-gray-100 mb-3">
           Chiral Network
         </h1>
-        <p class="text-lg text-gray-500 dark:text-gray-400">Decentralized File Sharing Network</p>
+        <p class="text-lg text-gray-500">Decentralized File Sharing Network</p>
       </div>
 
       <!-- Card -->
-      <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-8 shadow-lg">
-        <h2 class="text-2xl font-semibold text-gray-900 dark:text-white mb-6">Get Started</h2>
+      <div class="bg-gray-900/80 border border-cyan-500/20 rounded-2xl p-8 shadow-[0_0_20px_rgba(6,182,212,0.1)]">
+        <h2 class="text-2xl font-semibold text-gray-100 mb-6">Get Started</h2>
 
         <button
           onclick={handleCreateWallet}
-          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-xl transition-all shadow-[0_0_10px_rgba(6,182,212,0.05)] focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         >
-          <div class="flex-shrink-0 mt-0.5 p-2 bg-white/20 rounded-lg">
+          <div class="flex-shrink-0 mt-0.5 p-2 bg-cyan-500/15 rounded-lg">
             <Plus class="w-5 h-5" />
           </div>
           <div class="text-left">
@@ -57,25 +57,25 @@
 
         <button
           onclick={handleUseExisting}
-          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+          class="w-full flex items-start gap-4 px-5 py-4 border border-cyan-500/20 bg-gray-800 hover:bg-cyan-500/10 text-gray-100 rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         >
-          <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-200 dark:bg-gray-600 rounded-lg">
+          <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-700 rounded-lg">
             <KeyRound class="w-5 h-5" />
           </div>
           <div class="text-left">
             <span class="block font-semibold text-base">Import Existing Wallet</span>
-            <span class="block text-sm text-gray-500 dark:text-gray-400 mt-0.5">Use your private key or recovery phrase</span>
+            <span class="block text-sm text-gray-500 mt-0.5">Use your private key or recovery phrase</span>
           </div>
         </button>
       </div>
     </div>
   </div>
 {:else if mode === 'create'}
-  <div class="min-h-screen bg-white dark:bg-gray-950 py-12">
+  <div class="min-h-screen bg-black py-12">
     <WalletCreation onBack={handleBack} onComplete={handleComplete} />
   </div>
 {:else if mode === 'login'}
-  <div class="min-h-screen bg-white dark:bg-gray-950 py-12">
+  <div class="min-h-screen bg-black py-12">
     <WalletLogin onBack={handleBack} onComplete={handleComplete} />
   </div>
 {/if}

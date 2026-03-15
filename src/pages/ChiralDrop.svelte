@@ -557,8 +557,8 @@
       case 'failed': return 'text-red-600';
       case 'declined': return 'text-gray-500';
       case 'pending': return 'text-yellow-600';
-      case 'accepted': return 'text-blue-600';
-      default: return 'text-gray-600';
+      case 'accepted': return 'text-cyan-400';
+      default: return 'text-gray-400';
     }
   }
 </script>
@@ -569,24 +569,24 @@
   <!-- Header -->
   <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
     <div class="space-y-1">
-      <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">ChiralDrop</h1>
-      <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400">
+      <h1 class="text-2xl font-bold tracking-tight text-gray-100">ChiralDrop</h1>
+      <p class="text-sm sm:text-base text-gray-400">
         Your alias:
         <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-      <div class="inline-flex items-center rounded-full border border-primary-200/70 bg-primary-50/80 px-3 py-1 text-xs font-medium text-primary-700 dark:border-primary-800/60 dark:bg-primary-900/30 dark:text-primary-300">
+      <div class="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-300">
         {$nearbyPeers.length} peers online
       </div>
       {#if $incomingPendingTransfers.length > 0}
-        <div class="inline-flex items-center rounded-full border border-amber-200/70 bg-amber-50/80 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/30 dark:text-amber-300">
+        <div class="inline-flex items-center rounded-full border border-amber-500/20 bg-amber-900/20 px-3 py-1 text-xs font-medium text-amber-400">
           {$incomingPendingTransfers.length} pending request{$incomingPendingTransfers.length === 1 ? '' : 's'}
         </div>
       {/if}
       <button
         onclick={() => showHistory = !showHistory}
-        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+        class="inline-flex items-center gap-2 rounded-xl border border-cyan-500/15 bg-gray-900 px-4 py-2 text-sm font-medium text-gray-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] transition hover:bg-cyan-500/5 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 text-gray-300"
       >
         <History class="h-4 w-4" />
         <span>{showHistory ? 'Hide History' : 'Show History'}</span>
@@ -600,18 +600,18 @@
   >
     <!-- Peer Map -->
     <div
-      class="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800 min-h-[22rem] xl:min-h-0"
+      class="relative overflow-hidden rounded-2xl border border-cyan-500/15 bg-gray-900 shadow-[0_0_10px_rgba(6,182,212,0.05)] min-h-[22rem] xl:min-h-0"
       style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` : ''}
     >
-      <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-primary-50/70 to-cyan-50/60 dark:from-slate-900 dark:via-gray-900 dark:to-primary-950/50"></div>
-      <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-primary-300/25 blur-3xl dark:bg-primary-500/20"></div>
-      <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20"></div>
-      <div class="network-dot-grid absolute inset-0 opacity-45 dark:opacity-30"></div>
+      <div class="absolute inset-0 bg-gray-950"></div>
+      <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-cyan-500/5 blur-3xl"></div>
+      <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-500/5 blur-3xl"></div>
+      <div class="network-dot-grid absolute inset-0 opacity-30"></div>
 
-      <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-200 dark:ring-gray-700">
+      <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-gray-900/90 px-3 py-1 text-xs font-semibold text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
         Live Peer Mesh
       </div>
-      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs text-slate-600 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-300 dark:ring-gray-700">
+      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-gray-900/85 px-3 py-1 text-xs text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
         {$nearbyPeers.length} discovered
       </div>
 
@@ -622,14 +622,14 @@
           <span class="user-wave user-wave-2"></span>
           <span class="user-wave user-wave-3"></span>
         </div>
-        <span class="absolute -inset-4 rounded-full bg-primary-400/25 blur-xl dark:bg-primary-500/20"></span>
+        <span class="absolute -inset-4 rounded-full bg-cyan-500/15 blur-xl/20"></span>
         <div
-          class="relative h-16 w-16 rounded-full border-4 border-white shadow-xl ring-4 ring-primary-200/60 dark:border-gray-700 dark:ring-primary-900/60 flex items-center justify-center"
+          class="relative h-16 w-16 rounded-full border-4 border-cyan-500/30 shadow-[0_0_25px_rgba(6,182,212,0.12)] ring-4 ring-cyan-500/20 flex items-center justify-center"
           style="background-color: {$userAlias.colorHex}"
         >
           <User class="h-8 w-8 text-white" />
         </div>
-        <span class="mt-2 rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm ring-1 ring-gray-200 backdrop-blur dark:bg-gray-700/80 dark:text-gray-100 dark:ring-gray-600">
+        <span class="mt-2 rounded-full bg-gray-900/90 px-3 py-1 text-xs font-semibold text-gray-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
           You
         </span>
       </div>
@@ -638,18 +638,18 @@
       {#each $nearbyPeers as peer (peer.peerId)}
         <button
           onclick={() => handlePeerClick(peer)}
-          class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2"
+          class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2"
           style="left: {peer.position.x}%; top: {peer.position.y}%; transform: translate(-50%, -50%);"
         >
-          <span class="peer-glow absolute inset-0 rounded-full bg-primary-400/20 blur-md dark:bg-primary-500/20"></span>
+          <span class="peer-glow absolute inset-0 rounded-full bg-cyan-500/10 blur-md/20"></span>
           <div class="relative z-10 flex flex-col items-center">
             <div
-              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-md transition-transform duration-200 group-hover:scale-110 dark:border-gray-700 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-primary-300/60 dark:ring-primary-900/70' : ''}"
+              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-transform duration-200 group-hover:scale-110 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-cyan-500/30' : ''}"
               style="background-color: {peer.alias.colorHex}"
             >
               <User class="h-6 w-6 text-white" />
             </div>
-            <span class="mt-1 whitespace-nowrap rounded-full bg-white/90 px-2 py-0.5 text-xs font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 backdrop-blur dark:bg-gray-700/80 dark:text-gray-100 dark:ring-gray-600">
+            <span class="mt-1 whitespace-nowrap rounded-full bg-gray-900/90 px-2 py-0.5 text-xs font-medium text-gray-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
               {peer.alias.displayName}
             </span>
           </div>
@@ -659,12 +659,12 @@
       <!-- Empty state -->
       {#if $nearbyPeers.length === 0}
         <div class="absolute inset-0 flex items-center justify-center p-6">
-          <div class="max-w-sm rounded-2xl border border-white/70 bg-white/75 p-6 text-center shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-900/75">
-            <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-gray-700 dark:text-gray-300">
+          <div class="max-w-sm rounded-2xl border border-cyan-500/30 bg-gray-900/75 p-6 text-center shadow-[0_0_20px_rgba(6,182,212,0.1)] backdrop-blur">
+            <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800 text-gray-400 text-gray-300">
               <User class="h-6 w-6" />
             </div>
-            <p class="text-lg font-semibold text-gray-800 dark:text-gray-100">No nearby users found</p>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Connect to the network to discover peers</p>
+            <p class="text-lg font-semibold text-gray-200">No nearby users found</p>
+            <p class="mt-1 text-sm text-gray-500">Connect to the network to discover peers</p>
           </div>
         </div>
       {/if}
@@ -677,33 +677,33 @@
       aria-label="Resize map and side panel"
       title="Drag to resize panels"
     >
-      <span class="h-full w-px bg-gray-300 dark:bg-gray-600"></span>
-      <span class="absolute h-20 w-1.5 rounded-full bg-gray-300/80 transition group-hover:bg-primary-400 dark:bg-gray-600 dark:group-hover:bg-primary-500"></span>
+      <span class="h-full w-px bg-gray-300"></span>
+      <span class="absolute h-20 w-1.5 rounded-full bg-gray-300/80 transition group-hover:bg-primary-400/100"></span>
     </button>
 
     <!-- Side Panel -->
     <div class="flex min-h-0 flex-col gap-4 xl:flex-1">
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
-        <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-800/85">
-          <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Incoming Transfers</h3>
+        <div class="rounded-2xl border border-amber-500/20 bg-gray-900/90 p-4 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm">
+          <h3 class="mb-3 font-semibold text-gray-100">Incoming Transfers</h3>
           <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
-              <div class="rounded-xl border border-amber-100 bg-amber-50/60 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+              <div class="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
                 <div class="flex items-start gap-3">
                   <div
-                    class="h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm"
+                    class="h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-[0_0_10px_rgba(6,182,212,0.05)]"
                     style="background-color: {transfer.fromAlias.colorHex}"
                   >
                     <User class="h-4 w-4 text-white" />
                   </div>
                   <div class="min-w-0 flex-1">
-                    <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{transfer.fileName}</p>
-                    <p class="text-xs text-gray-600 dark:text-gray-400">
+                    <p class="truncate text-sm font-medium text-gray-100">{transfer.fileName}</p>
+                    <p class="text-xs text-gray-400">
                       From {transfer.fromAlias.displayName} - {formatFileSize(transfer.fileSize)}
                     </p>
                     {#if transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0}
-                      <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                      <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-400">
                         <Coins class="h-3 w-3" />
                         {formatPriceWei(transfer.priceWei)}
                       </span>
@@ -740,30 +740,30 @@
 
       <!-- Selected Peer Panel -->
       {#if $selectedPeer}
-        <div class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="rounded-2xl border border-cyan-500/15 bg-gray-900 p-4 shadow-[0_0_10px_rgba(6,182,212,0.05)]">
           <div class="mb-4 flex items-center justify-between">
-            <h3 class="font-semibold text-gray-900 dark:text-white">Send to Peer</h3>
+            <h3 class="font-semibold text-gray-100">Send to Peer</h3>
             <button
               onclick={() => selectPeer(null)}
-              class="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-gray-700"
+              class="rounded-lg p-1 transition hover:bg-cyan-500/10"
             >
-              <X class="h-4 w-4 text-gray-500 dark:text-gray-400" />
+              <X class="h-4 w-4 text-gray-500" />
             </button>
           </div>
-          <div class="mb-4 flex items-center gap-3 rounded-xl bg-gray-50 p-3 dark:bg-gray-700/70">
+          <div class="mb-4 flex items-center gap-3 rounded-xl bg-gray-800 p-3/70">
             <div
-              class="h-12 w-12 rounded-full flex items-center justify-center shadow-sm"
+              class="h-12 w-12 rounded-full flex items-center justify-center shadow-[0_0_10px_rgba(6,182,212,0.05)]"
               style="background-color: {$selectedPeer.alias.colorHex}"
             >
               <User class="h-6 w-6 text-white" />
             </div>
             <div class="min-w-0">
-              <p class="truncate font-medium text-gray-900 dark:text-white">{$selectedPeer.alias.displayName}</p>
-              <p class="truncate text-xs text-gray-500 dark:text-gray-400">{$selectedPeer.peerId}</p>
+              <p class="truncate font-medium text-gray-100">{$selectedPeer.alias.displayName}</p>
+              <p class="truncate text-xs text-gray-500">{$selectedPeer.peerId}</p>
             </div>
           </div>
           <div class="mb-3">
-            <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+            <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-gray-500">
               Price (CHI) — leave empty for free
             </label>
             <div class="flex items-center gap-2">
@@ -775,7 +775,7 @@
                 min="0"
                 placeholder="0 (free)"
                 bind:value={sendPrice}
-                class="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:focus:border-primary-500 dark:focus:ring-primary-900/50"
+                class="flex-1 rounded-lg border border-cyan-500/15 bg-gray-800 px-3 py-2 text-sm text-gray-100 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30 text-gray-100 "
               />
             </div>
             {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -784,7 +784,7 @@
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            class="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-600/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />
@@ -793,43 +793,43 @@
           </button>
         </div>
       {:else}
-        <div class="rounded-2xl border border-dashed border-gray-300 bg-white/80 p-5 text-center shadow-sm dark:border-gray-700 dark:bg-gray-800/85">
-          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
+        <div class="rounded-2xl border border-dashed border-cyan-500/20 bg-gray-900/80 p-5 text-center shadow-[0_0_10px_rgba(6,182,212,0.05)]/85">
+          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800">
             <Upload class="h-6 w-6 text-gray-400" />
           </div>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Select a nearby user to start a transfer</p>
+          <p class="text-sm text-gray-400">Select a nearby user to start a transfer</p>
         </div>
       {/if}
 
       <!-- Transaction History -->
       {#if showHistory}
-        <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Transaction History</h3>
+        <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-cyan-500/15 bg-gray-900 p-4 shadow-[0_0_10px_rgba(6,182,212,0.05)]">
+          <h3 class="mb-3 font-semibold text-gray-100">Transaction History</h3>
           <div class="flex-1 space-y-2 overflow-y-auto pr-1">
             {#if $transferHistory.length === 0}
-              <p class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">No transfers yet</p>
+              <p class="py-4 text-center text-sm text-gray-500">No transfers yet</p>
             {:else}
               {#each $transferHistory as transfer (transfer.id)}
-                <div class="rounded-xl border border-gray-100 bg-gray-50/80 p-3 dark:border-gray-700 dark:bg-gray-700/60">
+                <div class="rounded-xl border border-cyan-500/10 bg-gray-800 p-3/60">
                   <div class="flex items-start gap-2.5">
                     <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
                     <div class="min-w-0 flex-1">
-                      <p class="truncate text-sm font-medium text-gray-900 dark:text-white">{transfer.fileName}</p>
-                      <p class="text-xs text-gray-500 dark:text-gray-400">
+                      <p class="truncate text-sm font-medium text-gray-100">{transfer.fileName}</p>
+                      <p class="text-xs text-gray-500">
                         {transfer.direction === 'incoming' ? 'From' : 'To'} {transfer.direction === 'incoming' ? transfer.fromAlias.displayName : transfer.toAlias.displayName}
                       </p>
                       <div class="mt-1 flex items-center gap-2">
                         <span class="text-xs capitalize {getStatusColor(transfer.status)}">{transfer.status}</span>
                         <span class="text-xs text-gray-400">{formatFileSize(transfer.fileSize)}</span>
                         {#if transfer.priceWei && transfer.priceWei !== '0'}
-                          <span class="text-xs text-amber-600 dark:text-amber-400">{formatPriceWei(transfer.priceWei)}</span>
+                          <span class="text-xs text-amber-400">{formatPriceWei(transfer.priceWei)}</span>
                         {/if}
                       </div>
                       {#if transfer.paymentTxHash}
                         <p class="mt-1 truncate font-mono text-xs text-gray-400" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
                       {/if}
                       {#if transfer.balanceBefore && transfer.balanceAfter}
-                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        <p class="mt-1 text-xs text-gray-500">
                           {transfer.balanceBefore} → {transfer.balanceAfter} CHI
                         </p>
                       {/if}
@@ -848,7 +848,7 @@
 
 <style>
   .network-dot-grid {
-    background-image: radial-gradient(rgba(148, 163, 184, 0.45) 1px, transparent 1px);
+    background-image: radial-gradient(rgba(6, 182, 212, 0.15) 1px, transparent 1px);
     background-size: 22px 22px;
     mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0.2) 75%, rgba(0, 0, 0, 0));
   }
@@ -868,7 +868,7 @@
     width: 64px;
     height: 64px;
     border-radius: 9999px;
-    border: 2px solid rgba(59, 130, 246, 0.45);
+    border: 2px solid rgba(6, 182, 212, 0.35);
     transform: translate(-50%, -50%);
     animation: userWavePulse 4s ease-out infinite;
     pointer-events: none;

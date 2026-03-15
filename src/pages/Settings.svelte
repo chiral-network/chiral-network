@@ -132,25 +132,25 @@
 
 <div class="p-4 sm:p-6 max-w-6xl mx-auto">
   <div class="mb-6">
-    <h1 class="text-2xl font-bold dark:text-white">Settings</h1>
-    <p class="text-gray-600 dark:text-gray-400 mt-1">Customize your Chiral Network experience</p>
+    <h1 class="text-2xl font-bold text-gray-100">Settings</h1>
+    <p class="text-gray-400 mt-1">Customize your Chiral Network experience</p>
   </div>
 
   <!-- Appearance Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
     <div class="flex items-center gap-3 mb-6">
-      <div class="p-2 bg-purple-100 dark:bg-purple-900 rounded-lg">
-        <Palette class="w-5 h-5 text-purple-600 dark:text-purple-400" />
+      <div class="p-2 bg-purple-500/10 rounded-lg">
+        <Palette class="w-5 h-5 text-purple-400" />
       </div>
       <div>
-        <h2 class="font-semibold text-lg dark:text-white">Appearance</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Customize how the app looks</p>
+        <h2 class="font-semibold text-lg text-gray-100">Appearance</h2>
+        <p class="text-sm text-gray-500">Customize how the app looks</p>
       </div>
     </div>
 
     <!-- Theme Selection -->
     <div class="mb-6">
-      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Theme</span>
+      <span class="block text-sm font-medium text-gray-300 mb-3">Theme</span>
       <div class="grid grid-cols-3 gap-3">
         {#each themeOptions as option}
           {@const Icon = option.icon}
@@ -158,22 +158,22 @@
             onclick={() => setTheme(option.value)}
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.theme === option.value
-                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
-                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
+                ? 'border-cyan-500/40 bg-cyan-500/10'
+                : 'border-cyan-500/20 hover:border-cyan-500/20 bg-gray-800'}"
           >
             {#if $settings.theme === option.value}
               <div class="absolute top-2 right-2">
-                <Check class="w-4 h-4 text-primary-500" />
+                <Check class="w-4 h-4 text-cyan-400" />
               </div>
             {/if}
-            <Icon class="w-6 h-6 {$settings.theme === option.value ? 'text-primary-500' : 'text-gray-500 dark:text-gray-400'}" />
-            <span class="text-sm font-medium {$settings.theme === option.value ? 'text-primary-700 dark:text-primary-300' : 'text-gray-700 dark:text-gray-300'}">
+            <Icon class="w-6 h-6 {$settings.theme === option.value ? 'text-cyan-400' : 'text-gray-500'}" />
+            <span class="text-sm font-medium {$settings.theme === option.value ? 'text-cyan-300' : 'text-gray-300'}">
               {option.label}
             </span>
           </button>
         {/each}
       </div>
-      <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+      <p class="text-xs text-gray-500 mt-2">
         {#if $settings.theme === 'system'}
           Currently using {$isDarkMode ? 'dark' : 'light'} mode based on your system preference
         {:else}
@@ -184,14 +184,14 @@
 
     <!-- Accent Color -->
     <div class="mb-6">
-      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Accent Color</span>
+      <span class="block text-sm font-medium text-gray-300 mb-3">Accent Color</span>
       <div class="flex gap-3">
         {#each availableThemes as ct}
           <button
             onclick={() => setColorTheme(ct.value)}
             class="relative w-10 h-10 rounded-full transition-all
               {$settings.colorTheme === ct.value
-                ? 'scale-110 ring-2 ring-offset-2 ring-gray-400 dark:ring-gray-500 dark:ring-offset-gray-800'
+                ? 'scale-110 ring-2 ring-offset-2 ring-cyan-500/30gray-800'
                 : 'hover:scale-105'}"
             style="background-color: {ct.previewHex}"
             title={ct.label}
@@ -206,32 +206,32 @@
     </div>
 
     <!-- Compact Mode -->
-    <div class="flex items-center justify-between py-4 border-t border-gray-200 dark:border-gray-700">
+    <div class="flex items-center justify-between py-4 border-t border-cyan-500/20">
       <div class="flex items-center gap-3">
-        <LayoutGrid class="w-5 h-5 text-gray-500 dark:text-gray-400" />
+        <LayoutGrid class="w-5 h-5 text-gray-500" />
         <div>
-          <p class="font-medium text-gray-900 dark:text-white">Compact Mode</p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Use smaller spacing and font sizes</p>
+          <p class="font-medium text-gray-100">Compact Mode</p>
+          <p class="text-sm text-gray-500">Use smaller spacing and font sizes</p>
         </div>
       </div>
       <button
         onclick={toggleCompactMode}
         class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.compactMode ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+          {$settings.compactMode ? 'bg-cyan-500' : 'bg-gray-300'}"
         role="switch"
         aria-checked={$settings.compactMode}
         aria-label="Toggle compact mode"
       >
         <span
-          class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
+          class="absolute top-0.5 left-0.5 w-5 h-5 bg-gray-900 rounded-full shadow transition-transform
             {$settings.compactMode ? 'translate-x-6' : 'translate-x-0'}"
         ></span>
       </button>
     </div>
 
     <!-- Navigation Style -->
-    <div class="py-4 border-t border-gray-200 dark:border-gray-700">
-      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Navigation Style</span>
+    <div class="py-4 border-t border-cyan-500/20">
+      <span class="block text-sm font-medium text-gray-300 mb-3">Navigation Style</span>
       <div class="grid grid-cols-2 gap-3">
         {#each navStyleOptions as option}
           {@const Icon = option.icon}
@@ -239,16 +239,16 @@
             onclick={() => setNavStyle(option.value)}
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.navStyle === option.value
-                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
-                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
+                ? 'border-cyan-500/40 bg-cyan-500/10'
+                : 'border-cyan-500/20 hover:border-cyan-500/20 bg-gray-800'}"
           >
             {#if $settings.navStyle === option.value}
               <div class="absolute top-2 right-2">
-                <Check class="w-4 h-4 text-primary-500" />
+                <Check class="w-4 h-4 text-cyan-400" />
               </div>
             {/if}
-            <Icon class="w-6 h-6 {$settings.navStyle === option.value ? 'text-primary-500' : 'text-gray-500 dark:text-gray-400'}" />
-            <span class="text-sm font-medium {$settings.navStyle === option.value ? 'text-primary-700 dark:text-primary-300' : 'text-gray-700 dark:text-gray-300'}">
+            <Icon class="w-6 h-6 {$settings.navStyle === option.value ? 'text-cyan-400' : 'text-gray-500'}" />
+            <span class="text-sm font-medium {$settings.navStyle === option.value ? 'text-cyan-300' : 'text-gray-300'}">
               {option.label}
             </span>
           </button>
@@ -257,24 +257,24 @@
     </div>
 
     <!-- Preview -->
-    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
-      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Preview</span>
-      <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
+    <div class="pt-4 border-t border-cyan-500/20">
+      <span class="block text-sm font-medium text-gray-300 mb-3">Preview</span>
+      <div class="p-4 rounded-lg bg-gray-950 border border-cyan-500/20">
         <div class="flex items-center gap-3 mb-3">
-          <div class="w-10 h-10 rounded-full bg-primary-500"></div>
+          <div class="w-10 h-10 rounded-full bg-cyan-500"></div>
           <div>
-            <p class="font-medium text-gray-900 dark:text-white">Sample User</p>
-            <p class="text-sm text-gray-500 dark:text-gray-400">0x1234...5678</p>
+            <p class="font-medium text-gray-100">Sample User</p>
+            <p class="text-sm text-gray-500">0x1234...5678</p>
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
-          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-            <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
-            <p class="text-lg font-bold text-gray-900 dark:text-white tabular-nums">100.00 CHI</p>
+          <div class="p-3 rounded-lg bg-gray-900/80 border border-cyan-500/20">
+            <p class="text-xs text-gray-500">Balance</p>
+            <p class="text-lg font-bold text-gray-100 tabular-nums">100.00 CHI</p>
           </div>
-          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
-            <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>
-            <p class="text-lg font-bold text-gray-900 dark:text-white">12</p>
+          <div class="p-3 rounded-lg bg-gray-900/80 border border-cyan-500/20">
+            <p class="text-xs text-gray-500">Peers</p>
+            <p class="text-lg font-bold text-gray-100">12</p>
           </div>
         </div>
       </div>
@@ -283,44 +283,44 @@
 
   <!-- Storage Section -->
   {#if isTauri}
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
       <div class="flex items-center gap-3 mb-6">
-        <div class="p-2 bg-primary-100 dark:bg-primary-900 rounded-lg">
-          <HardDrive class="w-5 h-5 text-primary-600 dark:text-primary-400" />
+        <div class="p-2 bg-cyan-500/10 rounded-lg">
+          <HardDrive class="w-5 h-5 text-cyan-400" />
         </div>
         <div>
-          <h2 class="font-semibold text-lg dark:text-white">Storage</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Configure where downloaded files are saved</p>
+          <h2 class="font-semibold text-lg text-gray-100">Storage</h2>
+          <p class="text-sm text-gray-500">Configure where downloaded files are saved</p>
         </div>
       </div>
 
       <!-- Download Directory -->
       <div>
-        <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Download Directory</span>
+        <span class="block text-sm font-medium text-gray-300 mb-2">Download Directory</span>
         <div class="flex items-center gap-3">
-          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-800 border border-cyan-500/20 rounded-lg">
             <FolderOpen class="w-4 h-4 text-gray-400 flex-shrink-0" />
-            <span class="text-sm text-gray-700 dark:text-gray-300 truncate font-mono">
+            <span class="text-sm text-gray-300 truncate font-mono">
               {displayDownloadDir || 'Loading...'}
             </span>
           </div>
           <button
             onclick={browseDownloadDirectory}
-            class="px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            class="px-4 py-2.5 bg-cyan-600/80 text-white text-sm font-medium rounded-lg hover:bg-cyan-500/90 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             Browse
           </button>
           {#if $settings.downloadDirectory}
             <button
               onclick={resetDownloadDirectory}
-              class="p-2.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors flex-shrink-0"
+              class="p-2.5 text-gray-400 hover:text-red-500 transition-colors flex-shrink-0"
               title="Reset to system default"
             >
               <X class="w-4 h-4" />
             </button>
           {/if}
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+        <p class="text-xs text-gray-500 mt-2">
           {#if $settings.downloadDirectory}
             Using custom directory
           {:else}
@@ -332,14 +332,14 @@
   {/if}
 
   <!-- Notification Settings Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
     <div class="flex items-center gap-3 mb-4">
-      <div class="p-2 bg-amber-100 dark:bg-amber-900 rounded-lg">
-        <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
+      <div class="p-2 bg-amber-500/10 rounded-lg">
+        <Bell class="w-5 h-5 text-amber-400" />
       </div>
       <div>
-        <h2 class="font-semibold text-lg dark:text-white">Notifications</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Toggle which toast notifications to show</p>
+        <h2 class="font-semibold text-lg text-gray-100">Notifications</h2>
+        <p class="text-sm text-gray-500">Toggle which toast notifications to show</p>
       </div>
     </div>
 
@@ -347,16 +347,16 @@
       {#each notificationOptions as option}
         <button
           onclick={() => toggleNotification(option.key)}
-          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
+          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-cyan-500/5 transition-colors group"
           role="switch"
           aria-checked={$settings.notifications?.[option.key] ?? true}
           title={option.description}
         >
-          <span class="text-sm text-gray-700 dark:text-gray-300 text-left">{option.label}</span>
+          <span class="text-sm text-gray-300 text-left">{option.label}</span>
           <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
-            {$settings.notifications?.[option.key] ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}">
+            {$settings.notifications?.[option.key] ? 'bg-cyan-500' : 'bg-gray-300'}">
             <span
-              class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform
+              class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-900 rounded-full shadow transition-transform
                 {$settings.notifications?.[option.key] ? 'translate-x-4' : 'translate-x-0'}"
             ></span>
           </div>
@@ -366,15 +366,15 @@
   </div>
 
   <!-- Reset Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6">
     <div class="flex items-center justify-between">
       <div>
-        <h3 class="font-semibold text-gray-900 dark:text-white">Reset Settings</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Restore all settings to their default values</p>
+        <h3 class="font-semibold text-gray-100">Reset Settings</h3>
+        <p class="text-sm text-gray-500">Restore all settings to their default values</p>
       </div>
       <button
         onclick={resetSettings}
-        class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/30"
+        class="flex items-center gap-2 px-4 py-2 text-red-400 border border-red-500/20 rounded-lg hover:bg-red-500/10 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/30"
       >
         <RotateCcw class="w-4 h-4" />
         Reset

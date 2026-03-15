@@ -99,54 +99,54 @@
   }
 
   function eloColor(score: number): string {
-    if (score >= 80) return 'text-emerald-600 dark:text-emerald-400';
-    if (score >= 60) return 'text-blue-600 dark:text-blue-400';
-    if (score >= 40) return 'text-yellow-600 dark:text-yellow-400';
-    return 'text-red-500 dark:text-red-400';
+    if (score >= 80) return 'text-emerald-400';
+    if (score >= 60) return 'text-cyan-400';
+    if (score >= 40) return 'text-yellow-400';
+    return 'text-red-500';
   }
 
   function eloBg(score: number): string {
-    if (score >= 80) return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300';
-    if (score >= 60) return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
-    if (score >= 40) return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300';
-    return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
+    if (score >= 80) return 'bg-emerald-500/10 text-emerald-800';
+    if (score >= 60) return 'bg-blue-500/10 text-blue-400';
+    if (score >= 40) return 'bg-yellow-100 text-yellow-400';
+    return 'bg-red-500/10 text-red-400';
   }
 </script>
 
 <!-- Host Marketplace Settings -->
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85 overflow-hidden">
+<div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm overflow-hidden">
   <div class="flex items-center justify-between gap-4 p-5 pb-4">
     <div class="flex items-center gap-3">
-      <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 dark:bg-gray-700/50">
-        <Settings2 class="h-4.5 w-4.5 text-gray-500 dark:text-gray-400" />
+      <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-800">
+        <Settings2 class="h-4.5 w-4.5 text-gray-500" />
       </div>
       <div>
-        <h2 class="font-semibold text-base text-gray-900 dark:text-white">Host Settings</h2>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+        <h2 class="font-semibold text-base text-gray-100">Host Settings</h2>
+        <p class="text-xs text-gray-500 mt-0.5">
           Configure your hosting offer for the network
         </p>
       </div>
     </div>
     <button
       onclick={onToggleEnabled}
-      class="relative w-12 h-7 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-400/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900
-        {$settings.hostingConfig.enabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+      class="relative w-12 h-7 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-2
+        {$settings.hostingConfig.enabled ? 'bg-cyan-500' : 'bg-gray-300'}"
       role="switch"
       aria-checked={$settings.hostingConfig.enabled}
       aria-label="Toggle hosting"
     >
       <span
-        class="absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full shadow-sm transition-transform
+        class="absolute top-0.5 left-0.5 w-6 h-6 bg-gray-900 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.05)] transition-transform
           {$settings.hostingConfig.enabled ? 'translate-x-5' : 'translate-x-0'}"
       ></span>
     </button>
   </div>
 
   {#if $settings.hostingConfig.enabled}
-    <div class="border-t border-gray-100 dark:border-gray-700/60 px-5 py-4">
+    <div class="border-t border-cyan-500/10 px-5 py-4">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
         <div>
-          <label for="host-max-storage-gb" class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
+          <label for="host-max-storage-gb" class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
             Max Storage
           </label>
           <div class="flex items-center gap-2">
@@ -158,15 +158,15 @@
               step="1"
               value={Math.round($settings.hostingConfig.maxStorageBytes / (1024 * 1024 * 1024))}
               oninput={(e) => updateMaxStorageGb(Number(e.currentTarget.value))}
-              class="w-24 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white tabular-nums
-                focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/20"
+              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+                focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
-            <span class="text-xs text-gray-500 dark:text-gray-400 font-medium">GB</span>
+            <span class="text-xs text-gray-500 font-medium">GB</span>
           </div>
         </div>
 
         <div>
-          <label for="host-price-chi" class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
+          <label for="host-price-chi" class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
             Price
           </label>
           <div class="flex items-center gap-2">
@@ -178,15 +178,15 @@
               step="0.000001"
               value={weiToChiNumber($settings.hostingConfig.pricePerMbPerDayWei, 0.001)}
               oninput={(e) => updatePriceChi(Number(e.currentTarget.value))}
-              class="w-32 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white tabular-nums
-                focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/20"
+              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+                focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
-            <span class="text-xs text-gray-500 dark:text-gray-400 font-medium">CHI/MB/day</span>
+            <span class="text-xs text-gray-500 font-medium">CHI/MB/day</span>
           </div>
         </div>
 
         <div>
-          <label for="host-deposit-chi" class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
+          <label for="host-deposit-chi" class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
             Min Deposit
           </label>
           <div class="flex items-center gap-2">
@@ -198,28 +198,28 @@
               step="0.000001"
               value={weiToChiNumber($settings.hostingConfig.minDepositWei, 0.1)}
               oninput={(e) => updateDepositChi(Number(e.currentTarget.value))}
-              class="w-32 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white tabular-nums
-                focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/20"
+              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+                focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
-            <span class="text-xs text-gray-500 dark:text-gray-400 font-medium">CHI</span>
+            <span class="text-xs text-gray-500 font-medium">CHI</span>
           </div>
         </div>
 
         <div>
           <div class="flex items-center justify-between mb-1.5">
-            <label for="host-auto-accept-elo" class="block text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+            <label for="host-auto-accept-elo" class="block text-xs font-medium text-gray-400 uppercase tracking-wide">
               Auto-Accept
             </label>
             <button
               onclick={() => updateAutoAcceptByElo(!$settings.hostingConfig.autoAcceptByElo)}
-              class="relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-400/50
-                {$settings.hostingConfig.autoAcceptByElo ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+              class="relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/50
+                {$settings.hostingConfig.autoAcceptByElo ? 'bg-cyan-500' : 'bg-gray-300'}"
               role="switch"
               aria-checked={$settings.hostingConfig.autoAcceptByElo}
               aria-label="Toggle auto accept"
             >
               <span
-                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-900 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.05)] transition-transform
                   {$settings.hostingConfig.autoAcceptByElo ? 'translate-x-4' : 'translate-x-0'}"
               ></span>
             </button>
@@ -234,24 +234,24 @@
               value={$settings.hostingConfig.minAutoAcceptElo}
               oninput={(e) => updateAutoAcceptMinElo(Number(e.currentTarget.value))}
               disabled={!$settings.hostingConfig.autoAcceptByElo}
-              class="w-24 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white tabular-nums
-                focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/20
+              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+                focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20
                 disabled:opacity-40 disabled:cursor-not-allowed"
             />
-            <span class="text-xs text-gray-500 dark:text-gray-400 font-medium">Min Elo</span>
+            <span class="text-xs text-gray-500 font-medium">Min Elo</span>
           </div>
-          <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-1.5 leading-tight">
+          <p class="text-[11px] text-gray-500 mt-1.5 leading-tight">
             Auto-accept proposals from peers at or above this reputation score.
           </p>
         </div>
       </div>
 
-      <div class="mt-5 flex items-center gap-3 pt-4 border-t border-gray-100 dark:border-gray-700/40">
+      <div class="mt-5 flex items-center gap-3 pt-4 border-t border-cyan-500/10">
         <button
           onclick={onPublish}
           disabled={hostingPublishing}
-          class="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors
-            focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900
+          class="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-lg transition-colors
+            focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-2
             disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {#if hostingPublishing}
@@ -262,9 +262,9 @@
         <button
           onclick={onUnpublish}
           disabled={hostingPublishing}
-          class="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600 rounded-lg
-            hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors
-            focus:outline-none focus:ring-2 focus:ring-gray-400/30
+          class="px-4 py-2 text-sm font-medium text-gray-400 border border-cyan-500/20 rounded-lg
+            hover:bg-cyan-500/5 transition-colors
+            focus:outline-none focus:ring-2 focus:ring-cyan-500/30
             disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Unpublish
@@ -275,15 +275,15 @@
 </div>
 
 <!-- Available Hosts -->
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
+<div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 p-5 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm">
   <div class="flex items-center justify-between mb-4">
     <div class="flex items-center gap-3">
-      <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-100 dark:bg-purple-900/30">
-        <Users class="w-4.5 h-4.5 text-purple-600 dark:text-purple-400" />
+      <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-500/10">
+        <Users class="w-4.5 h-4.5 text-purple-400" />
       </div>
       <div>
-        <h2 class="font-semibold text-base text-gray-900 dark:text-white">Available Hosts</h2>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+        <h2 class="font-semibold text-base text-gray-100">Available Hosts</h2>
+        <p class="text-xs text-gray-500 mt-0.5">
           {#if loadingHosts}
             Searching the network...
           {:else}
@@ -298,8 +298,8 @@
         value={sortBy}
         onchange={(e) => onSortChange(e.currentTarget.value as 'reputation' | 'price' | 'storage')}
         aria-label="Sort hosts by"
-        class="text-xs bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-lg px-2.5 py-1.5 text-gray-600 dark:text-gray-300
-          focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/20"
+        class="text-xs bg-gray-800/60 border border-cyan-500/20 rounded-lg px-2.5 py-1.5 text-gray-300
+          focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
       >
         <option value="reputation">Reputation</option>
         <option value="price">Price (low)</option>
@@ -308,8 +308,8 @@
       <button
         onclick={onRefreshHosts}
         disabled={loadingHosts}
-        class="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors
-          focus:outline-none focus:ring-2 focus:ring-gray-400/30 disabled:opacity-50"
+        class="p-2 text-gray-400 hover:text-gray-400 rounded-lg hover:bg-cyan-500/10 transition-colors
+          focus:outline-none focus:ring-2 focus:ring-cyan-500/30 disabled:opacity-50"
         title="Refresh host list"
         aria-label="Refresh host list"
       >
@@ -324,20 +324,20 @@
       <span class="text-sm text-gray-400">Discovering hosts on the network...</span>
     </div>
   {:else if sortedHostList.length === 0}
-    <div class="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-500">
-      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700/40 mb-4">
+    <div class="flex flex-col items-center justify-center py-16 text-gray-500">
+      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 mb-4">
         <Users class="w-8 h-8 opacity-40" />
       </div>
-      <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No hosts available</p>
-      <p class="text-xs mt-1 text-gray-400 dark:text-gray-500">
+      <p class="text-sm font-medium text-gray-500">No hosts available</p>
+      <p class="text-xs mt-1 text-gray-500">
         Peers offering hosting services will appear here
       </p>
     </div>
   {:else}
     <div class="space-y-3">
       {#each sortedHostList as host (host.advertisement.peerId)}
-        <div class="group p-4 rounded-xl border border-gray-100 dark:border-gray-600/60 bg-gray-50/50 dark:bg-gray-700/30
-          hover:border-gray-200 dark:hover:border-gray-500/60 hover:shadow-sm transition-all">
+        <div class="group p-4 rounded-xl border border-cyan-500/10 bg-gray-800
+          hover:border-cyan-500/15 hover:shadow-[0_0_10px_rgba(6,182,212,0.05)] transition-all">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0 flex-1">
               <!-- Header row -->
@@ -346,9 +346,9 @@
                   {#if host.isOnline}
                     <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
                   {/if}
-                  <span class="relative inline-flex h-2.5 w-2.5 rounded-full {host.isOnline ? 'bg-green-500' : 'bg-gray-400'}"></span>
+                  <span class="relative inline-flex h-2.5 w-2.5 rounded-full {host.isOnline ? 'bg-emerald-500' : 'bg-gray-400'}"></span>
                 </span>
-                <span class="text-sm font-semibold text-gray-900 dark:text-white font-mono">
+                <span class="text-sm font-semibold text-gray-100 font-mono">
                   {formatPeerId(host.advertisement.peerId)}
                 </span>
                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums {eloBg(host.reputationScore)}">
@@ -358,20 +358,20 @@
 
               <!-- Stats row -->
               <div class="flex items-center gap-4 mt-2.5 flex-wrap">
-                <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                <span class="flex items-center gap-1.5 text-xs text-gray-500">
                   <HardDrive class="w-3.5 h-3.5 text-gray-400" />
-                  <span class="font-medium text-gray-700 dark:text-gray-300">{formatBytes(host.availableStorageBytes)}</span>
+                  <span class="font-medium text-gray-300">{formatBytes(host.availableStorageBytes)}</span>
                 </span>
-                <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                <span class="flex items-center gap-1.5 text-xs text-gray-500">
                   <Coins class="w-3.5 h-3.5 text-gray-400" />
-                  <span class="font-medium text-gray-700 dark:text-gray-300">{formatWeiAsChi(host.advertisement.pricePerMbPerDayWei)}</span>
+                  <span class="font-medium text-gray-300">{formatWeiAsChi(host.advertisement.pricePerMbPerDayWei)}</span>
                   <span class="text-gray-400">/MB/day</span>
                 </span>
-                <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                <span class="flex items-center gap-1.5 text-xs text-gray-500">
                   <Shield class="w-3.5 h-3.5 text-gray-400" />
                   <span>Deposit: {formatWeiAsChi(host.advertisement.minDepositWei)}</span>
                 </span>
-                <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+                <span class="flex items-center gap-1.5 text-xs text-gray-500">
                   <Clock class="w-3.5 h-3.5 text-gray-400" />
                   <span class="tabular-nums">{host.advertisement.uptimePercent.toFixed(0)}%</span> uptime
                 </span>
@@ -380,9 +380,9 @@
 
             <button
               onclick={() => onPropose(host)}
-              class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all flex-shrink-0
-                shadow-sm shadow-primary-500/10 hover:shadow-md hover:shadow-primary-500/20 active:scale-[0.98]
-                focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+              class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-xl transition-all flex-shrink-0
+                shadow-[0_0_10px_rgba(6,182,212,0.05)] shadow-primary-500/10 hover:shadow-[0_0_15px_rgba(6,182,212,0.08)] hover:shadow-primary-500/20 active:scale-[0.98]
+                focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-2"
             >
               <Rocket class="w-3.5 h-3.5" />
               Propose

@@ -4,27 +4,79 @@
 
 @layer base {
   :root {
-    /* Default: Blue theme (Tailwind blue palette, space-separated RGB) */
-    --color-primary-50:  239 246 255;
-    --color-primary-100: 219 234 254;
-    --color-primary-200: 191 219 254;
-    --color-primary-300: 147 197 253;
-    --color-primary-400: 96 165 250;
-    --color-primary-500: 59 130 246;
-    --color-primary-600: 37 99 235;
-    --color-primary-700: 29 78 216;
-    --color-primary-800: 30 64 175;
-    --color-primary-900: 30 58 138;
-    --color-primary-950: 23 37 84;
+    /* Cyberpunk cyan theme (space-separated RGB) */
+    --color-primary-50:  236 254 255;
+    --color-primary-100: 207 250 254;
+    --color-primary-200: 165 243 252;
+    --color-primary-300: 103 232 249;
+    --color-primary-400: 34 211 238;
+    --color-primary-500: 6 182 212;
+    --color-primary-600: 8 145 178;
+    --color-primary-700: 14 116 144;
+    --color-primary-800: 21 94 117;
+    --color-primary-900: 22 78 99;
+    --color-primary-950: 8 51 68;
+  }
+
+  html {
+    color-scheme: dark;
   }
 
   body {
-    @apply text-gray-900 dark:text-gray-100;
+    @apply bg-black text-gray-100;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(6, 182, 212, 0.25);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(6, 182, 212, 0.45);
+  }
+
+  /* Firefox scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(6, 182, 212, 0.25) transparent;
   }
 }
 
 @layer utilities {
   .text-muted-foreground {
-    @apply text-gray-600 dark:text-gray-400;
+    @apply text-gray-500;
+  }
+
+  /* Neon glow utility classes */
+  .neon-border {
+    border: 1px solid rgba(6, 182, 212, 0.2);
+    box-shadow: 0 0 15px rgba(6, 182, 212, 0.08);
+  }
+
+  .neon-border-bright {
+    border: 1px solid rgba(6, 182, 212, 0.4);
+    box-shadow: 0 0 20px rgba(6, 182, 212, 0.15);
+  }
+
+  .neon-glow {
+    box-shadow: 0 0 15px rgba(6, 182, 212, 0.15);
+  }
+
+  .neon-glow-strong {
+    box-shadow: 0 0 25px rgba(6, 182, 212, 0.25);
+  }
+
+  .neon-text {
+    text-shadow: 0 0 10px rgba(6, 182, 212, 0.4);
   }
 }
