@@ -30,14 +30,14 @@
 <div class="rounded-xl border p-4 transition-colors
  {serverRunning
  ?'border-green-200/70 bg-green-50/50'
- :'border-[var(--border)] bg-[var(--surface-0)]'}">
+ :'border-white/[0.06] bg-white/[0.03]'}">
  
  <div class="flex items-center justify-between gap-4 flex-wrap">
  <div class="flex items-center gap-3">
  <!-- Status indicator -->
  <div class="relative flex h-10 w-10 items-center justify-center rounded-xl
- {serverRunning ?'bg-green-500/[0.08]' :'bg-[var(--surface-0)]'}">
- <Server class="h-5 w-5 {serverRunning ?'text-green-400' :'text-[var(--text-secondary)]'}" />
+ {serverRunning ?'bg-green-500/[0.08]' :'bg-white/[0.03]'}">
+ <Server class="h-5 w-5 {serverRunning ?'text-green-400' :'text-white/50'}" />
  {#if serverRunning}
  <span class="absolute -top-0.5 -right-0.5 flex h-3 w-3">
  <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
@@ -59,7 +59,7 @@
  Serving at <a href={localUrl()} target="_blank" rel="noopener noreferrer" class="font-mono underline decoration-green-300 hover:decoration-green-500 transition-colors">{localUrl()}</a>
  </p>
  {:else}
- <p class="text-xs text-[var(--text-secondary)] mt-0.5">Server is stopped. Start it to host content.</p>
+ <p class="text-xs text-white/50 mt-0.5">Server is stopped. Start it to host content.</p>
  {/if}
  </div>
  </div>
@@ -67,7 +67,7 @@
  <div class="flex items-center gap-3">
  {#if !serverRunning}
  <div class="flex items-center gap-2">
- <label for="hosting-port" class="text-xs text-[var(--text-secondary)] font-medium">Port</label>
+ <label for="hosting-port" class="text-xs text-white/50 font-medium">Port</label>
  <input
  id="hosting-port"
  type="number"
@@ -75,7 +75,7 @@
  oninput={(e) => onPortChange(Number(e.currentTarget.value))}
  min="1024"
  max="65535"
- class="w-20 rounded-lg border border-[var(--border)] bg-[var(--surface-0)] px-2.5 py-1.5 text-sm text-white text-center tabular-nums
+ class="w-20 rounded-lg border border-white/[0.06] bg-white/[0.03] px-2.5 py-1.5 text-sm text-white text-center tabular-nums
  focus:border-cyan-500/30 focus:outline-none focus:
 "
  />

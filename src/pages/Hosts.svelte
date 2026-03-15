@@ -845,7 +845,7 @@
  <div class="flex items-start justify-between gap-4">
  <div>
  <h1 class="text-2xl font-light tracking-tight text-white">Hosts</h1>
- <p class="text-sm text-[var(--text-secondary)] mt-1">
+ <p class="text-sm text-white/50 mt-1">
  Host websites and files, find hosting providers, and manage agreements
  </p>
  </div>
@@ -878,15 +878,15 @@
  />
 
  <!-- Tab bar -->
- <div class="flex gap-1 bg-[var(--surface-0)] rounded-xl p-1" role="tablist" aria-label="Hosting sections">
+ <div class="flex gap-1 bg-white/[0.03] rounded-xl p-1" role="tablist" aria-label="Hosting sections">
  <button
  onclick={() => activeTab ='sites'}
  role="tab"
  aria-selected={activeTab ==='sites'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='sites'
- ?'bg-[var(--surface-0)] text-white border border-[var(--border)]/60/50'
- :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[#13111C]/70'}"
+ ?'bg-white/[0.03] text-white border border-white/[0.06]/60/50'
+ :'text-white/50 hover:text-white/50 hover:bg-[#13111C]/70'}"
  >
  <Server class="w-4 h-4" />
  <span class="hidden sm:inline">My Sites</span>
@@ -897,8 +897,8 @@
  aria-selected={activeTab ==='marketplace'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='marketplace'
- ?'bg-[var(--surface-0)] text-white border border-[var(--border)]/60/50'
- :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[#13111C]/70'}"
+ ?'bg-white/[0.03] text-white border border-white/[0.06]/60/50'
+ :'text-white/50 hover:text-white/50 hover:bg-[#13111C]/70'}"
  >
  <Users class="w-4 h-4" />
  <span class="hidden sm:inline">Marketplace</span>
@@ -909,8 +909,8 @@
  aria-selected={activeTab ==='agreements'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='agreements'
- ?'bg-[var(--surface-0)] text-white border border-[var(--border)]/60/50'
- :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[#13111C]/70'}"
+ ?'bg-white/[0.03] text-white border border-white/[0.06]/60/50'
+ :'text-white/50 hover:text-white/50 hover:bg-[#13111C]/70'}"
  >
  <Shield class="w-4 h-4" />
  <span class="hidden sm:inline">Agreements</span>
@@ -930,7 +930,7 @@
  {selectedFiles}
  {isDragOver}
  {isCreating}
- onNameChange={(name) => newSiteName = name}
+ onNameChange={(name: string) => newSiteName = name}
  onSelectFiles={selectFiles}
  onSelectFromDrive={openDrivePickerForSite}
  onRemoveFile={removeSelectedFile}
@@ -950,8 +950,8 @@
  {:else if activeTab ==='marketplace'}
  {#if marketplaceError}
  <div class="text-center py-20">
- <AlertCircle class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
- <p class="text-[var(--text-secondary)]">{marketplaceError}</p>
+ <AlertCircle class="w-12 h-12 mx-auto text-white/50 mb-3" />
+ <p class="text-white/50">{marketplaceError}</p>
  </div>
  {:else}
  <HostingMarketplace
@@ -959,7 +959,7 @@
  {loadingHosts}
  {hostingPublishing}
  {sortBy}
- onSortChange={(s) => sortBy = s}
+ onSortChange={(s: 'storage' | 'reputation' | 'price') => sortBy = s}
  onRefreshHosts={refreshHosts}
  onPropose={openProposalModal}
  onToggleEnabled={toggleHostingEnabled}
@@ -975,7 +975,7 @@
  {incomingProposals}
  {activeAgreements}
  {hostedFiles}
- onRespondToAgreement={(id, accept) => respondToAgreement(id, accept)}
+ onRespondToAgreement={(id: string, accept: boolean) => respondToAgreement(id, accept)}
  onRequestCancellation={requestCancellation}
  onRespondToCancellation={respondToCancellation}
  />
@@ -1022,18 +1022,18 @@
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="bg-[var(--surface-0)] rounded-xl p-6 max-w-sm w-full mx-4"
+ class="bg-white/[0.03] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
  <h3 class="text-lg font-semibold text-white mb-2">Delete Site</h3>
- <p class="text-sm text-[var(--text-secondary)] mb-1">
+ <p class="text-sm text-white/50 mb-1">
  Are you sure you want to delete <strong class="text-white">"{deleteConfirm.name}"</strong>?
  </p>
  <p class="text-sm text-amber-400 mb-4">This cannot be undone.</p>
  <div class="flex justify-end gap-3">
  <button
  onclick={() => deleteConfirm = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--text-secondary)] bg-[var(--surface-0)] hover:bg-[var(--surface-0)] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-white/50 bg-white/[0.03] hover:bg-white/[0.03] transition"
  >Cancel</button>
  <button
  onclick={confirmDeleteSite}
