@@ -1,343 +1,343 @@
 <script lang="ts">
-  import { Copy, ExternalLink, X, Plus, Globe, Link } from 'lucide-svelte';
-  import { getFileIcon, getFileColor } from '$lib/utils/fileIcons';
-  import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
-  import { networkConnected, walletAccount } from '$lib/stores';
-  import { toasts } from '$lib/toastStore';
+ import { Copy, ExternalLink, X, Plus, Globe, Link } from 'lucide-svelte';
+ import { getFileIcon, getFileColor } from '$lib/utils/fileIcons';
+ import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
+ import { networkConnected, walletAccount } from '$lib/stores';
+ import { toasts } from '$lib/toastStore';
 
-  let {
-    manifest,
-    onAddFiles,
-    onOptionsChange,
-  }: {
-    manifest: DriveManifest;
-    onAddFiles: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
-    onOptionsChange?: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
-  } = $props();
+ let {
+ manifest,
+ onAddFiles,
+ onOptionsChange,
+ }: {
+ manifest: DriveManifest;
+ onAddFiles: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
+ onOptionsChange?: (protocol: 'WebRTC' | 'BitTorrent', priceChi: string) => void;
+ } = $props();
 
-  let selectedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
-  let filePrice = $state('');
-  let expandedFileId = $state<string | null>(null);
-  let priceDrafts = $state<Record<string, string>>({});
+ let selectedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
+ let filePrice = $state('');
+ let expandedFileId = $state<string | null>(null);
+ let priceDrafts = $state<Record<string, string>>({});
 
-  const seedingItems = $derived($networkConnected ? driveStore.getSeedingItems(manifest) : []);
+ const seedingItems = $derived($networkConnected ? driveStore.getSeedingItems(manifest) : []);
 
-  function formatFileSize(bytes?: number): string {
-    if (!bytes) return '0 B';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
+ function formatFileSize(bytes?: number): string {
+ if (!bytes) return '0 B';
+ if (bytes < 1024) return `${bytes} B`;
+ if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+ if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+ return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+ }
 
-  function formatDate(date: number): string {
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short', day: 'numeric', year: 'numeric',
-      hour: '2-digit', minute: '2-digit',
-    }).format(new Date(date));
-  }
+ function formatDate(date: number): string {
+ return new Intl.DateTimeFormat('en-US', {
+ month: 'short', day: 'numeric', year: 'numeric',
+ hour: '2-digit', minute: '2-digit',
+ }).format(new Date(date));
+ }
 
-  function generateMagnetLink(item: DriveItem): string {
-    const encodedName = encodeURIComponent(item.name);
-    return `magnet:?xt=urn:btih:${item.merkleRoot}&dn=${encodedName}&xl=${item.size || 0}`;
-  }
+ function generateMagnetLink(item: DriveItem): string {
+ const encodedName = encodeURIComponent(item.name);
+ return `magnet:?xt=urn:btih:${item.merkleRoot}&dn=${encodedName}&xl=${item.size || 0}`;
+ }
 
-  async function copyToClipboard(text: string, label: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      toasts.show(`${label} copied to clipboard`, 'success');
-    } catch {
-      toasts.show('Failed to copy to clipboard', 'error');
-    }
-  }
+ async function copyToClipboard(text: string, label: string) {
+ try {
+ await navigator.clipboard.writeText(text);
+ toasts.show(`${label} copied to clipboard`, 'success');
+ } catch {
+ toasts.show('Failed to copy to clipboard', 'error');
+ }
+ }
 
-  async function handleStopSeeding(item: DriveItem) {
-    await driveStore.stopSeeding(item.id);
-    toasts.show(`Stopped seeding ${item.name}`, 'info');
-  }
+ async function handleStopSeeding(item: DriveItem) {
+ await driveStore.stopSeeding(item.id);
+ toasts.show(`Stopped seeding ${item.name}`, 'info');
+ }
 
-  async function handleExportTorrent(item: DriveItem) {
-    const path = await driveStore.exportTorrent(item.id);
-    if (path) {
-      toasts.show(`Torrent file saved to ${path}`, 'success');
-    } else {
-      toasts.show('Failed to export torrent file', 'error');
-    }
-  }
+ async function handleExportTorrent(item: DriveItem) {
+ const path = await driveStore.exportTorrent(item.id);
+ if (path) {
+ toasts.show(`Torrent file saved to ${path}`, 'success');
+ } else {
+ toasts.show('Failed to export torrent file', 'error');
+ }
+ }
 
-  function getProtocolColor(protocol?: string): string {
-    return protocol === 'BitTorrent'
-      ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-      : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
-  }
+ function getProtocolColor(protocol?: string): string {
+ return protocol === 'BitTorrent'
+ ? 'bg-green-100 text-green-800 dark:text-green-400'
+ : 'bg-blue-100 text-blue-800 dark:text-violet-400';
+ }
 
-  function normalizePriceChi(value: string | number | null | undefined): string {
-    const raw = `${value ?? ''}`.trim();
-    if (!raw) return '';
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed <= 0) return '';
-    return raw;
-  }
+ function normalizePriceChi(value: string | number | null | undefined): string {
+ const raw = `${value ?? ''}`.trim();
+ if (!raw) return '';
+ const parsed = Number(raw);
+ if (!Number.isFinite(parsed) || parsed <= 0) return '';
+ return raw;
+ }
 
-  function getCurrentItemPrice(item: DriveItem): string {
-    return normalizePriceChi(item.priceChi);
-  }
+ function getCurrentItemPrice(item: DriveItem): string {
+ return normalizePriceChi(item.priceChi);
+ }
 
-  function getPriceDraft(item: DriveItem): string {
-    const existing = priceDrafts[item.id];
-    if (existing !== undefined) return existing;
-    return getCurrentItemPrice(item);
-  }
+ function getPriceDraft(item: DriveItem): string {
+ const existing = priceDrafts[item.id];
+ if (existing !== undefined) return existing;
+ return getCurrentItemPrice(item);
+ }
 
-  function setPriceDraft(itemId: string, value: string) {
-    priceDrafts = { ...priceDrafts, [itemId]: value };
-  }
+ function setPriceDraft(itemId: string, value: string) {
+ priceDrafts = { ...priceDrafts, [itemId]: value };
+ }
 
-  function isPriceDirty(item: DriveItem): boolean {
-    return normalizePriceChi(getPriceDraft(item)) !== getCurrentItemPrice(item);
-  }
+ function isPriceDirty(item: DriveItem): boolean {
+ return normalizePriceChi(getPriceDraft(item)) !== getCurrentItemPrice(item);
+ }
 
-  async function handleUpdatePrice(item: DriveItem) {
-    if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
-      return;
-    }
-    const priceChi = normalizePriceChi(getPriceDraft(item));
-    const protocol = item.protocol === 'BitTorrent' ? 'BitTorrent' : 'WebRTC';
-    const updated = await driveStore.seedFile(item.id, protocol, priceChi || undefined);
-    if (!updated) {
-      toasts.show(`Failed to update price for ${item.name}`, 'error');
-      return;
-    }
-    setPriceDraft(item.id, normalizePriceChi(updated.priceChi));
-    toasts.show(
-      priceChi
-        ? `Updated "${item.name}" to ${priceChi} CHI`
-        : `Updated "${item.name}" to Free`,
-      'success',
-    );
-  }
+ async function handleUpdatePrice(item: DriveItem) {
+ if (!$networkConnected) {
+ toasts.show('Please connect to the network first', 'error');
+ return;
+ }
+ const priceChi = normalizePriceChi(getPriceDraft(item));
+ const protocol = item.protocol === 'BitTorrent' ? 'BitTorrent' : 'WebRTC';
+ const updated = await driveStore.seedFile(item.id, protocol, priceChi || undefined);
+ if (!updated) {
+ toasts.show(`Failed to update price for ${item.name}`, 'error');
+ return;
+ }
+ setPriceDraft(item.id, normalizePriceChi(updated.priceChi));
+ toasts.show(
+ priceChi
+ ? `Updated "${item.name}" to ${priceChi} CHI`
+ : `Updated "${item.name}" to Free`,
+ 'success',
+ );
+ }
 
-  $effect(() => {
-    onOptionsChange?.(selectedProtocol, normalizePriceChi(filePrice));
-  });
+ $effect(() => {
+ onOptionsChange?.(selectedProtocol, normalizePriceChi(filePrice));
+ });
 
-  function handleAddFiles() {
-    if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
-      return;
-    }
-    onAddFiles(selectedProtocol, normalizePriceChi(filePrice));
-  }
+ function handleAddFiles() {
+ if (!$networkConnected) {
+ toasts.show('Please connect to the network first', 'error');
+ return;
+ }
+ onAddFiles(selectedProtocol, normalizePriceChi(filePrice));
+ }
 </script>
 
 <div class="space-y-4">
-  <!-- Protocol selector + Price input + Add files button -->
-  <div class="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-    <div class="flex flex-wrap items-end gap-4">
-      <!-- Protocol toggle -->
-      <div>
-        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Protocol</label>
-        <div class="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
-          <button
-            onclick={() => selectedProtocol = 'WebRTC'}
-            class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'WebRTC'
-              ? 'bg-blue-600 text-white'
-              : 'backdrop-blur-md bg-white/8 dark:bg-white/5 text-gray-600 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
-          >
-            WebRTC
-          </button>
-          <button
-            onclick={() => selectedProtocol = 'BitTorrent'}
-            class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'BitTorrent'
-              ? 'backdrop-blur-md bg-green-500/70 dark:bg-green-600/60 border border-green-400/30 text-white'
-              : 'backdrop-blur-md bg-white/8 dark:bg-white/5 text-gray-600 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
-          >
-            BitTorrent
-          </button>
-        </div>
-      </div>
+ <!-- Protocol selector + Price input + Add files button -->
+ <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl p-4">
+ <div class="flex flex-wrap items-end gap-4">
+ <!-- Protocol toggle -->
+ <div>
+ <label class="block text-xs font-medium text-[var(--text-tertiary)] mb-1.5">Protocol</label>
+ <div class="flex rounded-lg overflow-hidden border border-[var(--border)]">
+ <button
+ onclick={() => selectedProtocol = 'WebRTC'}
+ class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'WebRTC'
+ ? 'bg-violet-600 text-white'
+ : ' bg-[var(--surface-1)] text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ >
+ WebRTC
+ </button>
+ <button
+ onclick={() => selectedProtocol = 'BitTorrent'}
+ class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'BitTorrent'
+ ? ' bg-green-500/70 border border-green-400/30 text-white'
+ : ' bg-[var(--surface-1)] text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ >
+ BitTorrent
+ </button>
+ </div>
+ </div>
 
-      <!-- Price input -->
-      <div>
-        <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Price (CHI)</label>
-        <input
-          type="number"
-          step="0.001"
-          min="0"
-          placeholder="Free"
-          bind:value={filePrice}
-          class="w-28 px-3 py-1.5 text-sm backdrop-blur-md bg-white/8 dark:bg-white/5 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-      </div>
+ <!-- Price input -->
+ <div>
+ <label class="block text-xs font-medium text-[var(--text-tertiary)] mb-1.5">Price (CHI)</label>
+ <input
+ type="number"
+ step="0.001"
+ min="0"
+ placeholder="Free"
+ bind:value={filePrice}
+ class="w-28 px-3 py-1.5 text-sm bg-[var(--surface-1)] border border-[var(--border)] rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+ />
+ </div>
 
-      <!-- Add files button -->
-      <button
-        onclick={handleAddFiles}
-        disabled={!$networkConnected}
-        class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition text-sm font-medium"
-      >
-        <Plus class="w-4 h-4" />
-        Add Files to Seed
-      </button>
-    </div>
+ <!-- Add files button -->
+ <button
+ onclick={handleAddFiles}
+ disabled={!$networkConnected}
+ class="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition text-sm font-medium"
+ >
+ <Plus class="w-4 h-4" />
+ Add Files to Seed
+ </button>
+ </div>
 
-    {#if normalizePriceChi(filePrice) && !$walletAccount}
-      <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
-        Connect your wallet on the Account page to receive payments.
-      </p>
-    {/if}
-  </div>
+ {#if normalizePriceChi(filePrice) && !$walletAccount}
+ <p class="mt-2 text-xs text-amber-600">
+ Connect your wallet on the Account page to receive payments.
+ </p>
+ {/if}
+ </div>
 
-  <!-- Seeding files list -->
-  {#if seedingItems.length === 0}
-    <div class="text-center py-12 text-gray-500 dark:text-gray-400">
-      <Globe class="w-12 h-12 mx-auto mb-3 opacity-40" />
-      <p class="text-sm font-medium">No files being seeded</p>
-      <p class="text-xs mt-1">Add files above or right-click any file in "All Files" and choose "Seed to Network"</p>
-    </div>
-  {:else}
-    <div class="space-y-2">
-      {#each seedingItems as item (item.id)}
-        {@const Icon = getFileIcon(item.name)}
-        <div class="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <div class="flex items-start gap-3">
-            <!-- File icon -->
-            <div class="flex-shrink-0 w-10 h-10 rounded-lg backdrop-blur-md bg-white/8 dark:bg-white/5 flex items-center justify-center">
-              <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)}" />
-            </div>
+ <!-- Seeding files list -->
+ {#if seedingItems.length === 0}
+ <div class="text-center py-12 text-[var(--text-tertiary)]">
+ <Globe class="w-12 h-12 mx-auto mb-3 opacity-40" />
+ <p class="text-sm font-medium">No files being seeded</p>
+ <p class="text-xs mt-1">Add files above or right-click any file in "All Files" and choose "Seed to Network"</p>
+ </div>
+ {:else}
+ <div class="space-y-2">
+ {#each seedingItems as item (item.id)}
+ {@const Icon = getFileIcon(item.name)}
+ <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl p-4">
+ <div class="flex items-start gap-3">
+ <!-- File icon -->
+ <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-[var(--surface-1)] flex items-center justify-center">
+ <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)}" />
+ </div>
 
-            <!-- File info -->
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="text-sm font-medium text-gray-900 dark:text-white truncate">{item.name}</span>
-                <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(item.protocol)}">
-                  {item.protocol || 'WebRTC'}
-                </span>
-                {#if item.priceChi && item.priceChi !== '0'}
-                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-                    {item.priceChi} CHI
-                  </span>
-                {:else}
-                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-                    Free
-                  </span>
-                {/if}
-              </div>
+ <!-- File info -->
+ <div class="flex-1 min-w-0">
+ <div class="flex items-center gap-2 flex-wrap">
+ <span class="text-sm font-medium text-gray-900 truncate">{item.name}</span>
+ <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(item.protocol)}">
+ {item.protocol || 'WebRTC'}
+ </span>
+ {#if item.priceChi && item.priceChi !== '0'}
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800">
+ {item.priceChi} CHI
+ </span>
+ {:else}
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-800">
+ Free
+ </span>
+ {/if}
+ </div>
 
-              <div class="flex items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                <span>{formatFileSize(item.size)}</span>
-                <span>{formatDate(item.modifiedAt)}</span>
-              </div>
+ <div class="flex items-center gap-3 mt-1 text-xs text-[var(--text-tertiary)]">
+ <span>{formatFileSize(item.size)}</span>
+ <span>{formatDate(item.modifiedAt)}</span>
+ </div>
 
-              <div class="mt-2 flex flex-wrap items-center gap-2">
-                <span class="text-xs text-gray-500 dark:text-gray-400">Price (CHI)</span>
-                <input
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  placeholder="Free"
-                  value={getPriceDraft(item)}
-                  oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
-                  class="w-24 px-2 py-1 text-xs backdrop-blur-md bg-white/8 dark:bg-white/5 border border-gray-200 dark:border-gray-600 rounded text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <button
-                  onclick={() => handleUpdatePrice(item)}
-                  disabled={!isPriceDirty(item)}
-                  class="px-2.5 py-1 text-xs font-medium rounded transition
-                    {isPriceDirty(item)
-                      ? 'bg-blue-600 text-white hover:bg-blue-700'
-                      : 'bg-white/10 dark:bg-white/5 text-gray-500 dark:text-gray-400 cursor-not-allowed'}"
-                >
-                  Update Price
-                </button>
-              </div>
+ <div class="mt-2 flex flex-wrap items-center gap-2">
+ <span class="text-xs text-[var(--text-tertiary)]">Price (CHI)</span>
+ <input
+ type="number"
+ step="0.001"
+ min="0"
+ placeholder="Free"
+ value={getPriceDraft(item)}
+ oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
+ class="w-24 px-2 py-1 text-xs bg-[var(--surface-1)] border border-[var(--border)] rounded text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+ />
+ <button
+ onclick={() => handleUpdatePrice(item)}
+ disabled={!isPriceDirty(item)}
+ class="px-2.5 py-1 text-xs font-medium rounded transition
+ {isPriceDirty(item)
+ ? 'bg-violet-600 text-white hover:bg-blue-700'
+ : 'bg-[var(--surface-1)] text-[var(--text-tertiary)] cursor-not-allowed'}"
+ >
+ Update Price
+ </button>
+ </div>
 
-              <!-- Merkle hash -->
-              {#if item.merkleRoot}
-                <div class="flex items-center gap-2 mt-2">
-                  <span class="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
-                    {item.merkleRoot}
-                  </span>
-                  <button
-                    onclick={() => copyToClipboard(item.merkleRoot!, 'Hash')}
-                    class="flex-shrink-0 p-1 hover:bg-white/10 dark:hover:bg-white/5 rounded"
-                    title="Copy hash"
-                  >
-                    <Copy class="w-3.5 h-3.5 text-gray-400" />
-                  </button>
-                </div>
-              {/if}
-            </div>
+ <!-- Merkle hash -->
+ {#if item.merkleRoot}
+ <div class="flex items-center gap-2 mt-2">
+ <span class="text-xs text-[var(--text-tertiary)] font-mono truncate">
+ {item.merkleRoot}
+ </span>
+ <button
+ onclick={() => copyToClipboard(item.merkleRoot!, 'Hash')}
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded"
+ title="Copy hash"
+ >
+ <Copy class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+ </button>
+ </div>
+ {/if}
+ </div>
 
-            <!-- Actions -->
-            <div class="flex items-center gap-1 flex-shrink-0">
-              <button
-                onclick={() => expandedFileId = expandedFileId === item.id ? null : item.id}
-                class="p-1.5 hover:bg-white/10 dark:hover:bg-white/5 rounded-lg transition"
-                title="Share options"
-              >
-                <Link class="w-4 h-4 text-gray-500" />
-              </button>
-              <button
-                onclick={() => handleStopSeeding(item)}
-                class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition"
-                title="Stop seeding"
-              >
-                <X class="w-4 h-4 text-red-500" />
-              </button>
-            </div>
-          </div>
+ <!-- Actions -->
+ <div class="flex items-center gap-1 flex-shrink-0">
+ <button
+ onclick={() => expandedFileId = expandedFileId === item.id ? null : item.id}
+ class="p-1.5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition"
+ title="Share options"
+ >
+ <Link class="w-4 h-4 text-[var(--text-tertiary)]" />
+ </button>
+ <button
+ onclick={() => handleStopSeeding(item)}
+ class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition"
+ title="Stop seeding"
+ >
+ <X class="w-4 h-4 text-red-500" />
+ </button>
+ </div>
+ </div>
 
-          <!-- Expanded share options -->
-          {#if expandedFileId === item.id && item.merkleRoot}
-            <div class="mt-3 pt-3 border-t border-gray-100 dark:border-gray-700 space-y-2">
-              <!-- Magnet link -->
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-gray-500 dark:text-gray-400 w-16 flex-shrink-0">Magnet</span>
-                <input
-                  type="text"
-                  readonly
-                  value={generateMagnetLink(item)}
-                  class="flex-1 text-xs font-mono backdrop-blur-md bg-white/8 dark:bg-white/5 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-gray-600 dark:text-gray-300"
-                />
-                <button
-                  onclick={() => copyToClipboard(generateMagnetLink(item), 'Magnet link')}
-                  class="flex-shrink-0 p-1 hover:bg-white/10 dark:hover:bg-white/5 rounded"
-                >
-                  <Copy class="w-3.5 h-3.5 text-gray-400" />
-                </button>
-              </div>
+ <!-- Expanded share options -->
+ {#if expandedFileId === item.id && item.merkleRoot}
+ <div class="mt-3 pt-3 border-t border-[var(--border)] space-y-2">
+ <!-- Magnet link -->
+ <div class="flex items-center gap-2">
+ <span class="text-xs text-[var(--text-tertiary)] w-16 flex-shrink-0">Magnet</span>
+ <input
+ type="text"
+ readonly
+ value={generateMagnetLink(item)}
+ class="flex-1 text-xs font-mono bg-[var(--surface-1)] border border-[var(--border)] rounded px-2 py-1 text-[var(--text-secondary)]"
+ />
+ <button
+ onclick={() => copyToClipboard(generateMagnetLink(item), 'Magnet link')}
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded"
+ >
+ <Copy class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+ </button>
+ </div>
 
-              <!-- Hash -->
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-gray-500 dark:text-gray-400 w-16 flex-shrink-0">Hash</span>
-                <input
-                  type="text"
-                  readonly
-                  value={item.merkleRoot}
-                  class="flex-1 text-xs font-mono backdrop-blur-md bg-white/8 dark:bg-white/5 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 text-gray-600 dark:text-gray-300"
-                />
-                <button
-                  onclick={() => copyToClipboard(item.merkleRoot!, 'Hash')}
-                  class="flex-shrink-0 p-1 hover:bg-white/10 dark:hover:bg-white/5 rounded"
-                >
-                  <Copy class="w-3.5 h-3.5 text-gray-400" />
-                </button>
-              </div>
+ <!-- Hash -->
+ <div class="flex items-center gap-2">
+ <span class="text-xs text-[var(--text-tertiary)] w-16 flex-shrink-0">Hash</span>
+ <input
+ type="text"
+ readonly
+ value={item.merkleRoot}
+ class="flex-1 text-xs font-mono bg-[var(--surface-1)] border border-[var(--border)] rounded px-2 py-1 text-[var(--text-secondary)]"
+ />
+ <button
+ onclick={() => copyToClipboard(item.merkleRoot!, 'Hash')}
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded"
+ >
+ <Copy class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+ </button>
+ </div>
 
-              <!-- Export torrent -->
-              <button
-                onclick={() => handleExportTorrent(item)}
-                class="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-              >
-                <ExternalLink class="w-3.5 h-3.5" />
-                Export .torrent file
-              </button>
-            </div>
-          {/if}
-        </div>
-      {/each}
-    </div>
-  {/if}
+ <!-- Export torrent -->
+ <button
+ onclick={() => handleExportTorrent(item)}
+ class="flex items-center gap-1.5 text-xs text-blue-600 hover:underline"
+ >
+ <ExternalLink class="w-3.5 h-3.5" />
+ Export .torrent file
+ </button>
+ </div>
+ {/if}
+ </div>
+ {/each}
+ </div>
+ {/if}
 </div>

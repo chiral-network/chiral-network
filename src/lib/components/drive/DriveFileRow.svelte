@@ -1,91 +1,91 @@
 <script lang="ts">
-  import { Star, MoreVertical, Link, Folder, EyeOff } from 'lucide-svelte';
-  import { getFileIcon, getFileColor, getFolderColor } from '$lib/utils/fileIcons';
-  import type { DriveItem } from '$lib/stores/driveStore';
-  import { networkConnected } from '$lib/stores';
+ import { Star, MoreVertical, Link, Folder, EyeOff } from 'lucide-svelte';
+ import { getFileIcon, getFileColor, getFolderColor } from '$lib/utils/fileIcons';
+ import type { DriveItem } from '$lib/stores/driveStore';
+ import { networkConnected } from '$lib/stores';
 
-  let {
-    item,
-    onOpen,
-    onContextMenu,
-  }: {
-    item: DriveItem;
-    onOpen: (item: DriveItem) => void;
-    onContextMenu: (item: DriveItem, event: MouseEvent) => void;
-  } = $props();
+ let {
+ item,
+ onOpen,
+ onContextMenu,
+ }: {
+ item: DriveItem;
+ onOpen: (item: DriveItem) => void;
+ onContextMenu: (item: DriveItem, event: MouseEvent) => void;
+ } = $props();
 
-  function formatSize(bytes?: number): string {
-    if (!bytes) return '—';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
+ function formatSize(bytes?: number): string {
+ if (!bytes) return '—';
+ if (bytes < 1024) return `${bytes} B`;
+ if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+ if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+ return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+ }
 
-  function formatDate(ts: number): string {
-    return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  }
+ function formatDate(ts: number): string {
+ return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+ }
 
-  function getPriceLabel(item: DriveItem): string | null {
-    if (item.type !== 'file') return null;
-    const raw = item.priceChi?.trim();
-    if (raw && raw !== '0') return `${raw} CHI`;
-    if (item.seeding || raw === '0') return 'Free';
-    return null;
-  }
+ function getPriceLabel(item: DriveItem): string | null {
+ if (item.type !== 'file') return null;
+ const raw = item.priceChi?.trim();
+ if (raw && raw !== '0') return `${raw} CHI`;
+ if (item.seeding || raw === '0') return 'Free';
+ return null;
+ }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <tr
-  class="group hover:bg-white/5 dark:hover:bg-white/5 transition cursor-pointer select-none border-b border-white/10 dark:border-white/5"
-  ondblclick={() => onOpen(item)}
-  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
+ class="group hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition cursor-pointer select-none border-b border-[var(--border)]"
+ ondblclick={() => onOpen(item)}
+ oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
-  <td class="py-2.5 px-3">
-    <div class="flex items-center gap-3">
-      {#if item.type === 'folder'}
-        <Folder class="w-5 h-5 {getFolderColor()} fill-current opacity-80 shrink-0" />
-      {:else}
-        {@const Icon = getFileIcon(item.name)}
-        <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)} shrink-0" />
-      {/if}
-      <span class="text-sm font-medium text-gray-900 dark:text-white truncate">{item.name}</span>
-      {#if item.starred}
-        <Star class="w-3.5 h-3.5 text-yellow-500 fill-yellow-500 shrink-0" />
-      {/if}
-      {#if item.shared}
-        {#if item.isPublic}
-          <Link class="w-3.5 h-3.5 text-blue-500 shrink-0" />
-        {:else}
-          <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
-        {/if}
-      {/if}
-      {#if item.seeding && $networkConnected}
-        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 shrink-0">
-          <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-          Seeding{#if item.protocol} ({item.protocol}){/if}
-        </span>
-      {/if}
-      {#if getPriceLabel(item)}
-        {@const priceLabel = getPriceLabel(item)}
-        <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 shrink-0">
-          {priceLabel}
-        </span>
-      {/if}
-    </div>
-  </td>
-  <td class="py-2.5 px-3 text-sm text-gray-500 dark:text-gray-400">
-    {item.type === 'folder' ? '—' : formatSize(item.size)}
-  </td>
-  <td class="py-2.5 px-3 text-sm text-gray-500 dark:text-gray-400">
-    {formatDate(item.modifiedAt)}
-  </td>
-  <td class="py-2.5 px-3 text-right">
-    <button
-      onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
-      class="p-1 hover:bg-white/15 dark:hover:bg-white/10 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-    >
-      <MoreVertical class="w-4 h-4 text-gray-500" />
-    </button>
-  </td>
+ <td class="py-2.5 px-3">
+ <div class="flex items-center gap-3">
+ {#if item.type === 'folder'}
+ <Folder class="w-5 h-5 {getFolderColor()} fill-current opacity-80 shrink-0" />
+ {:else}
+ {@const Icon = getFileIcon(item.name)}
+ <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)} shrink-0" />
+ {/if}
+ <span class="text-sm font-medium text-gray-900 truncate">{item.name}</span>
+ {#if item.starred}
+ <Star class="w-3.5 h-3.5 text-yellow-500 fill-yellow-500 shrink-0" />
+ {/if}
+ {#if item.shared}
+ {#if item.isPublic}
+ <Link class="w-3.5 h-3.5 text-violet-400 shrink-0" />
+ {:else}
+ <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
+ {/if}
+ {/if}
+ {#if item.seeding && $networkConnected}
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-800 shrink-0">
+ <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+ Seeding{#if item.protocol} ({item.protocol}){/if}
+ </span>
+ {/if}
+ {#if getPriceLabel(item)}
+ {@const priceLabel = getPriceLabel(item)}
+ <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-800 shrink-0">
+ {priceLabel}
+ </span>
+ {/if}
+ </div>
+ </td>
+ <td class="py-2.5 px-3 text-sm text-[var(--text-tertiary)]">
+ {item.type === 'folder' ? '—' : formatSize(item.size)}
+ </td>
+ <td class="py-2.5 px-3 text-sm text-[var(--text-tertiary)]">
+ {formatDate(item.modifiedAt)}
+ </td>
+ <td class="py-2.5 px-3 text-right">
+ <button
+ onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
+ class="p-1 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+ >
+ <MoreVertical class="w-4 h-4 text-[var(--text-tertiary)]" />
+ </button>
+ </td>
 </tr>

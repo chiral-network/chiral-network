@@ -1,148 +1,148 @@
 <script lang="ts">
-  import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2, Coins } from 'lucide-svelte';
-  import type { DriveItem } from '$lib/stores/driveStore';
-  import { computeContextMenuPlacement } from '$lib/utils/uiPositioning';
+ import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2, Coins } from 'lucide-svelte';
+ import type { DriveItem } from '$lib/stores/driveStore';
+ import { computeContextMenuPlacement } from '$lib/utils/uiPositioning';
 
-  let {
-    item,
-    x,
-    y,
-    onClose,
-    onRename,
-    onMove,
-    onShare,
-    onCopyLink,
-    onToggleStar,
-    onToggleVisibility,
-    onDelete,
-    onSeed,
-    onStopSeed,
-    onCopyHash,
-    onCopyMagnet,
-    onShowInExplorer,
-    onEditPrice,
-  }: {
-    item: DriveItem;
-    x: number;
-    y: number;
-    onClose: () => void;
-    onRename: (item: DriveItem) => void;
-    onMove: (item: DriveItem) => void;
-    onShare: (item: DriveItem) => void;
-    onCopyLink: (item: DriveItem) => void;
-    onToggleStar: (item: DriveItem) => void;
-    onToggleVisibility: (item: DriveItem) => void;
-    onDelete: (item: DriveItem) => void;
-    onSeed?: (item: DriveItem) => void;
-    onStopSeed?: (item: DriveItem) => void;
-    onCopyHash?: (item: DriveItem) => void;
-    onCopyMagnet?: (item: DriveItem) => void;
-    onShowInExplorer?: (item: DriveItem) => void;
-    onEditPrice?: (item: DriveItem) => void;
-  } = $props();
+ let {
+ item,
+ x,
+ y,
+ onClose,
+ onRename,
+ onMove,
+ onShare,
+ onCopyLink,
+ onToggleStar,
+ onToggleVisibility,
+ onDelete,
+ onSeed,
+ onStopSeed,
+ onCopyHash,
+ onCopyMagnet,
+ onShowInExplorer,
+ onEditPrice,
+ }: {
+ item: DriveItem;
+ x: number;
+ y: number;
+ onClose: () => void;
+ onRename: (item: DriveItem) => void;
+ onMove: (item: DriveItem) => void;
+ onShare: (item: DriveItem) => void;
+ onCopyLink: (item: DriveItem) => void;
+ onToggleStar: (item: DriveItem) => void;
+ onToggleVisibility: (item: DriveItem) => void;
+ onDelete: (item: DriveItem) => void;
+ onSeed?: (item: DriveItem) => void;
+ onStopSeed?: (item: DriveItem) => void;
+ onCopyHash?: (item: DriveItem) => void;
+ onCopyMagnet?: (item: DriveItem) => void;
+ onShowInExplorer?: (item: DriveItem) => void;
+ onEditPrice?: (item: DriveItem) => void;
+ } = $props();
 
-  let menuEl = $state<HTMLDivElement | null>(null);
-  let menuLeft = $state(0);
-  let menuTop = $state(0);
-  let menuMaxHeight = $state(320);
+ let menuEl = $state<HTMLDivElement | null>(null);
+ let menuLeft = $state(0);
+ let menuTop = $state(0);
+ let menuMaxHeight = $state(320);
 
-  function action(fn: (item: DriveItem) => void) {
-    return () => { fn(item); onClose(); };
-  }
+ function action(fn: (item: DriveItem) => void) {
+ return () => { fn(item); onClose(); };
+ }
 
-  function positionMenu() {
-    if (!menuEl || typeof window === 'undefined') return;
+ function positionMenu() {
+ if (!menuEl || typeof window === 'undefined') return;
 
-    const FALLBACK_WIDTH = 192;
-    const FALLBACK_HEIGHT = 280;
+ const FALLBACK_WIDTH = 192;
+ const FALLBACK_HEIGHT = 280;
 
-    const rect = menuEl.getBoundingClientRect();
-    const menuWidth = rect.width || FALLBACK_WIDTH;
-    const naturalHeight = rect.height || FALLBACK_HEIGHT;
-    const placement = computeContextMenuPlacement({
-      pointerX: x,
-      pointerY: y,
-      menuWidth,
-      menuHeight: naturalHeight,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-    });
+ const rect = menuEl.getBoundingClientRect();
+ const menuWidth = rect.width || FALLBACK_WIDTH;
+ const naturalHeight = rect.height || FALLBACK_HEIGHT;
+ const placement = computeContextMenuPlacement({
+ pointerX: x,
+ pointerY: y,
+ menuWidth,
+ menuHeight: naturalHeight,
+ viewportWidth: window.innerWidth,
+ viewportHeight: window.innerHeight,
+ });
 
-    menuLeft = placement.left;
-    menuTop = placement.top;
-    menuMaxHeight = placement.maxHeight;
-  }
+ menuLeft = placement.left;
+ menuTop = placement.top;
+ menuMaxHeight = placement.maxHeight;
+ }
 
-  $effect(() => {
-    function handleClick() { onClose(); }
-    document.addEventListener('click', handleClick);
-    return () => document.removeEventListener('click', handleClick);
-  });
+ $effect(() => {
+ function handleClick() { onClose(); }
+ document.addEventListener('click', handleClick);
+ return () => document.removeEventListener('click', handleClick);
+ });
 
-  $effect(() => {
-    x;
-    y;
-    menuItems.length;
-    if (typeof window === 'undefined' || !menuEl) return;
+ $effect(() => {
+ x;
+ y;
+ menuItems.length;
+ if (typeof window === 'undefined' || !menuEl) return;
 
-    const rafId = window.requestAnimationFrame(positionMenu);
-    const handleResize = () => positionMenu();
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', handleResize);
-    };
-  });
+ const rafId = window.requestAnimationFrame(positionMenu);
+ const handleResize = () => positionMenu();
+ window.addEventListener('resize', handleResize);
+ return () => {
+ window.cancelAnimationFrame(rafId);
+ window.removeEventListener('resize', handleResize);
+ };
+ });
 
-  const menuItems = $derived([
-    { label: 'Rename', icon: Pencil, action: action(onRename) },
-    { label: 'Move to...', icon: FolderInput, action: action(onMove) },
-    ...(onShowInExplorer
-      ? [{ label: 'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
-      : []),
-    { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
-    { label: 'Share...', icon: Share2, action: action(onShare) },
-    // Seeding actions
-    ...(item.type === 'file' && !item.seeding && onSeed
-      ? [{ label: 'Seed to Network', icon: Globe, action: action(onSeed) }]
-      : []),
-    ...(item.seeding && onStopSeed
-      ? [{ label: 'Stop Seeding', icon: StopCircle, action: action(onStopSeed) }]
-      : []),
-    ...(item.merkleRoot && onCopyHash
-      ? [{ label: 'Copy Merkle Hash', icon: Copy, action: action(onCopyHash) }]
-      : []),
-    ...(item.merkleRoot && onCopyMagnet
-      ? [{ label: 'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
-      : []),
-    ...(item.type === 'file' && onEditPrice
-      ? [{ label: 'Edit Price', icon: Coins, action: action(onEditPrice) }]
-      : []),
-    ...(item.shared
-      ? [{ label: item.isPublic ? 'Make Private' : 'Make Public', icon: item.isPublic ? EyeOff : Eye, action: action(onToggleVisibility) }]
-      : []),
-    { label: item.starred ? 'Unstar' : 'Star', icon: item.starred ? StarOff : Star, action: action(onToggleStar) },
-    { label: 'Delete', icon: Trash2, action: action(onDelete), danger: true },
-  ]);
+ const menuItems = $derived([
+ { label: 'Rename', icon: Pencil, action: action(onRename) },
+ { label: 'Move to...', icon: FolderInput, action: action(onMove) },
+ ...(onShowInExplorer
+ ? [{ label: 'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
+ : []),
+ { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
+ { label: 'Share...', icon: Share2, action: action(onShare) },
+ // Seeding actions
+ ...(item.type === 'file' && !item.seeding && onSeed
+ ? [{ label: 'Seed to Network', icon: Globe, action: action(onSeed) }]
+ : []),
+ ...(item.seeding && onStopSeed
+ ? [{ label: 'Stop Seeding', icon: StopCircle, action: action(onStopSeed) }]
+ : []),
+ ...(item.merkleRoot && onCopyHash
+ ? [{ label: 'Copy Merkle Hash', icon: Copy, action: action(onCopyHash) }]
+ : []),
+ ...(item.merkleRoot && onCopyMagnet
+ ? [{ label: 'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
+ : []),
+ ...(item.type === 'file' && onEditPrice
+ ? [{ label: 'Edit Price', icon: Coins, action: action(onEditPrice) }]
+ : []),
+ ...(item.shared
+ ? [{ label: item.isPublic ? 'Make Private' : 'Make Public', icon: item.isPublic ? EyeOff : Eye, action: action(onToggleVisibility) }]
+ : []),
+ { label: item.starred ? 'Unstar' : 'Star', icon: item.starred ? StarOff : Star, action: action(onToggleStar) },
+ { label: 'Delete', icon: Trash2, action: action(onDelete), danger: true },
+ ]);
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  bind:this={menuEl}
-  class="fixed z-[100] w-48 overflow-y-auto backdrop-blur-2xl bg-white/15 dark:bg-white/10 rounded-lg shadow-xl shadow-black/10 border border-white/20 dark:border-white/15 py-1"
-  style="left: {menuLeft}px; top: {menuTop}px; max-height: {menuMaxHeight}px;"
-  onclick={(e) => e.stopPropagation()}
+ bind:this={menuEl}
+ class="fixed z-[100] w-48 overflow-y-auto bg-[var(--surface-1)] rounded-lg shadow-black/10 border border-[var(--border)] py-1"
+ style="left: {menuLeft}px; top: {menuTop}px; max-height: {menuMaxHeight}px;"
+ onclick={(e) => e.stopPropagation()}
 >
-  {#each menuItems as mi}
-    <button
-      onclick={mi.action}
-      class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition
-        {mi.danger
-          ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
-          : 'text-gray-700 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
-    >
-      <svelte:component this={mi.icon} class="w-4 h-4" />
-      {mi.label}
-    </button>
-  {/each}
+ {#each menuItems as mi}
+ <button
+ onclick={mi.action}
+ class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition
+ {mi.danger
+ ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20'
+ : 'text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ >
+ <svelte:component this={mi.icon} class="w-4 h-4" />
+ {mi.label}
+ </button>
+ {/each}
 </div>
