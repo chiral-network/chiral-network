@@ -314,7 +314,7 @@
     } else {
       const liveItem = manifest.items.find(i => i.id === item.id);
       const priceSrc = liveItem?.priceChi ?? item.priceChi;
-      const fallbackPrice = priceSrc && parseFloat(priceSrc) > 0 ? priceSrc : '0.001';
+      const fallbackPrice = priceSrc && parseFloat(priceSrc) > 0 ? priceSrc : '0';
       const share = await driveStore.createShareLink(item.id, fallbackPrice, true);
       if (!share) {
         toasts.show('Failed to create share link', 'error');
