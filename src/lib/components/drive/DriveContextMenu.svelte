@@ -115,7 +115,7 @@
     ...(item.merkleRoot && onCopyMagnet
       ? [{ label: 'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
       : []),
-    ...(item.seeding && onEditPrice
+    ...(item.type === 'file' && onEditPrice
       ? [{ label: 'Edit Price', icon: Coins, action: action(onEditPrice) }]
       : []),
     ...(item.shared
