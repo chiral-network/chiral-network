@@ -50,9 +50,9 @@
   }
 </script>
 
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
+<div class="rounded-2xl backdrop-blur-xl bg-white/10 dark:bg-white/5 p-5 shadow-lg shadow-black/5 border border-white/20 dark:border-white/10 ring-1 ring-white/10">
   <h2 class="mb-4 text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-700/50">
+    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/10 dark:bg-white/5">
       <Globe class="h-3.5 w-3.5 text-gray-500 dark:text-gray-400" />
     </div>
     Hosted Sites
@@ -65,7 +65,7 @@
 
   {#if sites.length === 0}
     <div class="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-500">
-      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700/40 mb-4">
+      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 dark:bg-white/5 mb-4">
         <Server class="h-8 w-8 opacity-40" />
       </div>
       <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No hosted sites yet</p>
@@ -74,9 +74,9 @@
   {:else}
     <div class="space-y-3">
       {#each sites as site (site.id)}
-        <div class="group rounded-xl border border-gray-100 bg-gray-50/50 p-4 transition-all
-          hover:border-gray-200 hover:shadow-sm
-          dark:border-gray-700/50 dark:bg-gray-700/30 dark:hover:border-gray-600">
+        <div class="group rounded-xl border border-gray-100 bg-white/5 p-4 transition-all
+          hover:border-white/25 hover:shadow-sm
+          dark:border-white/10 dark:bg-white/5 dark:hover:border-white/15">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">

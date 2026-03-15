@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="group relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 hover:shadow-md hover:border-blue-300 dark:hover:border-blue-600 transition cursor-pointer select-none"
+  class="group relative backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-xl p-4 hover:shadow-lg hover:shadow-black/5 hover:border-white/30 dark:hover:border-white/20 transition cursor-pointer select-none ring-1 ring-white/10"
   ondblclick={() => onOpen(item)}
   oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -51,14 +51,14 @@
     {/if}
     <button
       onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
-      class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+      class="p-1 hover:bg-white/10 dark:hover:bg-white/5 rounded"
     >
       <MoreVertical class="w-4 h-4 text-gray-500" />
     </button>
   </div>
 
   <!-- Icon -->
-  <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type === 'folder' ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'bg-gray-50 dark:bg-gray-700'}">
+  <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type === 'folder' ? 'bg-yellow-500/10 dark:bg-yellow-500/5' : 'bg-white/8 dark:bg-white/5'}">
     {#if item.type === 'folder'}
       <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
     {:else}

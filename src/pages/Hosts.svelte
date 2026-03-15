@@ -878,15 +878,15 @@
   />
 
   <!-- Tab bar -->
-  <div class="flex gap-1 bg-gray-100 dark:bg-gray-800/60 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
+  <div class="flex gap-1 backdrop-blur-md bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
     <button
       onclick={() => activeTab = 'sites'}
       role="tab"
       aria-selected={activeTab === 'sites'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'sites'
-          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
-          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+          ? 'backdrop-blur-md bg-white/20 dark:bg-white/10 text-gray-900 dark:text-white shadow-sm ring-1 ring-white/20'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
     >
       <Server class="w-4 h-4" />
       <span class="hidden sm:inline">My Sites</span>
@@ -897,8 +897,8 @@
       aria-selected={activeTab === 'marketplace'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'marketplace'
-          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
-          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+          ? 'backdrop-blur-md bg-white/20 dark:bg-white/10 text-gray-900 dark:text-white shadow-sm ring-1 ring-white/20'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
     >
       <Users class="w-4 h-4" />
       <span class="hidden sm:inline">Marketplace</span>
@@ -909,8 +909,8 @@
       aria-selected={activeTab === 'agreements'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'agreements'
-          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
-          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+          ? 'backdrop-blur-md bg-white/20 dark:bg-white/10 text-gray-900 dark:text-white shadow-sm ring-1 ring-white/20'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
     >
       <Shield class="w-4 h-4" />
       <span class="hidden sm:inline">Agreements</span>
@@ -1022,7 +1022,7 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      class="backdrop-blur-2xl bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-2xl shadow-2xl shadow-black/10 p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete Site</h3>
@@ -1033,7 +1033,7 @@
       <div class="flex justify-end gap-3">
         <button
           onclick={() => deleteConfirm = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-white/10 dark:bg-white/5 hover:bg-white/15 dark:hover:bg-white/10 transition"
         >Cancel</button>
         <button
           onclick={confirmDeleteSite}

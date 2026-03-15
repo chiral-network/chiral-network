@@ -36,9 +36,9 @@
   let totalSize = $derived(selectedFiles.reduce((s, f) => s + f.size, 0));
 </script>
 
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
+<div class="rounded-2xl backdrop-blur-xl bg-white/10 dark:bg-white/5 p-5 shadow-lg shadow-black/5 border border-white/20 dark:border-white/10 ring-1 ring-white/10">
   <h2 class="mb-4 text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-100 dark:bg-primary-900/30">
+    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-500/15 dark:bg-primary-500/10">
       <Plus class="h-3.5 w-3.5 text-primary-600 dark:text-primary-400" />
     </div>
     Create New Site
@@ -54,9 +54,9 @@
         value={newSiteName}
         oninput={(e) => onNameChange(e.currentTarget.value)}
         placeholder="e.g. My Portfolio"
-        class="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-all
-          focus:border-primary-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-400/20
-          dark:border-gray-600 dark:bg-gray-700/50 dark:text-white dark:placeholder-gray-500 dark:focus:bg-gray-700"
+        class="w-full rounded-xl border border-gray-200 bg-white/5 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-all
+          focus:border-primary-400 focus:bg-white/10 focus:outline-none focus:ring-2 focus:ring-primary-400/20
+          dark:border-gray-600 dark:bg-gray-700/50 dark:text-white dark:placeholder-gray-500 dark:focus:bg-white/5"
       />
     </div>
 
@@ -73,8 +73,8 @@
       </button>
       <button
         onclick={onSelectFiles}
-        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600
-          rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-400 border border-white/20 dark:border-white/10
+          rounded-lg hover:bg-white/10 dark:hover:bg-white/5/50 transition-colors
           focus:outline-none focus:ring-2 focus:ring-gray-400/30"
       >
         <FolderOpen class="w-3.5 h-3.5" />
@@ -88,12 +88,12 @@
       tabindex="0"
       onclick={onSelectFiles}
       onkeydown={(e) => e.key === 'Enter' && onSelectFiles()}
-      class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 px-4 transition-all
+      class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed py-8 px-4 transition-all
         {isDragOver
-          ? 'border-primary-400 bg-primary-50/60 dark:border-primary-500 dark:bg-primary-900/20 scale-[1.01]'
-          : 'border-gray-200 bg-gray-50/30 hover:border-gray-300 hover:bg-gray-50/60 dark:border-gray-600/70 dark:bg-gray-700/20 dark:hover:border-gray-500'}"
+          ? 'border-primary-400/40 bg-primary-500/15 dark:border-primary-500/30 dark:bg-primary-500/10 scale-[1.01]'
+          : 'border-gray-200 bg-white/5 hover:border-white/20 hover:bg-white/8 dark:border-gray-600/70 dark:bg-gray-700/20 dark:hover:border-white/15'}"
     >
-      <div class="flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700/60">
+      <div class="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 dark:bg-white/5">
         <FolderOpen class="h-6 w-6 text-gray-400 dark:text-gray-500" />
       </div>
       <p class="text-sm font-medium text-gray-600 dark:text-gray-400">
@@ -113,9 +113,9 @@
           </p>
           <p class="text-xs text-gray-400 tabular-nums">{formatFileSize(totalSize)}</p>
         </div>
-        <div class="max-h-40 overflow-y-auto rounded-xl border border-gray-100 dark:border-gray-700/60 divide-y divide-gray-100 dark:divide-gray-700/40">
+        <div class="max-h-40 overflow-y-auto rounded-xl border border-white/15 dark:border-white/10 divide-y divide-white/10 dark:divide-white/5">
           {#each selectedFiles as file, i (file.path)}
-            <div class="flex items-center justify-between px-3 py-2 hover:bg-gray-50/80 dark:hover:bg-gray-700/30 transition-colors group">
+            <div class="flex items-center justify-between px-3 py-2 hover:bg-white/5 dark:hover:bg-gray-700/30 transition-colors group">
               <div class="flex items-center gap-2.5 min-w-0">
                 <FileIcon class="h-4 w-4 flex-shrink-0 text-gray-400" />
                 <span class="truncate text-sm text-gray-700 dark:text-gray-300">{file.name}</span>

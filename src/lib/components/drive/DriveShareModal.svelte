@@ -82,18 +82,18 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={onClose}>
   <div
-    class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6"
+    class="backdrop-blur-2xl bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-xl shadow-2xl shadow-black/10 w-full max-w-lg mx-4 p-6"
     onclick={(e) => e.stopPropagation()}
   >
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Share "{item.name}"</h3>
-      <button onclick={onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
+      <button onclick={onClose} class="p-1 hover:bg-white/10 dark:hover:bg-white/5 rounded-lg transition">
         <X class="w-5 h-5 text-gray-500" />
       </button>
     </div>
 
     {#if existingShares.length > 0}
-      <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg mb-4">
+      <div class="flex items-center justify-between p-3 bg-white/8 dark:bg-white/5 rounded-lg mb-4">
         <div class="flex items-center gap-2">
           {#if isItemPublic}
             <Eye class="w-4 h-4 text-green-500" />
@@ -169,13 +169,13 @@
     </div>
 
     {#if existingShares.length > 0}
-      <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+      <div class="border-t border-white/20 dark:border-white/10 pt-4">
         <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
           Active Links ({existingShares.length})
         </h4>
         <div class="space-y-2 max-h-48 overflow-y-auto">
           {#each existingShares as share (share.id)}
-            <div class="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <div class="flex items-center gap-2 p-2 bg-white/8 dark:bg-white/5 rounded-lg">
               <div class="flex-1 min-w-0">
                 <code class="text-xs text-gray-600 dark:text-gray-400 font-mono truncate block">
                   {driveStore.getShareUrl(share.id)}

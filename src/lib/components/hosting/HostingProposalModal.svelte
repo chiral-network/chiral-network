@@ -65,9 +65,9 @@
   aria-modal="true"
   aria-label="Propose hosting agreement"
 >
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-lg overflow-hidden">
+  <div class="backdrop-blur-2xl bg-white/15 dark:bg-white/10 rounded-2xl shadow-2xl border border-white/20 dark:border-white/10 w-full max-w-lg overflow-hidden">
     <!-- Header -->
-    <div class="flex items-center justify-between p-5 pb-4 border-b border-gray-100 dark:border-gray-700/60">
+    <div class="flex items-center justify-between p-5 pb-4 border-b border-white/15 dark:border-white/10">
       <div>
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Propose Hosting Agreement</h3>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">
@@ -76,7 +76,7 @@
       </div>
       <button
         onclick={onClose}
-        class="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors
+        class="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors
           focus:outline-none focus:ring-2 focus:ring-gray-400/30"
         aria-label="Close"
       >
@@ -87,17 +87,17 @@
     <div class="p-5 space-y-5 max-h-[70vh] overflow-y-auto">
       <!-- Host summary -->
       <div class="grid grid-cols-3 gap-3">
-        <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-gray-50 dark:bg-gray-700/40">
+        <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10">
           <Coins class="w-4 h-4 text-gray-400" />
           <span class="text-xs font-semibold text-gray-900 dark:text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.pricePerMbPerDayWei)}</span>
           <span class="text-[10px] text-gray-400 uppercase tracking-wide">per MB/day</span>
         </div>
-        <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-gray-50 dark:bg-gray-700/40">
+        <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10">
           <Shield class="w-4 h-4 text-gray-400" />
           <span class="text-xs font-semibold text-gray-900 dark:text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
           <span class="text-[10px] text-gray-400 uppercase tracking-wide">deposit</span>
         </div>
-        <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-gray-50 dark:bg-gray-700/40">
+        <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10">
           <HardDrive class="w-4 h-4 text-gray-400" />
           <span class="text-xs font-semibold text-gray-900 dark:text-white tabular-nums">{formatBytes(proposalHost.availableStorageBytes)}</span>
           <span class="text-[10px] text-gray-400 uppercase tracking-wide">available</span>
@@ -128,12 +128,12 @@
           oninput={(e) => onFileHashesChange(e.currentTarget.value)}
           rows="3"
           placeholder="Paste file hashes, one per line..."
-          class="w-full p-3 text-sm font-mono bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-xl text-gray-900 dark:text-white placeholder-gray-400
+          class="w-full p-3 text-sm font-mono bg-white/8 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-xl text-gray-900 dark:text-white placeholder-gray-400
             focus:ring-2 focus:ring-primary-400/20 focus:border-primary-400 focus:outline-none resize-none transition-all"
         ></textarea>
 
         {#if showDrivePicker}
-          <div class="mt-2 max-h-40 overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50/50 dark:bg-gray-700/30 divide-y divide-gray-100 dark:divide-gray-700/40">
+          <div class="mt-2 max-h-40 overflow-y-auto rounded-xl border border-white/20 dark:border-white/10 bg-white/8 dark:bg-white/5 divide-y divide-white/10 dark:divide-white/5">
             {#if driveFiles.length === 0}
               <p class="text-xs text-gray-400 dark:text-gray-500 p-4 text-center">No files in Drive</p>
             {:else}
@@ -141,7 +141,7 @@
                 <button
                   onclick={() => onAddDriveFile(file.id, file.name)}
                   disabled={publishingDriveFile === file.id}
-                  class="flex items-center justify-between w-full px-3 py-2.5 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-600/50 transition-colors
+                  class="flex items-center justify-between w-full px-3 py-2.5 text-left text-sm hover:bg-white/10 dark:hover:bg-white/5 transition-colors
                     disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:bg-gray-100 dark:focus:bg-gray-600/50"
                 >
                   <div class="flex items-center gap-2.5 min-w-0">
@@ -201,18 +201,18 @@
     </div>
 
     <!-- Footer actions -->
-    <div class="flex justify-end gap-3 p-5 pt-4 border-t border-gray-100 dark:border-gray-700/60 bg-gray-50/50 dark:bg-gray-800">
+    <div class="flex justify-end gap-3 p-5 pt-4 border-t border-white/15 dark:border-white/10 bg-white/8 dark:bg-white/5">
       <button
         onclick={onClose}
-        class="px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-xl
-          hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+        class="px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-white/20 dark:border-white/10 rounded-xl
+          hover:bg-white/10 dark:hover:bg-white/5 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400/30"
       >
         Cancel
       </button>
       <button
         onclick={onSendProposal}
         disabled={isProposing || hashCount === 0}
-        class="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all
+        class="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 hover:bg-primary-500/90 dark:hover:bg-primary-600/80 text-white rounded-xl transition-all
           shadow-sm shadow-primary-500/20 hover:shadow-md hover:shadow-primary-500/25 active:scale-[0.98]
           focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900
           disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"

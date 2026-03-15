@@ -129,7 +129,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={menuEl}
-  class="fixed z-[100] w-48 overflow-y-auto bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1"
+  class="fixed z-[100] w-48 overflow-y-auto backdrop-blur-2xl bg-white/15 dark:bg-white/10 rounded-lg shadow-xl shadow-black/10 border border-white/20 dark:border-white/15 py-1"
   style="left: {menuLeft}px; top: {menuTop}px; max-height: {menuMaxHeight}px;"
   onclick={(e) => e.stopPropagation()}
 >
@@ -139,7 +139,7 @@
       class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition
         {mi.danger
           ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
-          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}"
+          : 'text-gray-700 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
     >
       <svelte:component this={mi.icon} class="w-4 h-4" />
       {mi.label}

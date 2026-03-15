@@ -25,7 +25,7 @@
 <svelte:head><title>Chiral Network</title></svelte:head>
 
 {#if mode === 'select'}
-  <div class="flex items-center justify-center min-h-screen bg-white dark:bg-gray-950 p-6">
+  <div class="flex items-center justify-center min-h-screen p-6">
     <div class="max-w-md w-full">
       <!-- Logo and title -->
       <div class="text-center mb-10">
@@ -39,12 +39,12 @@
       </div>
 
       <!-- Card -->
-      <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-8 shadow-lg">
+      <div class="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-2xl p-8 shadow-lg shadow-black/5 ring-1 ring-white/10">
         <h2 class="text-2xl font-semibold text-gray-900 dark:text-white mb-6">Get Started</h2>
 
         <button
           onclick={handleCreateWallet}
-          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-primary-600 hover:bg-primary-700 text-white rounded-xl transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+          class="w-full flex items-start gap-4 px-5 py-4 mb-4 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 hover:bg-primary-500/90 dark:hover:bg-primary-600/80 text-white rounded-xl transition-all shadow-sm shadow-black/5 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
         >
           <div class="flex-shrink-0 mt-0.5 p-2 bg-white/20 rounded-lg">
             <Plus class="w-5 h-5" />
@@ -57,9 +57,9 @@
 
         <button
           onclick={handleUseExisting}
-          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+          class="w-full flex items-start gap-4 px-5 py-4 border border-white/20 dark:border-white/10 backdrop-blur-md bg-white/10 dark:bg-white/5 hover:bg-white/20 dark:hover:bg-white/10 text-gray-900 dark:text-white rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-gray-400/30"
         >
-          <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-200 dark:bg-gray-600 rounded-lg">
+          <div class="flex-shrink-0 mt-0.5 p-2 bg-white/15 dark:bg-white/10 rounded-lg">
             <KeyRound class="w-5 h-5" />
           </div>
           <div class="text-left">
@@ -71,11 +71,11 @@
     </div>
   </div>
 {:else if mode === 'create'}
-  <div class="min-h-screen bg-white dark:bg-gray-950 py-12">
+  <div class="min-h-screen py-12">
     <WalletCreation onBack={handleBack} onComplete={handleComplete} />
   </div>
 {:else if mode === 'login'}
-  <div class="min-h-screen bg-white dark:bg-gray-950 py-12">
+  <div class="min-h-screen py-12">
     <WalletLogin onBack={handleBack} onComplete={handleComplete} />
   </div>
 {/if}

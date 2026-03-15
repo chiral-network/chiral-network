@@ -23,6 +23,65 @@
   }
 }
 
+@layer components {
+  /* Glassmorphism utility classes */
+  .glass {
+    @apply backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 ring-1 ring-white/10;
+  }
+
+  .glass-card {
+    @apply backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-2xl shadow-lg shadow-black/5 ring-1 ring-white/10;
+  }
+
+  .glass-panel {
+    @apply backdrop-blur-xl bg-white/15 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-xl shadow-lg shadow-black/5;
+  }
+
+  .glass-button {
+    @apply backdrop-blur-md bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-lg shadow-sm shadow-black/5 hover:bg-white/25 dark:hover:bg-white/15 transition-all;
+  }
+
+  .glass-button-primary {
+    @apply backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 dark:border-primary-500/30 rounded-lg shadow-sm shadow-black/5 hover:bg-primary-500/90 dark:hover:bg-primary-600/80 text-white transition-all;
+  }
+
+  .glass-input {
+    @apply backdrop-blur-md bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-white/30;
+  }
+
+  .glass-sidebar {
+    @apply backdrop-blur-2xl bg-white/10 dark:bg-white/5 border-r border-white/15 dark:border-white/10;
+  }
+
+  .glass-navbar {
+    @apply backdrop-blur-2xl bg-white/10 dark:bg-white/5 border-b border-white/15 dark:border-white/10 shadow-lg shadow-black/5;
+  }
+
+  .glass-modal {
+    @apply backdrop-blur-2xl bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-2xl shadow-2xl shadow-black/10;
+  }
+
+  .glass-toast {
+    @apply backdrop-blur-xl bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-lg shadow-lg shadow-black/10;
+  }
+
+  .glass-stat {
+    @apply backdrop-blur-md bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10 rounded-lg;
+  }
+
+  .glass-tab-active {
+    @apply backdrop-blur-md bg-white/20 dark:bg-white/10 shadow-sm ring-1 ring-white/20;
+  }
+
+  .glass-tab-inactive {
+    @apply hover:bg-white/10 dark:hover:bg-white/5;
+  }
+
+  .glass-context-menu {
+    @apply backdrop-blur-2xl bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-lg shadow-xl shadow-black/10;
+  }
+}
+
 @layer utilities {
   .text-muted-foreground {
     @apply text-gray-600 dark:text-gray-400;
