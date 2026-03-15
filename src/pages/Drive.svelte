@@ -455,10 +455,28 @@
     if (!seedModalItem) return;
     const item = seedModalItem;
     seedModalItem = null;
-    const priceChi = normalizePriceChi(seedPrice) || undefined;
-    const result = await driveStore.seedFile(item.id, seedProtocol, priceChi);
+    const priceChi = normalizePriceChi(seedPrice);
+    const priceLabel = priceChi || 'Free';
+
+    if (!$networkConnected) {
+      // No network — just save the price locally
+      try {
+        await driveStore.updatePrice(item.id, priceChi);
+        toasts.show(`Price set to ${priceLabel} — connect to network to start seeding`, 'info');
+      } catch {
+        toasts.show(`Failed to update price for "${item.name}"`, 'error');
+      }
+      return;
+    }
+
+    const result = await driveStore.seedFile(item.id, seedProtocol, priceChi || undefined);
     if (result) {
-      toasts.show(`Now seeding "${item.name}" via ${seedProtocol}`, 'success');
+      toasts.show(
+        item.seeding
+          ? `Updated "${item.name}" — ${seedProtocol}, ${priceLabel}`
+          : `Now seeding "${item.name}" via ${seedProtocol}`,
+        'success',
+      );
     } else {
       toasts.show(`Failed to seed "${item.name}"`, 'error');
     }

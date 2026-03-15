@@ -268,6 +268,24 @@ function createDriveStore() {
       }
     },
 
+    async updatePrice(id: string, priceChi: string) {
+      syncOwner();
+      try {
+        await driveApi.updateItem(id, { price_chi: priceChi });
+        update(m => {
+          const item = m.items.find(i => i.id === id);
+          if (item) {
+            item.priceChi = priceChi || undefined;
+            item.modifiedAt = Date.now();
+          }
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to update price:', e);
+        throw e;
+      }
+    },
+
     async deleteItem(id: string) {
       syncOwner();
       try {

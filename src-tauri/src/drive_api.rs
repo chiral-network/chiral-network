@@ -243,6 +243,7 @@ struct UpdateItemRequest {
     name: Option<String>,
     parent_id: Option<String>,
     starred: Option<bool>,
+    price_chi: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -498,6 +499,9 @@ async fn update_item(
     }
     if let Some(starred) = req.starred {
         item.starred = starred;
+    }
+    if let Some(p) = req.price_chi {
+        item.price_chi = if p.is_empty() { None } else { Some(p) };
     }
     item.modified_at = now_secs();
 

@@ -5082,6 +5082,7 @@ async fn drive_update_item(
     name: Option<String>,
     parent_id: Option<String>,
     starred: Option<bool>,
+    price_chi: Option<String>,
 ) -> Result<DsItem, String> {
     if owner.is_empty() {
         return Err("owner required".into());
@@ -5103,6 +5104,9 @@ async fn drive_update_item(
     }
     if let Some(s) = starred {
         item.starred = s;
+    }
+    if let Some(p) = price_chi {
+        item.price_chi = if p.is_empty() { None } else { Some(p) };
     }
     item.modified_at = ds::now_secs();
     let updated = item.clone();

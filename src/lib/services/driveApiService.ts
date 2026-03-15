@@ -214,7 +214,7 @@ export const driveApi = {
   /** Update item properties (rename, move, star) */
   async updateItem(
     id: string,
-    updates: { name?: string; parent_id?: string | null; starred?: boolean },
+    updates: { name?: string; parent_id?: string | null; starred?: boolean; price_chi?: string },
   ): Promise<DriveItem> {
     if (isTauri()) {
       const invoke = await getInvoke();
@@ -224,6 +224,7 @@ export const driveApi = {
         name: updates.name ?? null,
         parentId: updates.parent_id ?? null,
         starred: updates.starred ?? null,
+        priceChi: updates.price_chi ?? null,
       });
       return convertItem(item);
     }

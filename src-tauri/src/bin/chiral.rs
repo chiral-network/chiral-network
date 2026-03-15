@@ -1949,6 +1949,8 @@ struct UpdateItemPayload {
     parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     starred: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    price_chi: Option<String>,
 }
 
 async fn drive_list_items(
@@ -2019,6 +2021,7 @@ async fn drive_set_starred(
         name: None,
         parent_id: None,
         starred: Some(starred),
+        price_chi: None,
     };
     drive_update_item(client, port, owner, item_id, &payload).await
 }
@@ -2996,6 +2999,7 @@ async fn handle_drive(cmd: DriveCommand) -> Result<(), String> {
                 name: Some(name),
                 parent_id: None,
                 starred: None,
+                price_chi: None,
             };
             let item = drive_update_item(&client, port, &owner, &item_id, &payload).await?;
             println!("renamed id={} name={}", item.id, item.name);
@@ -3011,6 +3015,7 @@ async fn handle_drive(cmd: DriveCommand) -> Result<(), String> {
                 name: None,
                 parent_id,
                 starred: None,
+                price_chi: None,
             };
             let item = drive_update_item(&client, port, &owner, &item_id, &payload).await?;
             println!("moved id={} parent_id={:?}", item.id, item.parent_id);
