@@ -580,13 +580,13 @@
  {$nearbyPeers.length} peers online
  </div>
  {#if $incomingPendingTransfers.length > 0}
- <div class="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-500/[0.1]0/[0.1] px-3 py-1 text-xs font-medium text-amber-400">
+ <div class="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-500/[0.1]0/[0.1]0/[0.1] px-3 py-1 text-xs font-medium text-amber-400">
  {$incomingPendingTransfers.length} pending request{$incomingPendingTransfers.length === 1 ?'' :'s'}
  </div>
  {/if}
  <button
  onclick={() => showHistory = !showHistory}
- class="inline-flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2 text-sm font-medium text-white/50 shadow-black/5 transition hover:bg-white/[0.05] focus:outline-none "
+ class="inline-flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2 text-sm font-medium text-white/50 shadow-black/5 transition hover:bg-white/[0.05] focus:outline-none"
  >
  <History class="h-4 w-4" />
  <span>{showHistory ?'Hide History' :'Show History'}</span>
@@ -638,7 +638,7 @@
  {#each $nearbyPeers as peer (peer.peerId)}
  <button
  onclick={() => handlePeerClick(peer)}
- class="peer-node group absolute z-20 focus:outline-none "
+ class="peer-node group absolute z-20 focus:outline-none"
  style="left: {peer.position.x}%; top: {peer.position.y}%; transform: translate(-50%, -50%);"
  >
  <span class="peer-glow absolute inset-0 rounded-full bg-primary-400/20 blur-md"></span>
@@ -689,7 +689,7 @@
  <h3 class="mb-3 font-semibold text-white/90">Incoming Transfers</h3>
  <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
  {#each $incomingPendingTransfers as transfer (transfer.id)}
- <div class="rounded-xl border border-amber-100 bg-amber-500/[0.1]/60 p-3">
+ <div class="rounded-xl border border-amber-100 bg-amber-500/[0.1]0/[0.1]/60 p-3">
  <div class="flex items-start gap-3">
  <div
  class="h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0"
@@ -713,7 +713,7 @@
  <div class="mt-3 flex gap-2">
  <button
  onclick={() => handleAccept(transfer)}
- class="flex-1 rounded-lg bg-emerald-500/70 border border-emerald-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-500/80 focus:outline-none "
+ class="flex-1 rounded-lg bg-emerald-500/70 border border-emerald-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-500/80 focus:outline-none"
  >
  <span class="inline-flex items-center justify-center gap-1">
  <Check class="h-4 w-4" />
@@ -724,7 +724,7 @@
  </button>
  <button
  onclick={() => handleDecline(transfer)}
- class="flex-1 rounded-lg bg-rose-500/70 border border-rose-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-500/80 focus:outline-none "
+ class="flex-1 rounded-lg bg-rose-500/70 border border-rose-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-500/80 focus:outline-none"
  >
  <span class="inline-flex items-center justify-center gap-1">
  <X class="h-4 w-4" />
@@ -775,7 +775,7 @@
  min="0"
  placeholder="0 (free)"
  bind:value={sendPrice}
- class="flex-1 rounded-lg border border-white/[0.06] bg-white/[0.05] px-3 py-2 text-sm text-white/90 outline-none transition focus:border-primary-400 "
+ class="flex-1 rounded-lg border border-white/[0.06] bg-white/[0.05] px-3 py-2 text-sm text-white/90 outline-none transition focus:border-primary-400"
  />
  </div>
  {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -784,7 +784,7 @@
  </div>
  <button
  onclick={handleSendClick}
- class="w-full rounded-xl bg-violet-500/80 border border-primary-400/30 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500/90 focus:outline-none "
+ class="w-full rounded-xl bg-violet-500/80 border border-primary-400/30 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500/90 focus:outline-none"
  >
  <span class="inline-flex items-center justify-center gap-2">
  <Send class="h-4 w-4" />

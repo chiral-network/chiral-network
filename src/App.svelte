@@ -1,24 +1,24 @@
 <script lang="ts">
- import { Router, type RouteConfig, goto } from '@mateothegreat/svelte5-router';
- import { isAuthenticated, isDarkMode, networkConnected, settings, walletAccount } from '$lib/stores';
- import { toasts } from '$lib/toastStore';
- import { dhtService } from '$lib/dhtService';
- import { gethService } from '$lib/services/gethService';
- import { applyColorTheme } from '$lib/services/colorThemeService';
- import { onDestroy, onMount } from 'svelte';
- import Navbar from '$lib/components/Navbar.svelte';
- import Sidebar from '$lib/components/Sidebar.svelte';
- import Toast from '$lib/components/Toast.svelte';
- import WalletPage from './pages/Wallet.svelte';
- import DownloadPage from './pages/Download.svelte';
- import ChiralDropPage from './pages/ChiralDrop.svelte';
- import AccountPage from './pages/Account.svelte';
- import NetworkPage from './pages/Network.svelte';
- import MiningPage from './pages/Mining.svelte';
- import DiagnosticsPage from './pages/Diagnostics.svelte';
- import SettingsPage from './pages/Settings.svelte';
- import HostsPage from './pages/Hosts.svelte';
- import DrivePage from './pages/Drive.svelte';
+ import { Router, type RouteConfig, goto } from'@mateothegreat/svelte5-router';
+ import { isAuthenticated, isDarkMode, networkConnected, settings, walletAccount } from'$lib/stores';
+ import { toasts } from'$lib/toastStore';
+ import { dhtService } from'$lib/dhtService';
+ import { gethService } from'$lib/services/gethService';
+ import { applyColorTheme } from'$lib/services/colorThemeService';
+ import { onDestroy, onMount } from'svelte';
+ import Navbar from'$lib/components/Navbar.svelte';
+ import Sidebar from'$lib/components/Sidebar.svelte';
+ import Toast from'$lib/components/Toast.svelte';
+ import WalletPage from'./pages/Wallet.svelte';
+ import DownloadPage from'./pages/Download.svelte';
+ import ChiralDropPage from'./pages/ChiralDrop.svelte';
+ import AccountPage from'./pages/Account.svelte';
+ import NetworkPage from'./pages/Network.svelte';
+ import MiningPage from'./pages/Mining.svelte';
+ import DiagnosticsPage from'./pages/Diagnostics.svelte';
+ import SettingsPage from'./pages/Settings.svelte';
+ import HostsPage from'./pages/Hosts.svelte';
+ import DrivePage from'./pages/Drive.svelte';
 
 
  let currentPath = $state('/wallet');
@@ -32,7 +32,7 @@
 
  // Apply dark mode class to document
  $effect(() => {
- if (typeof document !== 'undefined') {
+ if (typeof document !=='undefined') {
  if ($isDarkMode) {
  document.documentElement.classList.add('dark');
  } else {
@@ -43,7 +43,7 @@
 
  // Apply color theme
  $effect(() => {
- if (typeof document !== 'undefined') {
+ if (typeof document !=='undefined') {
  applyColorTheme($settings.colorTheme);
  }
  });
@@ -52,7 +52,7 @@
  // + Auto-register hosted files as seeded when downloads complete
  // + Auto-reseed legacy uploads and hosted files on startup
  onMount(async () => {
- if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+ if (typeof window !=='undefined' &&'__TAURI_INTERNALS__' in window) {
  const { getCurrentWindow } = await import('@tauri-apps/api/window');
  const { invoke } = await import('@tauri-apps/api/core');
  const { listen } = await import('@tauri-apps/api/event');
@@ -95,7 +95,7 @@
  const agreement = JSON.parse(json);
  if (
  agreement.hostPeerId === myPeerId &&
- (agreement.status === 'accepted' || agreement.status === 'active') &&
+ (agreement.status ==='accepted' || agreement.status ==='active') &&
  agreement.fileHashes?.includes(fileHash)
  ) {
  // Register as seeder and publish to DHT
@@ -106,7 +106,7 @@
  console.log(`✅ Auto-registered hosted file ${fileHash} as seeder`);
 
  // Update agreement status to active
- agreement.status = 'active';
+ agreement.status ='active';
  await invoke('store_hosting_agreement', {
  agreementId: id,
  agreementJson: JSON.stringify(agreement),
@@ -114,9 +114,9 @@
 
  // Notify proposer that hosting is active (best-effort)
  const message = JSON.stringify({
- type: 'hosting_response',
+ type:'hosting_response',
  agreementId: id,
- status: 'active',
+ status:'active',
  });
  try {
  await invoke('echo_peer', {
@@ -127,19 +127,19 @@
  // Peer offline — they'll see the status change when they load agreements
  }
 
- // Add hosted file to Drive "Shared" folder
+ // Add hosted file to Drive"Shared" folder
  try {
  const addr = $walletAccount?.address;
  if (addr) {
  const rootItems = await invoke<{ id: string; name: string; itemType: string }[]>(
- 'drive_list_items', { owner: addr, parentId: null },
+'drive_list_items', { owner: addr, parentId: null },
  );
  let sharedFolder = rootItems.find(
- (i) => i.name === 'Shared' && i.itemType === 'folder',
+ (i) => i.name ==='Shared' && i.itemType ==='folder',
  );
  if (!sharedFolder) {
  sharedFolder = await invoke<{ id: string; name: string; itemType: string }>(
- 'drive_create_folder', { owner: addr, name: 'Shared', parentId: null },
+'drive_create_folder', { owner: addr, name:'Shared', parentId: null },
  );
  }
  await invoke('drive_upload_file', {
@@ -166,7 +166,7 @@
  });
 
  onDestroy(() => {
- if (hostingAutoPublishRetryTimer !== null && typeof window !== 'undefined') {
+ if (hostingAutoPublishRetryTimer !== null && typeof window !=='undefined') {
  window.clearTimeout(hostingAutoPublishRetryTimer);
  hostingAutoPublishRetryTimer = null;
  }
@@ -175,9 +175,9 @@
  });
 
  // Auto-reseed AFTER Kademlia bootstrap completes, so DHT puts propagate.
- // The Rust backend emits "dht-bootstrap-complete" once bootstrap finishes.
+ // The Rust backend emits"dht-bootstrap-complete" once bootstrap finishes.
  onMount(async () => {
- if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+ if (typeof window !=='undefined' &&'__TAURI_INTERNALS__' in window) {
  const { listen } = await import('@tauri-apps/api/event');
  unlistenBootstrapComplete = await listen('dht-bootstrap-complete', () => {
  void maybeAutoReseed(true);
@@ -186,7 +186,7 @@
  });
 
  async function maybeAutoReseed(force = false) {
- if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+ if (typeof window ==='undefined' || !('__TAURI_INTERNALS__' in window)) return;
  if (!$isAuthenticated || !$networkConnected) return;
  const addr = $walletAccount?.address ?? null;
  if (!addr) return;
@@ -203,7 +203,7 @@
  }
 
  async function autoReseedOnStartup() {
- if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+ if (typeof window ==='undefined' || !('__TAURI_INTERNALS__' in window)) return;
  const { invoke } = await import('@tauri-apps/api/core');
  const walletAddress = $walletAccount?.address ?? null;
 
@@ -222,7 +222,7 @@
  filePath: file.filePath,
  fileName: file.name,
  fileSize: file.size,
- priceChi: file.priceChi && file.priceChi !== '0' ? file.priceChi : null,
+ priceChi: file.priceChi && file.priceChi !=='0' ? file.priceChi : null,
  walletAddress,
  });
  count++;
@@ -239,7 +239,7 @@
  // 2. Re-register hosted files from active agreements
  try {
  const hostedEntries = await invoke<{ fileHash: string; agreementId: string; clientPeerId: string }[]>(
- 'get_active_hosted_files'
+'get_active_hosted_files'
  );
  if (hostedEntries.length > 0) {
  const downloadDir = await invoke<string>('get_download_directory');
@@ -267,14 +267,14 @@
  }
 
  function clearHostingAutoPublishRetry() {
- if (hostingAutoPublishRetryTimer !== null && typeof window !== 'undefined') {
+ if (hostingAutoPublishRetryTimer !== null && typeof window !=='undefined') {
  window.clearTimeout(hostingAutoPublishRetryTimer);
  hostingAutoPublishRetryTimer = null;
  }
  }
 
  function scheduleHostingAutoPublishRetry() {
- if (typeof window === 'undefined' || hostingAutoPublishRetryTimer !== null) return;
+ if (typeof window ==='undefined' || hostingAutoPublishRetryTimer !== null) return;
  hostingAutoPublishRetryTimer = window.setTimeout(() => {
  hostingAutoPublishRetryTimer = null;
  void maybeAutoPublishHosting();
@@ -283,7 +283,7 @@
 
  async function maybeAutoPublishHosting(): Promise<void> {
  if (
- typeof window === 'undefined'
+ typeof window ==='undefined'
  || !('__TAURI_INTERNALS__' in window)
  || !$isAuthenticated
  || !$networkConnected
@@ -318,72 +318,72 @@
 
  const authenticatedRoutes: RouteConfig[] = [
  {
- path: '/download',
+ path:'/download',
  component: DownloadPage
  },
  {
- path: '/chiraldrop',
+ path:'/chiraldrop',
  component: ChiralDropPage
  },
  {
- path: '/account',
+ path:'/account',
  component: AccountPage
  },
  {
- path: '/network',
+ path:'/network',
  component: NetworkPage
  },
  {
- path: '/mining',
+ path:'/mining',
  component: MiningPage
  },
  {
- path: '/diagnostics',
+ path:'/diagnostics',
  component: DiagnosticsPage
  },
  {
- path: '/hosts',
+ path:'/hosts',
  component: HostsPage
  },
  {
- path: '/drive',
+ path:'/drive',
  component: DrivePage
  },
 {
- path: '/settings',
+ path:'/settings',
  component: SettingsPage
  },
  {
- path: '/',
+ path:'/',
  component: NetworkPage
  }
  ];
  
  const unauthenticatedRoutes: RouteConfig[] = [
  {
- path: '/wallet',
+ path:'/wallet',
  component: WalletPage
  },
  {
- path: '/',
+ path:'/',
  component: WalletPage
  },
  {
- path: '*',
+ path:'*',
  component: WalletPage
  }
  ];
  
  // Track current path for navbar highlighting
  $effect(() => {
- currentPath = window.location.pathname || '/';
+ currentPath = window.location.pathname ||'/';
  });
  
  // Redirect to network page when authenticated
  $effect(() => {
  if ($isAuthenticated) {
  const path = window.location.pathname;
- if (path === '/wallet' || path === '/') {
+ if (path ==='/wallet' || path ==='/') {
  goto('/network');
  }
  }
@@ -392,7 +392,7 @@
  // Sync download directory setting to backend on startup
  let downloadDirSynced = false;
  $effect(() => {
- if (!downloadDirSynced && typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window)) {
+ if (!downloadDirSynced && typeof window !=='undefined' && ('__TAURI__' in window ||'__TAURI_INTERNALS__' in window)) {
  downloadDirSynced = true;
  const dir = $settings.downloadDirectory;
  if (dir) {
@@ -406,7 +406,7 @@
  // Auto-connect DHT once on app launch.
  let dhtAutoConnected = false;
  $effect(() => {
- if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+ if (typeof window ==='undefined' || !('__TAURI_INTERNALS__' in window)) return;
  if (!dhtAutoConnected) {
  dhtAutoConnected = true;
  dhtService.start().catch((err) => {
@@ -420,8 +420,8 @@
  // or when DHT is already running on app startup.
  $effect(() => {
  const canReseed =
- typeof window !== 'undefined'
- && '__TAURI_INTERNALS__' in window
+ typeof window !=='undefined'
+ &&'__TAURI_INTERNALS__' in window
  && $isAuthenticated
  && $networkConnected
  && !!$walletAccount?.address;
@@ -482,10 +482,10 @@
 </script>
 
 {#if $isAuthenticated}
- {#if $settings.navStyle === 'sidebar'}
- <div class="min-h-screen bg-slate-200 transition-colors">
+ {#if $settings.navStyle ==='sidebar'}
+ <div class="min-h-screen bg-white/[0.06] transition-colors">
  <Sidebar currentPage={currentPath} bind:collapsed={sidebarCollapsed} />
- <div class="transition-[margin] duration-200 hidden md:block {sidebarCollapsed ? 'md:ml-16' : 'md:ml-48'}">
+ <div class="transition-[margin] duration-200 hidden md:block {sidebarCollapsed ?'md:ml-16' :'md:ml-48'}">
  <Router routes={authenticatedRoutes} />
  </div>
  <div class="md:hidden">
@@ -493,13 +493,13 @@
  </div>
  </div>
  {:else}
- <div class="min-h-screen bg-slate-200 transition-colors">
+ <div class="min-h-screen bg-white/[0.06] transition-colors">
  <Navbar currentPage={currentPath} />
  <Router routes={authenticatedRoutes} />
  </div>
  {/if}
 {:else}
- <div class="dark:bg-[var(--surface-0)] bg-slate-200 min-h-screen transition-colors">
+ <div class="bg-[#13111C] min-h-screen transition-colors">
  <Router routes={unauthenticatedRoutes} />
  </div>
 {/if}

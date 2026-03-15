@@ -417,7 +417,7 @@
  <button
  onclick={refreshAll}
  disabled={isLoading}
- class="p-2 hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50 focus:outline-none "
+ class="p-2 hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50 focus:outline-none"
  title="Refresh status"
  >
  <RefreshCw class="w-5 h-5 {isLoading ?'animate-spin' :''}" />
@@ -642,7 +642,7 @@
  <!-- GPU Control -->
  <div class="mb-4">
  {#if !gpuCapabilities?.binaryPath}
- <div class="rounded-lg border border-amber-200 bg-amber-500/[0.1] p-3">
+ <div class="rounded-lg border border-amber-200 bg-amber-500/[0.1]0/[0.1] p-3">
  {#if gpuCapabilities?.lastError}
  <p class="text-sm text-amber-800">
  GPU miner is unavailable: {gpuCapabilities.lastError}
@@ -658,7 +658,7 @@
  </div>
  {:else}
  {#if gpuCapabilities?.lastError}
- <div class="mb-3 rounded-lg border border-amber-200 bg-amber-500/[0.1] p-3">
+ <div class="mb-3 rounded-lg border border-amber-200 bg-amber-500/[0.1]0/[0.1] p-3">
  <p class="text-sm text-amber-800">
  GPU probe warning: {gpuCapabilities.lastError}
  </p>
@@ -696,7 +696,7 @@
  {/if}
 
  {#if gpuMiningStatus?.lastError}
- <div class="mb-4 rounded-lg border border-red-400/20 bg-red-500/[0.1] p-3">
+ <div class="mb-4 rounded-lg border border-red-400/20 bg-red-500/[0.1]0/[0.1] p-3">
  <p class="text-sm text-red-700">{gpuMiningStatus.lastError}</p>
  </div>
  {/if}
@@ -706,7 +706,7 @@
  {#if isAnyMining}
  <button
  onclick={handleStopMining}
- class="flex-1 px-4 py-3 bg-red-500/[0.1]0/70 border border-red-400/30 text-white rounded-lg hover:bg-red-500/[0.15]0/80 transition-colors flex items-center justify-center gap-2 focus:outline-none "
+ class="flex-1 px-4 py-3 bg-red-500/[0.1]0/[0.1]0/70 border border-red-400/30 text-white rounded-lg hover:bg-red-500/[0.1]0/[0.15]0/80 transition-colors flex items-center justify-center gap-2 focus:outline-none"
  >
  <Square class="w-5 h-5" />
  Stop Mining
@@ -715,7 +715,7 @@
  <button
  onclick={handleStartMining}
  disabled={isStartingMining || (miningMode ==='gpu' && !gpuCapabilities?.binaryPath)}
- class="flex-1 px-4 py-3 bg-yellow-500/[0.1]0/70 border border-yellow-400/30 text-white rounded-lg hover:bg-yellow-500/[0.1]0/80 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none "
+ class="flex-1 px-4 py-3 bg-yellow-500/[0.1]0/70 border border-yellow-400/30 text-white rounded-lg hover:bg-yellow-500/[0.1]0/80 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none"
  >
  {#if isStartingMining}
  <Loader2 class="w-5 h-5 animate-spin" />

@@ -30,7 +30,7 @@
 <div class="rounded-xl border p-4 transition-colors
  {serverRunning
  ?'border-green-400/20 bg-green-500/10'
- :'border-[var(--border)] bg-[var(--surface-1)]'}">
+ :'border-white/[0.06] bg-white/[0.05]'}">
  
  <div class="flex items-center justify-between gap-4 flex-wrap">
  <div class="flex items-center gap-3">
@@ -85,8 +85,8 @@
  {#if serverRunning}
  <button
  onclick={onStopServer}
- class="flex items-center gap-2 rounded-xl bg-red-500/[0.1]0 px-4 py-2 text-sm font-medium text-white transition-colors
- hover:bg-red-500/[0.15]0/80 focus:outline-none "
+ class="flex items-center gap-2 rounded-xl bg-red-500/[0.1]0/[0.1]0 px-4 py-2 text-sm font-medium text-white transition-colors
+ hover:bg-red-500/[0.1]0/[0.15]0/80 focus:outline-none"
  >
  <PowerOff class="h-4 w-4" />
  Stop

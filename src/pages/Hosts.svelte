@@ -1037,7 +1037,7 @@
  >Cancel</button>
  <button
  onclick={confirmDeleteSite}
- class="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/[0.1]0/70 border border-red-400/30 text-white hover:bg-red-500/[0.15]0/80 transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/[0.1]0/[0.1]0/70 border border-red-400/30 text-white hover:bg-red-500/[0.1]0/[0.15]0/80 transition"
  >Delete</button>
  </div>
  </div>

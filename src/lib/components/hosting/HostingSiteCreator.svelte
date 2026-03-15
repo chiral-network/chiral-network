@@ -55,7 +55,7 @@
  oninput={(e) => onNameChange(e.currentTarget.value)}
  placeholder="e.g. My Portfolio"
  class="w-full rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2.5 text-sm text-white/90 placeholder:text-white/40 transition-all
- focus:border-primary-400 focus:bg-white/[0.05] focus:outline-none "
+ focus:border-primary-400 focus:bg-white/[0.05] focus:outline-none"
  />
  </div>
 
@@ -65,7 +65,7 @@
  onclick={onSelectFromDrive}
  class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-violet-500 border border-primary-200
  rounded-lg hover:bg-violet-950/20 transition-colors
- focus:outline-none "
+ focus:outline-none"
  >
  <HardDrive class="w-3.5 h-3.5" />
  Add from Drive
@@ -74,7 +74,7 @@
  onclick={onSelectFiles}
  class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white/50 border border-white/[0.06]
  rounded-lg hover:bg-white/[0.05]/50 transition-colors
- focus:outline-none "
+ focus:outline-none"
  >
  <FolderOpen class="w-3.5 h-3.5" />
  Browse Files
@@ -142,7 +142,7 @@
  {canCreate
  ?'bg-violet-500 hover:bg-violet-500/90 shadow-primary-500/20 hover:shadow-md hover:shadow-primary-500/25 active:scale-[0.98]'
  :'bg-white/[0.05] cursor-not-allowed'}
- focus:outline-none "
+ focus:outline-none"
  >
  {#if isCreating}
  <Loader2 class="h-4 w-4 animate-spin" />

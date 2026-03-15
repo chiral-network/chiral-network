@@ -1,7 +1,7 @@
 <script lang="ts">
- import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2, Coins } from 'lucide-svelte';
- import type { DriveItem } from '$lib/stores/driveStore';
- import { computeContextMenuPlacement } from '$lib/utils/uiPositioning';
+ import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2, Coins } from'lucide-svelte';
+ import type { DriveItem } from'$lib/stores/driveStore';
+ import { computeContextMenuPlacement } from'$lib/utils/uiPositioning';
 
  let {
  item,
@@ -51,7 +51,7 @@
  }
 
  function positionMenu() {
- if (!menuEl || typeof window === 'undefined') return;
+ if (!menuEl || typeof window ==='undefined') return;
 
  const FALLBACK_WIDTH = 192;
  const FALLBACK_HEIGHT = 280;
@@ -83,7 +83,7 @@
  x;
  y;
  menuItems.length;
- if (typeof window === 'undefined' || !menuEl) return;
+ if (typeof window ==='undefined' || !menuEl) return;
 
  const rafId = window.requestAnimationFrame(positionMenu);
  const handleResize = () => positionMenu();
@@ -95,41 +95,41 @@
  });
 
  const menuItems = $derived([
- { label: 'Rename', icon: Pencil, action: action(onRename) },
- { label: 'Move to...', icon: FolderInput, action: action(onMove) },
+ { label:'Rename', icon: Pencil, action: action(onRename) },
+ { label:'Move to...', icon: FolderInput, action: action(onMove) },
  ...(onShowInExplorer
- ? [{ label: 'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
+ ? [{ label:'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
  : []),
- { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
- { label: 'Share...', icon: Share2, action: action(onShare) },
+ { label:'Copy Link', icon: Link, action: action(onCopyLink) },
+ { label:'Share...', icon: Share2, action: action(onShare) },
  // Seeding actions
- ...(item.type === 'file' && !item.seeding && onSeed
- ? [{ label: 'Seed to Network', icon: Globe, action: action(onSeed) }]
+ ...(item.type ==='file' && !item.seeding && onSeed
+ ? [{ label:'Seed to Network', icon: Globe, action: action(onSeed) }]
  : []),
  ...(item.seeding && onStopSeed
- ? [{ label: 'Stop Seeding', icon: StopCircle, action: action(onStopSeed) }]
+ ? [{ label:'Stop Seeding', icon: StopCircle, action: action(onStopSeed) }]
  : []),
  ...(item.merkleRoot && onCopyHash
- ? [{ label: 'Copy Merkle Hash', icon: Copy, action: action(onCopyHash) }]
+ ? [{ label:'Copy Merkle Hash', icon: Copy, action: action(onCopyHash) }]
  : []),
  ...(item.merkleRoot && onCopyMagnet
- ? [{ label: 'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
+ ? [{ label:'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
  : []),
- ...(item.type === 'file' && onEditPrice
- ? [{ label: 'Edit Price', icon: Coins, action: action(onEditPrice) }]
+ ...(item.type ==='file' && onEditPrice
+ ? [{ label:'Edit Price', icon: Coins, action: action(onEditPrice) }]
  : []),
  ...(item.shared
- ? [{ label: item.isPublic ? 'Make Private' : 'Make Public', icon: item.isPublic ? EyeOff : Eye, action: action(onToggleVisibility) }]
+ ? [{ label: item.isPublic ?'Make Private' :'Make Public', icon: item.isPublic ? EyeOff : Eye, action: action(onToggleVisibility) }]
  : []),
- { label: item.starred ? 'Unstar' : 'Star', icon: item.starred ? StarOff : Star, action: action(onToggleStar) },
- { label: 'Delete', icon: Trash2, action: action(onDelete), danger: true },
+ { label: item.starred ?'Unstar' :'Star', icon: item.starred ? StarOff : Star, action: action(onToggleStar) },
+ { label:'Delete', icon: Trash2, action: action(onDelete), danger: true },
  ]);
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
  bind:this={menuEl}
- class="fixed z-[100] w-48 overflow-y-auto bg-[var(--surface-1)] rounded-lg shadow-black/10 border border-[var(--border)] py-1"
+ class="fixed z-[100] w-48 overflow-y-auto bg-white/[0.05] rounded-lg shadow-black/10 border border-white/[0.06] py-1"
  style="left: {menuLeft}px; top: {menuTop}px; max-height: {menuMaxHeight}px;"
  onclick={(e) => e.stopPropagation()}
 >
@@ -138,8 +138,8 @@
  onclick={mi.action}
  class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition
  {mi.danger
- ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20'
- : 'text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ ?'text-red-400 hover:bg-red-500/[0.1]'
+ :'text-white/50 hover:bg-white/[0.05]'}"
  >
  <svelte:component this={mi.icon} class="w-4 h-4" />
  {mi.label}

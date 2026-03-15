@@ -1,26 +1,26 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
- import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
- import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
- import { setLocalDriveServer } from '$lib/services/driveApiService';
- import { walletAccount, networkConnected } from '$lib/stores';
+ import { onMount, onDestroy } from'svelte';
+ import { HardDrive, FolderPlus, Upload, Loader2 } from'lucide-svelte';
+ import { driveStore, type DriveItem, type DriveManifest } from'$lib/stores/driveStore';
+ import { setLocalDriveServer } from'$lib/services/driveApiService';
+ import { walletAccount, networkConnected } from'$lib/stores';
 
  // Track whether initialization is complete (prevents wallet subscription from firing too early)
  let initialized = false;
- import { toasts } from '$lib/toastStore';
- import { open } from '@tauri-apps/plugin-shell';
- import DriveBreadcrumb from '$lib/components/drive/DriveBreadcrumb.svelte';
- import DriveToolbar from '$lib/components/drive/DriveToolbar.svelte';
- import DriveFileCard from '$lib/components/drive/DriveFileCard.svelte';
- import DriveFileRow from '$lib/components/drive/DriveFileRow.svelte';
- import DriveContextMenu from '$lib/components/drive/DriveContextMenu.svelte';
- import DriveShareModal from '$lib/components/drive/DriveShareModal.svelte';
- import DriveMoveModal from '$lib/components/drive/DriveMoveModal.svelte';
+ import { toasts } from'$lib/toastStore';
+ import { open } from'@tauri-apps/plugin-shell';
+ import DriveBreadcrumb from'$lib/components/drive/DriveBreadcrumb.svelte';
+ import DriveToolbar from'$lib/components/drive/DriveToolbar.svelte';
+ import DriveFileCard from'$lib/components/drive/DriveFileCard.svelte';
+ import DriveFileRow from'$lib/components/drive/DriveFileRow.svelte';
+ import DriveContextMenu from'$lib/components/drive/DriveContextMenu.svelte';
+ import DriveShareModal from'$lib/components/drive/DriveShareModal.svelte';
+ import DriveMoveModal from'$lib/components/drive/DriveMoveModal.svelte';
 
 
  let manifest = $state<DriveManifest>({ version: 1, items: [], shares: [], lastModified: 0 });
  let currentFolderId = $state<string | null>(null);
- let viewMode = $state<'grid' | 'list'>('grid');
+ let viewMode = $state<'grid' |'list'>('grid');
  let searchQuery = $state('');
  let creatingFolder = $state(false);
  let newFolderName = $state('');
@@ -42,7 +42,7 @@
 
  // Seed modal
  let seedModalItem = $state<DriveItem | null>(null);
- let seedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
+ let seedProtocol = $state<'WebRTC' |'BitTorrent'>('WebRTC');
  let seedPrice = $state('');
 
  // Drag and drop
@@ -52,9 +52,9 @@
  driveStore.subscribe(m => manifest = m);
 
  // Reload drive when wallet changes (only after initialization)
- let prevWalletAddr = '';
+ let prevWalletAddr ='';
  const unsubWallet = walletAccount.subscribe((account) => {
- const addr = account?.address ?? '';
+ const addr = account?.address ??'';
  if (addr !== prevWalletAddr) {
  prevWalletAddr = addr;
  currentFolderId = null;
@@ -71,7 +71,7 @@
 
  /** Migrate chiral_upload_history from the old Upload page into Drive items */
  async function migrateUploadHistory() {
- const UPLOAD_HISTORY_KEY = 'chiral_upload_history';
+ const UPLOAD_HISTORY_KEY ='chiral_upload_history';
  const raw = localStorage.getItem(UPLOAD_HISTORY_KEY);
  if (!raw) return;
 
@@ -86,7 +86,7 @@
  let migrated = 0;
  try {
  const { invoke } = await import('@tauri-apps/api/core');
- const owner = $walletAccount?.address ?? '';
+ const owner = $walletAccount?.address ??'';
  if (!owner) return; // No wallet — can't migrate
 
  for (const entry of entries) {
@@ -99,8 +99,8 @@
  if (entry.hash) {
  await driveStore.seedFile(
  driveItem.id,
- (entry.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC',
- entry.priceChi && entry.priceChi !== '0' ? entry.priceChi : undefined,
+ (entry.protocol as'WebRTC' |'BitTorrent') ||'WebRTC',
+ entry.priceChi && entry.priceChi !=='0' ? entry.priceChi : undefined,
  );
  }
  migrated++;
@@ -112,7 +112,7 @@
  // Remove old history after migration
  localStorage.removeItem(UPLOAD_HISTORY_KEY);
  if (migrated > 0) {
- toasts.show(`Migrated ${migrated} seeded file${migrated > 1 ? 's' : ''} to Drive`, 'success');
+ toasts.show(`Migrated ${migrated} seeded file${migrated > 1 ?'s' :''} to Drive`,'success');
  }
  } catch {
  // Migration failed — keep localStorage for next attempt
@@ -130,7 +130,7 @@
  }
 
  const saved = localStorage.getItem('drive-view-mode');
- if (saved === 'list' || saved === 'grid') viewMode = saved;
+ if (saved ==='list' || saved ==='grid') viewMode = saved;
  initialized = true;
 
  // Migrate chiral_upload_history from old Upload page into Drive
@@ -147,7 +147,7 @@
  );
  const totalSize = $derived(
  manifest.items
- .filter(i => i.type === 'file' && i.size)
+ .filter(i => i.type ==='file' && i.size)
  .reduce((sum, i) => sum + (i.size || 0), 0)
  );
 
@@ -174,18 +174,18 @@
  // Navigation
  function navigateTo(folderId: string | null) {
  currentFolderId = folderId;
- searchQuery = '';
+ searchQuery ='';
  scheduleLoadCurrentFolder();
  }
 
  function handleOpen(item: DriveItem) {
- if (item.type === 'folder') {
+ if (item.type ==='folder') {
  navigateTo(item.id);
  }
  }
 
  // View mode
- function handleViewModeChange(mode: 'grid' | 'list') {
+ function handleViewModeChange(mode:'grid' |'list') {
  viewMode = mode;
  localStorage.setItem('drive-view-mode', mode);
  }
@@ -205,12 +205,12 @@
  if (result) count++;
  }
  if (count > 0) {
- toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+ toasts.show(`Uploaded ${count} file${count > 1 ?'s' :''}`,'success');
  } else {
- toasts.show('Upload failed', 'error');
+ toasts.show('Upload failed','error');
  }
  } catch (e) {
- toasts.show('Upload failed: ' + (e as Error).message, 'error');
+ toasts.show('Upload failed:' + (e as Error).message,'error');
  } finally {
  uploading = false;
  }
@@ -221,7 +221,7 @@
 
  // Browser fallback
  const input = document.createElement('input');
- input.type = 'file';
+ input.type ='file';
  input.multiple = true;
  input.onchange = async () => {
  if (!input.files || input.files.length === 0) return;
@@ -234,12 +234,12 @@
  }
  const total = input.files.length;
  if (count > 0) {
- toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+ toasts.show(`Uploaded ${count} file${count > 1 ?'s' :''}`,'success');
  } else if (total > 0) {
- toasts.show('Upload failed — could not reach the local server', 'error');
+ toasts.show('Upload failed — could not reach the local server','error');
  }
  } catch (e) {
- toasts.show('Upload failed: ' + (e as Error).message, 'error');
+ toasts.show('Upload failed:' + (e as Error).message,'error');
  } finally {
  uploading = false;
  }
@@ -250,7 +250,7 @@
  // New folder
  function handleNewFolder() {
  creatingFolder = true;
- newFolderName = '';
+ newFolderName ='';
  setTimeout(() => {
  const input = document.getElementById('new-folder-input') as HTMLInputElement;
  input?.focus();
@@ -262,17 +262,17 @@
  if (!name) return;
  const result = await driveStore.createFolder(name, currentFolderId);
  if (result) {
- toasts.show(`Created folder "${name}"`, 'success');
+ toasts.show(`Created folder"${name}"`,'success');
  } else {
- toasts.show('Failed to create folder — could not reach the local server', 'error');
+ toasts.show('Failed to create folder — could not reach the local server','error');
  }
  creatingFolder = false;
- newFolderName = '';
+ newFolderName ='';
  }
 
  function cancelNewFolder() {
  creatingFolder = false;
- newFolderName = '';
+ newFolderName ='';
  }
 
  // Context menu
@@ -302,7 +302,7 @@
  await driveStore.renameItem(renamingId, renameValue.trim());
  }
  renamingId = null;
- renameValue = '';
+ renameValue ='';
  }
 
  // Copy link
@@ -314,32 +314,32 @@
  } else {
  const liveItem = manifest.items.find(i => i.id === item.id);
  const priceSrc = liveItem?.priceChi ?? item.priceChi;
- const fallbackPrice = priceSrc && parseFloat(priceSrc) > 0 ? priceSrc : '0';
+ const fallbackPrice = priceSrc && parseFloat(priceSrc) > 0 ? priceSrc :'0';
  const share = await driveStore.createShareLink(item.id, fallbackPrice, true);
  if (!share) {
- toasts.show('Failed to create share link', 'error');
+ toasts.show('Failed to create share link','error');
  return;
  }
  url = driveStore.getShareUrl(share.id);
  }
  try {
  await navigator.clipboard.writeText(url);
- toasts.show('Link copied to clipboard', 'success');
+ toasts.show('Link copied to clipboard','success');
  } catch {
- toasts.show('Failed to copy link', 'error');
+ toasts.show('Failed to copy link','error');
  }
  }
 
  // Download
  async function handleDownload(item: DriveItem) {
- if (item.type !== 'file') return;
+ if (item.type !=='file') return;
  const url = driveStore.getDownloadUrl(item.id, item.name);
  try {
  // Open in the system's default browser which handles Content-Disposition properly
  await open(url);
  } catch {
  // Fallback for non-Tauri environments
- window.open(url, '_blank');
+ window.open(url,'_blank');
  }
  }
 
@@ -359,9 +359,9 @@
  deleteConfirmItem = null;
  try {
  await driveStore.deleteItem(item.id);
- toasts.show(`Deleted "${item.name}"`, 'success');
+ toasts.show(`Deleted"${item.name}"`,'success');
  } catch (e) {
- toasts.show(`Failed to delete "${item.name}"`, 'error');
+ toasts.show(`Failed to delete"${item.name}"`,'error');
  }
  }
 
@@ -372,7 +372,7 @@
 
  async function handleMoveConfirm(itemId: string, targetFolderId: string | null) {
  await driveStore.moveItem(itemId, targetFolderId);
- toasts.show('Item moved', 'success');
+ toasts.show('Item moved','success');
  }
 
  // Star
@@ -386,7 +386,7 @@
  const newState = !item.isPublic;
  toasts.show(
  newState ? `"${item.name}" is now public` : `"${item.name}" is now private`,
- 'success'
+'success'
  );
  }
 
@@ -401,10 +401,10 @@
  }
 
  function normalizePriceChi(value: string | number | null | undefined): string {
- const raw = `${value ?? ''}`.trim();
- if (!raw) return '';
+ const raw = `${value ??''}`.trim();
+ if (!raw) return'';
  const parsed = Number(raw);
- if (!Number.isFinite(parsed) || parsed <= 0) return '';
+ if (!Number.isFinite(parsed) || parsed <= 0) return'';
  return raw;
  }
 
@@ -417,7 +417,7 @@
  // Show a hint to use the Upload button instead.
  const isTauriEnv = !!(window as any).__TAURI_INTERNALS__;
  if (isTauriEnv) {
- toasts.show('Please use the Upload button to add files', 'info');
+ toasts.show('Please use the Upload button to add files','info');
  return;
  }
 
@@ -430,10 +430,10 @@
  if (result) count++;
  }
  if (count > 0) {
- toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+ toasts.show(`Uploaded ${count} file${count > 1 ?'s' :''}`,'success');
  }
  } catch (e) {
- toasts.show('Upload failed: ' + (e as Error).message, 'error');
+ toasts.show('Upload failed:' + (e as Error).message,'error');
  } finally {
  uploading = false;
  }
@@ -443,11 +443,11 @@
 
  function handleSeedToNetwork(item: DriveItem) {
  if (!$networkConnected) {
- toasts.show('Please connect to the network first', 'error');
+ toasts.show('Please connect to the network first','error');
  return;
  }
- seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
- seedPrice = item.priceChi || '';
+ seedProtocol = (item.protocol as'WebRTC' |'BitTorrent') ||'WebRTC';
+ seedPrice = item.priceChi ||'';
  seedModalItem = item;
  }
 
@@ -456,15 +456,15 @@
  const item = seedModalItem;
  seedModalItem = null;
  const priceChi = normalizePriceChi(seedPrice);
- const priceLabel = priceChi || 'Free';
+ const priceLabel = priceChi ||'Free';
 
  if (!$networkConnected) {
  // No network — just save the price locally
  try {
  await driveStore.updatePrice(item.id, priceChi);
- toasts.show(`Price set to ${priceLabel} — connect to network to start seeding`, 'info');
+ toasts.show(`Price set to ${priceLabel} — connect to network to start seeding`,'info');
  } catch {
- toasts.show(`Failed to update price for "${item.name}"`, 'error');
+ toasts.show(`Failed to update price for"${item.name}"`,'error');
  }
  return;
  }
@@ -473,23 +473,23 @@
  if (result) {
  toasts.show(
  item.seeding
- ? `Updated "${item.name}" — ${seedProtocol}, ${priceLabel}`
- : `Now seeding "${item.name}" via ${seedProtocol}`,
- 'success',
+ ? `Updated"${item.name}" — ${seedProtocol}, ${priceLabel}`
+ : `Now seeding"${item.name}" via ${seedProtocol}`,
+'success',
  );
  } else {
- toasts.show(`Failed to seed "${item.name}"`, 'error');
+ toasts.show(`Failed to seed"${item.name}"`,'error');
  }
  }
 
  async function handleStopSeeding(item: DriveItem) {
  await driveStore.stopSeeding(item.id);
- toasts.show(`Stopped seeding "${item.name}"`, 'info');
+ toasts.show(`Stopped seeding"${item.name}"`,'info');
  }
 
  function handleEditPrice(item: DriveItem) {
- seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
- seedPrice = item.priceChi || '';
+ seedProtocol = (item.protocol as'WebRTC' |'BitTorrent') ||'WebRTC';
+ seedPrice = item.priceChi ||'';
  seedModalItem = item;
  }
 
@@ -497,9 +497,9 @@
  if (!item.merkleRoot) return;
  try {
  await navigator.clipboard.writeText(item.merkleRoot);
- toasts.show('Hash copied to clipboard', 'success');
+ toasts.show('Hash copied to clipboard','success');
  } catch {
- toasts.show('Failed to copy hash', 'error');
+ toasts.show('Failed to copy hash','error');
  }
  }
 
@@ -510,7 +510,7 @@
  if (!addr) return;
  await invoke('show_drive_item_in_folder', { owner: addr, itemId: item.id });
  } catch (e) {
- toasts.show(`Failed to open file explorer: ${(e as Error).message || e}`, 'error');
+ toasts.show(`Failed to open file explorer: ${(e as Error).message || e}`,'error');
  }
  }
 
@@ -519,22 +519,22 @@
  const link = `magnet:?xt=urn:btih:${item.merkleRoot}&dn=${encodeURIComponent(item.name)}&xl=${item.size || 0}`;
  try {
  await navigator.clipboard.writeText(link);
- toasts.show('Magnet link copied to clipboard', 'success');
+ toasts.show('Magnet link copied to clipboard','success');
  } catch {
- toasts.show('Failed to copy magnet link', 'error');
+ toasts.show('Failed to copy magnet link','error');
  }
  }
 
  // Tauri native drag-drop support
  let unlistenDragDrop: (() => void) | null = null;
  onMount(async () => {
- const isTauriEnv = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+ const isTauriEnv = typeof window !=='undefined' &&'__TAURI_INTERNALS__' in window;
  if (!isTauriEnv) return;
  try {
  const { getCurrentWindow } = await import('@tauri-apps/api/window');
  const appWindow = getCurrentWindow();
  const unlistenFn = await appWindow.onDragDropEvent(async (event: any) => {
- if (event.payload.type === 'drop' && event.payload.paths?.length > 0) {
+ if (event.payload.type ==='drop' && event.payload.paths?.length > 0) {
  isDragging = false;
  uploading = true;
  let count = 0;
@@ -543,15 +543,15 @@
  const result = await driveStore.uploadFile(path as string, currentFolderId);
  if (result) count++;
  }
- if (count > 0) toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+ if (count > 0) toasts.show(`Uploaded ${count} file${count > 1 ?'s' :''}`,'success');
  } catch (e) {
- toasts.show('Upload failed: ' + (e as Error).message, 'error');
+ toasts.show('Upload failed:' + (e as Error).message,'error');
  } finally {
  uploading = false;
  }
- } else if (event.payload.type === 'enter') {
+ } else if (event.payload.type ==='enter') {
  isDragging = true;
- } else if (event.payload.type === 'leave') {
+ } else if (event.payload.type ==='leave') {
  isDragging = false;
  }
  });
@@ -581,12 +581,12 @@
 >
  <!-- Header -->
  <div>
- <h1 class="text-2xl font-bold text-gray-900">My Drive</h1>
+ <h1 class="text-2xl font-bold text-white/90">My Drive</h1>
  <p class="text-muted-foreground mt-2">
  Cloud storage with shareable links
  {#if manifest.items.length > 0}
  <span class="ml-2 text-xs">
- — {manifest.items.filter(i => i.type === 'file').length} files, {formatBytes(totalSize)}
+ — {manifest.items.filter(i => i.type ==='file').length} files, {formatBytes(totalSize)}
  </span>
  {/if}
  </p>
@@ -606,8 +606,8 @@
  {#if !searchQuery}
  <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
  {:else}
- <p class="text-sm text-[var(--text-tertiary)]">
- Search results for "<span class="font-medium">{searchQuery}</span>" — {currentItems.length} result{currentItems.length !== 1 ? 's' : ''}
+ <p class="text-sm text-white/40">
+ Search results for"<span class="font-medium">{searchQuery}</span>" — {currentItems.length} result{currentItems.length !== 1 ?'s' :''}
  </p>
  {/if}
 
@@ -620,11 +620,11 @@
  type="text"
  placeholder="Folder name"
  bind:value={newFolderName}
- onkeydown={(e) => { if (e.key === 'Enter') confirmNewFolder(); if (e.key === 'Escape') cancelNewFolder(); }}
- class="px-3 py-1.5 bg-[var(--surface-1)] border border-[var(--border)] rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+ onkeydown={(e) => { if (e.key ==='Enter') confirmNewFolder(); if (e.key ==='Escape') cancelNewFolder(); }}
+ class="px-3 py-1.5 bg-white/[0.05] border border-white/[0.06] rounded-lg text-sm text-white/90 focus:outline-none w-64"
  />
  <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-violet-600 text-white text-sm rounded-lg hover:bg-blue-700 transition">Create</button>
- <button onclick={cancelNewFolder} class="px-3 py-1.5 text-[var(--text-secondary)] text-sm hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition">Cancel</button>
+ <button onclick={cancelNewFolder} class="px-3 py-1.5 text-white/50 text-sm hover:bg-white/[0.05] rounded-lg transition">Cancel</button>
  </div>
  {/if}
 
@@ -652,27 +652,27 @@
  {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
  <!-- Empty state -->
  <div class="flex flex-col items-center justify-center py-16 text-center">
- <div class="w-16 h-16 bg-[var(--surface-1)] rounded-full flex items-center justify-center mb-4">
- <HardDrive class="w-8 h-8 text-[var(--text-secondary)]" />
+ <div class="w-16 h-16 bg-white/[0.05] rounded-full flex items-center justify-center mb-4">
+ <HardDrive class="w-8 h-8 text-white/50" />
  </div>
- <h3 class="text-lg font-medium text-gray-900 mb-1">
- {searchQuery ? 'No files found' : 'This folder is empty'}
+ <h3 class="text-lg font-medium text-white/90 mb-1">
+ {searchQuery ?'No files found' :'This folder is empty'}
  </h3>
- <p class="text-sm text-[var(--text-tertiary)] mb-6">
- {searchQuery ? 'Try a different search term' : 'Upload files or create a folder to get started'}
+ <p class="text-sm text-white/40 mb-6">
+ {searchQuery ?'Try a different search term' :'Upload files or create a folder to get started'}
  </p>
  {#if !searchQuery}
  <div class="flex gap-3">
  <button
  onclick={handleUpload}
- class="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+ class="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none"
  >
  <Upload class="w-4 h-4" />
  Upload File
  </button>
  <button
  onclick={handleNewFolder}
- class="flex items-center gap-2 px-4 py-2 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] text-[var(--text-secondary)] rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+ class="flex items-center gap-2 px-4 py-2 bg-white/[0.05] hover:bg-white/[0.05] text-white/50 rounded-lg transition text-sm font-medium focus:outline-none"
  >
  <FolderPlus class="w-4 h-4" />
  New Folder
@@ -680,18 +680,18 @@
  </div>
  {/if}
  </div>
- {:else if viewMode === 'grid'}
+ {:else if viewMode ==='grid'}
  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
  {#each currentItems as item (item.id)}
  {#if renamingId === item.id}
- <div class=" bg-[var(--surface-1)] border border-violet-400/30 rounded-xl p-4">
+ <div class="bg-white/[0.05] border border-violet-400/30 rounded-xl p-4">
  <input
  id="rename-input"
  type="text"
  bind:value={renameValue}
- onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
+ onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-[var(--surface-1)] border border-[var(--border)] rounded text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+ class="w-full px-2 py-1 text-sm bg-white/[0.05] border border-white/[0.06] rounded text-white/90 focus:outline-none"
  />
  </div>
  {:else}
@@ -704,28 +704,28 @@
  {/each}
  </div>
  {:else}
- <div class=" bg-[var(--surface-1)] rounded-xl border border-[var(--border)] ring-1 ring-white/10 overflow-hidden">
+ <div class="bg-white/[0.05] rounded-xl border border-white/[0.06] overflow-hidden">
  <table class="w-full">
  <thead>
- <tr class="border-b border-[var(--border)] text-left">
- <th class="py-2.5 px-3 text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wide">Name</th>
- <th class="py-2.5 px-3 text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wide w-24">Size</th>
- <th class="py-2.5 px-3 text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wide w-32">Modified</th>
+ <tr class="border-b border-white/[0.06] text-left">
+ <th class="py-2.5 px-3 text-xs font-medium text-white/40 uppercase tracking-wide">Name</th>
+ <th class="py-2.5 px-3 text-xs font-medium text-white/40 uppercase tracking-wide w-24">Size</th>
+ <th class="py-2.5 px-3 text-xs font-medium text-white/40 uppercase tracking-wide w-32">Modified</th>
  <th class="py-2.5 px-3 w-12"></th>
  </tr>
  </thead>
  <tbody>
  {#each currentItems as item (item.id)}
  {#if renamingId === item.id}
- <tr class="border-b border-[var(--border)]">
+ <tr class="border-b border-white/[0.06]">
  <td colspan="4" class="py-2 px-3">
  <input
  id="rename-input"
  type="text"
  bind:value={renameValue}
- onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
+ onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-[var(--surface-1)] border border-[var(--border)] rounded text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+ class="w-full px-2 py-1 text-sm bg-white/[0.05] border border-white/[0.06] rounded text-white/90 focus:outline-none"
  />
  </td>
  </tr>
@@ -775,38 +775,38 @@
 {#if seedModalItem}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/70"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-white/[0.03]/70"
  onclick={() => seedModalItem = null}
- onkeydown={(e) => { if (e.key === 'Escape') seedModalItem = null; }}
+ onkeydown={(e) => { if (e.key ==='Escape') seedModalItem = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl shadow-black/10 p-6 max-w-sm w-full mx-4"
+ class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/10 p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
- <h3 class="text-lg font-semibold text-gray-900 mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
- <p class="text-sm text-[var(--text-secondary)] mb-4">
- {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900">"{seedModalItem.name}"</strong> on the network.
+ <h3 class="text-lg font-semibold text-white/90 mb-4">{seedModalItem.seeding ?'Edit Seeding' :'Seed to Network'}</h3>
+ <p class="text-sm text-white/50 mb-4">
+ {seedModalItem.seeding ?'Update' :'Share'} <strong class="text-white/90">"{seedModalItem.name}"</strong> on the network.
  </p>
 
  <div class="space-y-4">
  <!-- Protocol picker -->
  <div>
- <label class="block text-xs font-medium text-[var(--text-tertiary)] mb-1.5">Protocol</label>
- <div class="flex rounded-lg overflow-hidden border border-[var(--border)]">
+ <label class="block text-xs font-medium text-white/40 mb-1.5">Protocol</label>
+ <div class="flex rounded-lg overflow-hidden border border-white/[0.06]">
  <button
- onclick={() => seedProtocol = 'WebRTC'}
- class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'WebRTC'
- ? 'bg-violet-600 text-white'
- : 'bg-[var(--surface-1)] text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ onclick={() => seedProtocol ='WebRTC'}
+ class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol ==='WebRTC'
+ ?'bg-violet-600 text-white'
+ :'bg-white/[0.05] text-white/50 hover:bg-white/[0.05]'}"
  >
  WebRTC
  </button>
  <button
- onclick={() => seedProtocol = 'BitTorrent'}
- class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'BitTorrent'
- ? ' bg-green-500/70 border border-green-400/30 text-white'
- : 'bg-[var(--surface-1)] text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ onclick={() => seedProtocol ='BitTorrent'}
+ class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol ==='BitTorrent'
+ ?' bg-green-500/70 border border-green-400/30 text-white'
+ :'bg-white/[0.05] text-white/50 hover:bg-white/[0.05]'}"
  >
  BitTorrent
  </button>
@@ -815,14 +815,14 @@
 
  <!-- Price input -->
  <div>
- <label class="block text-xs font-medium text-[var(--text-tertiary)] mb-1.5">Price (CHI)</label>
+ <label class="block text-xs font-medium text-white/40 mb-1.5">Price (CHI)</label>
  <input
  type="number"
  step="0.001"
  min="0"
  placeholder="Free"
  bind:value={seedPrice}
- class="w-full px-3 py-1.5 text-sm bg-[var(--surface-1)] border border-[var(--border)] rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+ class="w-full px-3 py-1.5 text-sm bg-white/[0.05] border border-white/[0.06] rounded-lg text-white/90 placeholder:text-white/40 focus:outline-none"
  />
  </div>
  </div>
@@ -830,12 +830,12 @@
  <div class="flex justify-end gap-3 mt-5">
  <button
  onclick={() => seedModalItem = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--text-secondary)] bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-white/50 bg-white/[0.05] hover:bg-white/[0.05] transition"
  >Cancel</button>
  <button
  onclick={confirmSeed}
  class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-violet-600 hover:bg-blue-700 transition"
- >{seedModalItem?.seeding ? 'Update' : 'Start Seeding'}</button>
+ >{seedModalItem?.seeding ?'Update' :'Start Seeding'}</button>
  </div>
  </div>
  </div>
@@ -855,32 +855,32 @@
 {#if deleteConfirmItem}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/70"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-white/[0.03]/70"
  onclick={() => deleteConfirmItem = null}
- onkeydown={(e) => { if (e.key === 'Escape') deleteConfirmItem = null; }}
+ onkeydown={(e) => { if (e.key ==='Escape') deleteConfirmItem = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl shadow-black/10 p-6 max-w-sm w-full mx-4"
+ class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/10 p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
- <h3 class="text-lg font-semibold text-gray-900 mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>
- <p class="text-sm text-[var(--text-secondary)] mb-1">
- Are you sure you want to delete <strong class="text-gray-900">"{deleteConfirmItem.name}"</strong>?
+ <h3 class="text-lg font-semibold text-white/90 mb-2">Delete {deleteConfirmItem.type ==='folder' ?'Folder' :'File'}</h3>
+ <p class="text-sm text-white/50 mb-1">
+ Are you sure you want to delete <strong class="text-white/90">"{deleteConfirmItem.name}"</strong>?
  </p>
- {#if deleteConfirmItem.type === 'folder'}
+ {#if deleteConfirmItem.type ==='folder'}
  <p class="text-sm text-amber-600 mb-4">This will delete all contents inside the folder.</p>
  {:else}
- <p class="text-sm text-[var(--text-tertiary)] mb-4">This will remove it from your Drive.</p>
+ <p class="text-sm text-white/40 mb-4">This will remove it from your Drive.</p>
  {/if}
  <div class="flex justify-end gap-3">
  <button
  onclick={() => deleteConfirmItem = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--text-secondary)] bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-white/50 bg-white/[0.05] hover:bg-white/[0.05] transition"
  >Cancel</button>
  <button
  onclick={confirmDelete}
- class="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/70 border border-red-400/30 text-white hover:bg-red-500/80 transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/[0.1]0/70 border border-red-400/30 text-white hover:bg-red-500/[0.1]0/80 transition"
  >Delete</button>
  </div>
  </div>

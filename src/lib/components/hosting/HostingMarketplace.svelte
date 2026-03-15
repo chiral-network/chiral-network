@@ -159,7 +159,7 @@
  value={Math.round($settings.hostingConfig.maxStorageBytes / (1024 * 1024 * 1024))}
  oninput={(e) => updateMaxStorageGb(Number(e.currentTarget.value))}
  class="w-24 px-3 py-2 text-sm bg-white/[0.05] border border-white/[0.06] rounded-lg text-white/90 tabular-nums
- focus:border-primary-400 focus:outline-none "
+ focus:border-primary-400 focus:outline-none"
  />
  <span class="text-xs text-white/40 font-medium">GB</span>
  </div>
@@ -179,7 +179,7 @@
  value={weiToChiNumber($settings.hostingConfig.pricePerMbPerDayWei, 0.001)}
  oninput={(e) => updatePriceChi(Number(e.currentTarget.value))}
  class="w-32 px-3 py-2 text-sm bg-white/[0.05] border border-white/[0.06] rounded-lg text-white/90 tabular-nums
- focus:border-primary-400 focus:outline-none "
+ focus:border-primary-400 focus:outline-none"
  />
  <span class="text-xs text-white/40 font-medium">CHI/MB/day</span>
  </div>
@@ -199,7 +199,7 @@
  value={weiToChiNumber($settings.hostingConfig.minDepositWei, 0.1)}
  oninput={(e) => updateDepositChi(Number(e.currentTarget.value))}
  class="w-32 px-3 py-2 text-sm bg-white/[0.05] border border-white/[0.06] rounded-lg text-white/90 tabular-nums
- focus:border-primary-400 focus:outline-none "
+ focus:border-primary-400 focus:outline-none"
  />
  <span class="text-xs text-white/40 font-medium">CHI</span>
  </div>
@@ -299,7 +299,7 @@
  onchange={(e) => onSortChange(e.currentTarget.value as'reputation' |'price' |'storage')}
  aria-label="Sort hosts by"
  class="text-xs bg-white/[0.05] border border-white/[0.06] rounded-lg px-2.5 py-1.5 text-white/50
- focus:border-primary-400 focus:outline-none "
+ focus:border-primary-400 focus:outline-none"
  >
  <option value="reputation">Reputation</option>
  <option value="price">Price (low)</option>
@@ -382,7 +382,7 @@
  onclick={() => onPropose(host)}
  class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium bg-violet-500/80 border border-primary-400/30 hover:bg-violet-500/90 text-white rounded-xl transition-all flex-shrink-0
  shadow-primary-500/10 hover:shadow-md hover:shadow-primary-500/20 active:scale-[0.98]
- focus:outline-none "
+ focus:outline-none"
  >
  <Rocket class="w-3.5 h-3.5" />
  Propose

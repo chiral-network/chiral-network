@@ -1,14 +1,14 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
+ import { onMount, onDestroy } from'svelte';
  import {
  gethService,
  gethStatus,
  miningStatus,
  downloadProgress,
  isDownloading
- } from '$lib/services/gethService';
- import { walletAccount } from '$lib/stores';
- import { toasts } from '$lib/toastStore';
+ } from'$lib/services/gethService';
+ import { walletAccount } from'$lib/stores';
+ import { toasts } from'$lib/toastStore';
  import {
  Server,
  Download,
@@ -21,8 +21,8 @@
  CheckCircle,
  XCircle,
  Pickaxe
- } from 'lucide-svelte';
- import { logger } from '$lib/logger';
+ } from'lucide-svelte';
+ import { logger } from'$lib/logger';
  const log = logger('GethStatus');
 
  // State
@@ -34,7 +34,7 @@
 
  // Check if Tauri is available
  function isTauri(): boolean {
- return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+ return typeof window !=='undefined' &&'__TAURI_INTERNALS__' in window;
  }
 
  onMount(async () => {
@@ -58,10 +58,10 @@
  try {
  await gethService.download();
  isInstalled = await gethService.isInstalled();
- toasts.show('Geth installed successfully', 'success');
+ toasts.show('Geth installed successfully','success');
  } catch (error) {
  log.error('Failed to download Geth:', error);
- toasts.show('Failed to download Geth: ' + error, 'error');
+ toasts.show('Failed to download Geth:' + error,'error');
  }
  }
 
@@ -70,10 +70,10 @@
  try {
  const minerAddr = $walletAccount?.address;
  await gethService.start(minerAddr);
- toasts.show('Geth started successfully', 'success');
+ toasts.show('Geth started successfully','success');
  } catch (error) {
  log.error('Failed to start Geth:', error);
- toasts.show('Failed to start Geth: ' + error, 'error');
+ toasts.show('Failed to start Geth:' + error,'error');
  } finally {
  isStarting = false;
  }
@@ -83,10 +83,10 @@
  isStopping = true;
  try {
  await gethService.stop();
- toasts.show('Geth stopped', 'info');
+ toasts.show('Geth stopped','info');
  } catch (error) {
  log.error('Failed to stop Geth:', error);
- toasts.show('Failed to stop Geth: ' + error, 'error');
+ toasts.show('Failed to stop Geth:' + error,'error');
  } finally {
  isStopping = false;
  }
@@ -100,10 +100,10 @@
  await gethService.setMinerAddress($walletAccount.address);
  }
  await gethService.startMining(miningThreads);
- toasts.show('Mining started', 'success');
+ toasts.show('Mining started','success');
  } catch (error) {
  log.error('Failed to start mining:', error);
- toasts.show('Failed to start mining: ' + error, 'error');
+ toasts.show('Failed to start mining:' + error,'error');
  } finally {
  isStartingMining = false;
  }
@@ -112,42 +112,42 @@
  async function handleStopMining() {
  try {
  await gethService.stopMining();
- toasts.show('Mining stopped', 'info');
+ toasts.show('Mining stopped','info');
  } catch (error) {
  log.error('Failed to stop mining:', error);
- toasts.show('Failed to stop mining: ' + error, 'error');
+ toasts.show('Failed to stop mining:' + error,'error');
  }
  }
 
  function formatHashRate(hashRate: number): string {
- if (hashRate >= 1e9) return (hashRate / 1e9).toFixed(2) + ' GH/s';
- if (hashRate >= 1e6) return (hashRate / 1e6).toFixed(2) + ' MH/s';
- if (hashRate >= 1e3) return (hashRate / 1e3).toFixed(2) + ' KH/s';
- return hashRate + ' H/s';
+ if (hashRate >= 1e9) return (hashRate / 1e9).toFixed(2) +' GH/s';
+ if (hashRate >= 1e6) return (hashRate / 1e6).toFixed(2) +' MH/s';
+ if (hashRate >= 1e3) return (hashRate / 1e3).toFixed(2) +' KH/s';
+ return hashRate +' H/s';
  }
 </script>
 
 <div class="space-y-4">
  <!-- Installation Status -->
  {#if !isInstalled}
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl shadow-black/5 ring-1 ring-white/10 p-6">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/5 p-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-violet-500/15 rounded-lg">
  <Download class="w-6 h-6 text-violet-500" />
  </div>
  <div>
  <h3 class="font-semibold">Install Geth</h3>
- <p class="text-sm text-[var(--text-tertiary)]">Download Core-Geth to run the blockchain node</p>
+ <p class="text-sm text-white/40">Download Core-Geth to run the blockchain node</p>
  </div>
  </div>
 
  {#if $isDownloading}
  <div class="space-y-2">
  <div class="flex justify-between text-sm">
- <span>{$downloadProgress?.status || 'Downloading...'}</span>
+ <span>{$downloadProgress?.status ||'Downloading...'}</span>
  <span>{$downloadProgress?.percentage?.toFixed(1) || 0}%</span>
  </div>
- <div class="w-full bg-[var(--surface-1)] rounded-full h-2">
+ <div class="w-full bg-white/[0.05] rounded-full h-2">
  <div
  class="bg-violet-500/80 h-2 rounded-full transition-all"
  style="width: {$downloadProgress?.percentage || 0}%"
@@ -157,7 +157,7 @@
  {:else}
  <button
  onclick={handleDownload}
- class="w-full px-4 py-2 bg-violet-500/80 border border-primary-400/30 text-white rounded-lg hover:bg-violet-500/90 dark:hover:bg-violet-600/80 transition-colors flex items-center justify-center gap-2"
+ class="w-full px-4 py-2 bg-violet-500/80 border border-primary-400/30 text-white rounded-lg hover:bg-violet-500/90 transition-colors flex items-center justify-center gap-2"
  >
  <Download class="w-4 h-4" />
  Download Geth
@@ -166,15 +166,15 @@
  </div>
  {:else}
  <!-- Geth Status Card -->
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl shadow-black/5 ring-1 ring-white/10 p-6">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/5 p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {$gethStatus?.running ? 'bg-green-500/15 dark:bg-green-500/10' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'} rounded-lg">
- <Server class="w-6 h-6 {$gethStatus?.running ? 'text-green-600 dark:text-green-400' : 'text-[var(--text-secondary)]'}" />
+ <div class="p-2 {$gethStatus?.running ?'bg-green-500/15' :'bg-white/[0.05]'} rounded-lg">
+ <Server class="w-6 h-6 {$gethStatus?.running ?'text-green-400' :'text-white/50'}" />
  </div>
  <div>
  <h3 class="font-semibold">Geth Node</h3>
- <p class="text-sm text-[var(--text-tertiary)]">
+ <p class="text-sm text-white/40">
  {#if $gethStatus?.running}
  {#if $gethStatus?.syncing}
  Syncing... Block {$gethStatus?.currentBlock?.toLocaleString()} / {$gethStatus?.highestBlock?.toLocaleString()}
@@ -192,7 +192,7 @@
  <button
  onclick={handleStop}
  disabled={isStopping}
- class="px-4 py-2 bg-red-500/15 border border-red-400/20 text-red-600 rounded-lg hover:bg-red-500/25 dark:hover:bg-red-500/15 transition-colors flex items-center gap-2 disabled:opacity-50"
+ class="px-4 py-2 bg-red-500/[0.1]0/15 border border-red-400/20 text-red-400 rounded-lg hover:bg-red-500/[0.1]0/25 transition-colors flex items-center gap-2 disabled:opacity-50"
  >
  {#if isStopping}
  <Loader2 class="w-4 h-4 animate-spin" />
@@ -205,7 +205,7 @@
  <button
  onclick={handleStart}
  disabled={isStarting}
- class="px-4 py-2 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 transition-colors flex items-center gap-2 disabled:opacity-50"
+ class="px-4 py-2 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 transition-colors flex items-center gap-2 disabled:opacity-50"
  >
  {#if isStarting}
  <Loader2 class="w-4 h-4 animate-spin" />
@@ -219,25 +219,25 @@
 
  {#if $gethStatus?.running}
  <div class="grid grid-cols-3 gap-4 mt-4">
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-3 text-center">
- <Users class="w-5 h-5 mx-auto text-[var(--text-secondary)] mb-1" />
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-3 text-center">
+ <Users class="w-5 h-5 mx-auto text-white/50 mb-1" />
  <p class="text-lg font-semibold">{$gethStatus?.peerCount || 0}</p>
- <p class="text-xs text-[var(--text-tertiary)]">Peers</p>
+ <p class="text-xs text-white/40">Peers</p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-3 text-center">
- <Box class="w-5 h-5 mx-auto text-[var(--text-secondary)] mb-1" />
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-3 text-center">
+ <Box class="w-5 h-5 mx-auto text-white/50 mb-1" />
  <p class="text-lg font-semibold">{$gethStatus?.currentBlock?.toLocaleString() || 0}</p>
- <p class="text-xs text-[var(--text-tertiary)]">Block</p>
+ <p class="text-xs text-white/40">Block</p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-3 text-center">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-3 text-center">
  {#if $gethStatus?.syncing}
  <Loader2 class="w-5 h-5 mx-auto text-yellow-500 mb-1 animate-spin" />
  <p class="text-lg font-semibold text-yellow-600">Syncing</p>
  {:else}
  <CheckCircle class="w-5 h-5 mx-auto text-green-500 mb-1" />
- <p class="text-lg font-semibold text-green-600">Synced</p>
+ <p class="text-lg font-semibold text-green-400">Synced</p>
  {/if}
- <p class="text-xs text-[var(--text-tertiary)]">Status</p>
+ <p class="text-xs text-white/40">Status</p>
  </div>
  </div>
  {/if}
@@ -245,15 +245,15 @@
 
  <!-- Mining Card -->
  {#if $gethStatus?.running}
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl shadow-black/5 ring-1 ring-white/10 p-6">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/5 p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {$miningStatus?.mining ? 'bg-yellow-500/15 dark:bg-yellow-500/10' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'} rounded-lg">
- <Pickaxe class="w-6 h-6 {$miningStatus?.mining ? 'text-yellow-600 dark:text-yellow-400' : 'text-[var(--text-secondary)]'}" />
+ <div class="p-2 {$miningStatus?.mining ?'bg-yellow-500/15' :'bg-white/[0.05]'} rounded-lg">
+ <Pickaxe class="w-6 h-6 {$miningStatus?.mining ?'text-yellow-600' :'text-white/50'}" />
  </div>
  <div>
  <h3 class="font-semibold">Mining</h3>
- <p class="text-sm text-[var(--text-tertiary)]">
+ <p class="text-sm text-white/40">
  {#if $miningStatus?.mining}
  Hash Rate: {formatHashRate($miningStatus?.hashRate || 0)}
  {:else}
@@ -266,7 +266,7 @@
  {#if $miningStatus?.mining}
  <button
  onclick={handleStopMining}
- class="px-4 py-2 bg-red-500/15 border border-red-400/20 text-red-600 rounded-lg hover:bg-red-500/25 transition-colors flex items-center gap-2"
+ class="px-4 py-2 bg-red-500/[0.1]0/15 border border-red-400/20 text-red-400 rounded-lg hover:bg-red-500/[0.1]0/25 transition-colors flex items-center gap-2"
  >
  <Square class="w-4 h-4" />
  Stop Mining
@@ -275,17 +275,17 @@
  <div class="flex items-center gap-2">
  <select
  bind:value={miningThreads}
- class="px-3 py-2 bg-[var(--surface-1)] border border-[var(--border)] text-gray-900 rounded-lg text-sm outline-none focus:ring-2 focus:ring-violet-500/40"
+ class="px-3 py-2 bg-white/[0.05] border border-white/[0.06] text-white/90 rounded-lg text-sm outline-none"
  >
  {#each [1, 2, 4, 8] as threads}
- <option value={threads}>{threads} thread{threads > 1 ? 's' : ''}</option>
+ <option value={threads}>{threads} thread{threads > 1 ?'s' :''}</option>
  {/each}
  </select>
  <button
  onclick={handleStartMining}
  disabled={isStartingMining || !$walletAccount}
  class="px-4 py-2 bg-yellow-500/70 border border-yellow-400/30 text-white rounded-lg hover:bg-yellow-500/80 transition-colors flex items-center gap-2 disabled:opacity-50"
- title={!$walletAccount ? 'Connect wallet first' : ''}
+ title={!$walletAccount ?'Connect wallet first' :''}
  >
  {#if isStartingMining}
  <Loader2 class="w-4 h-4 animate-spin" />
@@ -299,17 +299,17 @@
  </div>
 
  {#if $miningStatus?.mining}
- <div class=" bg-yellow-500/10 border border-yellow-400/20 rounded-lg p-3 mt-4">
+ <div class="bg-yellow-500/10 border border-yellow-400/20 rounded-lg p-3 mt-4">
  <div class="flex items-center gap-2 text-yellow-800">
  <Cpu class="w-4 h-4" />
  <span class="text-sm">
- Mining to: <span class="font-mono text-xs">{$miningStatus?.minerAddress || 'Not set'}</span>
+ Mining to: <span class="font-mono text-xs">{$miningStatus?.minerAddress ||'Not set'}</span>
  </span>
  </div>
  </div>
  {:else if !$walletAccount}
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-3 mt-4">
- <p class="text-sm text-[var(--text-secondary)]">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-3 mt-4">
+ <p class="text-sm text-white/50">
  Connect your wallet on the Account page to start mining and earn CHI.
  </p>
  </div>

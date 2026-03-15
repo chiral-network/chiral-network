@@ -1,21 +1,21 @@
 <script lang="ts">
- import { fly } from 'svelte/transition';
- import { X } from 'lucide-svelte';
+ import { fly } from'svelte/transition';
+ import { X } from'lucide-svelte';
 
  interface Props {
  message: string;
- type?: 'success' | 'error' | 'info' | 'warning';
+ type?:'success' |'error' |'info' |'warning';
  index?: number;
  onClose: () => void;
  }
 
- let { message, type = 'info', index = 0, onClose }: Props = $props();
+ let { message, type ='info', index = 0, onClose }: Props = $props();
 
  const typeStyles = {
- success: ' bg-green-500/70 border border-green-400/30 ring-1 ring-white/10',
- error: ' bg-red-500/70 border border-red-400/30 ring-1 ring-white/10',
- info: ' bg-violet-600/70 border border-violet-400/30 ring-1 ring-white/10',
- warning: ' bg-yellow-500/70 border border-yellow-400/30 ring-1 ring-white/10'
+ success:' bg-green-500/70 border border-green-400/30',
+ error:' bg-red-500/[0.1]0/70 border border-red-400/30',
+ info:' bg-violet-600/70 border border-violet-400/30',
+ warning:' bg-yellow-500/70 border border-yellow-400/30'
  };
 
  // Calculate vertical offset based on index (each toast is ~56px tall + 8px gap)
@@ -30,7 +30,7 @@
  <span class="flex-1">{message}</span>
  <button
  onclick={onClose}
- class="text-white hover:text-[var(--text-primary)] transition-colors"
+ class="text-white hover:text-white/90 transition-colors"
  aria-label="Close toast"
  >
  <X size={18} />

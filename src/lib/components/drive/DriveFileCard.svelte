@@ -1,8 +1,8 @@
 <script lang="ts">
- import { Star, MoreVertical, Link, Folder, EyeOff } from 'lucide-svelte';
- import { getFileIcon, getFileColor, getFolderColor } from '$lib/utils/fileIcons';
- import type { DriveItem } from '$lib/stores/driveStore';
- import { networkConnected } from '$lib/stores';
+ import { Star, MoreVertical, Link, Folder, EyeOff } from'lucide-svelte';
+ import { getFileIcon, getFileColor, getFolderColor } from'$lib/utils/fileIcons';
+ import type { DriveItem } from'$lib/stores/driveStore';
+ import { networkConnected } from'$lib/stores';
 
  let {
  item,
@@ -15,7 +15,7 @@
  } = $props();
 
  function formatSize(bytes?: number): string {
- if (!bytes) return '';
+ if (!bytes) return'';
  if (bytes < 1024) return `${bytes} B`;
  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -23,17 +23,17 @@
  }
 
  function getPriceLabel(item: DriveItem): string | null {
- if (item.type !== 'file') return null;
+ if (item.type !=='file') return null;
  const raw = item.priceChi?.trim();
- if (raw && raw !== '0') return `${raw} CHI`;
- if (item.seeding || raw === '0') return 'Free';
+ if (raw && raw !=='0') return `${raw} CHI`;
+ if (item.seeding || raw ==='0') return'Free';
  return null;
  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
- class="group relative bg-[var(--surface-1)] border border-[var(--border)] rounded-xl p-4 hover:shadow-lg hover:shadow-black/5 hover:border-[var(--border)] dark:hover:border-[var(--border)] transition cursor-pointer select-none ring-1 ring-white/10"
+ class="group relative bg-white/[0.05] border border-white/[0.06] rounded-xl p-4 hover:shadow-lg hover:shadow-black/5 hover:border-white/[0.06] transition cursor-pointer select-none"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -51,15 +51,15 @@
  {/if}
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded"
+ class="p-1 hover:bg-white/[0.05] rounded"
  >
- <MoreVertical class="w-4 h-4 text-[var(--text-tertiary)]" />
+ <MoreVertical class="w-4 h-4 text-white/40" />
  </button>
  </div>
 
  <!-- Icon -->
- <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type === 'folder' ? 'bg-yellow-500/10 dark:bg-yellow-500/5' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'}">
- {#if item.type === 'folder'}
+ <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-500/10' :'bg-white/[0.05]'}">
+ {#if item.type ==='folder'}
  <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
  {:else}
  {@const Icon = getFileIcon(item.name)}
@@ -69,22 +69,22 @@
 
  <!-- Name & metadata -->
  <div class="text-center">
- <p class="text-sm font-medium text-gray-900 truncate" title={item.name}>
+ <p class="text-sm font-medium text-white/90 truncate" title={item.name}>
  {item.name}
  </p>
- {#if item.type === 'file' && item.size}
- <p class="text-xs text-[var(--text-tertiary)] mt-0.5">{formatSize(item.size)}</p>
+ {#if item.type ==='file' && item.size}
+ <p class="text-xs text-white/40 mt-0.5">{formatSize(item.size)}</p>
  {/if}
  {#if getPriceLabel(item)}
  {@const priceLabel = getPriceLabel(item)}
- <p class="text-[11px] text-amber-700 font-medium mt-0.5">{priceLabel}</p>
+ <p class="text-[11px] text-amber-400 font-medium mt-0.5">{priceLabel}</p>
  {/if}
  {#if item.seeding && $networkConnected}
  <div class="flex items-center justify-center gap-1 mt-1">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
- <span class="text-[10px] text-green-600 font-medium">Seeding</span>
+ <span class="text-[10px] text-green-400 font-medium">Seeding</span>
  {#if item.protocol}
- <span class="text-[10px] text-[var(--text-secondary)]">({item.protocol})</span>
+ <span class="text-[10px] text-white/50">({item.protocol})</span>
  {/if}
  </div>
  {/if}

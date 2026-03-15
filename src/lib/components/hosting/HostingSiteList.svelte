@@ -162,7 +162,7 @@
  onclick={() => onCopyUrl(site)}
  title="Copy URL"
  aria-label="Copy URL for {site.name}"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-white/[0.05] hover:text-white/50 focus:outline-none "
+ class="rounded-lg p-2 text-white/50 transition-colors hover:bg-white/[0.05] hover:text-white/50 focus:outline-none"
  >
  <Copy class="h-4 w-4" />
  </button>
@@ -170,7 +170,7 @@
  onclick={() => onOpenSite(site)}
  title="Open in browser"
  aria-label="Open {site.name} in browser"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-blue-50 hover:text-violet-400 focus:outline-none "
+ class="rounded-lg p-2 text-white/50 transition-colors hover:bg-blue-50 hover:text-violet-400 focus:outline-none"
  >
  <ExternalLink class="h-4 w-4" />
  </button>
@@ -178,7 +178,7 @@
  onclick={() => onDeleteSite(site.id, site.name)}
  title="Delete site"
  aria-label="Delete {site.name}"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-red-500/[0.15] hover:text-red-500 focus:outline-none "
+ class="rounded-lg p-2 text-white/50 transition-colors hover:bg-red-500/[0.1]0/[0.15] hover:text-red-500 focus:outline-none"
  >
  <Trash2 class="h-4 w-4" />
  </button>

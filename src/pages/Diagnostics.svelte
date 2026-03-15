@@ -1,10 +1,10 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
- import { invoke } from '@tauri-apps/api/core';
- import { listen } from '@tauri-apps/api/event';
- import { networkConnected } from '$lib/stores';
- import { dhtService, type DhtHealthInfo } from '$lib/dhtService';
- import { toasts } from '$lib/toastStore';
+ import { onMount, onDestroy } from'svelte';
+ import { invoke } from'@tauri-apps/api/core';
+ import { listen } from'@tauri-apps/api/event';
+ import { networkConnected } from'$lib/stores';
+ import { dhtService, type DhtHealthInfo } from'$lib/dhtService';
+ import { toasts } from'$lib/toastStore';
  import {
  Bug,
  RefreshCw,
@@ -24,15 +24,15 @@
  Terminal,
  Pickaxe,
  FileText
- } from 'lucide-svelte';
- import { logger } from '$lib/logger';
+ } from'lucide-svelte';
+ import { logger } from'$lib/logger';
  const log = logger('Diagnostics');
 
  // Log entry type
  interface LogEntry {
  id: number;
  timestamp: Date;
- level: 'info' | 'warn' | 'error' | 'debug';
+ level:'info' |'warn' |'error' |'debug';
  source: string;
  message: string;
  }
@@ -40,8 +40,8 @@
  // State
  let logEntries = $state<LogEntry[]>([]);
  let nextLogId = 0;
- let logFilter = $state<'all' | 'info' | 'warn' | 'error' | 'debug'>('all');
- let sourceFilter = $state<'all' | 'dht' | 'bootstrap' | 'geth' | 'mining' | 'system'>('all');
+ let logFilter = $state<'all' |'info' |'warn' |'error' |'debug'>('all');
+ let sourceFilter = $state<'all' |'dht' |'bootstrap' |'geth' |'mining' |'system'>('all');
  let maxLogEntries = 500;
 
  // DHT diagnostics
@@ -116,7 +116,7 @@
  let showLogsSection = $state(true);
 
  function isTauri(): boolean {
- return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+ return typeof window !=='undefined' &&'__TAURI_INTERNALS__' in window;
  }
 
  function addLog(level: LogEntry['level'], source: string, message: string) {
@@ -133,40 +133,40 @@
  // Filtered logs
  let filteredLogs = $derived(
  logEntries.filter(entry => {
- if (logFilter !== 'all' && entry.level !== logFilter) return false;
- if (sourceFilter !== 'all' && entry.source.toLowerCase() !== sourceFilter) return false;
+ if (logFilter !=='all' && entry.level !== logFilter) return false;
+ if (sourceFilter !=='all' && entry.source.toLowerCase() !== sourceFilter) return false;
  return true;
  })
  );
 
  onMount(async () => {
- addLog('info', 'system', 'Diagnostics page opened');
+ addLog('info','system','Diagnostics page opened');
 
  if (isTauri()) {
  // Listen for various events
  const events = [
- 'peer-discovered',
- 'ping-sent',
- 'ping-received',
- 'pong-received',
- 'geth-download-progress',
- 'file-download-started',
- 'file-download-progress',
- 'file-download-completed',
- 'file-download-failed',
- 'file-upload-started',
- 'file-payment-processing'
+'peer-discovered',
+'ping-sent',
+'ping-received',
+'pong-received',
+'geth-download-progress',
+'file-download-started',
+'file-download-progress',
+'file-download-completed',
+'file-download-failed',
+'file-upload-started',
+'file-payment-processing'
  ];
 
  for (const eventName of events) {
  try {
  const unlisten = await listen(eventName, (event) => {
- const payload = typeof event.payload === 'string'
+ const payload = typeof event.payload ==='string'
  ? event.payload
  : JSON.stringify(event.payload, null, 0).slice(0, 200);
- const source = eventName.startsWith('geth') ? 'geth'
- : eventName.startsWith('peer') || eventName.startsWith('ping') || eventName.startsWith('pong') ? 'dht'
- : 'system';
+ const source = eventName.startsWith('geth') ?'geth'
+ : eventName.startsWith('peer') || eventName.startsWith('ping') || eventName.startsWith('pong') ?'dht'
+ :'system';
  addLog('info', source, `Event: ${eventName} — ${payload}`);
  });
  eventListeners.push(unlisten);
@@ -209,10 +209,10 @@
  autoRefreshEnabled = !autoRefreshEnabled;
  if (autoRefreshEnabled) {
  startAutoRefresh();
- addLog('info', 'system', `Auto-refresh enabled (${autoRefreshSeconds}s)`);
+ addLog('info','system', `Auto-refresh enabled (${autoRefreshSeconds}s)`);
  } else {
  stopAutoRefresh();
- addLog('info', 'system', 'Auto-refresh disabled');
+ addLog('info','system','Auto-refresh disabled');
  }
  }
 
@@ -220,9 +220,9 @@
  isLoadingDht = true;
  try {
  dhtHealth = await dhtService.getHealth();
- addLog('debug', 'dht', `DHT health: ${dhtHealth.running ? 'Running' : 'Stopped'}, ${dhtHealth.connectedPeerCount} peers`);
+ addLog('debug','dht', `DHT health: ${dhtHealth.running ?'Running' :'Stopped'}, ${dhtHealth.connectedPeerCount} peers`);
  } catch (err) {
- addLog('error', 'dht', `Failed to get DHT health: ${err}`);
+ addLog('error','dht', `Failed to get DHT health: ${err}`);
  } finally {
  isLoadingDht = false;
  }
@@ -234,10 +234,10 @@
  const cached = await invoke<BootstrapHealthReport | null>('get_bootstrap_health');
  if (cached) {
  bootstrapHealth = cached;
- addLog('debug', 'bootstrap', `Bootstrap: ${cached.healthyNodes}/${cached.totalNodes} healthy nodes`);
+ addLog('debug','bootstrap', `Bootstrap: ${cached.healthyNodes}/${cached.totalNodes} healthy nodes`);
  }
  } catch (err) {
- addLog('warn', 'bootstrap', `No cached bootstrap health: ${err}`);
+ addLog('warn','bootstrap', `No cached bootstrap health: ${err}`);
  } finally {
  isLoadingBootstrap = false;
  }
@@ -245,12 +245,12 @@
 
  async function runBootstrapCheck() {
  isLoadingBootstrap = true;
- addLog('info', 'bootstrap', 'Running bootstrap health check...');
+ addLog('info','bootstrap','Running bootstrap health check...');
  try {
  bootstrapHealth = await invoke<BootstrapHealthReport>('check_bootstrap_health');
- addLog('info', 'bootstrap', `Bootstrap check complete: ${bootstrapHealth.healthyNodes}/${bootstrapHealth.totalNodes} healthy`);
+ addLog('info','bootstrap', `Bootstrap check complete: ${bootstrapHealth.healthyNodes}/${bootstrapHealth.totalNodes} healthy`);
  } catch (err) {
- addLog('error', 'bootstrap', `Bootstrap check failed: ${err}`);
+ addLog('error','bootstrap', `Bootstrap check failed: ${err}`);
  } finally {
  isLoadingBootstrap = false;
  }
@@ -260,9 +260,9 @@
  isLoadingGeth = true;
  try {
  gethStatus = await invoke<GethStatus>('get_geth_status');
- addLog('debug', 'geth', `Geth: ${gethStatus.running ? 'Running' : 'Stopped'}, block ${gethStatus.currentBlock}, ${gethStatus.peerCount} peers`);
+ addLog('debug','geth', `Geth: ${gethStatus.running ?'Running' :'Stopped'}, block ${gethStatus.currentBlock}, ${gethStatus.peerCount} peers`);
  } catch (err) {
- addLog('error', 'geth', `Failed to get Geth status: ${err}`);
+ addLog('error','geth', `Failed to get Geth status: ${err}`);
  gethStatus = { installed: false, running: false, syncing: false, currentBlock: 0, highestBlock: 0, peerCount: 0, chainId: 0 };
  } finally {
  isLoadingGeth = false;
@@ -273,9 +273,9 @@
  isLoadingMining = true;
  try {
  miningStatus = await invoke<MiningStatus>('get_mining_status');
- addLog('debug', 'mining', `Mining: ${miningStatus.mining ? 'Active' : 'Inactive'}, hashrate: ${miningStatus.hashRate} H/s, mined: ${miningStatus.totalMinedChi.toFixed(4)} CHI`);
+ addLog('debug','mining', `Mining: ${miningStatus.mining ?'Active' :'Inactive'}, hashrate: ${miningStatus.hashRate} H/s, mined: ${miningStatus.totalMinedChi.toFixed(4)} CHI`);
  } catch (err) {
- addLog('error', 'mining', `Failed to get mining status: ${err}`);
+ addLog('error','mining', `Failed to get mining status: ${err}`);
  miningStatus = null;
  } finally {
  isLoadingMining = false;
@@ -302,7 +302,7 @@
 
  function clearLogs() {
  logEntries = [];
- addLog('info', 'system', 'Logs cleared');
+ addLog('info','system','Logs cleared');
  }
 
  function copyLogs() {
@@ -310,9 +310,9 @@
  `[${e.timestamp.toISOString()}] [${e.level.toUpperCase()}] [${e.source}] ${e.message}`
  ).join('\n');
  navigator.clipboard.writeText(text).then(() => {
- toasts.show('Logs copied to clipboard', 'success');
+ toasts.show('Logs copied to clipboard','success');
  }).catch(() => {
- toasts.show('Failed to copy logs', 'error');
+ toasts.show('Failed to copy logs','error');
  });
  }
 
@@ -320,70 +320,70 @@
  const text = logEntries.map(e =>
  `[${e.timestamp.toISOString()}] [${e.level.toUpperCase()}] [${e.source}] ${e.message}`
  ).join('\n');
- const blob = new Blob([text], { type: 'text/plain' });
+ const blob = new Blob([text], { type:'text/plain' });
  const url = URL.createObjectURL(blob);
  const a = document.createElement('a');
  a.href = url;
- a.download = `chiral-diagnostics-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.log`;
+ a.download = `chiral-diagnostics-${new Date().toISOString().slice(0, 19).replace(/:/g,'-')}.log`;
  a.click();
  URL.revokeObjectURL(url);
- toasts.show('Logs exported', 'success');
+ toasts.show('Logs exported','success');
  }
 
  async function refreshAll() {
- addLog('info', 'system', 'Refreshing all diagnostics...');
+ addLog('info','system','Refreshing all diagnostics...');
  await Promise.all([loadDhtHealth(), loadBootstrapHealth(), loadGethStatus(), loadMiningStatus(), loadGethLog()]);
- addLog('info', 'system', 'All diagnostics refreshed');
+ addLog('info','system','All diagnostics refreshed');
  }
 
  function levelColor(level: string): string {
  switch (level) {
- case 'error': return 'text-red-500';
- case 'warn': return 'text-yellow-500';
- case 'info': return 'text-violet-400';
- case 'debug': return 'text-[var(--text-tertiary)]';
- default: return 'text-[var(--text-tertiary)]';
+ case'error': return'text-red-500';
+ case'warn': return'text-yellow-500';
+ case'info': return'text-violet-400';
+ case'debug': return'text-white/40';
+ default: return'text-white/40';
  }
  }
 
  function levelBg(level: string): string {
  switch (level) {
- case 'error': return 'bg-red-100 text-red-700 dark:text-red-400';
- case 'warn': return 'bg-yellow-100 text-yellow-700 dark:text-yellow-400';
- case 'info': return 'bg-blue-100 text-blue-700 dark:text-violet-400';
- case 'debug': return 'bg-[var(--surface-1)] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]';
- default: return 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]';
+ case'error': return'bg-red-100 text-red-700';
+ case'warn': return'bg-yellow-100 text-yellow-700';
+ case'info': return'bg-blue-500/[0.15] text-blue-400';
+ case'debug': return'bg-white/[0.05] text-white/50';
+ default: return'bg-white/[0.05]';
  }
  }
 
  function sourceBg(source: string): string {
  const normalized = source.toLowerCase();
  switch (normalized) {
- case 'geth': return 'bg-cyan-100 text-cyan-700 dark:text-violet-300';
- case 'mining': return 'bg-amber-100 text-amber-700 dark:text-amber-300';
- case 'dht': return 'bg-emerald-100 text-emerald-700 dark:text-emerald-300';
- case 'bootstrap': return 'bg-orange-100 text-orange-700 dark:text-orange-300';
- case 'system': return 'bg-violet-100 text-violet-700 dark:text-violet-300';
- default: return 'bg-[var(--surface-1)] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]';
+ case'geth': return'bg-blue-500/[0.15] text-blue-400';
+ case'mining': return'bg-amber-100 text-amber-400';
+ case'dht': return'bg-emerald-100 text-emerald-700';
+ case'bootstrap': return'bg-orange-100 text-orange-700';
+ case'system': return'bg-violet-100 text-violet-700';
+ default: return'bg-white/[0.05] text-white/50';
  }
  }
 
  function gethLogLineColor(line: string, level: string | null): string {
- if (level === 'ERROR' || line.includes('Fatal') || line.includes('ERROR') || line.includes('error')) {
- return 'text-red-400';
+ if (level ==='ERROR' || line.includes('Fatal') || line.includes('ERROR') || line.includes('error')) {
+ return'text-red-400';
  }
- if (level === 'WARN' || line.includes('WARN') || line.includes('warn')) {
- return 'text-yellow-400';
+ if (level ==='WARN' || line.includes('WARN') || line.includes('warn')) {
+ return'text-yellow-400';
  }
- if (level === 'DEBUG') {
- return 'text-slate-400';
+ if (level ==='DEBUG') {
+ return'text-slate-400';
  }
- return 'text-[var(--text-secondary)]';
+ return'text-white/50';
  }
 
  function parseStructuredGethLine(line: string): {
  timestamp: string | null;
- level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG' | null;
+ level:'INFO' |'WARN' |'ERROR' |'DEBUG' | null;
  source: string | null;
  message: string;
  } {
@@ -395,7 +395,7 @@
  const date = new Date(Number(ts) * 1000);
  return {
  timestamp: Number.isFinite(date.getTime()) ? date.toLocaleTimeString() : ts,
- level: level as 'INFO' | 'WARN' | 'ERROR' | 'DEBUG',
+ level: level as'INFO' |'WARN' |'ERROR' |'DEBUG',
  source,
  message
  };
@@ -408,16 +408,16 @@
  <div class="flex items-center justify-between">
  <div>
  <h1 class="text-2xl font-bold">Diagnostics</h1>
- <p class="text-[var(--text-secondary)] mt-1">Developer tools for debugging and monitoring</p>
+ <p class="text-white/50 mt-1">Developer tools for debugging and monitoring</p>
  </div>
  <div class="flex items-center gap-3">
- <label class="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
+ <label class="flex items-center gap-2 text-xs text-white/40">
  <input type="checkbox" checked={autoRefreshEnabled} onchange={toggleAutoRefresh} class="rounded" />
  Auto-refresh ({autoRefreshSeconds}s)
  </label>
  <button
  onclick={refreshAll}
- class="p-2 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+ class="p-2 hover:bg-white/[0.05] rounded-lg transition-colors focus:outline-none"
  title="Refresh all"
  >
  <RefreshCw class="w-5 h-5" />
@@ -426,24 +426,24 @@
  </div>
 
  <!-- DHT Diagnostics -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06]">
  <button
  onclick={() => showDhtSection = !showDhtSection}
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'} rounded-lg">
- <Globe class="w-6 h-6 {$networkConnected ? 'text-green-600 dark:text-green-400' : 'text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}" />
+ <div class="p-2 {$networkConnected ?'bg-green-500/[0.15]' :'bg-white/[0.05]'} rounded-lg">
+ <Globe class="w-6 h-6 {$networkConnected ?'text-green-400' :'text-white/50'}" />
  </div>
  <div>
  <h2 class="font-semibold">DHT Diagnostics</h2>
- <p class="text-sm text-[var(--text-tertiary)]">P2P network status and peer information</p>
+ <p class="text-sm text-white/40">P2P network status and peer information</p>
  </div>
  </div>
  {#if showDhtSection}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </button>
 
@@ -453,7 +453,7 @@
  <button
  onclick={loadDhtHealth}
  disabled={isLoadingDht}
- class="text-xs px-3 py-1.5 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingDht}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -466,36 +466,36 @@
 
  {#if dhtHealth}
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Status</p>
- <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
- {dhtHealth.running ? 'Running' : 'Stopped'}
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Status</p>
+ <p class="text-sm font-bold {dhtHealth.running ?'text-green-400' :'text-red-400'}">
+ {dhtHealth.running ?'Running' :'Stopped'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Connected Peers</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Connected Peers</p>
  <p class="text-sm font-bold tabular-nums">{dhtHealth.connectedPeerCount}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Kademlia Peers</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Kademlia Peers</p>
  <p class="text-sm font-bold tabular-nums">{dhtHealth.kademliaPeers}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Shared Files</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Shared Files</p>
  <p class="text-sm font-bold tabular-nums">{dhtHealth.sharedFiles}</p>
  </div>
  </div>
 
  {#if dhtHealth.peerId}
- <div class="p-3 bg-[var(--surface-1)] rounded-lg">
- <p class="text-xs text-[var(--text-tertiary)] mb-1">Peer ID</p>
+ <div class="p-3 bg-white/[0.05] rounded-lg">
+ <p class="text-xs text-white/40 mb-1">Peer ID</p>
  <p class="font-mono text-xs break-all">{dhtHealth.peerId}</p>
  </div>
  {/if}
 
  {#if dhtHealth.listeningAddresses.length > 0}
- <div class="p-3 bg-[var(--surface-1)] rounded-lg">
- <p class="text-xs text-[var(--text-tertiary)] mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
+ <div class="p-3 bg-white/[0.05] rounded-lg">
+ <p class="text-xs text-white/40 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
  <div class="space-y-1">
  {#each dhtHealth.listeningAddresses as addr}
  <p class="font-mono text-xs break-all">{addr}</p>
@@ -505,11 +505,11 @@
  {/if}
 
  {#if dhtHealth.protocols.length > 0}
- <div class="p-3 bg-[var(--surface-1)] rounded-lg">
- <p class="text-xs text-[var(--text-tertiary)] mb-2">Active Protocols ({dhtHealth.protocols.length})</p>
+ <div class="p-3 bg-white/[0.05] rounded-lg">
+ <p class="text-xs text-white/40 mb-2">Active Protocols ({dhtHealth.protocols.length})</p>
  <div class="flex flex-wrap gap-1.5">
  {#each dhtHealth.protocols as protocol}
- <span class="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-mono">
+ <span class="px-2 py-0.5 bg-blue-500/[0.15] text-blue-400 text-xs rounded-full font-mono">
  {protocol}
  </span>
  {/each}
@@ -518,15 +518,15 @@
  {/if}
 
  {#if dhtHealth.bootstrapNodes.length > 0}
- <div class="p-3 bg-[var(--surface-1)] rounded-lg">
- <p class="text-xs text-[var(--text-tertiary)] mb-2">DHT Bootstrap Nodes</p>
+ <div class="p-3 bg-white/[0.05] rounded-lg">
+ <p class="text-xs text-white/40 mb-2">DHT Bootstrap Nodes</p>
  <div class="space-y-1.5">
  {#each dhtHealth.bootstrapNodes as node}
  <div class="flex items-center gap-2 text-xs">
- <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+ <div class="w-2 h-2 rounded-full {node.reachable ?'bg-green-500' :'bg-red-500/[0.1]0'} shrink-0"></div>
  <span class="font-mono break-all">{node.address}</span>
- <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} shrink-0">
- {node.reachable ? 'Reachable' : 'Unreachable'}
+ <span class="{node.reachable ?'text-green-400' :'text-red-400'} shrink-0">
+ {node.reachable ?'Reachable' :'Unreachable'}
  </span>
  </div>
  {/each}
@@ -534,8 +534,8 @@
  </div>
  {/if}
  {:else}
- <p class="text-sm text-[var(--text-tertiary)] text-center py-4">
- Click "Refresh" to load DHT diagnostics
+ <p class="text-sm text-white/40 text-center py-4">
+ Click"Refresh" to load DHT diagnostics
  </p>
  {/if}
  </div>
@@ -543,7 +543,7 @@
  </div>
 
  <!-- Bootstrap Diagnostics -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06]">
  <button
  onclick={() => showBootstrapSection = !showBootstrapSection}
  class="w-full flex items-center justify-between p-6 text-left"
@@ -554,13 +554,13 @@
  </div>
  <div>
  <h2 class="font-semibold">Bootstrap Diagnostics</h2>
- <p class="text-sm text-[var(--text-tertiary)]">Bootstrap node connectivity and latency</p>
+ <p class="text-sm text-white/40">Bootstrap node connectivity and latency</p>
  </div>
  </div>
  {#if showBootstrapSection}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </button>
 
@@ -570,7 +570,7 @@
  <button
  onclick={runBootstrapCheck}
  disabled={isLoadingBootstrap}
- class="text-xs px-3 py-1.5 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingBootstrap}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -583,40 +583,40 @@
 
  {#if bootstrapHealth}
  <div class="grid grid-cols-3 gap-3">
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Status</p>
- <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
- {bootstrapHealth.isHealthy ? 'Healthy' : 'Degraded'}
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Status</p>
+ <p class="text-sm font-bold {bootstrapHealth.isHealthy ?'text-green-400' :'text-red-400'}">
+ {bootstrapHealth.isHealthy ?'Healthy' :'Degraded'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Healthy Nodes</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Healthy Nodes</p>
  <p class="text-sm font-bold tabular-nums">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Last Checked</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Last Checked</p>
  <p class="text-sm font-bold">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
  </div>
  </div>
 
  <div class="space-y-2">
  {#each bootstrapHealth.nodes as node}
- <div class="flex items-center justify-between p-3 bg-[var(--surface-1)] rounded-lg text-xs">
+ <div class="flex items-center justify-between p-3 bg-white/[0.05] rounded-lg text-xs">
  <div class="flex items-center gap-2">
- <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+ <div class="w-2 h-2 rounded-full {node.reachable ?'bg-green-500' :'bg-red-500/[0.1]0'} shrink-0"></div>
  <div>
  <span class="font-medium text-sm">{node.name}</span>
- <span class="text-[var(--text-tertiary)] ml-1">({node.region})</span>
+ <span class="text-white/40 ml-1">({node.region})</span>
  </div>
  </div>
  <div class="text-right shrink-0">
  {#if node.reachable && node.latencyMs}
- <span class="text-green-600 tabular-nums">{node.latencyMs}ms</span>
+ <span class="text-green-400 tabular-nums">{node.latencyMs}ms</span>
  {:else if node.error}
  <span class="text-red-500">{node.error}</span>
  {:else}
- <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
- {node.reachable ? 'Reachable' : 'Unreachable'}
+ <span class="{node.reachable ?'text-green-400' :'text-red-400'}">
+ {node.reachable ?'Reachable' :'Unreachable'}
  </span>
  {/if}
  </div>
@@ -624,8 +624,8 @@
  {/each}
  </div>
  {:else}
- <p class="text-sm text-[var(--text-tertiary)] text-center py-4">
- Click "Run Check" to test bootstrap node connectivity
+ <p class="text-sm text-white/40 text-center py-4">
+ Click"Run Check" to test bootstrap node connectivity
  </p>
  {/if}
  </div>
@@ -633,24 +633,24 @@
  </div>
 
  <!-- Geth Diagnostics -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06]">
  <button
  onclick={() => showGethSection = !showGethSection}
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'} rounded-lg">
- <Server class="w-6 h-6 {gethStatus?.running ? 'text-green-600 dark:text-green-400' : 'text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}" />
+ <div class="p-2 {gethStatus?.running ?'bg-green-500/[0.15]' :'bg-white/[0.05]'} rounded-lg">
+ <Server class="w-6 h-6 {gethStatus?.running ?'text-green-400' :'text-white/50'}" />
  </div>
  <div>
  <h2 class="font-semibold">Geth Diagnostics</h2>
- <p class="text-sm text-[var(--text-tertiary)]">Blockchain node status and sync info</p>
+ <p class="text-sm text-white/40">Blockchain node status and sync info</p>
  </div>
  </div>
  {#if showGethSection}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </button>
 
@@ -660,7 +660,7 @@
  <button
  onclick={loadGethStatus}
  disabled={isLoadingGeth}
- class="text-xs px-3 py-1.5 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingGeth}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -673,40 +673,40 @@
 
  {#if gethStatus}
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Installed</p>
- <p class="text-sm font-bold {gethStatus.installed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
- {gethStatus.installed ? 'Yes' : 'No'}
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Installed</p>
+ <p class="text-sm font-bold {gethStatus.installed ?'text-green-400' :'text-red-400'}">
+ {gethStatus.installed ?'Yes' :'No'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Status</p>
- <p class="text-sm font-bold {gethStatus.running ? 'text-green-600 dark:text-green-400' : 'text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}">
- {gethStatus.running ? 'Running' : 'Stopped'}
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Status</p>
+ <p class="text-sm font-bold {gethStatus.running ?'text-green-400' :'text-white/50'}">
+ {gethStatus.running ?'Running' :'Stopped'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Syncing</p>
- <p class="text-sm font-bold">{gethStatus.syncing ? 'Yes' : 'No'}</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Syncing</p>
+ <p class="text-sm font-bold">{gethStatus.syncing ?'Yes' :'No'}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Chain ID</p>
- <p class="text-sm font-bold tabular-nums">{gethStatus.chainId || 'N/A'}</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Chain ID</p>
+ <p class="text-sm font-bold tabular-nums">{gethStatus.chainId ||'N/A'}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Current Block</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Current Block</p>
  <p class="text-sm font-bold tabular-nums">{gethStatus.currentBlock.toLocaleString()}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Highest Block</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Highest Block</p>
  <p class="text-sm font-bold tabular-nums">{gethStatus.highestBlock.toLocaleString()}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Blockchain Peers</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Blockchain Peers</p>
  <p class="text-sm font-bold tabular-nums">{gethStatus.peerCount}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Sync Progress</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Sync Progress</p>
  <p class="text-sm font-bold tabular-nums">
  {#if gethStatus.syncing && gethStatus.highestBlock > 0}
  {((gethStatus.currentBlock / gethStatus.highestBlock) * 100).toFixed(1)}%
@@ -719,8 +719,8 @@
  </div>
  </div>
  {:else}
- <p class="text-sm text-[var(--text-tertiary)] text-center py-4">
- Click "Refresh" to load Geth diagnostics
+ <p class="text-sm text-white/40 text-center py-4">
+ Click"Refresh" to load Geth diagnostics
  </p>
  {/if}
  </div>
@@ -728,24 +728,24 @@
  </div>
 
  <!-- Mining Diagnostics -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06]">
  <button
  onclick={() => showMiningSection = !showMiningSection}
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 {miningStatus?.mining ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'} rounded-lg">
- <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}" />
+ <div class="p-2 {miningStatus?.mining ?'bg-amber-100' :'bg-white/[0.05]'} rounded-lg">
+ <Pickaxe class="w-6 h-6 {miningStatus?.mining ?'text-amber-600' :'text-white/50'}" />
  </div>
  <div>
  <h2 class="font-semibold">Mining Diagnostics</h2>
- <p class="text-sm text-[var(--text-tertiary)]">Mining status, hashrate, and rewards</p>
+ <p class="text-sm text-white/40">Mining status, hashrate, and rewards</p>
  </div>
  </div>
  {#if showMiningSection}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </button>
 
@@ -755,7 +755,7 @@
  <button
  onclick={loadMiningStatus}
  disabled={isLoadingMining}
- class="text-xs px-3 py-1.5 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingMining}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -768,29 +768,29 @@
 
  {#if miningStatus}
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Status</p>
- <p class="text-sm font-bold {miningStatus.mining ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}">
- {miningStatus.mining ? 'Mining' : 'Inactive'}
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Status</p>
+ <p class="text-sm font-bold {miningStatus.mining ?'text-amber-600' :'text-white/50'}">
+ {miningStatus.mining ?'Mining' :'Inactive'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Hash Rate</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Hash Rate</p>
  <p class="text-sm font-bold tabular-nums">{formatHashRate(miningStatus.hashRate)}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Total Mined</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Total Mined</p>
  <p class="text-sm font-bold text-amber-600 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Total Mined (Wei)</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-xs text-white/40">Total Mined (Wei)</p>
  <p class="text-sm font-bold font-mono tabular-nums">{miningStatus.totalMinedWei}</p>
  </div>
  </div>
 
  {#if miningStatus.minerAddress}
- <div class="p-3 bg-[var(--surface-1)] rounded-lg">
- <p class="text-xs text-[var(--text-tertiary)] mb-1">Miner Address (Coinbase)</p>
+ <div class="p-3 bg-white/[0.05] rounded-lg">
+ <p class="text-xs text-white/40 mb-1">Miner Address (Coinbase)</p>
  <p class="font-mono text-xs break-all">{miningStatus.minerAddress}</p>
  </div>
  {:else}
@@ -799,8 +799,8 @@
  </div>
  {/if}
  {:else}
- <p class="text-sm text-[var(--text-tertiary)] text-center py-4">
- Click "Refresh" to load mining diagnostics
+ <p class="text-sm text-white/40 text-center py-4">
+ Click"Refresh" to load mining diagnostics
  </p>
  {/if}
  </div>
@@ -808,24 +808,24 @@
  </div>
 
  <!-- Geth Log Viewer -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06]">
  <button
  onclick={() => showGethLogSection = !showGethLogSection}
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 bg-cyan-100 rounded-lg">
+ <div class="p-2 bg-blue-500/[0.15] rounded-lg">
  <FileText class="w-6 h-6 text-violet-500" />
  </div>
  <div>
  <h2 class="font-semibold">Geth Log</h2>
- <p class="text-sm text-[var(--text-tertiary)]">Live Geth process output (geth.log)</p>
+ <p class="text-sm text-white/40">Live Geth process output (geth.log)</p>
  </div>
  </div>
  {#if showGethLogSection}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </button>
 
@@ -833,12 +833,12 @@
  <div class="px-6 pb-6 space-y-4">
  <div class="flex items-center justify-between">
  <div class="flex items-center gap-2">
- <label for="geth-log-lines" class="text-xs text-[var(--text-tertiary)]">Lines:</label>
+ <label for="geth-log-lines" class="text-xs text-white/40">Lines:</label>
  <select
  id="geth-log-lines"
  bind:value={gethLogLines}
  onchange={() => loadGethLog()}
- class="text-xs px-2 py-1 bg-[var(--surface-1)] border border-[var(--border)] rounded"
+ class="text-xs px-2 py-1 bg-white/[0.05] border border-white/[0.06] rounded"
  >
  <option value={50}>50</option>
  <option value={100}>100</option>
@@ -851,11 +851,11 @@
  onclick={() => {
  if (gethLogContent) {
  navigator.clipboard.writeText(gethLogContent).then(() => {
- toasts.show('Geth log copied', 'success');
+ toasts.show('Geth log copied','success');
  });
  }
  }}
- class="text-xs px-2 py-1 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1"
  >
  <Copy class="w-3 h-3" />
  Copy
@@ -863,7 +863,7 @@
  <button
  onclick={loadGethLog}
  disabled={isLoadingGethLog}
- class="text-xs px-3 py-1.5 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingGethLog}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -875,13 +875,13 @@
  </div>
  </div>
 
- <div class=" bg-[var(--surface-0)]/40 border border-[var(--border)] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
+ <div class="bg-white/[0.03]/40 border border-white/[0.06] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
  {#if gethLogContent}
  {#each gethLogContent.split('\n') as line}
  {@const parsed = parseStructuredGethLine(line)}
- <div class="flex gap-2 py-0.5 hover:bg-[var(--surface-1)] px-1 rounded">
+ <div class="flex gap-2 py-0.5 hover:bg-white/[0.05] px-1 rounded">
  {#if parsed.timestamp}
- <span class="text-[var(--text-tertiary)] shrink-0">{parsed.timestamp}</span>
+ <span class="text-white/40 shrink-0">{parsed.timestamp}</span>
  {/if}
  {#if parsed.level}
  <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {levelBg(parsed.level.toLowerCase())}">
@@ -899,7 +899,7 @@
  </div>
  {/each}
  {:else}
- <p class="text-[var(--text-tertiary)] text-center py-8">No Geth log available. Start the Geth node to generate logs.</p>
+ <p class="text-white/40 text-center py-8">No Geth log available. Start the Geth node to generate logs.</p>
  {/if}
  </div>
  </div>
@@ -907,24 +907,24 @@
  </div>
 
  <!-- Event Logs -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06]">
  <button
  onclick={() => showLogsSection = !showLogsSection}
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 bg-purple-100 rounded-lg">
+ <div class="p-2 bg-purple-500/[0.15] rounded-lg">
  <Terminal class="w-6 h-6 text-purple-600" />
  </div>
  <div>
  <h2 class="font-semibold">Event Logs</h2>
- <p class="text-sm text-[var(--text-tertiary)]">Real-time events and log messages ({logEntries.length} entries)</p>
+ <p class="text-sm text-white/40">Real-time events and log messages ({logEntries.length} entries)</p>
  </div>
  </div>
  {#if showLogsSection}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </button>
 
@@ -933,10 +933,10 @@
  <!-- Log Controls -->
  <div class="flex flex-wrap items-center gap-3">
  <div class="flex items-center gap-2">
- <Filter class="w-4 h-4 text-[var(--text-secondary)]" />
+ <Filter class="w-4 h-4 text-white/50" />
  <select
  bind:value={logFilter}
- class="text-xs px-2 py-1 bg-[var(--surface-1)] border border-[var(--border)] rounded"
+ class="text-xs px-2 py-1 bg-white/[0.05] border border-white/[0.06] rounded"
  >
  <option value="all">All Levels</option>
  <option value="info">Info</option>
@@ -946,7 +946,7 @@
  </select>
  <select
  bind:value={sourceFilter}
- class="text-xs px-2 py-1 bg-[var(--surface-1)] border border-[var(--border)] rounded"
+ class="text-xs px-2 py-1 bg-white/[0.05] border border-white/[0.06] rounded"
  >
  <option value="all">All Sources</option>
  <option value="dht">DHT</option>
@@ -957,13 +957,13 @@
  </select>
  </div>
  <div class="flex items-center gap-2 ml-auto">
- <label class="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
+ <label class="flex items-center gap-1.5 text-xs text-white/40">
  <input type="checkbox" bind:checked={autoScroll} class="rounded" />
  Auto-scroll
  </label>
  <button
  onclick={copyLogs}
- class="text-xs px-2 py-1 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1"
  title="Copy logs to clipboard"
  >
  <Copy class="w-3 h-3" />
@@ -971,7 +971,7 @@
  </button>
  <button
  onclick={exportLogs}
- class="text-xs px-2 py-1 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1"
  title="Export logs as file"
  >
  <Download class="w-3 h-3" />
@@ -979,7 +979,7 @@
  </button>
  <button
  onclick={clearLogs}
- class="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 dark:hover:bg-red-900/50 text-red-600 rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-red-100 hover:bg-red-200 text-red-400 rounded transition-colors flex items-center gap-1"
  title="Clear logs"
  >
  <Trash2 class="w-3 h-3" />
@@ -989,16 +989,16 @@
  </div>
 
  <!-- Log Output -->
- <div class=" bg-[var(--surface-0)]/40 border border-[var(--border)] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
+ <div class="bg-white/[0.03]/40 border border-white/[0.06] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
  {#if filteredLogs.length === 0}
- <p class="text-[var(--text-tertiary)] text-center py-8">No log entries{logFilter !== 'all' || sourceFilter !== 'all' ? ' matching filters' : ''}</p>
+ <p class="text-white/40 text-center py-8">No log entries{logFilter !=='all' || sourceFilter !=='all' ?' matching filters' :''}</p>
  {:else}
  {#each filteredLogs as entry (entry.id)}
- <div class="flex gap-2 py-0.5 hover:bg-[var(--surface-1)] px-1 rounded">
- <span class="text-[var(--text-tertiary)] shrink-0">{entry.timestamp.toLocaleTimeString()}</span>
+ <div class="flex gap-2 py-0.5 hover:bg-white/[0.05] px-1 rounded">
+ <span class="text-white/40 shrink-0">{entry.timestamp.toLocaleTimeString()}</span>
  <span class="shrink-0 px-1 rounded {levelBg(entry.level)} text-[10px] uppercase font-bold">{entry.level}</span>
  <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {sourceBg(entry.source)}">{entry.source}</span>
- <span class="text-[var(--text-secondary)] break-all">{entry.message}</span>
+ <span class="text-white/50 break-all">{entry.message}</span>
  </div>
  {/each}
  {/if}

@@ -1,8 +1,8 @@
 <script lang="ts">
- import { Star, MoreVertical, Link, Folder, EyeOff } from 'lucide-svelte';
- import { getFileIcon, getFileColor, getFolderColor } from '$lib/utils/fileIcons';
- import type { DriveItem } from '$lib/stores/driveStore';
- import { networkConnected } from '$lib/stores';
+ import { Star, MoreVertical, Link, Folder, EyeOff } from'lucide-svelte';
+ import { getFileIcon, getFileColor, getFolderColor } from'$lib/utils/fileIcons';
+ import type { DriveItem } from'$lib/stores/driveStore';
+ import { networkConnected } from'$lib/stores';
 
  let {
  item,
@@ -15,7 +15,7 @@
  } = $props();
 
  function formatSize(bytes?: number): string {
- if (!bytes) return '—';
+ if (!bytes) return'—';
  if (bytes < 1024) return `${bytes} B`;
  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -23,33 +23,33 @@
  }
 
  function formatDate(ts: number): string {
- return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+ return new Date(ts).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
  }
 
  function getPriceLabel(item: DriveItem): string | null {
- if (item.type !== 'file') return null;
+ if (item.type !=='file') return null;
  const raw = item.priceChi?.trim();
- if (raw && raw !== '0') return `${raw} CHI`;
- if (item.seeding || raw === '0') return 'Free';
+ if (raw && raw !=='0') return `${raw} CHI`;
+ if (item.seeding || raw ==='0') return'Free';
  return null;
  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <tr
- class="group hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition cursor-pointer select-none border-b border-[var(--border)]"
+ class="group hover:bg-white/[0.05] transition cursor-pointer select-none border-b border-white/[0.06]"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
  <td class="py-2.5 px-3">
  <div class="flex items-center gap-3">
- {#if item.type === 'folder'}
+ {#if item.type ==='folder'}
  <Folder class="w-5 h-5 {getFolderColor()} fill-current opacity-80 shrink-0" />
  {:else}
  {@const Icon = getFileIcon(item.name)}
  <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)} shrink-0" />
  {/if}
- <span class="text-sm font-medium text-gray-900 truncate">{item.name}</span>
+ <span class="text-sm font-medium text-white/90 truncate">{item.name}</span>
  {#if item.starred}
  <Star class="w-3.5 h-3.5 text-yellow-500 fill-yellow-500 shrink-0" />
  {/if}
@@ -61,7 +61,7 @@
  {/if}
  {/if}
  {#if item.seeding && $networkConnected}
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-800 shrink-0">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-500/[0.15] text-green-800 shrink-0">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
  Seeding{#if item.protocol} ({item.protocol}){/if}
  </span>
@@ -74,18 +74,18 @@
  {/if}
  </div>
  </td>
- <td class="py-2.5 px-3 text-sm text-[var(--text-tertiary)]">
- {item.type === 'folder' ? '—' : formatSize(item.size)}
+ <td class="py-2.5 px-3 text-sm text-white/40">
+ {item.type ==='folder' ?'—' : formatSize(item.size)}
  </td>
- <td class="py-2.5 px-3 text-sm text-[var(--text-tertiary)]">
+ <td class="py-2.5 px-3 text-sm text-white/40">
  {formatDate(item.modifiedAt)}
  </td>
  <td class="py-2.5 px-3 text-right">
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+ class="p-1 hover:bg-white/[0.05] rounded opacity-0 group-hover:opacity-100 transition-opacity"
  >
- <MoreVertical class="w-4 h-4 text-[var(--text-tertiary)]" />
+ <MoreVertical class="w-4 h-4 text-white/40" />
  </button>
  </td>
 </tr>

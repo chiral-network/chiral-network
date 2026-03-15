@@ -1,5 +1,5 @@
 <script lang="ts">
- import { logger } from '$lib/logger';
+ import { logger } from'$lib/logger';
  const log = logger('ChiralDropTest');
  log.info('ChiralDrop test component loaded');
 </script>

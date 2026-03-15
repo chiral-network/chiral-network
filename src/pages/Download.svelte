@@ -1,5 +1,5 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
+ import { onMount, onDestroy } from'svelte';
  import {
  Search,
  Download,
@@ -26,17 +26,17 @@
  FolderOpen,
  ExternalLink,
  Eye
- } from 'lucide-svelte';
- import { Zap, Gauge, Rocket } from 'lucide-svelte';
- import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
- import { get } from 'svelte/store';
- import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
- import RateSeederModal from '$lib/components/RateSeederModal.svelte';
- import { walletService } from '$lib/services/walletService';
- import { ratingApi, setRatingOwner, type BatchReputationEntry } from '$lib/services/ratingApiService';
- import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
- import { toasts } from '$lib/toastStore';
- import { logger } from '$lib/logger';
+ } from'lucide-svelte';
+ import { Zap, Gauge, Rocket } from'lucide-svelte';
+ import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from'$lib/stores';
+ import { get } from'svelte/store';
+ import BlacklistWarningModal from'$lib/components/BlacklistWarningModal.svelte';
+ import RateSeederModal from'$lib/components/RateSeederModal.svelte';
+ import { walletService } from'$lib/services/walletService';
+ import { ratingApi, setRatingOwner, type BatchReputationEntry } from'$lib/services/ratingApiService';
+ import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from'$lib/speedTiers';
+ import { toasts } from'$lib/toastStore';
+ import { logger } from'$lib/logger';
  const log = logger('Download');
 
  // Check if running in Tauri environment (reactive)
@@ -44,7 +44,7 @@
  
  // Check Tauri availability
  function checkTauriAvailability(): boolean {
- return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+ return typeof window !=='undefined' && ('__TAURI__' in window ||'__TAURI_INTERNALS__' in window);
  }
 
  // Event listener cleanup functions
@@ -56,9 +56,9 @@
  let unlistenPaymentSent: (() => void) | null = null;
 
  // Types
- type SearchMode = 'hash' | 'magnet' | 'torrent';
- type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'completed' | 'cancelled' | 'failed';
- type PreviewType = 'video' | 'audio' | 'image' | 'pdf' | 'unsupported';
+ type SearchMode ='hash' |'magnet' |'torrent';
+ type DownloadStatus ='queued' |'downloading' |'paused' |'completed' |'cancelled' |'failed';
+ type PreviewType ='video' |'audio' |'image' |'pdf' |'unsupported';
 
  interface SeederInfo {
  peerId: string;
@@ -103,7 +103,7 @@
  fileSize: number;
  completedAt: Date;
  startedAt?: Date;
- status: 'completed' | 'cancelled' | 'failed';
+ status:'completed' |'cancelled' |'failed';
  speedTier?: SpeedTier;
  seeders?: number;
  seederWallet?: string;
@@ -125,96 +125,96 @@
 
  // File type detection
  function getFileIcon(fileName: string) {
- const ext = fileName.split('.').pop()?.toLowerCase() || '';
+ const ext = fileName.split('.').pop()?.toLowerCase() ||'';
 
- if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return Image;
- if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return Video;
- if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return Music;
- if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return Archive;
- if (['js', 'ts', 'html', 'css', 'py', 'java', 'cpp', 'c', 'php', 'rb', 'go', 'rs'].includes(ext)) return Code;
- if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return FileText;
- if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return FileSpreadsheet;
+ if (['jpg','jpeg','png','gif','webp','svg','bmp','ico'].includes(ext)) return Image;
+ if (['mp4','avi','mkv','mov','wmv','webm','flv','m4v'].includes(ext)) return Video;
+ if (['mp3','wav','flac','aac','ogg','m4a','wma'].includes(ext)) return Music;
+ if (['zip','rar','7z','tar','gz','bz2','xz'].includes(ext)) return Archive;
+ if (['js','ts','html','css','py','java','cpp','c','php','rb','go','rs'].includes(ext)) return Code;
+ if (['txt','md','pdf','doc','docx','rtf'].includes(ext)) return FileText;
+ if (['xls','xlsx','csv','ods'].includes(ext)) return FileSpreadsheet;
 
  return FileIcon;
  }
 
  function getFileColor(fileName: string) {
- const ext = fileName.split('.').pop()?.toLowerCase() || '';
+ const ext = fileName.split('.').pop()?.toLowerCase() ||'';
 
- if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-violet-400';
- if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return 'text-purple-500';
- if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return 'text-green-500';
- if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return 'text-orange-500';
- if (['js', 'ts', 'html', 'css', 'py', 'java', 'cpp', 'c', 'php', 'rb', 'go', 'rs'].includes(ext)) return 'text-red-500';
- if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return 'text-[var(--text-secondary)]';
- if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return 'text-emerald-500';
+ if (['jpg','jpeg','png','gif','webp','svg','bmp','ico'].includes(ext)) return'text-violet-400';
+ if (['mp4','avi','mkv','mov','wmv','webm','flv','m4v'].includes(ext)) return'text-purple-500';
+ if (['mp3','wav','flac','aac','ogg','m4a','wma'].includes(ext)) return'text-green-500';
+ if (['zip','rar','7z','tar','gz','bz2','xz'].includes(ext)) return'text-orange-500';
+ if (['js','ts','html','css','py','java','cpp','c','php','rb','go','rs'].includes(ext)) return'text-red-500';
+ if (['txt','md','pdf','doc','docx','rtf'].includes(ext)) return'text-white/50';
+ if (['xls','xlsx','csv','ods'].includes(ext)) return'text-emerald-500';
 
- return 'text-[var(--text-secondary)]';
+ return'text-white/50';
  }
 
  function getFileExtension(fileNameOrPath: string): string {
  const normalized = fileNameOrPath.split('?')[0];
  const ext = normalized.split('.').pop();
- return ext?.toLowerCase() || '';
+ return ext?.toLowerCase() ||'';
  }
 
  function getPreviewType(fileNameOrPath: string): PreviewType {
  const ext = getFileExtension(fileNameOrPath);
 
- if (['mp4', 'webm', 'mov', 'm4v', 'ogg', 'ogv'].includes(ext)) return 'video';
- if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'].includes(ext)) return 'audio';
- if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
- if (ext === 'pdf') return 'pdf';
+ if (['mp4','webm','mov','m4v','ogg','ogv'].includes(ext)) return'video';
+ if (['mp3','wav','flac','aac','ogg','m4a'].includes(ext)) return'audio';
+ if (['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext)) return'image';
+ if (ext ==='pdf') return'pdf';
 
- return 'unsupported';
+ return'unsupported';
  }
 
  function canPreviewFile(fileNameOrPath: string): boolean {
- return getPreviewType(fileNameOrPath) !== 'unsupported';
+ return getPreviewType(fileNameOrPath) !=='unsupported';
  }
 
  // Format file size
  function formatFileSize(bytes: number): string {
- if (bytes === 0) return '0 B';
+ if (bytes === 0) return'0 B';
  const k = 1024;
- const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+ const sizes = ['B','KB','MB','GB','TB'];
  const i = Math.floor(Math.log(bytes) / Math.log(k));
- return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+ return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) +'' + sizes[i];
  }
 
  // Format date
  function formatDate(date: Date): string {
  return new Intl.DateTimeFormat('en-US', {
- month: 'short',
- day: 'numeric',
- hour: '2-digit',
- minute: '2-digit'
+ month:'short',
+ day:'numeric',
+ hour:'2-digit',
+ minute:'2-digit'
  }).format(date);
  }
 
  // Format wei price as CHI string
  function formatPriceWei(weiStr: string): string {
- if (!weiStr || weiStr === '0') return 'Free';
+ if (!weiStr || weiStr ==='0') return'Free';
  try {
  const wei = BigInt(weiStr);
- if (wei === 0n) return 'Free';
+ if (wei === 0n) return'Free';
  const whole = wei / 1_000_000_000_000_000_000n;
  const frac = wei % 1_000_000_000_000_000_000n;
  if (frac === 0n) return `${whole} CHI`;
- const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
+ const fracStr = frac.toString().padStart(18,'0').replace(/0+$/,'');
  const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) : fracStr;
  return `${whole}.${decimals} CHI`;
  } catch {
- return 'Free';
+ return'Free';
  }
  }
 
  function formatInvokeError(error: unknown): string {
- if (typeof error === 'string') return error;
- if (error && typeof error === 'object') {
+ if (typeof error ==='string') return error;
+ if (error && typeof error ==='object') {
  const maybe = error as Record<string, unknown>;
- if (typeof maybe.error === 'string') return maybe.error;
- if (typeof maybe.message === 'string') return maybe.message;
+ if (typeof maybe.error ==='string') return maybe.error;
+ if (typeof maybe.message ==='string') return maybe.message;
  try {
  return JSON.stringify(maybe);
  } catch {
@@ -245,7 +245,7 @@
  let downloads = $state<DownloadItem[]>([]);
  let downloadHistory = $state<HistoryEntry[]>([]);
  let showSearchHistory = $state(false);
- let downloadsTab = $state<'active' | 'history'>('active');
+ let downloadsTab = $state<'active' |'history'>('active');
  let isViewerOpen = $state(false);
  let viewerSource = $state('');
  let viewerType = $state<PreviewType>('unsupported');
@@ -276,8 +276,8 @@
  const BASE_ELO = 50;
 
  // Persistence keys
- const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
- const ACTIVE_DOWNLOADS_KEY = 'chiral_active_downloads';
+ const DOWNLOAD_HISTORY_KEY ='chiral_download_history';
+ const ACTIVE_DOWNLOADS_KEY ='chiral_active_downloads';
 
  function normalizeUniqueIds<T extends { id: string }>(
  items: T[],
@@ -287,7 +287,7 @@
  let changed = false;
 
  const normalized = items.map((item, index) => {
- let nextId = (item.id || '').trim();
+ let nextId = (item.id ||'').trim();
  if (!nextId) {
  nextId = `${fallbackPrefix}-${Date.now()}-${index}`;
  changed = true;
@@ -323,7 +323,7 @@
  ...h,
  completedAt: new Date(h.completedAt)
  }));
- const normalizedHistory = normalizeUniqueIds(mappedHistory as HistoryEntry[], 'history');
+ const normalizedHistory = normalizeUniqueIds(mappedHistory as HistoryEntry[],'history');
  downloadHistory = normalizedHistory.items;
  idsChanged = idsChanged || normalizedHistory.changed;
  }
@@ -337,7 +337,7 @@
  startedAt: new Date(d.startedAt),
  completedAt: d.completedAt ? new Date(d.completedAt) : undefined
  }));
- const normalizedDownloads = normalizeUniqueIds(mappedDownloads as DownloadItem[], 'download');
+ const normalizedDownloads = normalizeUniqueIds(mappedDownloads as DownloadItem[],'download');
  downloads = normalizedDownloads.items;
  idsChanged = idsChanged || normalizedDownloads.changed;
  }
@@ -353,11 +353,11 @@
 
  function saveDownloadHistory() {
  try {
- const normalizedDownloads = normalizeUniqueIds(downloads, 'download');
+ const normalizedDownloads = normalizeUniqueIds(downloads,'download');
  if (normalizedDownloads.changed) {
  downloads = normalizedDownloads.items;
  }
- const normalizedHistory = normalizeUniqueIds(downloadHistory, 'history');
+ const normalizedHistory = normalizeUniqueIds(downloadHistory,'history');
  if (normalizedHistory.changed) {
  downloadHistory = normalizedHistory.items;
  }
@@ -388,7 +388,7 @@
  fileSize: download.size,
  completedAt: new Date(),
  startedAt: download.startedAt,
- status: download.status as 'completed' | 'cancelled' | 'failed',
+ status: download.status as'completed' |'cancelled' |'failed',
  speedTier: download.speedTier,
  seeders: download.seeders,
  seederWallet: download.seederWallet,
@@ -423,14 +423,14 @@
  if (match) {
  return decodeURIComponent(match[1]);
  }
- return 'Unknown';
+ return'Unknown';
  }
 
  // Handle torrent file upload
  async function handleTorrentFile() {
  const tauriAvailable = checkTauriAvailability();
  if (!tauriAvailable) {
- toasts.show('Torrent file upload requires the desktop app', 'error');
+ toasts.show('Torrent file upload requires the desktop app','error');
  return;
  }
 
@@ -447,7 +447,7 @@
 
  // Check if it's a .torrent file
  if (!selectedPath.toLowerCase().endsWith('.torrent')) {
- toasts.show('Please select a .torrent file', 'error');
+ toasts.show('Please select a .torrent file','error');
  return;
  }
 
@@ -460,7 +460,7 @@
  const dhtResult = await withTimeout(
  invoke<SearchResult | null>('search_file', { fileHash: result.infoHash }),
  8000,
- 'search'
+'search'
  );
 
  searchResult = {
@@ -469,32 +469,32 @@
  fileSize: result.size || dhtResult?.fileSize || 0,
  seeders: dhtResult?.seeders || [],
  createdAt: dhtResult?.createdAt || Date.now(),
- priceWei: dhtResult?.priceWei || '0',
- walletAddress: dhtResult?.walletAddress || '',
+ priceWei: dhtResult?.priceWei ||'0',
+ walletAddress: dhtResult?.walletAddress ||'',
  };
 
  if (searchResult.seeders.length > 0) {
- toasts.show(`Loaded torrent: ${result.name} (${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''})`, 'success');
+ toasts.show(`Loaded torrent: ${result.name} (${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ?'s' :''})`,'success');
  } else {
- toasts.show(`Loaded torrent: ${result.name} - searching for seeders...`, 'info');
+ toasts.show(`Loaded torrent: ${result.name} - searching for seeders...`,'info');
  }
  }
  }
  } catch (error) {
  log.error('Failed to parse torrent file:', error);
- toasts.show(`Failed to parse torrent file: ${error}`, 'error');
+ toasts.show(`Failed to parse torrent file: ${error}`,'error');
  }
  }
 
  // Search for file
  async function searchFile() {
  if (!searchQuery.trim()) {
- toasts.show('Please enter a search query', 'error');
+ toasts.show('Please enter a search query','error');
  return;
  }
 
  if (!$networkConnected) {
- toasts.show('Please connect to the network first', 'error');
+ toasts.show('Please connect to the network first','error');
  return;
  }
 
@@ -505,13 +505,13 @@
 
  try {
  let fileHash = searchQuery.trim();
- let fileName = 'Unknown';
+ let fileName ='Unknown';
 
  // Handle magnet link
- if (searchMode === 'magnet' || searchQuery.startsWith('magnet:')) {
+ if (searchMode ==='magnet' || searchQuery.startsWith('magnet:')) {
  const extractedHash = extractInfoHashFromMagnet(searchQuery);
  if (!extractedHash) {
- searchError = 'Invalid magnet link';
+ searchError ='Invalid magnet link';
  isSearching = false;
  return;
  }
@@ -524,16 +524,16 @@
  const result = await withTimeout(
  invoke<SearchResult | null>('search_file', { fileHash }),
  8000,
- 'search'
+'search'
  );
 
  if (result) {
  // For magnet links, use the name from the magnet link if available
- if ((searchMode === 'magnet' || searchQuery.startsWith('magnet:')) && fileName !== 'Unknown') {
+ if ((searchMode ==='magnet' || searchQuery.startsWith('magnet:')) && fileName !=='Unknown') {
  result.fileName = fileName;
  }
  // If result has empty fileName (from DHT fallback), use the one from magnet/torrent
- if (!result.fileName && fileName !== 'Unknown') {
+ if (!result.fileName && fileName !=='Unknown') {
  result.fileName = fileName;
  }
  // Fallback file name
@@ -546,30 +546,30 @@
  fetchSeederRatings(result.seeders);
  }
  if (result.seeders.length > 0) {
- toasts.show(`Found ${result.seeders.length} potential seeder${result.seeders.length !== 1 ? 's' : ''} for: ${result.fileName}`, 'success');
+ toasts.show(`Found ${result.seeders.length} potential seeder${result.seeders.length !== 1 ?'s' :''} for: ${result.fileName}`,'success');
  } else {
- toasts.show(`Found: ${result.fileName} - no seeders currently available`, 'warning');
+ toasts.show(`Found: ${result.fileName} - no seeders currently available`,'warning');
  }
  } else {
  // For magnet links, create a result even if not in DHT but show warning
- if (searchMode === 'magnet' || searchQuery.startsWith('magnet:')) {
+ if (searchMode ==='magnet' || searchQuery.startsWith('magnet:')) {
  searchResult = {
  hash: fileHash,
  fileName,
  fileSize: 0,
  seeders: [],
  createdAt: Date.now(),
- priceWei: '0',
- walletAddress: '',
+ priceWei:'0',
+ walletAddress:'',
  };
- toasts.show(`Magnet link parsed but file not found in DHT. The seeder may be offline.`, 'warning');
+ toasts.show(`Magnet link parsed but file not found in DHT. The seeder may be offline.`,'warning');
  } else {
- searchError = 'File not found in DHT. The seeder may be offline or the hash may be incorrect.';
+ searchError ='File not found in DHT. The seeder may be offline or the hash may be incorrect.';
  }
  }
  } else {
  await new Promise(resolve => setTimeout(resolve, 1000));
- searchError = 'Search requires the desktop application';
+ searchError ='Search requires the desktop application';
  }
  } catch (error) {
  log.error('Search failed:', error);
@@ -590,7 +590,7 @@
 
  async function reportTransferOutcome(
  context: TransferReputationContext,
- outcome: 'completed' | 'failed',
+ outcome:'completed' |'failed',
  ) {
  if (context.outcomeReported) return;
  if (!context.seederWallet) {
@@ -608,7 +608,7 @@
  context.seederWallet,
  context.fileHash,
  outcome,
- context.amountWei || '0',
+ context.amountWei ||'0',
  context.txHash,
  );
  const updated = { ...context, outcomeReported: true };
@@ -622,7 +622,7 @@
  // Refresh cached reputation so Elo updates are visible after transfer events.
  reputationCache.delete(context.seederWallet);
  await fetchSeederRatings([
- { peerId: '', walletAddress: context.seederWallet, priceWei: context.amountWei || '0' },
+ { peerId:'', walletAddress: context.seederWallet, priceWei: context.amountWei ||'0' },
  ]);
  } catch (err) {
  log.warn('Failed to record transfer outcome for reputation:', err);
@@ -658,7 +658,7 @@
  pending = (async () => {
  const raw = await ratingApi.getBatchReputation(requestWallets);
  const ratings: Record<string, BatchReputationEntry> =
- raw && typeof raw === 'object' ? raw : {};
+ raw && typeof raw ==='object' ? raw : {};
  const expiresAt = Date.now() + REPUTATION_CACHE_TTL_MS;
  for (const [key, value] of Object.entries(ratings)) {
  reputationCache.set(key, { rating: value, expiresAt });
@@ -673,7 +673,7 @@
  }
 
  const ratings = {
- ...(seederRatings && typeof seederRatings === 'object' ? seederRatings : {}),
+ ...(seederRatings && typeof seederRatings ==='object' ? seederRatings : {}),
  ...cachedRatings,
  ...fetchedRatings,
  };
@@ -683,7 +683,7 @@
  downloads = downloads.map((download) => {
  const wallet = download.seederWallet?.trim();
  const nextElo = wallet ? ratings[wallet]?.elo : undefined;
- if (typeof nextElo === 'number' && Number.isFinite(nextElo) && download.seederElo !== nextElo) {
+ if (typeof nextElo ==='number' && Number.isFinite(nextElo) && download.seederElo !== nextElo) {
  changed = true;
  return { ...download, seederElo: nextElo };
  }
@@ -692,7 +692,7 @@
  downloadHistory = downloadHistory.map((entry) => {
  const wallet = entry.seederWallet?.trim();
  const nextElo = wallet ? ratings[wallet]?.elo : undefined;
- if (typeof nextElo === 'number' && Number.isFinite(nextElo) && entry.seederElo !== nextElo) {
+ if (typeof nextElo ==='number' && Number.isFinite(nextElo) && entry.seederElo !== nextElo) {
  changed = true;
  return { ...entry, seederElo: nextElo };
  }
@@ -708,7 +708,7 @@
 
  function getSeederReputation(seeder: SeederInfo): BatchReputationEntry | null {
  if (!seeder) return null;
- const ratings = seederRatings && typeof seederRatings === 'object' ? seederRatings : {};
+ const ratings = seederRatings && typeof seederRatings ==='object' ? seederRatings : {};
  const wallet = seeder.walletAddress?.trim();
  if (wallet && ratings[wallet]) {
  return ratings[wallet];
@@ -722,7 +722,7 @@
 
  function getSeederElo(seeder: SeederInfo): number {
  const score = getSeederReputation(seeder)?.elo;
- return typeof score === 'number' && Number.isFinite(score) ? score : BASE_ELO;
+ return typeof score ==='number' && Number.isFinite(score) ? score : BASE_ELO;
  }
 
  function getBestSeederElo(seeders: SeederInfo[]): number | null {
@@ -735,16 +735,16 @@
  if ($walletAccount?.address) {
  walletBalance = await walletService.getBalance($walletAccount.address);
  } else {
- walletBalance = '0';
+ walletBalance ='0';
  }
  }
 
  // Get tier icon component
  function getTierIcon(tier: SpeedTier) {
  switch (tier) {
- case 'standard': return Zap;
- case 'premium': return Gauge;
- case 'ultra': return Rocket;
+ case'standard': return Zap;
+ case'premium': return Gauge;
+ case'ultra': return Rocket;
  default: return Zap;
  }
  }
@@ -753,19 +753,19 @@
  async function startDownload(result: SearchResult, skipBlacklistCheck = false, skipCostConfirm = false) {
  const tauriAvailable = checkTauriAvailability();
  if (!tauriAvailable) {
- toasts.show('Download requires the desktop app', 'error');
+ toasts.show('Download requires the desktop app','error');
  return;
  }
 
  // Check if already downloading
- if (downloads.some(d => d.hash === result.hash && !['completed', 'failed', 'cancelled'].includes(d.status))) {
- toasts.show('This file is already being downloaded', 'warning');
+ if (downloads.some(d => d.hash === result.hash && !['completed','failed','cancelled'].includes(d.status))) {
+ toasts.show('This file is already being downloaded','warning');
  return;
  }
 
  // Check if we have any seeders
  if (result.seeders.length === 0) {
- toasts.show('No seeders available. The file owner may be offline or the file was not found in DHT.', 'error');
+ toasts.show('No seeders available. The file owner may be offline or the file was not found in DHT.','error');
  return;
  }
 
@@ -788,23 +788,23 @@
 
  // Use selected seeder's pricing (fall back to file-level for backward compat)
  const selected = result.seeders[selectedSeederIndex] || result.seeders[0];
- const seederPriceWei = selected?.priceWei || result.priceWei || '0';
- const seederWalletAddr = selected?.walletAddress || result.walletAddress || '';
+ const seederPriceWei = selected?.priceWei || result.priceWei ||'0';
+ const seederWalletAddr = selected?.walletAddress || result.walletAddress ||'';
 
  // Calculate total cost: speed tier + seeder file price
  const tierCost = calculateCost(selectedTier, result.fileSize);
- const seederPriceChi = seederPriceWei !== '0'
+ const seederPriceChi = seederPriceWei !=='0'
  ? Number(BigInt(seederPriceWei)) / 1e18
  : 0;
  const totalCost = tierCost + seederPriceChi;
 
  if (totalCost > 0) {
  if (!$walletAccount) {
- toasts.show('Please log in with your wallet to download paid files', 'error');
+ toasts.show('Please log in with your wallet to download paid files','error');
  return;
  }
  if (parseFloat(walletBalance) < totalCost) {
- toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHI, have ${walletBalance} CHI`, 'error');
+ toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHI, have ${walletBalance} CHI`,'error');
  return;
  }
  // Show confirmation modal before spending CHI
@@ -819,14 +819,14 @@
  // Move any previous completed/failed/cancelled downloads of this hash to history
  // so event listeners (which match by hash) only update the new card.
  const staleEntries = downloads.filter(
- d => d.hash === result.hash && ['completed', 'failed', 'cancelled'].includes(d.status)
+ d => d.hash === result.hash && ['completed','failed','cancelled'].includes(d.status)
  );
  for (const entry of staleEntries) {
  addToDownloadHistory(entry);
  }
  if (staleEntries.length > 0) {
  downloads = downloads.filter(
- d => !(d.hash === result.hash && ['completed', 'failed', 'cancelled'].includes(d.status))
+ d => !(d.hash === result.hash && ['completed','failed','cancelled'].includes(d.status))
  );
  }
 
@@ -835,19 +835,19 @@
  hash: result.hash,
  name: result.fileName,
  size: result.fileSize,
- status: 'downloading',
+ status:'downloading',
  progress: 0,
- speed: totalCost > 0 ? 'Processing payment...' : 'Connecting...',
- eta: 'Requesting file...',
+ speed: totalCost > 0 ?'Processing payment...' :'Connecting...',
+ eta:'Requesting file...',
  seeders: result.seeders.length,
- seederWallet: seederWalletAddr || selected?.walletAddress || result.walletAddress || '',
+ seederWallet: seederWalletAddr || selected?.walletAddress || result.walletAddress ||'',
  seederElo: selected ? getSeederElo(selected) : BASE_ELO,
  startedAt: new Date(),
  speedTier: selectedTier
  };
 
  downloads = [...downloads, newDownload];
- downloadsTab = 'active';
+ downloadsTab ='active';
  saveDownloadHistory();
 
  try {
@@ -875,7 +875,7 @@
  params.privateKey = $walletAccount.privateKey;
  }
  // Pass selected seeder's pricing info
- if (seederPriceWei !== '0') {
+ if (seederPriceWei !=='0') {
  params.seederPriceWei = seederPriceWei;
  params.seederWalletAddress = seederWalletAddr;
  }
@@ -883,17 +883,17 @@
  const response = await withTimeout(
  invoke<{ requestId: string; status: string }>('start_download', params),
  12000,
- 'download start'
+'download start'
  );
 
  log.info('Download request sent:', response);
  if (tierCost > 0) {
- toasts.show(`Speed tier payment processed! Requesting file from seeder...`, 'success');
+ toasts.show(`Speed tier payment processed! Requesting file from seeder...`,'success');
  refreshWalletBalance();
  } else if (seederPriceChi > 0) {
- toasts.show(`Requesting file from seeder (payment will be sent automatically)...`, 'info');
+ toasts.show(`Requesting file from seeder (payment will be sent automatically)...`,'info');
  } else {
- toasts.show(`Requesting file from seeder...`, 'info');
+ toasts.show(`Requesting file from seeder...`,'info');
  }
 
  // Update download with request ID
@@ -903,7 +903,7 @@
  }
 
  downloads = downloads.map(d =>
- d.id === newDownload.id ? { ...d, id: resolvedRequestId, speed: 'Connecting...' } : d
+ d.id === newDownload.id ? { ...d, id: resolvedRequestId, speed:'Connecting...' } : d
  );
 
  const transferId = response.requestId;
@@ -911,8 +911,8 @@
  transferId,
  fileHash: result.hash,
  fileName: result.fileName,
- seederWallet: seederWalletAddr || selected?.walletAddress || result.walletAddress || '',
- amountWei: seederPriceWei || '0',
+ seederWallet: seederWalletAddr || selected?.walletAddress || result.walletAddress ||'',
+ amountWei: seederPriceWei ||'0',
  outcomeReported: false,
  };
  const nextContexts: Record<string, TransferReputationContext> = {
@@ -927,10 +927,10 @@
  } catch (error) {
  log.error('Download failed:', error);
  downloads = downloads.map(d =>
- d.id === newDownload.id ? { ...d, status: 'failed' as const } : d
+ d.id === newDownload.id ? { ...d, status:'failed' as const } : d
  );
  saveDownloadHistory();
- toasts.show(`Download failed: ${formatInvokeError(error)}`, 'error');
+ toasts.show(`Download failed: ${formatInvokeError(error)}`,'error');
  } finally {
  isProcessingPayment = false;
  }
@@ -940,10 +940,10 @@
  function togglePause(downloadId: string) {
  downloads = downloads.map(d => {
  if (d.id === downloadId) {
- if (d.status === 'downloading') {
- return { ...d, status: 'paused' as const };
- } else if (d.status === 'paused') {
- return { ...d, status: 'downloading' as const };
+ if (d.status ==='downloading') {
+ return { ...d, status:'paused' as const };
+ } else if (d.status ==='paused') {
+ return { ...d, status:'downloading' as const };
  }
  }
  return d;
@@ -955,18 +955,18 @@
  function cancelDownload(downloadId: string) {
  const download = downloads.find(d => d.id === downloadId);
  if (download) {
- download.status = 'cancelled';
+ download.status ='cancelled';
  addToDownloadHistory(download);
  downloads = downloads.filter(d => d.id !== downloadId);
  saveDownloadHistory();
- toasts.show(`Cancelled: ${download.name}`, 'info');
+ toasts.show(`Cancelled: ${download.name}`,'info');
  }
  }
 
  // Move completed/failed downloads to history
  function moveToHistory(downloadId: string) {
  const download = downloads.find(d => d.id === downloadId);
- if (download && ['completed', 'failed', 'cancelled'].includes(download.status)) {
+ if (download && ['completed','failed','cancelled'].includes(download.status)) {
  addToDownloadHistory(download);
  downloads = downloads.filter(d => d.id !== downloadId);
  saveDownloadHistory();
@@ -978,17 +978,17 @@
  const count = downloadHistory.length;
  downloadHistory = [];
  saveDownloadHistory();
- toasts.show(`Cleared ${count} item${count !== 1 ? 's' : ''} from history`, 'info');
+ toasts.show(`Cleared ${count} item${count !== 1 ?'s' :''} from history`,'info');
  }
 
  // Get active downloads (not completed/failed/cancelled)
  function getActiveDownloads(): DownloadItem[] {
- return downloads.filter(d => !['completed', 'failed', 'cancelled'].includes(d.status));
+ return downloads.filter(d => !['completed','failed','cancelled'].includes(d.status));
  }
 
  // Get finished downloads
  function getFinishedDownloads(): DownloadItem[] {
- return downloads.filter(d => ['completed', 'failed', 'cancelled'].includes(d.status));
+ return downloads.filter(d => ['completed','failed','cancelled'].includes(d.status));
  }
 
  // Setup event listeners for download events from Tauri backend
@@ -1012,10 +1012,10 @@
 
  // Update the download status — only target the actively downloading entry
  downloads = downloads.map(d => {
- if (d.hash === fileHash && d.status === 'downloading') {
+ if (d.hash === fileHash && d.status ==='downloading') {
  return {
  ...d,
- status: 'completed' as const,
+ status:'completed' as const,
  progress: 100,
  size: fileSize || d.size,
  completedAt: new Date(),
@@ -1026,12 +1026,12 @@
  });
  saveDownloadHistory();
 
- toasts.show(`Downloaded: ${fileName}`, 'success');
+ toasts.show(`Downloaded: ${fileName}`,'success');
 
  const context = getTransferContext(requestId, fileHash);
  void (async () => {
  if (context) {
- await reportTransferOutcome(context, 'completed');
+ await reportTransferOutcome(context,'completed');
  }
 
  // Show rating modal for this completed transfer.
@@ -1057,10 +1057,10 @@
 
  // Update the download status — only target the actively downloading entry
  downloads = downloads.map(d => {
- if (d.hash === fileHash && d.status === 'downloading') {
+ if (d.hash === fileHash && d.status ==='downloading') {
  return {
  ...d,
- status: 'failed' as const
+ status:'failed' as const
  };
  }
  return d;
@@ -1069,10 +1069,10 @@
 
  const context = getTransferContext(requestId, fileHash);
  if (context) {
- void reportTransferOutcome(context, 'failed');
+ void reportTransferOutcome(context,'failed');
  }
 
- toasts.show(`Download failed: ${error}`, 'error');
+ toasts.show(`Download failed: ${error}`,'error');
  });
 
  // Listen for download progress (rate-limited writes)
@@ -1088,7 +1088,7 @@
  const { requestId, fileHash, bytesWritten, totalBytes, speedBps, progress } = event.payload;
 
  downloads = downloads.map(d => {
- if ((d.hash === fileHash || d.id === requestId) && d.status === 'downloading') {
+ if ((d.hash === fileHash || d.id === requestId) && d.status ==='downloading') {
  return {
  ...d,
  progress,
@@ -1096,7 +1096,7 @@
  size: totalBytes || d.size,
  eta: speedBps > 0
  ? `${Math.ceil((totalBytes - bytesWritten) / speedBps)}s remaining`
- : 'Calculating...'
+ :'Calculating...'
  };
  }
  return d;
@@ -1114,7 +1114,7 @@
  log.info('Processing seeder payment:', event.payload);
 
  downloads = downloads.map(d => {
- if (d.hash === fileHash && d.status === 'downloading') {
+ if (d.hash === fileHash && d.status ==='downloading') {
  return { ...d, speed: `Paying seeder ${formatPriceWei(priceWei)}...` };
  }
  return d;
@@ -1135,7 +1135,7 @@
 
  // Store balance data on the active download so it transfers to history
  downloads = downloads.map(d => {
- if (d.hash === fileHash && d.status === 'downloading') {
+ if (d.hash === fileHash && d.status ==='downloading') {
  return { ...d, balanceBefore, balanceAfter };
  }
  return d;
@@ -1154,13 +1154,13 @@
  const { requestId, fileHash, fileName, txHash, priceWei, toWallet } = event.payload;
  const current = getTransferContext(requestId, fileHash);
  const next: TransferReputationContext = current
- ? { ...current, txHash, amountWei: priceWei || current.amountWei || '0', seederWallet: toWallet || current.seederWallet }
+ ? { ...current, txHash, amountWei: priceWei || current.amountWei ||'0', seederWallet: toWallet || current.seederWallet }
  : {
  transferId: requestId,
  fileHash,
  fileName,
- seederWallet: toWallet || '',
- amountWei: priceWei || '0',
+ seederWallet: toWallet ||'',
+ amountWei: priceWei ||'0',
  txHash,
  outcomeReported: false,
  };
@@ -1217,7 +1217,7 @@
  if ($walletAccount?.address) {
  refreshWalletBalance();
  } else {
- walletBalance = '0';
+ walletBalance ='0';
  }
  });
 
@@ -1228,13 +1228,13 @@
  // Get status badge color
  function getStatusBadgeColor(status: string): string {
  switch (status) {
- case 'completed': return 'bg-green-100 text-green-800 dark:text-green-400';
- case 'downloading': return 'bg-blue-100 text-blue-800 dark:text-violet-400';
- case 'paused': return 'bg-yellow-100 text-yellow-800 dark:text-yellow-400';
- case 'failed': return 'bg-red-100 text-red-800 dark:text-red-400';
- case 'cancelled': return 'bg-[var(--surface-1)] text-[var(--text-secondary)] border border-[var(--border)] dark:border-[var(--border)]';
- case 'queued': return 'bg-[var(--surface-1)] text-[var(--text-secondary)] border border-[var(--border)] dark:border-[var(--border)]';
- default: return 'bg-[var(--surface-1)] text-[var(--text-secondary)] border border-[var(--border)] dark:border-[var(--border)]';
+ case'completed': return'bg-green-500/[0.15] text-green-800';
+ case'downloading': return'bg-blue-500/[0.15] text-blue-800';
+ case'paused': return'bg-yellow-100 text-yellow-800';
+ case'failed': return'bg-red-100 text-red-800';
+ case'cancelled': return'bg-white/[0.05] text-white/50 border border-white/[0.06]';
+ case'queued': return'bg-white/[0.05] text-white/50 border border-white/[0.06]';
+ default: return'bg-white/[0.05] text-white/50 border border-white/[0.06]';
  }
  }
 
@@ -1245,7 +1245,7 @@
  await invoke('open_file', { path: filePath });
  } catch (error) {
  log.error('Failed to open file:', error);
- toasts.show(`Failed to open file: ${error}`, 'error');
+ toasts.show(`Failed to open file: ${error}`,'error');
  }
  }
 
@@ -1256,19 +1256,19 @@
  await invoke('show_in_folder', { path: filePath });
  } catch (error) {
  log.error('Failed to show in folder:', error);
- toasts.show(`Failed to show in folder: ${error}`, 'error');
+ toasts.show(`Failed to show in folder: ${error}`,'error');
  }
  }
 
  async function handlePreviewFile(filePath: string, fileName: string) {
  if (!isTauri) {
- toasts.show('In-app preview requires the desktop app', 'error');
+ toasts.show('In-app preview requires the desktop app','error');
  return;
  }
 
  const previewType = getPreviewType(fileName || filePath);
- if (previewType === 'unsupported') {
- toasts.show('Preview is not supported for this file type', 'warning');
+ if (previewType ==='unsupported') {
+ toasts.show('Preview is not supported for this file type','warning');
  return;
  }
 
@@ -1276,37 +1276,37 @@
  const { convertFileSrc } = await import('@tauri-apps/api/core');
  viewerType = previewType;
  viewerSource = convertFileSrc(filePath);
- viewerName = fileName || filePath.split(/[\\/]/).pop() || 'Preview';
+ viewerName = fileName || filePath.split(/[\\/]/).pop() ||'Preview';
  viewerError = null;
  isViewerOpen = true;
  } catch (error) {
  log.error('Failed to preview file:', error);
- toasts.show(`Failed to preview file: ${error}`, 'error');
+ toasts.show(`Failed to preview file: ${error}`,'error');
  }
  }
 
  function closeViewer() {
  isViewerOpen = false;
- viewerSource = '';
- viewerType = 'unsupported';
- viewerName = '';
+ viewerSource ='';
+ viewerType ='unsupported';
+ viewerName ='';
  viewerError = null;
  }
 
  function getTierLabel(tier?: SpeedTier): string {
  switch (tier) {
- case 'standard': return 'Standard';
- case 'premium': return 'Premium';
- case 'ultra': return 'Ultra';
- default: return 'Standard';
+ case'standard': return'Standard';
+ case'premium': return'Premium';
+ case'ultra': return'Ultra';
+ default: return'Standard';
  }
  }
 
  function getTierBadgeColor(tier?: SpeedTier): string {
  switch (tier) {
- case 'ultra': return 'bg-purple-100 text-purple-700 dark:text-purple-400';
- case 'premium': return 'bg-amber-100 text-amber-700 dark:text-amber-400';
- default: return 'bg-blue-100 text-blue-600 dark:text-violet-400';
+ case'ultra': return'bg-purple-500/[0.15] text-purple-400';
+ case'premium': return'bg-amber-100 text-amber-400';
+ default: return'bg-blue-500/[0.15] text-blue-600';
  }
  }
 
@@ -1326,7 +1326,7 @@
 <div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
  <div>
  <h1 class="text-2xl font-bold">Download</h1>
- <p class="text-[var(--text-secondary)] mt-2">Search and download files from the Chiral Network</p>
+ <p class="text-white/50 mt-2">Search and download files from the Chiral Network</p>
  </div>
 
  <!-- Network Status Warning -->
@@ -1345,31 +1345,31 @@
  {/if}
 
  <!-- Add New Download Section -->
- <div class=" bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6">
+ <div class="bg-white/[0.05] rounded-xl border border-white/[0.06] p-6">
  <div class="flex items-center gap-2 mb-4">
- <Plus class="w-5 h-5 text-[var(--text-secondary)]" />
+ <Plus class="w-5 h-5 text-white/50" />
  <h2 class="text-lg font-semibold">Add New Download</h2>
  </div>
 
  <!-- Search Mode Tabs -->
  <div class="flex gap-2 mb-4">
  <button
- onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-violet-500 bg-violet-950/20 text-primary-700 dark:text-violet-400' : 'border-gray-300 text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ onclick={() => { searchMode ='hash'; searchQuery =''; searchResult = null; searchError = null; }}
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='hash' ?'border-violet-500 bg-violet-950/20 text-primary-700' :'border-white/[0.2] text-white/50 hover:bg-white/[0.05]'}"
  >
  <Search class="w-4 h-4" />
  Merkle Hash
  </button>
  <button
- onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 text-purple-700 dark:text-purple-400' : 'border-gray-300 text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ onclick={() => { searchMode ='magnet'; searchQuery =''; searchResult = null; searchError = null; }}
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='magnet' ?'border-purple-500 bg-purple-50 text-purple-400' :'border-white/[0.2] text-white/50 hover:bg-white/[0.05]'}"
  >
  <Link class="w-4 h-4" />
  Magnet Link
  </button>
  <button
- onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 text-green-700 dark:text-green-400' : 'border-gray-300 text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ onclick={() => { searchMode ='torrent'; searchQuery =''; searchResult = null; searchError = null; }}
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='torrent' ?'border-green-500 bg-green-50 text-green-400' :'border-white/[0.2] text-white/50 hover:bg-white/[0.05]'}"
  >
  <FileUp class="w-4 h-4" />
  .torrent File
@@ -1377,14 +1377,14 @@
  </div>
 
  <!-- Search Input -->
- {#if searchMode === 'torrent'}
- <div class="text-center py-8 border-2 border-dashed border-gray-300 rounded-lg">
- <FileUp class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
- <p class="text-[var(--text-secondary)] mb-4">Upload a .torrent file to start downloading</p>
+ {#if searchMode ==='torrent'}
+ <div class="text-center py-8 border-2 border-dashed border-white/[0.2] rounded-lg">
+ <FileUp class="w-12 h-12 mx-auto text-white/50 mb-3" />
+ <p class="text-white/50 mb-4">Upload a .torrent file to start downloading</p>
  <button
  onclick={handleTorrentFile}
  disabled={!$networkConnected}
- class="px-6 py-3 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 disabled:opacity-50 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+ class="px-6 py-3 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 disabled:opacity-50 disabled:cursor-not-allowed transition-all focus:outline-none"
  >
  Select .torrent File
  </button>
@@ -1396,9 +1396,9 @@
  <input
  type="text"
  bind:value={searchQuery}
- placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
- class="w-full px-4 py-3 border border-[var(--border)] rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 font-mono text-sm"
- onkeydown={(e) => e.key === 'Enter' && searchFile()}
+ placeholder={searchMode ==='hash' ?'Enter SHA-256 hash (64 characters)' :'Paste magnet link (magnet:?xt=urn:btih:...)'}
+ class="w-full px-4 py-3 border border-white/[0.06] rounded-lg focus:border-violet-500 font-mono text-sm"
+ onkeydown={(e) => e.key ==='Enter' && searchFile()}
  onfocus={() => showSearchHistory = true}
  onblur={() => setTimeout(() => showSearchHistory = false, 200)}
  />
@@ -1407,7 +1407,7 @@
  <button
  onclick={searchFile}
  disabled={isSearching || !$networkConnected}
- class="px-6 py-3 bg-violet-500/80 border border-primary-400/30 text-white rounded-lg hover:bg-violet-500/90 dark:hover:bg-violet-600/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-2"
+ class="px-6 py-3 bg-violet-500/80 border border-primary-400/30 text-white rounded-lg hover:bg-violet-500/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none"
  >
  {#if isSearching}
  <Loader2 class="w-5 h-5 animate-spin" />
@@ -1420,11 +1420,11 @@
  </div>
  </div>
 
- <p class="text-xs text-[var(--text-tertiary)] mt-2">
- {#if searchMode === 'hash'}
+ <p class="text-xs text-white/40 mt-2">
+ {#if searchMode ==='hash'}
  Enter a 64-character SHA-256 Merkle root hash to search for files
  {:else}
- Paste a magnet link starting with "magnet:?xt=urn:btih:"
+ Paste a magnet link starting with"magnet:?xt=urn:btih:"
  {/if}
  </p>
  {/if}
@@ -1432,21 +1432,21 @@
  <!-- Search Result -->
  {#if searchResult}
  {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
- <div class="mt-6 bg-[var(--surface-1)] rounded-lg p-4 border border-[var(--border)]">
+ <div class="mt-6 bg-white/[0.05] rounded-lg p-4 border border-white/[0.06]">
  <!-- File info row -->
  <div class="flex items-start gap-4">
- <div class="flex items-center justify-center w-14 h-14 bg-[var(--surface-1)] rounded-lg border border-[var(--border)] flex-shrink-0">
+ <div class="flex items-center justify-center w-14 h-14 bg-white/[0.05] rounded-lg border border-white/[0.06] flex-shrink-0">
  <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
  </div>
 
  <div class="flex-1 min-w-0">
  <h3 class="text-lg font-semibold truncate">{searchResult.fileName}</h3>
- <div class="flex items-center gap-4 text-sm text-[var(--text-secondary)] mt-1">
+ <div class="flex items-center gap-4 text-sm text-white/50 mt-1">
  {#if searchResult.fileSize > 0}
  <span class="tabular-nums">{formatFileSize(searchResult.fileSize)}</span>
  {/if}
- <span class="tabular-nums {searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
- {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
+ <span class="tabular-nums {searchResult.seeders.length > 0 ?'text-green-400' :'text-amber-600'}">
+ {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ?'s' :''} found` :'No seeders available'}
  </span>
  {#if searchResult.seeders.length > 0}
  {@const bestSeederElo = getBestSeederElo(searchResult.seeders)}
@@ -1457,11 +1457,11 @@
  {/if}
  {/if}
  </div>
- <p class="text-xs text-[var(--text-tertiary)] font-mono mt-2 truncate">
+ <p class="text-xs text-white/40 font-mono mt-2 truncate">
  {searchResult.hash}
  </p>
  {#if searchResult.seeders.length > 0}
- <p class="text-xs text-[var(--text-secondary)] mt-1">
+ <p class="text-xs text-white/50 mt-1">
  Seeder availability is verified when download starts
  </p>
  {/if}
@@ -1470,8 +1470,8 @@
 
  <!-- Seeder Selection (when multiple seeders available) -->
  {#if searchResult.seeders.length > 1}
- <div class="mt-4 pt-4 border-t border-[var(--border)]">
- <p class="text-sm font-medium text-[var(--text-secondary)] mb-3">Select Seeder</p>
+ <div class="mt-4 pt-4 border-t border-white/[0.06]">
+ <p class="text-sm font-medium text-white/50 mb-3">Select Seeder</p>
  <div class="space-y-2 max-h-48 overflow-y-auto">
  {#each searchResult.seeders as seeder, i}
  {@const seederElo = getSeederElo(seeder)}
@@ -1479,8 +1479,8 @@
  onclick={() => selectedSeederIndex = i}
  class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
  {selectedSeederIndex === i
- ? 'border-violet-500 bg-violet-950/20 dark:bg-primary-900/30'
- : 'border-[var(--border)] hover:border-gray-400 dark:hover:border-gray-500'
+ ?'border-violet-500 bg-violet-950/20'
+ :'border-white/[0.06] hover:border-white/[0.15]'
  }"
  >
  <div class="flex items-center gap-2 min-w-0">
@@ -1493,7 +1493,7 @@
  </span>
  </div>
  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 flex-shrink-0 tabular-nums">
- {formatPriceWei(seeder.priceWei || '0')}
+ {formatPriceWei(seeder.priceWei ||'0')}
  </span>
  </button>
  {/each}
@@ -1502,7 +1502,7 @@
  {:else if searchResult.seeders.length === 1}
  {@const seeder = searchResult.seeders[0]}
  {@const seederElo = getSeederElo(seeder)}
- <div class="mt-3 flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+ <div class="mt-3 flex items-center gap-2 text-sm text-white/50">
  <span class="font-mono text-xs truncate" title={seeder.peerId}>
  Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
  </span>
@@ -1510,14 +1510,14 @@
  Elo {seederElo.toFixed(1)}
  </span>
  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 tabular-nums">
- {formatPriceWei(seeder.priceWei || '0')}
+ {formatPriceWei(seeder.priceWei ||'0')}
  </span>
  </div>
  {/if}
 
  <!-- Speed Tier Selector -->
- <div class="mt-4 pt-4 border-t border-[var(--border)]">
- <p class="text-sm font-medium text-[var(--text-secondary)] mb-3">Select Download Speed</p>
+ <div class="mt-4 pt-4 border-t border-white/[0.06]">
+ <p class="text-sm font-medium text-white/50 mb-3">Select Download Speed</p>
  <div class="grid grid-cols-3 gap-3">
  {#each TIERS as tier}
  {@const fileSizeKnown = searchResult.fileSize > 0}
@@ -1533,17 +1533,17 @@
  disabled={isDisabled}
  class="relative p-3 rounded-lg border-2 text-left transition-all
  {isSelected
- ? 'border-violet-500 bg-violet-950/20 ring-1 ring-violet-500'
+ ?'border-violet-500 bg-violet-950/20'
  : isDisabled
- ? 'border-[var(--border)] opacity-50 cursor-not-allowed'
- : 'border-[var(--border)] hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
+ ?'border-white/[0.06] opacity-50 cursor-not-allowed'
+ :'border-white/[0.06] hover:border-white/[0.15] cursor-pointer'
  }"
  >
  <div class="flex items-center gap-2 mb-1">
- <TierIcon class="w-4 h-4 {isSelected ? 'text-violet-500 dark:text-violet-400' : 'text-[var(--text-tertiary)] dark:text-[var(--text-secondary)]'}" />
- <span class="text-sm font-semibold {isSelected ? 'text-primary-700 dark:text-violet-300' : 'dark:text-white'}">{tier.name}</span>
+ <TierIcon class="w-4 h-4 {isSelected ?'text-violet-500' :'text-white/40'}" />
+ <span class="text-sm font-semibold {isSelected ?'text-primary-700' :'text-white'}">{tier.name}</span>
  </div>
- <p class="text-xs text-[var(--text-tertiary)]">{tier.speedLabel}</p>
+ <p class="text-xs text-white/40">{tier.speedLabel}</p>
  <p class="text-xs font-medium mt-1 text-amber-600">
  {#if fileSizeKnown}
  {formatCost(cost)}
@@ -1563,12 +1563,12 @@
  <!-- Download button -->
  {#if searchResult}
  {@const selectedSeeder = searchResult.seeders[selectedSeederIndex] || searchResult.seeders[0]}
- {@const selectedPriceWei = selectedSeeder?.priceWei || searchResult.priceWei || '0'}
- {@const seederPrice = selectedPriceWei !== '0' ? formatPriceWei(selectedPriceWei) : null}
+ {@const selectedPriceWei = selectedSeeder?.priceWei || searchResult.priceWei ||'0'}
+ {@const seederPrice = selectedPriceWei !=='0' ? formatPriceWei(selectedPriceWei) : null}
  {@const tierCostVal = searchResult.fileSize > 0 ? calculateCost(selectedTier, searchResult.fileSize) : 0}
  {@const hasCost = seederPrice || tierCostVal > 0}
  <div class="mt-4 flex items-center justify-between">
- <div class="text-sm text-[var(--text-secondary)]">
+ <div class="text-sm text-white/50">
  Cost:
  {#if seederPrice}
  <span class="font-medium text-amber-600">{seederPrice}</span> (file)
@@ -1580,14 +1580,14 @@
  <span class="font-medium text-amber-600">{formatCost(tierCostVal)}</span> (speed tier)
  {/if}
  {#if $walletAccount}
- <span class="text-[var(--text-secondary)] mx-1">•</span>
+ <span class="text-white/50 mx-1">•</span>
  Balance: <span class="font-medium tabular-nums">{parseFloat(walletBalance).toFixed(4)} CHI</span>
  {/if}
  </div>
  <button
  onclick={() => startDownload(searchResult!)}
  disabled={!isTauri || isProcessingPayment}
- class="px-5 py-2.5 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 disabled:opacity-50 flex items-center gap-2 transition-all font-medium focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+ class="px-5 py-2.5 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 disabled:opacity-50 flex items-center gap-2 transition-all font-medium focus:outline-none"
  >
  {#if isProcessingPayment}
  <Loader2 class="w-4 h-4 animate-spin" />
@@ -1605,7 +1605,7 @@
 
  <!-- Search Error -->
  {#if searchError}
- <div class="mt-6 bg-red-50 rounded-lg p-4 border border-red-200">
+ <div class="mt-6 bg-red-500/[0.1] rounded-lg p-4 border border-red-400/20">
  <div class="flex items-center gap-3">
  <AlertCircle class="w-5 h-5 text-red-500" />
  <p class="text-sm text-red-700">{searchError}</p>
@@ -1615,16 +1615,16 @@
  </div>
 
  <!-- Downloads -->
- <div class=" bg-[var(--surface-1)] rounded-xl border border-[var(--border)]">
+ <div class="bg-white/[0.05] rounded-xl border border-white/[0.06]">
  <!-- Tabs -->
- <div class="flex items-center justify-between border-b border-[var(--border)] px-4">
+ <div class="flex items-center justify-between border-b border-white/[0.06] px-4">
  <div class="flex">
  <button
- onclick={() => downloadsTab = 'active'}
+ onclick={() => downloadsTab ='active'}
  class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
- {downloadsTab === 'active'
- ? 'border-violet-500 text-violet-500 dark:text-violet-400'
- : 'border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] dark:hover:text-[var(--text-secondary)]'}"
+ {downloadsTab ==='active'
+ ?'border-violet-500 text-violet-500'
+ :'border-transparent text-white/40 hover:text-white/50'}"
  >
  <Download class="w-4 h-4" />
  Active
@@ -1635,26 +1635,26 @@
  {/if}
  </button>
  <button
- onclick={() => downloadsTab = 'history'}
+ onclick={() => downloadsTab ='history'}
  class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
- {downloadsTab === 'history'
- ? 'border-violet-500 text-violet-500 dark:text-violet-400'
- : 'border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] dark:hover:text-[var(--text-secondary)]'}"
+ {downloadsTab ==='history'
+ ?'border-violet-500 text-violet-500'
+ :'border-transparent text-white/40 hover:text-white/50'}"
  >
  <History class="w-4 h-4" />
  History
  {#if downloadHistory.length > 0}
- <span class="px-1.5 py-0.5 text-xs font-semibold bg-[var(--surface-1)] text-[var(--text-secondary)] border border-[var(--border)] rounded-full">
+ <span class="px-1.5 py-0.5 text-xs font-semibold bg-white/[0.05] text-white/50 border border-white/[0.06] rounded-full">
  {downloadHistory.length}
  </span>
  {/if}
  </button>
  </div>
 
- {#if downloadsTab === 'history' && downloadHistory.length > 0}
+ {#if downloadsTab ==='history' && downloadHistory.length > 0}
  <button
  onclick={clearDownloadHistory}
- class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+ class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/[0.1] rounded-lg transition-colors"
  >
  <Trash2 class="w-3.5 h-3.5" />
  Clear
@@ -1663,26 +1663,26 @@
  </div>
 
  <!-- Active Downloads Tab -->
- {#if downloadsTab === 'active'}
+ {#if downloadsTab ==='active'}
  {#if downloads.length === 0}
  <div class="text-center py-16 px-6">
- <Download class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
- <p class="text-[var(--text-tertiary)]">No active downloads</p>
- <p class="text-sm text-[var(--text-secondary)] mt-1">Search for a file above to start downloading</p>
+ <Download class="w-12 h-12 mx-auto text-white/50 mb-3" />
+ <p class="text-white/40">No active downloads</p>
+ <p class="text-sm text-white/50 mt-1">Search for a file above to start downloading</p>
  </div>
  {:else}
- <div class="divide-y divide-gray-100">
+ <div class="divide-y divide-white/[0.06]">
  {#each downloads as download (download.id)}
  {@const DownloadIcon = getFileIcon(download.name)}
- {@const TierIcon = getTierIcon(download.speedTier || 'standard')}
- {@const isActive = download.status === 'downloading' || download.status === 'paused'}
- {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
- <div class="p-4 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]/50 transition-colors">
+ {@const TierIcon = getTierIcon(download.speedTier ||'standard')}
+ {@const isActive = download.status ==='downloading' || download.status ==='paused'}
+ {@const isFinished = ['completed','failed','cancelled'].includes(download.status)}
+ <div class="p-4 hover:bg-white/[0.05]/50 transition-colors">
  <!-- Top row: icon, name, badges, actions -->
  <div class="flex items-start gap-3">
  <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
- {download.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'}">
- <DownloadIcon class="w-5 h-5 {download.status === 'completed' ? 'text-green-500' : getFileColor(download.name)}" />
+ {download.status ==='completed' ?'bg-green-50' :'bg-white/[0.05]'}">
+ <DownloadIcon class="w-5 h-5 {download.status ==='completed' ?'text-green-500' : getFileColor(download.name)}" />
  </div>
 
  <div class="flex-1 min-w-0">
@@ -1698,7 +1698,7 @@
  </div>
 
  <!-- Stats row -->
- <div class="flex items-center gap-3 mt-1.5 text-xs text-[var(--text-tertiary)]">
+ <div class="flex items-center gap-3 mt-1.5 text-xs text-white/40">
  {#if download.size > 0}
  <span class="flex items-center gap-1 tabular-nums">
  {formatFileSize(download.size)}
@@ -1708,57 +1708,57 @@
  <span class="text-violet-500 font-medium tabular-nums">{download.speed}</span>
  <span class="tabular-nums">{download.eta}</span>
  {/if}
- {#if download.status === 'completed' && download.startedAt && download.completedAt}
+ {#if download.status ==='completed' && download.startedAt && download.completedAt}
  <span class="tabular-nums">Took {formatDuration(download.startedAt, download.completedAt)}</span>
  {/if}
- <span class="tabular-nums">{download.seeders} seeder{download.seeders !== 1 ? 's' : ''}</span>
- {#if typeof download.seederElo === 'number'}
+ <span class="tabular-nums">{download.seeders} seeder{download.seeders !== 1 ?'s' :''}</span>
+ {#if typeof download.seederElo ==='number'}
  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-violet-900/20 text-primary-800 tabular-nums">
  Elo {download.seederElo.toFixed(1)}
  </span>
  {/if}
- <span class="text-[var(--text-secondary)]">Started {formatDate(download.startedAt)}</span>
+ <span class="text-white/50">Started {formatDate(download.startedAt)}</span>
  </div>
 
  <!-- Hash (truncated) -->
- <p class="text-xs text-[var(--text-secondary)] font-mono mt-1 truncate">{download.hash}</p>
+ <p class="text-xs text-white/50 font-mono mt-1 truncate">{download.hash}</p>
  </div>
 
  <!-- Actions -->
  <div class="flex items-center gap-1 flex-shrink-0">
- {#if download.status === 'downloading' || download.status === 'paused'}
+ {#if download.status ==='downloading' || download.status ==='paused'}
  <button
  onclick={() => togglePause(download.id)}
- class="p-1.5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition-colors"
- title={download.status === 'downloading' ? 'Pause' : 'Resume'}
+ class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
+ title={download.status ==='downloading' ?'Pause' :'Resume'}
  >
- {#if download.status === 'downloading'}
- <Pause class="w-4 h-4 text-[var(--text-tertiary)]" />
+ {#if download.status ==='downloading'}
+ <Pause class="w-4 h-4 text-white/40" />
  {:else}
  <Play class="w-4 h-4 text-green-500" />
  {/if}
  </button>
  <button
  onclick={() => cancelDownload(download.id)}
- class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-red-500/[0.1] rounded-lg transition-colors"
  title="Cancel"
  >
- <X class="w-4 h-4 text-[var(--text-secondary)] hover:text-red-500" />
+ <X class="w-4 h-4 text-white/50 hover:text-red-500" />
  </button>
- {:else if download.status === 'queued'}
+ {:else if download.status ==='queued'}
  <button
  onclick={() => cancelDownload(download.id)}
- class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-red-500/[0.1] rounded-lg transition-colors"
  title="Cancel"
  >
- <X class="w-4 h-4 text-[var(--text-secondary)] hover:text-red-500" />
+ <X class="w-4 h-4 text-white/50 hover:text-red-500" />
  </button>
  {:else if isFinished}
- {#if download.status === 'completed' && download.filePath}
+ {#if download.status ==='completed' && download.filePath}
  {#if canPreviewFile(download.name)}
  <button
  onclick={() => handlePreviewFile(download.filePath!, download.name)}
- class="p-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-indigo-50 rounded-lg transition-colors"
  title="Preview in app"
  >
  <Eye class="w-4 h-4 text-indigo-500" />
@@ -1766,22 +1766,22 @@
  {/if}
  <button
  onclick={() => handleOpenFile(download.filePath!)}
- class="p-1.5 hover:bg-violet-950/20 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-violet-950/20 rounded-lg transition-colors"
  title="Open file"
  >
  <ExternalLink class="w-4 h-4 text-primary-500" />
  </button>
  <button
  onclick={() => handleShowInFolder(download.filePath!)}
- class="p-1.5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Show in folder"
  >
- <FolderOpen class="w-4 h-4 text-[var(--text-tertiary)]" />
+ <FolderOpen class="w-4 h-4 text-white/40" />
  </button>
  {/if}
  <button
  onclick={() => moveToHistory(download.id)}
- class="px-2.5 py-1 text-xs text-[var(--text-tertiary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="px-2.5 py-1 text-xs text-white/40 hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Dismiss"
  >
  Dismiss
@@ -1794,19 +1794,19 @@
  {#if isActive}
  <div class="mt-3 ml-13">
  <div class="flex items-center gap-3">
- <div class="flex-1 h-2 bg-[var(--surface-1)] rounded-full overflow-hidden">
+ <div class="flex-1 h-2 bg-white/[0.05] rounded-full overflow-hidden">
  <div
- class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-violet-500'}"
+ class="h-full rounded-full transition-all duration-300 {download.status ==='paused' ?'bg-yellow-500' :'bg-violet-500'}"
  style="width: {download.progress}%"
  ></div>
  </div>
- <span class="text-xs font-medium text-[var(--text-secondary)] w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
+ <span class="text-xs font-medium text-white/50 w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
  </div>
  </div>
  {/if}
 
  <!-- Completed progress bar (full green) -->
- {#if download.status === 'completed'}
+ {#if download.status ==='completed'}
  <div class="mt-3 ml-13">
  <div class="flex items-center gap-3">
  <div class="flex-1 h-1.5 bg-green-200 rounded-full overflow-hidden">
@@ -1825,24 +1825,24 @@
  {:else}
  {#if downloadHistory.length === 0}
  <div class="text-center py-16 px-6">
- <History class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
- <p class="text-[var(--text-tertiary)]">No download history</p>
- <p class="text-sm text-[var(--text-secondary)] mt-1">Completed and finished downloads will appear here</p>
+ <History class="w-12 h-12 mx-auto text-white/50 mb-3" />
+ <p class="text-white/40">No download history</p>
+ <p class="text-sm text-white/50 mt-1">Completed and finished downloads will appear here</p>
  </div>
  {:else}
- <div class="divide-y divide-gray-100">
+ <div class="divide-y divide-white/[0.06]">
  {#each downloadHistory as entry (entry.id)}
  {@const EntryIcon = getFileIcon(entry.fileName)}
- {@const EntryTierIcon = getTierIcon(entry.speedTier || 'standard')}
- <div class="p-4 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]/50 transition-colors">
+ {@const EntryTierIcon = getTierIcon(entry.speedTier ||'standard')}
+ <div class="p-4 hover:bg-white/[0.05]/50 transition-colors">
  <div class="flex items-start gap-3">
  <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
- {entry.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' :
- entry.status === 'failed' ? 'bg-red-50 dark:bg-red-900/20' :
- 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'}">
+ {entry.status ==='completed' ?'bg-green-50' :
+ entry.status ==='failed' ?'bg-red-500/[0.1]' :
+'bg-white/[0.05]'}">
  <EntryIcon class="w-5 h-5 {
- entry.status === 'completed' ? 'text-green-500' :
- entry.status === 'failed' ? 'text-red-400' :
+ entry.status ==='completed' ?'text-green-500' :
+ entry.status ==='failed' ?'text-red-400' :
  getFileColor(entry.fileName)
  }" />
  </div>
@@ -1861,17 +1861,17 @@
  {/if}
  </div>
 
- <div class="flex items-center gap-3 mt-1.5 text-xs text-[var(--text-tertiary)]">
+ <div class="flex items-center gap-3 mt-1.5 text-xs text-white/40">
  {#if entry.fileSize > 0}
  <span class="tabular-nums">{formatFileSize(entry.fileSize)}</span>
  {/if}
- {#if entry.status === 'completed' && entry.startedAt && entry.completedAt}
+ {#if entry.status ==='completed' && entry.startedAt && entry.completedAt}
  <span class="tabular-nums">Took {formatDuration(new Date(entry.startedAt), new Date(entry.completedAt))}</span>
  {/if}
  {#if entry.seeders}
- <span class="tabular-nums">{entry.seeders} seeder{entry.seeders !== 1 ? 's' : ''}</span>
+ <span class="tabular-nums">{entry.seeders} seeder{entry.seeders !== 1 ?'s' :''}</span>
  {/if}
- {#if typeof entry.seederElo === 'number'}
+ {#if typeof entry.seederElo ==='number'}
  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-violet-900/20 text-primary-800 tabular-nums">
  Elo {entry.seederElo.toFixed(1)}
  </span>
@@ -1880,21 +1880,21 @@
  </div>
 
  {#if entry.balanceBefore && entry.balanceAfter}
- <p class="text-xs text-[var(--text-tertiary)] mt-1">
+ <p class="text-xs text-white/40 mt-1">
  Balance: {entry.balanceBefore} → {entry.balanceAfter} CHI
  </p>
  {/if}
- <p class="text-xs text-[var(--text-secondary)] font-mono mt-1 truncate">{entry.hash}</p>
+ <p class="text-xs text-white/50 font-mono mt-1 truncate">{entry.hash}</p>
  </div>
 
  <!-- File actions for completed entries -->
- {#if entry.status === 'completed'}
+ {#if entry.status ==='completed'}
  <div class="flex items-center gap-1 flex-shrink-0">
  {#if entry.filePath}
  {#if canPreviewFile(entry.fileName)}
  <button
  onclick={() => handlePreviewFile(entry.filePath!, entry.fileName)}
- class="p-1.5 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-indigo-50 rounded-lg transition-colors"
  title="Preview in app"
  >
  <Eye class="w-4 h-4 text-indigo-500" />
@@ -1902,25 +1902,25 @@
  {/if}
  <button
  onclick={() => handleOpenFile(entry.filePath!)}
- class="p-1.5 hover:bg-violet-950/20 dark:hover:bg-primary-900/30 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-violet-950/20 rounded-lg transition-colors"
  title="Open file"
  >
  <ExternalLink class="w-4 h-4 text-primary-500" />
  </button>
  <button
  onclick={() => handleShowInFolder(entry.filePath!)}
- class="p-1.5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Show in folder"
  >
- <FolderOpen class="w-4 h-4 text-[var(--text-tertiary)]" />
+ <FolderOpen class="w-4 h-4 text-white/40" />
  </button>
  {/if}
  <button
- onclick={() => { searchQuery = entry.hash; searchMode = 'hash'; searchFile(); }}
- class="p-1.5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ onclick={() => { searchQuery = entry.hash; searchMode ='hash'; searchFile(); }}
+ class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Download again"
  >
- <Download class="w-4 h-4 text-[var(--text-secondary)]" />
+ <Download class="w-4 h-4 text-white/50" />
  </button>
  </div>
  {/if}
@@ -1935,67 +1935,67 @@
 
 {#if isViewerOpen}
  <div
- class="fixed inset-0 z-50 bg-[var(--surface-0)]/70 flex items-center justify-center p-4"
+ class="fixed inset-0 z-50 bg-white/[0.03]/70 flex items-center justify-center p-4"
  role="dialog"
  aria-modal="true"
  tabindex="0"
  onclick={(e) => e.target === e.currentTarget && closeViewer()}
- onkeydown={(e) => e.key === 'Escape' && closeViewer()}
+ onkeydown={(e) => e.key ==='Escape' && closeViewer()}
  >
- <div class="w-full max-w-5xl max-h-[90vh] bg-[var(--surface-0)] rounded-xl border border-[var(--border)] flex flex-col">
- <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
+ <div class="w-full max-w-5xl max-h-[90vh] bg-white/[0.03] rounded-xl border border-white/[0.06] flex flex-col">
+ <div class="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
  <div class="min-w-0">
  <p class="text-sm font-semibold truncate">{viewerName}</p>
- <p class="text-xs text-[var(--text-tertiary)] capitalize">{viewerType} preview</p>
+ <p class="text-xs text-white/40 capitalize">{viewerType} preview</p>
  </div>
  <button
  onclick={closeViewer}
- class="p-1.5 rounded-lg hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition-colors"
+ class="p-1.5 rounded-lg hover:bg-white/[0.05] transition-colors"
  title="Close preview"
  >
- <X class="w-5 h-5 text-[var(--text-tertiary)]" />
+ <X class="w-5 h-5 text-white/40" />
  </button>
  </div>
 
  <div class="flex-1 p-4 overflow-auto bg-transparent">
  {#if viewerError}
  <div class="h-full flex items-center justify-center">
- <p class="text-sm text-red-600">{viewerError}</p>
+ <p class="text-sm text-red-400">{viewerError}</p>
  </div>
- {:else if viewerType === 'video'}
+ {:else if viewerType ==='video'}
  <video
- class="w-full h-full max-h-[75vh] rounded-lg bg-[var(--surface-0)]"
+ class="w-full h-full max-h-[75vh] rounded-lg bg-white/[0.03]"
  controls
  src={viewerSource}
- onerror={() => viewerError = 'Video preview failed to load'}
+ onerror={() => viewerError ='Video preview failed to load'}
  >
  <track kind="captions" srclang="en" label="English captions" />
  </video>
- {:else if viewerType === 'audio'}
+ {:else if viewerType ==='audio'}
  <div class="h-full flex items-center justify-center">
  <audio
  class="w-full max-w-2xl"
  controls
  src={viewerSource}
- onerror={() => viewerError = 'Audio preview failed to load'}
+ onerror={() => viewerError ='Audio preview failed to load'}
  ></audio>
  </div>
- {:else if viewerType === 'image'}
+ {:else if viewerType ==='image'}
  <img
  class="max-h-[75vh] mx-auto object-contain rounded-lg"
  src={viewerSource}
  alt={viewerName}
- onerror={() => viewerError = 'Image preview failed to load'}
+ onerror={() => viewerError ='Image preview failed to load'}
  />
- {:else if viewerType === 'pdf'}
+ {:else if viewerType ==='pdf'}
  <iframe
- class="w-full h-[75vh] rounded-lg border border-[var(--border)] bg-[var(--surface-0)]"
+ class="w-full h-[75vh] rounded-lg border border-white/[0.06] bg-white/[0.03]"
  src={viewerSource}
  title={viewerName}
  ></iframe>
  {:else}
  <div class="h-full flex items-center justify-center">
- <p class="text-sm text-[var(--text-secondary)]">Preview is not supported for this file type.</p>
+ <p class="text-sm text-white/50">Preview is not supported for this file type.</p>
  </div>
  {/if}
  </div>
@@ -2021,11 +2021,11 @@
  {@const selectedPendingSeeder = pendingDownload.result.seeders[selectedSeederIndex] || pendingDownload.result.seeders[0]}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 bg-[var(--surface-0)]/70 flex items-center justify-center z-50"
- onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') pendingDownload = null; }}
+ class="fixed inset-0 bg-white/[0.03]/70 flex items-center justify-center z-50"
+ onkeydown={(e: KeyboardEvent) => { if (e.key ==='Escape') pendingDownload = null; }}
  onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
  >
- <div class=" bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6 max-w-md w-full mx-4">
+ <div class="bg-white/[0.05] rounded-xl border border-white/[0.06] p-6 max-w-md w-full mx-4">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2.5 bg-amber-100 rounded-lg">
  <AlertTriangle class="w-6 h-6 text-amber-600" />
@@ -2034,19 +2034,19 @@
  </div>
 
  <div class="space-y-3 mb-5">
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-sm text-[var(--text-tertiary)]">File</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-sm text-white/40">File</p>
  <p class="font-medium truncate">{pendingDownload.result.fileName}</p>
  {#if pendingDownload.result.fileSize > 0}
- <p class="text-xs text-[var(--text-secondary)] mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
+ <p class="text-xs text-white/50 mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
  {/if}
  </div>
 
  {#if selectedPendingSeeder}
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-sm text-[var(--text-tertiary)]">Selected Seeder</p>
+ <div class="bg-white/[0.05] rounded-lg p-3">
+ <p class="text-sm text-white/40">Selected Seeder</p>
  <div class="flex items-center justify-between gap-2 mt-1 min-w-0">
- <span class="font-mono text-xs text-[var(--text-secondary)] truncate" title={selectedPendingSeeder.peerId}>
+ <span class="font-mono text-xs text-white/50 truncate" title={selectedPendingSeeder.peerId}>
  {selectedPendingSeeder.peerId.slice(0, 8)}...{selectedPendingSeeder.peerId.slice(-6)}
  </span>
  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-900/20 text-primary-800">
@@ -2056,27 +2056,27 @@
  </div>
  {/if}
 
- <div class="bg-[var(--surface-1)] rounded-lg p-3 space-y-2">
- <p class="text-sm text-[var(--text-tertiary)]">Cost Breakdown</p>
+ <div class="bg-white/[0.05] rounded-lg p-3 space-y-2">
+ <p class="text-sm text-white/40">Cost Breakdown</p>
  {#if pendingDownload.seederPriceChi > 0}
  <div class="flex justify-between text-sm">
- <span class="text-[var(--text-secondary)]">File price</span>
+ <span class="text-white/50">File price</span>
  <span class="font-medium text-amber-600">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
  </div>
  {/if}
  {#if pendingDownload.tierCost > 0}
  <div class="flex justify-between text-sm">
- <span class="text-[var(--text-secondary)]">Speed tier ({selectedTier})</span>
+ <span class="text-white/50">Speed tier ({selectedTier})</span>
  <span class="font-medium text-amber-600">{formatCost(pendingDownload.tierCost)}</span>
  </div>
  {/if}
- <div class="flex justify-between text-sm pt-2 border-t border-[var(--border)]">
+ <div class="flex justify-between text-sm pt-2 border-t border-white/[0.06]">
  <span class="font-semibold">Total</span>
  <span class="font-semibold text-amber-600">{pendingDownload.totalCost.toFixed(6)} CHI</span>
  </div>
  </div>
 
- <div class="flex justify-between text-sm text-[var(--text-tertiary)] px-1">
+ <div class="flex justify-between text-sm text-white/40 px-1">
  <span>Your balance</span>
  <span>{parseFloat(walletBalance).toFixed(4)} CHI</span>
  </div>
@@ -2085,7 +2085,7 @@
  <div class="flex gap-3">
  <button
  onclick={() => { pendingDownload = null; }}
- class="flex-1 px-4 py-2.5 border border-[var(--border)] rounded-lg hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition-colors font-medium"
+ class="flex-1 px-4 py-2.5 border border-white/[0.06] rounded-lg hover:bg-white/[0.05] transition-colors font-medium"
  >
  Cancel
  </button>
@@ -2095,7 +2095,7 @@
  pendingDownload = null;
  startDownload(result, true, true);
  }}
- class="flex-1 px-4 py-2.5 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 transition-colors flex items-center justify-center gap-2 font-medium"
+ class="flex-1 px-4 py-2.5 bg-green-500/70 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 transition-colors flex items-center justify-center gap-2 font-medium"
  >
  <Download class="w-4 h-4" />
  Confirm & Pay

@@ -1,8 +1,8 @@
 <script lang="ts">
- import { Copy, Check, X, Link, Globe, Trash2, Loader2, Eye, EyeOff } from 'lucide-svelte';
- import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
- import type { ShareLink } from '$lib/services/driveApiService';
- import { toasts } from '$lib/toastStore';
+ import { Copy, Check, X, Link, Globe, Trash2, Loader2, Eye, EyeOff } from'lucide-svelte';
+ import { driveStore, type DriveItem, type DriveManifest } from'$lib/stores/driveStore';
+ import type { ShareLink } from'$lib/services/driveApiService';
+ import { toasts } from'$lib/toastStore';
 
  let {
  item,
@@ -31,14 +31,14 @@
  toggling = true;
  try {
  await driveStore.toggleVisibility(item.id);
- toasts.show(isItemPublic ? 'File is now private' : 'File is now public', 'success');
+ toasts.show(isItemPublic ?'File is now private' :'File is now public','success');
  } finally {
  toggling = false;
  }
  }
 
  async function createLink() {
- const price = hasPrice ? itemPrice! : '0';
+ const price = hasPrice ? itemPrice! :'0';
 
  creating = true;
  try {
@@ -48,9 +48,9 @@
  justCreatedUrl = url;
  try {
  await navigator.clipboard.writeText(url);
- toasts.show('Share link created & copied!', 'success');
+ toasts.show('Share link created & copied!','success');
  } catch {
- toasts.show('Share link created. Copy it below.', 'success');
+ toasts.show('Share link created. Copy it below.','success');
  }
  }
  } finally {
@@ -65,62 +65,62 @@
  copied = share.id;
  setTimeout(() => copied = null, 2000);
  } catch {
- toasts.show('Failed to copy URL', 'error');
+ toasts.show('Failed to copy URL','error');
  }
  }
 
  async function revokeLink(share: ShareLink) {
  await driveStore.revokeShareLink(share.id);
- toasts.show('Share link revoked', 'success');
+ toasts.show('Share link revoked','success');
  }
 
  function formatDate(ts: number): string {
- return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+ return new Date(ts).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/70" onclick={onClose}>
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-white/[0.03]/70" onclick={onClose}>
  <div
- class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl shadow-black/10 w-full max-w-lg mx-4 p-6"
+ class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/10 w-full max-w-lg mx-4 p-6"
  onclick={(e) => e.stopPropagation()}
  >
  <div class="flex items-center justify-between mb-4">
- <h3 class="text-lg font-semibold text-gray-900">Share "{item.name}"</h3>
- <button onclick={onClose} class="p-1 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition">
- <X class="w-5 h-5 text-[var(--text-tertiary)]" />
+ <h3 class="text-lg font-semibold text-white/90">Share"{item.name}"</h3>
+ <button onclick={onClose} class="p-1 hover:bg-white/[0.05] rounded-lg transition">
+ <X class="w-5 h-5 text-white/40" />
  </button>
  </div>
 
  {#if existingShares.length > 0}
- <div class="flex items-center justify-between p-3 bg-[var(--surface-1)] rounded-lg mb-4">
+ <div class="flex items-center justify-between p-3 bg-white/[0.05] rounded-lg mb-4">
  <div class="flex items-center gap-2">
  {#if isItemPublic}
  <Eye class="w-4 h-4 text-green-500" />
- <span class="text-sm text-[var(--text-secondary)]">Public — share links are active</span>
+ <span class="text-sm text-white/50">Public — share links are active</span>
  {:else}
  <EyeOff class="w-4 h-4 text-orange-500" />
- <span class="text-sm text-[var(--text-secondary)]">Private — share links are blocked</span>
+ <span class="text-sm text-white/50">Private — share links are blocked</span>
  {/if}
  </div>
  <button
  onclick={toggleVisibility}
  disabled={toggling}
  class="px-3 py-1.5 text-sm font-medium rounded-lg transition disabled:opacity-50 {isItemPublic
- ? 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:hover:bg-orange-900/50'
- : 'bg-green-100 text-green-700 hover:bg-green-200 dark:hover:bg-green-900/50'}"
+ ?'bg-orange-100 text-orange-700 hover:bg-orange-200'
+ :'bg-green-500/[0.15] text-green-400 hover:bg-green-200'}"
  >
- {isItemPublic ? 'Make Private' : 'Make Public'}
+ {isItemPublic ?'Make Private' :'Make Public'}
  </button>
  </div>
  {/if}
 
  <div class="space-y-3 mb-6">
- <p class="text-sm text-[var(--text-secondary)]">
+ <p class="text-sm text-white/50">
  {#if hasPrice}
  Share at <strong class="text-emerald-600">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
  {:else}
- Share for free. Use "Edit Price" from the right-click menu to set a price.
+ Share for free. Use"Edit Price" from the right-click menu to set a price.
  {/if}
  </p>
 
@@ -154,34 +154,34 @@
  onclick={async () => {
  try {
  await navigator.clipboard.writeText(justCreatedUrl!);
- toasts.show('Copied!', 'success');
+ toasts.show('Copied!','success');
  } catch {
- toasts.show('Failed to copy', 'error');
+ toasts.show('Failed to copy','error');
  }
  }}
- class="p-1.5 hover:bg-green-100 dark:hover:bg-green-800 rounded transition shrink-0"
+ class="p-1.5 hover:bg-green-500/[0.15] rounded transition shrink-0"
  title="Copy link"
  >
- <Copy class="w-4 h-4 text-green-600" />
+ <Copy class="w-4 h-4 text-green-400" />
  </button>
  </div>
  {/if}
  </div>
 
  {#if existingShares.length > 0}
- <div class="border-t border-[var(--border)] pt-4">
- <h4 class="text-sm font-medium text-[var(--text-secondary)] mb-3">
+ <div class="border-t border-white/[0.06] pt-4">
+ <h4 class="text-sm font-medium text-white/50 mb-3">
  Active Links ({existingShares.length})
  </h4>
  <div class="space-y-2 max-h-48 overflow-y-auto">
  {#each existingShares as share (share.id)}
- <div class="flex items-center gap-2 p-2 bg-[var(--surface-1)] rounded-lg">
+ <div class="flex items-center gap-2 p-2 bg-white/[0.05] rounded-lg">
  <div class="flex-1 min-w-0">
- <code class="text-xs text-[var(--text-secondary)] font-mono truncate block">
+ <code class="text-xs text-white/50 font-mono truncate block">
  {driveStore.getShareUrl(share.id)}
  </code>
  <div class="flex flex-wrap items-center gap-2 mt-0.5">
- <span class="text-xs text-[var(--text-secondary)]">
+ <span class="text-xs text-white/50">
  Created {formatDate(share.createdAt)}
  </span>
  {#if share.isPublic}
@@ -190,28 +190,28 @@
  <span class="text-xs text-emerald-500">
  {share.priceChi} CHI
  </span>
- <span class="text-xs text-[var(--text-tertiary)] break-all">
+ <span class="text-xs text-white/40 break-all">
  to {share.recipientWallet}
  </span>
- <span class="text-xs text-[var(--text-secondary)]">
- {share.downloadCount} download{share.downloadCount !== 1 ? 's' : ''}
+ <span class="text-xs text-white/50">
+ {share.downloadCount} download{share.downloadCount !== 1 ?'s' :''}
  </span>
  </div>
  </div>
  <button
  onclick={() => copyUrl(share)}
- class="p-1.5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition"
+ class="p-1.5 hover:bg-white/[0.05] rounded transition"
  title="Copy link"
  >
  {#if copied === share.id}
  <Check class="w-4 h-4 text-green-500" />
  {:else}
- <Copy class="w-4 h-4 text-[var(--text-tertiary)]" />
+ <Copy class="w-4 h-4 text-white/40" />
  {/if}
  </button>
  <button
  onclick={() => revokeLink(share)}
- class="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded transition"
+ class="p-1.5 hover:bg-red-100 rounded transition"
  title="Revoke link"
  >
  <Trash2 class="w-4 h-4 text-red-500" />
@@ -223,7 +223,7 @@
  {/if}
 
  <div class="mt-4 p-3 bg-blue-50 rounded-lg">
- <p class="text-xs text-blue-700">
+ <p class="text-xs text-blue-400">
  <strong>File:</strong> {item.name}
  {#if item.size}
  <span class="ml-2 text-violet-400">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>

@@ -91,15 +91,15 @@
  <button
  onclick={() => onRespondToAgreement(proposal.agreementId, true)}
  class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-green-500/70 border border-green-400/30 hover:bg-green-500/80 text-white rounded-lg transition-colors
- focus:outline-none "
+ focus:outline-none"
  >
  <Check class="w-3.5 h-3.5" />
  Accept
  </button>
  <button
  onclick={() => onRespondToAgreement(proposal.agreementId, false)}
- class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-red-500/[0.1] hover:bg-red-100 text-red-700 rounded-lg transition-colors
- focus:outline-none "
+ class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-red-500/[0.1]0/[0.1] hover:bg-red-100 text-red-700 rounded-lg transition-colors
+ focus:outline-none"
  >
  <X class="w-3.5 h-3.5" />
  Reject
@@ -116,7 +116,7 @@
  <button
  onclick={() => showAgreements = !showAgreements}
  class="flex items-center justify-between w-full p-5 hover:bg-white/[0.05] transition-colors
- focus:outline-none "
+ focus:outline-none"
  aria-expanded={showAgreements}
  >
  <div class="flex items-center gap-3">
@@ -215,8 +215,8 @@
  </span>
  <button
  onclick={() => onRespondToCancellation(agreement.agreementId, true)}
- class="flex items-center gap-1 text-xs font-medium px-3 py-1.5 bg-red-500/[0.1]0/70 border border-red-400/30 hover:bg-red-500/[0.15]0/80 text-white rounded-lg transition-colors
- focus:outline-none "
+ class="flex items-center gap-1 text-xs font-medium px-3 py-1.5 bg-red-500/[0.1]0/[0.1]0/70 border border-red-400/30 hover:bg-red-500/[0.1]0/[0.15]0/80 text-white rounded-lg transition-colors
+ focus:outline-none"
  >
  <Check class="w-3 h-3" />
  Approve
@@ -224,7 +224,7 @@
  <button
  onclick={() => onRespondToCancellation(agreement.agreementId, false)}
  class="text-xs font-medium px-3 py-1.5 text-white/50 border border-white/[0.06] rounded-lg
- hover:bg-white/[0.05] transition-colors focus:outline-none "
+ hover:bg-white/[0.05] transition-colors focus:outline-none"
  >
  Deny
  </button>
@@ -238,7 +238,7 @@
  <button
  onclick={() => onRequestCancellation(agreement.agreementId)}
  class="text-xs font-medium px-3 py-1.5 text-red-400 border border-red-400/20 rounded-lg
- hover:bg-red-500/[0.15] transition-colors focus:outline-none "
+ hover:bg-red-500/[0.1]0/[0.15] transition-colors focus:outline-none"
  >
  Withdraw
  </button>
@@ -246,7 +246,7 @@
  <button
  onclick={() => onRequestCancellation(agreement.agreementId)}
  class="text-xs font-medium px-3 py-1.5 text-red-400 border border-red-400/20 rounded-lg
- hover:bg-red-500/[0.15] transition-colors focus:outline-none "
+ hover:bg-red-500/[0.1]0/[0.15] transition-colors focus:outline-none"
  >
  Request Cancellation
  </button>
