@@ -56,7 +56,7 @@
         placeholder="e.g. My Portfolio"
         class="w-full rounded-xl border border-gray-200 bg-white/5 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-all
           focus:border-primary-400 focus:bg-white/10 focus:outline-none focus:ring-2 focus:ring-primary-400/20
-          dark:border-gray-600 dark:bg-gray-700/50 dark:text-white dark:placeholder-gray-500 dark:focus:bg-white/5"
+          dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder-gray-500 dark:focus:bg-white/5"
       />
     </div>
 
@@ -91,7 +91,7 @@
       class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed py-8 px-4 transition-all
         {isDragOver
           ? 'border-primary-400/40 bg-primary-500/15 dark:border-primary-500/30 dark:bg-primary-500/10 scale-[1.01]'
-          : 'border-gray-200 bg-white/5 hover:border-white/20 hover:bg-white/8 dark:border-gray-600/70 dark:bg-gray-700/20 dark:hover:border-white/15'}"
+          : 'border-white/20 bg-white/5 hover:border-white/30 hover:bg-white/8 dark:border-white/10 dark:bg-white/5 dark:hover:border-white/15'}"
     >
       <div class="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 dark:bg-white/5">
         <FolderOpen class="h-6 w-6 text-gray-400 dark:text-gray-500" />
@@ -115,7 +115,7 @@
         </div>
         <div class="max-h-40 overflow-y-auto rounded-xl border border-white/15 dark:border-white/10 divide-y divide-white/10 dark:divide-white/5">
           {#each selectedFiles as file, i (file.path)}
-            <div class="flex items-center justify-between px-3 py-2 hover:bg-white/5 dark:hover:bg-gray-700/30 transition-colors group">
+            <div class="flex items-center justify-between px-3 py-2 hover:bg-white/8 dark:hover:bg-white/5 transition-colors group">
               <div class="flex items-center gap-2.5 min-w-0">
                 <FileIcon class="h-4 w-4 flex-shrink-0 text-gray-400" />
                 <span class="truncate text-sm text-gray-700 dark:text-gray-300">{file.name}</span>
@@ -141,9 +141,9 @@
         disabled={!canCreate}
         class="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition-all
           {canCreate
-            ? 'bg-primary-500 hover:bg-primary-600 shadow-sm shadow-primary-500/20 hover:shadow-md hover:shadow-primary-500/25 active:scale-[0.98]'
-            : 'bg-gray-300 dark:bg-gray-600 cursor-not-allowed'}
-          focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+            ? 'bg-primary-500 hover:bg-primary-500/90 dark:hover:bg-primary-600/80 shadow-sm shadow-primary-500/20 hover:shadow-md hover:shadow-primary-500/25 active:scale-[0.98]'
+            : 'bg-white/20 dark:bg-white/10 cursor-not-allowed'}
+          focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 "
       >
         {#if isCreating}
           <Loader2 class="h-4 w-4 animate-spin" />

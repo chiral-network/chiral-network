@@ -624,7 +624,7 @@
         class="px-3 py-1.5 bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
       />
       <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition">Create</button>
-      <button onclick={cancelNewFolder} class="px-3 py-1.5 text-gray-600 dark:text-gray-400 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">Cancel</button>
+      <button onclick={cancelNewFolder} class="px-3 py-1.5 text-gray-600 dark:text-gray-400 text-sm hover:bg-white/10 dark:hover:bg-white/5 rounded-lg transition">Cancel</button>
     </div>
   {/if}
 
@@ -805,7 +805,7 @@
             <button
               onclick={() => seedProtocol = 'BitTorrent'}
               class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'BitTorrent'
-                ? 'bg-green-600 text-white'
+                ? 'backdrop-blur-md bg-green-500/70 border border-green-400/30 text-white'
                 : 'bg-white/8 dark:bg-white/5 text-gray-600 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
             >
               BitTorrent
@@ -880,7 +880,7 @@
         >Cancel</button>
         <button
           onclick={confirmDelete}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg backdrop-blur-md bg-red-500/70 border border-red-400/30 text-white hover:bg-red-500/80 transition"
         >Delete</button>
       </div>
     </div>

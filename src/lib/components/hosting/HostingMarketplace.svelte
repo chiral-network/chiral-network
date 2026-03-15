@@ -129,8 +129,8 @@
     </div>
     <button
       onclick={onToggleEnabled}
-      class="relative w-12 h-7 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-400/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900
-        {$settings.hostingConfig.enabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+      class="relative w-12 h-7 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-400/50 focus:ring-offset-2 
+        {$settings.hostingConfig.enabled ? 'bg-primary-500' : 'bg-white/20 dark:bg-white/10'}"
       role="switch"
       aria-checked={$settings.hostingConfig.enabled}
       aria-label="Toggle hosting"
@@ -213,7 +213,7 @@
             <button
               onclick={() => updateAutoAcceptByElo(!$settings.hostingConfig.autoAcceptByElo)}
               class="relative w-9 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-400/50
-                {$settings.hostingConfig.autoAcceptByElo ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+                {$settings.hostingConfig.autoAcceptByElo ? 'bg-primary-500' : 'bg-white/20 dark:bg-white/10'}"
               role="switch"
               aria-checked={$settings.hostingConfig.autoAcceptByElo}
               aria-label="Toggle auto accept"
@@ -251,7 +251,7 @@
           onclick={onPublish}
           disabled={hostingPublishing}
           class="flex items-center gap-2 px-4 py-2 text-sm font-medium backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 hover:bg-primary-500/90 dark:hover:bg-primary-600/80 text-white rounded-lg transition-colors
-            focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900
+            focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 
             disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {#if hostingPublishing}
@@ -382,7 +382,7 @@
               onclick={() => onPropose(host)}
               class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 hover:bg-primary-500/90 dark:hover:bg-primary-600/80 text-white rounded-xl transition-all flex-shrink-0
                 shadow-sm shadow-primary-500/10 hover:shadow-md hover:shadow-primary-500/20 active:scale-[0.98]
-                focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+                focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 "
             >
               <Rocket class="w-3.5 h-3.5" />
               Propose

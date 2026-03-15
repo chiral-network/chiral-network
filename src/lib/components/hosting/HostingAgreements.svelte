@@ -90,8 +90,8 @@
           <div class="flex items-center gap-2 flex-shrink-0">
             <button
               onclick={() => onRespondToAgreement(proposal.agreementId, true)}
-              class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors
-                focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
+              class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium backdrop-blur-md bg-green-500/70 dark:bg-green-600/60 border border-green-400/30 hover:bg-green-500/80 dark:hover:bg-green-600/70 text-white rounded-lg transition-colors
+                focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:ring-offset-2 "
             >
               <Check class="w-3.5 h-3.5" />
               Accept
@@ -171,7 +171,7 @@
             <div class="p-4 rounded-xl border transition-all
               {hasCancelRequest && agreement.cancelRequestedBy !== myPeerId
                 ? 'border-orange-400/20 bg-orange-500/10 dark:border-orange-600/15 dark:bg-orange-500/5'
-                : 'border-gray-100 bg-white/5 dark:border-gray-600/60 dark:bg-gray-700/30 hover:border-white/25 dark:hover:border-white/15'}">
+                : 'border-white/15 dark:border-white/10 bg-white/5 dark:bg-white/3 hover:border-white/25 dark:hover:border-white/15'}">
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
@@ -215,7 +215,7 @@
                       </span>
                       <button
                         onclick={() => onRespondToCancellation(agreement.agreementId, true)}
-                        class="flex items-center gap-1 text-xs font-medium px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors
+                        class="flex items-center gap-1 text-xs font-medium px-3 py-1.5 backdrop-blur-md bg-red-500/70 dark:bg-red-600/60 border border-red-400/30 hover:bg-red-500/80 dark:hover:bg-red-600/70 text-white rounded-lg transition-colors
                           focus:outline-none focus:ring-2 focus:ring-red-500/50"
                       >
                         <Check class="w-3 h-3" />

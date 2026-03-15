@@ -59,10 +59,10 @@
 </script>
 
 <div class="max-w-2xl mx-auto p-6">
-  <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
+  <div class="backdrop-blur-xl bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-2xl shadow-lg shadow-black/5 ring-1 ring-white/10 p-8">
     <div class="flex items-center mb-6">
-      <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
-        <ArrowLeft class="w-5 h-5 dark:text-gray-300" />
+      <button on:click={onBack} class="mr-4 p-2 hover:bg-white/10 dark:hover:bg-white/5 rounded-lg transition text-gray-700 dark:text-gray-300">
+        <ArrowLeft class="w-5 h-5" />
       </button>
       <h2 class="text-2xl font-bold dark:text-white">Use Existing Wallet</h2>
     </div>
@@ -70,7 +70,7 @@
     <div class="flex gap-3 mb-6">
       <button
         on:click={() => method = 'privateKey'}
-        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'privateKey' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
+        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'privateKey' ? 'backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white' : 'backdrop-blur-md bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 hover:bg-white/20 dark:hover:bg-white/10 text-gray-700 dark:text-gray-300'}"
       >
         <KeyRound class="w-5 h-5" />
         <span>Private Key</span>
@@ -78,7 +78,7 @@
 
       <button
         on:click={() => method = 'mnemonic'}
-        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'mnemonic' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
+        class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'mnemonic' ? 'backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white' : 'backdrop-blur-md bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 hover:bg-white/20 dark:hover:bg-white/10 text-gray-700 dark:text-gray-300'}"
       >
         <FileText class="w-5 h-5" />
         <span>Recovery Phrase</span>
@@ -95,7 +95,7 @@
           type="password"
           bind:value={privateKeyInput}
           on:keydown={(e) => e.key === 'Enter' && handleLogin()}
-          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 dark:text-white"
+          class="w-full px-4 py-2 backdrop-blur-md bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary-500/40 focus:border-white/30 font-mono text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none"
           placeholder="Enter your private key (with or without 0x prefix)"
         />
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
@@ -111,7 +111,7 @@
           id="mnemonic-input"
           bind:value={mnemonicInput}
           rows="3"
-          class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-700 dark:text-white"
+          class="w-full px-4 py-2 backdrop-blur-md bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary-500/40 focus:border-white/30 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 outline-none"
           placeholder="Enter your 12-word recovery phrase"
         ></textarea>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
@@ -121,21 +121,21 @@
     {/if}
 
     {#if error}
-      <div class="bg-red-50 dark:bg-red-900/30 border-l-4 border-red-400 dark:border-red-600 p-4 mb-6">
-        <p class="text-sm text-red-800 dark:text-red-200">{error}</p>
+      <div class="backdrop-blur-md bg-red-500/10 dark:bg-red-500/5 border border-red-400/20 rounded-lg p-4 mb-6">
+        <p class="text-sm text-red-700 dark:text-red-300">{error}</p>
       </div>
     {/if}
 
     <div class="flex gap-3">
       <button
         on:click={onBack}
-        class="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
+        class="flex-1 px-6 py-3 border border-white/20 dark:border-white/10 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition text-gray-700 dark:text-gray-300"
       >
         Cancel
       </button>
       <button
         on:click={handleLogin}
-        class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
+        class="flex-1 px-6 py-3 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg hover:bg-primary-500/90 dark:hover:bg-primary-600/80 transition"
       >
         Login
       </button>

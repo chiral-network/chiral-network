@@ -875,11 +875,11 @@
           </div>
         </div>
 
-        <div class="bg-gray-900 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
+        <div class="backdrop-blur-md bg-black/40 dark:bg-black/60 border border-white/10 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
           {#if gethLogContent}
             {#each gethLogContent.split('\n') as line}
               {@const parsed = parseStructuredGethLine(line)}
-              <div class="flex gap-2 py-0.5 hover:bg-gray-800 px-1 rounded">
+              <div class="flex gap-2 py-0.5 hover:bg-white/10 px-1 rounded">
                 {#if parsed.timestamp}
                   <span class="text-gray-500 shrink-0">{parsed.timestamp}</span>
                 {/if}
@@ -989,12 +989,12 @@
         </div>
 
         <!-- Log Output -->
-        <div class="bg-gray-900 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
+        <div class="backdrop-blur-md bg-black/40 dark:bg-black/60 border border-white/10 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
           {#if filteredLogs.length === 0}
             <p class="text-gray-500 text-center py-8">No log entries{logFilter !== 'all' || sourceFilter !== 'all' ? ' matching filters' : ''}</p>
           {:else}
             {#each filteredLogs as entry (entry.id)}
-              <div class="flex gap-2 py-0.5 hover:bg-gray-800 px-1 rounded">
+              <div class="flex gap-2 py-0.5 hover:bg-white/10 px-1 rounded">
                 <span class="text-gray-500 shrink-0">{entry.timestamp.toLocaleTimeString()}</span>
                 <span class="shrink-0 px-1 rounded {levelBg(entry.level)} text-[10px] uppercase font-bold">{entry.level}</span>
                 <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {sourceBg(entry.source)}">{entry.source}</span>

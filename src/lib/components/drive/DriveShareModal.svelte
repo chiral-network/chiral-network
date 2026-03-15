@@ -200,7 +200,7 @@
               </div>
               <button
                 onclick={() => copyUrl(share)}
-                class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition"
+                class="p-1.5 hover:bg-white/10 dark:hover:bg-white/5 rounded transition"
                 title="Copy link"
               >
                 {#if copied === share.id}

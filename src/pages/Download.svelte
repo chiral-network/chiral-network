@@ -1232,9 +1232,9 @@
       case 'downloading': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-400';
       case 'paused': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-400';
       case 'failed': return 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-400';
-      case 'cancelled': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
-      case 'queued': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
-      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
+      case 'cancelled': return 'bg-white/10 dark:bg-white/8 text-gray-700 dark:text-gray-300 border border-white/20 dark:border-white/10';
+      case 'queued': return 'bg-white/10 dark:bg-white/8 text-gray-700 dark:text-gray-300 border border-white/20 dark:border-white/10';
+      default: return 'bg-white/10 dark:bg-white/8 text-gray-700 dark:text-gray-300 border border-white/20 dark:border-white/10';
     }
   }
 
@@ -1355,21 +1355,21 @@
     <div class="flex gap-2 mb-4">
       <button
         onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
       >
         <Search class="w-4 h-4" />
         Merkle Hash
       </button>
       <button
         onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
       >
         <Link class="w-4 h-4" />
         Magnet Link
       </button>
       <button
         onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5'}"
       >
         <FileUp class="w-4 h-4" />
         .torrent File
@@ -1384,7 +1384,7 @@
         <button
           onclick={handleTorrentFile}
           disabled={!$networkConnected}
-          class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+          class="px-6 py-3 backdrop-blur-md bg-green-500/70 dark:bg-green-600/60 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 disabled:opacity-50 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
         >
           Select .torrent File
         </button>
@@ -1397,7 +1397,7 @@
               type="text"
               bind:value={searchQuery}
               placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-white/20 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
+              class="w-full px-4 py-3 border border-white/20 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-white/5 dark:text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1407,7 +1407,7 @@
           <button
             onclick={searchFile}
             disabled={isSearching || !$networkConnected}
-            class="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+            class="px-6 py-3 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg hover:bg-primary-500/90 dark:hover:bg-primary-600/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
           >
             {#if isSearching}
               <Loader2 class="w-5 h-5 animate-spin" />
@@ -1587,7 +1587,7 @@
             <button
               onclick={() => startDownload(searchResult!)}
               disabled={!isTauri || isProcessingPayment}
-              class="px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-all font-medium focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+              class="px-5 py-2.5 backdrop-blur-md bg-green-500/70 dark:bg-green-600/60 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 disabled:opacity-50 flex items-center gap-2 transition-all font-medium focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
             >
               {#if isProcessingPayment}
                 <Loader2 class="w-4 h-4 animate-spin" />
@@ -1644,7 +1644,7 @@
           <History class="w-4 h-4" />
           History
           {#if downloadHistory.length > 0}
-            <span class="px-1.5 py-0.5 text-xs font-semibold bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 rounded-full">
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-white/15 dark:bg-white/8 text-gray-600 dark:text-gray-400 border border-white/20 dark:border-white/10 rounded-full">
               {downloadHistory.length}
             </span>
           {/if}
@@ -1677,7 +1677,7 @@
             {@const TierIcon = getTierIcon(download.speedTier || 'standard')}
             {@const isActive = download.status === 'downloading' || download.status === 'paused'}
             {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
-            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+            <div class="p-4 hover:bg-white/10 dark:hover:bg-white/5/50 transition-colors">
               <!-- Top row: icon, name, badges, actions -->
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
@@ -1794,7 +1794,7 @@
               {#if isActive}
                 <div class="mt-3 ml-13">
                   <div class="flex items-center gap-3">
-                    <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-600 rounded-full overflow-hidden">
+                    <div class="flex-1 h-2 bg-white/20 dark:bg-white/10 rounded-full overflow-hidden">
                       <div
                         class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-primary-500'}"
                         style="width: {download.progress}%"
@@ -1834,7 +1834,7 @@
           {#each downloadHistory as entry (entry.id)}
             {@const EntryIcon = getFileIcon(entry.fileName)}
             {@const EntryTierIcon = getTierIcon(entry.speedTier || 'standard')}
-            <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+            <div class="p-4 hover:bg-white/10 dark:hover:bg-white/5/50 transition-colors">
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
                   {entry.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' :
@@ -1957,7 +1957,7 @@
         </button>
       </div>
 
-      <div class="flex-1 p-4 overflow-auto bg-gray-50 dark:bg-gray-950">
+      <div class="flex-1 p-4 overflow-auto bg-transparent dark:bg-transparent">
         {#if viewerError}
           <div class="h-full flex items-center justify-center">
             <p class="text-sm text-red-600 dark:text-red-400">{viewerError}</p>
@@ -2085,7 +2085,7 @@
       <div class="flex gap-3">
         <button
           onclick={() => { pendingDownload = null; }}
-          class="flex-1 px-4 py-2.5 border border-white/20 dark:border-white/10 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300 font-medium"
+          class="flex-1 px-4 py-2.5 border border-white/20 dark:border-white/10 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors dark:text-gray-300 font-medium"
         >
           Cancel
         </button>
@@ -2095,7 +2095,7 @@
             pendingDownload = null;
             startDownload(result, true, true);
           }}
-          class="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 font-medium"
+          class="flex-1 px-4 py-2.5 backdrop-blur-md bg-green-500/70 dark:bg-green-600/60 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 transition-colors flex items-center justify-center gap-2 font-medium"
         >
           <Download class="w-4 h-4" />
           Confirm & Pay

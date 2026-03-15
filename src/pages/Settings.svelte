@@ -217,7 +217,7 @@
       <button
         onclick={toggleCompactMode}
         class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.compactMode ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+          {$settings.compactMode ? 'bg-primary-500/80' : 'bg-white/20 dark:bg-white/10'}"
         role="switch"
         aria-checked={$settings.compactMode}
         aria-label="Toggle compact mode"
@@ -259,7 +259,7 @@
     <!-- Preview -->
     <div class="pt-4 border-t border-white/20 dark:border-white/10">
       <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Preview</span>
-      <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-white/20 dark:border-white/10">
+      <div class="p-4 rounded-lg bg-gray-50 dark:backdrop-blur-md bg-white/5 dark:bg-white/5 border border-white/20 dark:border-white/10">
         <div class="flex items-center gap-3 mb-3">
           <div class="w-10 h-10 rounded-full bg-primary-500"></div>
           <div>
@@ -306,7 +306,7 @@
           </div>
           <button
             onclick={browseDownloadDirectory}
-            class="px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            class="px-4 py-2.5 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white text-sm font-medium rounded-lg hover:bg-primary-500/90 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             Browse
           </button>
@@ -347,14 +347,14 @@
       {#each notificationOptions as option}
         <button
           onclick={() => toggleNotification(option.key)}
-          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
+          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-white/10 dark:hover:bg-white/5/50 transition-colors group"
           role="switch"
           aria-checked={$settings.notifications?.[option.key] ?? true}
           title={option.description}
         >
           <span class="text-sm text-gray-700 dark:text-gray-300 text-left">{option.label}</span>
           <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
-            {$settings.notifications?.[option.key] ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}">
+            {$settings.notifications?.[option.key] ? 'bg-primary-500/80' : 'bg-white/20 dark:bg-white/10'}">
             <span
               class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform
                 {$settings.notifications?.[option.key] ? 'translate-x-4' : 'translate-x-0'}"

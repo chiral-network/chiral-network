@@ -87,7 +87,7 @@
                     Published
                   </span>
                 {:else}
-                  <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-400 uppercase tracking-wide">
+                  <span class="inline-flex items-center rounded-full bg-white/10 dark:bg-white/5 border border-white/15 dark:border-white/10 px-2 py-0.5 text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                     Local
                   </span>
                 {/if}
@@ -112,12 +112,12 @@
               {#if site.files.length > 0}
                 <div class="mt-2.5 flex flex-wrap gap-1.5">
                   {#each site.files.slice(0, 5) as file}
-                    <span class="rounded-md bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-600/50 dark:text-gray-400">
+                    <span class="rounded-md bg-white/10 dark:bg-white/5 border border-white/15 dark:border-white/10 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:text-gray-400">
                       {file.path}
                     </span>
                   {/each}
                   {#if site.files.length > 5}
-                    <span class="rounded-md bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-400 dark:bg-gray-600/50">
+                    <span class="rounded-md bg-white/10 dark:bg-white/5 px-1.5 py-0.5 text-[10px] font-medium text-gray-400">
                       +{site.files.length - 5} more
                     </span>
                   {/if}
@@ -163,8 +163,8 @@
                 onclick={() => onCopyUrl(site)}
                 title="Copy URL"
                 aria-label="Copy URL for {site.name}"
-                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600
-                  dark:hover:bg-gray-600/50 dark:hover:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-white/10 dark:hover:bg-white/5 hover:text-gray-600
+                  dark:hover:bg-white/8 dark:hover:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
               >
                 <Copy class="h-4 w-4" />
               </button>

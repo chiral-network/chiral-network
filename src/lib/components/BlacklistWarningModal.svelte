@@ -23,10 +23,10 @@
   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') oncancel(); }}
   onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) oncancel(); }}
 >
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 p-6 max-w-md w-full mx-4">
+  <div class="backdrop-blur-2xl bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-2xl shadow-2xl shadow-black/10 p-6 max-w-md w-full mx-4">
     <!-- Header -->
     <div class="flex items-center gap-3 mb-4">
-      <div class="p-2.5 bg-red-100 dark:bg-red-900/30 rounded-full">
+      <div class="p-2.5 bg-red-500/15 dark:bg-red-500/10 rounded-full">
         <ShieldBan class="w-6 h-6 text-red-600 dark:text-red-400" />
       </div>
       <div>
@@ -36,7 +36,7 @@
     </div>
 
     <!-- Details -->
-    <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 mb-4 space-y-2">
+    <div class="backdrop-blur-md bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10 rounded-lg p-4 mb-4 space-y-2">
       <div class="flex justify-between items-start gap-2">
         <span class="text-xs text-gray-500 dark:text-gray-400 shrink-0">Address</span>
         <span class="text-sm font-mono text-gray-900 dark:text-gray-200 text-right break-all">{formatAddr(address)}</span>
@@ -48,7 +48,7 @@
     </div>
 
     <!-- Warning -->
-    <div class="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mb-5">
+    <div class="backdrop-blur-md bg-amber-500/10 dark:bg-amber-500/5 border border-amber-400/20 dark:border-amber-500/15 rounded-lg p-3 mb-5">
       <p class="text-sm text-amber-800 dark:text-amber-300">
         Are you sure you want to <strong>{action}</strong>?
       </p>
@@ -58,13 +58,13 @@
     <div class="flex gap-3">
       <button
         onclick={oncancel}
-        class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+        class="flex-1 px-4 py-2.5 border border-white/20 dark:border-white/10 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5 transition-colors"
       >
         Cancel
       </button>
       <button
         onclick={onconfirm}
-        class="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+        class="flex-1 px-4 py-2.5 backdrop-blur-md bg-red-500/70 dark:bg-red-600/60 border border-red-400/30 text-white rounded-lg text-sm font-medium hover:bg-red-500/80 dark:hover:bg-red-600/70 transition-colors"
       >
         Proceed Anyway
       </button>

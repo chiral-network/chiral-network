@@ -460,7 +460,7 @@
       </div>
       <button
         onclick={() => goto('/network')}
-        class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2"
+        class="w-full px-4 py-3 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg hover:bg-primary-500/90 dark:hover:bg-primary-600/80 transition-colors flex items-center justify-center gap-2"
       >
         <Globe class="w-5 h-5" />
         Go to Network Page
@@ -560,7 +560,7 @@
       </div>
 
       <!-- Miner Address -->
-      <div class="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+      <div class="mb-4 p-3 backdrop-blur-md bg-white/8 dark:bg-white/5 rounded-lg">
         <div class="flex items-center gap-2 mb-1">
           <TrendingUp class="w-4 h-4 text-green-500" />
           <span class="text-sm text-gray-600 dark:text-gray-400">Miner Address</span>
@@ -607,7 +607,7 @@
             step="1"
             bind:value={cpuUtilizationPercent}
             disabled={isAnyMining}
-            class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+            class="w-full h-2 bg-white/20 dark:bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
           />
           <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
             <span>{MIN_UTILIZATION_PERCENT}%</span>
@@ -631,7 +631,7 @@
             step="1"
             bind:value={gpuUtilizationPercent}
             disabled={isAnyMining}
-            class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+            class="w-full h-2 bg-white/20 dark:bg-white/10 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
           />
           <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
             <span>{MIN_UTILIZATION_PERCENT}%</span>
@@ -671,11 +671,11 @@
               GPU Devices ({selectedGpuDevices.length} selected)
             </div>
             {#if gpuCapabilities.devices.length === 0}
-              <div class="rounded-lg border border-white/20 dark:border-white/10 bg-gray-50 dark:bg-gray-700 p-3 text-sm text-gray-600 dark:text-gray-300">
+              <div class="rounded-lg border border-white/20 dark:border-white/10 backdrop-blur-md bg-white/8 dark:bg-white/5 p-3 text-sm text-gray-600 dark:text-gray-300">
                 No devices were reported by the miner binary. You can still try starting GPU mining with auto-detection.
               </div>
             {:else}
-              <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-white/20 dark:border-white/10 p-3 bg-gray-50 dark:bg-gray-700">
+              <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-white/20 dark:border-white/10 p-3 backdrop-blur-md bg-white/8 dark:bg-white/5">
                 {#each gpuCapabilities.devices as device (device.id)}
                   <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                     <input
@@ -683,7 +683,7 @@
                       checked={selectedGpuDevices.includes(device.id)}
                       onchange={() => toggleGpuDevice(device.id)}
                       disabled={isAnyMining}
-                      class="rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                      class="rounded border-white/20 dark:border-white/10 bg-white/10 dark:bg-white/5"
                     />
                     <span class="font-mono text-xs text-gray-500 dark:text-gray-400">[{device.id}]</span>
                     <span>{device.name}</span>
@@ -706,7 +706,7 @@
         {#if isAnyMining}
           <button
             onclick={handleStopMining}
-            class="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500/30"
+            class="flex-1 px-4 py-3 backdrop-blur-md bg-red-500/70 dark:bg-red-600/60 border border-red-400/30 text-white rounded-lg hover:bg-red-500/80 dark:hover:bg-red-600/70 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500/30"
           >
             <Square class="w-5 h-5" />
             Stop Mining
@@ -715,7 +715,7 @@
           <button
             onclick={handleStartMining}
             disabled={isStartingMining || (miningMode === 'gpu' && !gpuCapabilities?.binaryPath)}
-            class="flex-1 px-4 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+            class="flex-1 px-4 py-3 backdrop-blur-md bg-yellow-500/70 dark:bg-yellow-600/60 border border-yellow-400/30 text-white rounded-lg hover:bg-yellow-500/80 dark:hover:bg-yellow-600/70 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
           >
             {#if isStartingMining}
               <Loader2 class="w-5 h-5 animate-spin" />
@@ -817,7 +817,7 @@
                 </thead>
                 <tbody>
                   {#each minedBlocks as block (block.blockNumber)}
-                    <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                    <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-white/10 dark:hover:bg-white/5/50 transition-colors">
                       <td class="py-2 px-3 font-mono text-xs tabular-nums dark:text-gray-300">
                         #{block.blockNumber.toLocaleString()}
                       </td>

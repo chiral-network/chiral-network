@@ -435,7 +435,7 @@
     </div>
     <button
       onclick={() => showLogoutModal = true}
-      class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/30"
+      class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 hover:bg-red-500/10 dark:hover:bg-red-500/5 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/30"
     >
       <LogOut class="w-5 h-5" />
       Logout
@@ -550,7 +550,7 @@
               />
               <button
                 onclick={() => privateKeyVisible = !privateKeyVisible}
-                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
+                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 dark:hover:bg-white/5 rounded transition-colors"
                 title={privateKeyVisible ? 'Hide private key' : 'Show private key'}
               >
                 {#if privateKeyVisible}
@@ -618,13 +618,13 @@
                   type="text"
                   bind:value={newRecipientLabel}
                   placeholder="Label (e.g. Alice)"
-                  class="flex-1 px-3 py-2 border border-white/20 dark:border-white/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
+                  class="flex-1 px-3 py-2 border border-white/20 dark:border-white/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-white/5 dark:text-gray-200"
                   onkeydown={(e) => { if (e.key === 'Enter') addRecipient(); }}
                 />
                 <button
                   onclick={addRecipient}
                   disabled={!newRecipientLabel.trim()}
-                  class="px-3 py-2 bg-primary-600 text-white text-sm rounded-lg hover:bg-primary-700 disabled:opacity-50 transition-colors"
+                  class="px-3 py-2 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white text-sm rounded-lg hover:bg-primary-500/90 disabled:opacity-50 transition-colors"
                 >
                   Save
                 </button>
@@ -641,7 +641,7 @@
               type="text"
               bind:value={recipientAddress}
               placeholder="0x..."
-              class="w-full px-4 py-3 border border-white/20 dark:border-white/10 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
+              class="w-full px-4 py-3 border border-white/20 dark:border-white/10 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-white/5 dark:text-gray-200"
             />
           </div>
 
@@ -658,7 +658,7 @@
                 pattern="[0-9]*\.?[0-9]*"
                 bind:value={sendAmount}
                 placeholder="0.00"
-                class="w-full px-4 py-3 border border-white/20 dark:border-white/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-gray-700 dark:text-gray-200"
+                class="w-full px-4 py-3 border border-white/20 dark:border-white/10 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-white/5 dark:text-gray-200"
               />
               <button
                 onclick={() => sendAmount = balance}
@@ -672,7 +672,7 @@
           <button
             onclick={handleSend}
             disabled={!recipientAddress || !sendAmount}
-            class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            class="w-full px-4 py-3 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg hover:bg-primary-500/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <Send class="w-4 h-4" />
             Send CHI
@@ -684,7 +684,7 @@
               <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Saved Recipients</span>
               <div class="space-y-1 max-h-48 overflow-y-auto">
                 {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
-                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-primary-500' : ''}"
+                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-primary-500' : ''}"
                     role="button"
                     tabindex="0"
                     onclick={() => selectRecipient(r)}
@@ -750,14 +750,14 @@
             <button
               onclick={() => showConfirmSend = false}
               disabled={isSending}
-              class="flex-1 px-4 py-2 border border-white/20 dark:border-white/10 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 dark:text-gray-300"
+              class="flex-1 px-4 py-2 border border-white/20 dark:border-white/10 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors disabled:opacity-50 dark:text-gray-300"
             >
               Back
             </button>
             <button
               onclick={confirmSend}
               disabled={isSending}
-              class="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              class="flex-1 px-4 py-2 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg hover:bg-primary-500/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {#if isSending}
                 <Loader2 class="w-4 h-4 animate-spin" />
@@ -810,7 +810,7 @@
           {#each transactions as tx}
             {@const style = getTxTypeStyle(tx)}
             {@const isExpanded = expandedTxHash === tx.hash}
-            <div class="bg-white/8 dark:bg-white/5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+            <div class="bg-white/8 dark:bg-white/5 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors">
               <!-- Main row -->
               <button
                 onclick={() => expandedTxHash = isExpanded ? null : tx.hash}
@@ -839,11 +839,11 @@
                           ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300'
                           : tx.txType === 'file_sale'
                             ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300'
-                            : 'bg-gray-200 dark:bg-gray-600 dark:text-gray-300'
+                            : 'bg-white/10 dark:bg-white/8 border border-white/20 dark:border-white/10 text-gray-700 dark:text-gray-300'
                     }">
                       {getTxTypeLabel(tx)}
                     </span>
-                    <span class="text-xs px-2 py-0.5 bg-gray-200 dark:bg-gray-600 dark:text-gray-300 rounded-full">{tx.status}</span>
+                    <span class="text-xs px-2 py-0.5 bg-white/10 dark:bg-white/8 border border-white/15 dark:border-white/10 text-gray-700 dark:text-gray-300 rounded-full">{tx.status}</span>
                   </div>
                   <p class="text-sm text-gray-600 dark:text-gray-300 mt-0.5 truncate">
                     {tx.description || (isIncoming(tx) ? `From: ${formatAddress(tx.from)}` : `To: ${formatAddress(tx.to)}`)}
@@ -917,7 +917,7 @@
                         <p class="font-mono text-gray-700 dark:text-gray-300 truncate flex-1">{tx.hash}</p>
                         <button
                           onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(tx.hash); toasts.show('Transaction hash copied', 'success'); }}
-                          class="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex-shrink-0"
+                          class="p-1 hover:bg-white/10 dark:hover:bg-white/5 rounded transition-colors flex-shrink-0"
                           title="Copy transaction hash"
                         >
                           <Copy class="w-3.5 h-3.5 text-gray-400" />
@@ -986,13 +986,13 @@
       <div class="flex gap-3">
         <button
           onclick={() => showLogoutModal = false}
-          class="flex-1 px-4 py-2 border border-white/20 dark:border-white/10 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+          class="flex-1 px-4 py-2 border border-white/20 dark:border-white/10 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors dark:text-gray-300"
         >
           Cancel
         </button>
         <button
           onclick={logout}
-          class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+          class="flex-1 px-4 py-2 backdrop-blur-md bg-red-500/70 dark:bg-red-600/60 border border-red-400/30 text-white rounded-lg hover:bg-red-500/80 transition-colors flex items-center justify-center gap-2"
         >
           <LogOut class="w-4 h-4" />
           Logout

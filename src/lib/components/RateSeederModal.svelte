@@ -63,7 +63,7 @@
   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') onclose(); }}
   onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) onclose(); }}
 >
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 p-6 max-w-md w-full mx-4">
+  <div class="backdrop-blur-2xl bg-white/15 dark:bg-white/10 border border-white/20 dark:border-white/15 rounded-2xl shadow-2xl shadow-black/10 p-6 max-w-md w-full mx-4">
     <!-- Header -->
     <div class="mb-4">
       <h3 class="font-semibold text-lg text-gray-900 dark:text-white">Rate This Download</h3>
@@ -73,7 +73,7 @@
     </div>
 
     <!-- Seeder info -->
-    <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 mb-4">
+    <div class="backdrop-blur-md bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10 rounded-lg p-3 mb-4">
       <div class="flex justify-between items-center">
         <span class="text-xs text-gray-500 dark:text-gray-400">Seeder</span>
         <span class="text-sm font-mono text-gray-900 dark:text-gray-200">{formatAddr(seederWallet)}</span>
@@ -92,7 +92,7 @@
             class="p-1 transition-transform hover:scale-110"
           >
             <Star
-              class="w-8 h-8 transition-colors {(hoveredScore || selectedScore) >= star ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300 dark:text-gray-600'}"
+              class="w-8 h-8 transition-colors {(hoveredScore || selectedScore) >= star ? 'text-yellow-400 fill-yellow-400' : 'text-gray-400/40 dark:text-gray-500/40'}"
             />
           </button>
         {/each}
@@ -119,7 +119,7 @@
         maxlength={500}
         rows={3}
         placeholder="Share your experience..."
-        class="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+        class="w-full px-3 py-2 backdrop-blur-md bg-white/10 dark:bg-white/5 border border-white/20 dark:border-white/10 rounded-lg text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500/40 focus:border-white/30 resize-none"
       ></textarea>
       <p class="text-xs text-gray-400 dark:text-gray-500 mt-1 text-right">{comment.length}/500</p>
     </div>
@@ -128,14 +128,14 @@
     <div class="flex gap-3">
       <button
         onclick={onclose}
-        class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+        class="flex-1 px-4 py-2.5 border border-white/20 dark:border-white/10 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-white/10 dark:hover:bg-white/5 transition-colors"
       >
         Skip
       </button>
       <button
         onclick={handleSubmit}
         disabled={selectedScore === 0 || submitting}
-        class="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        class="flex-1 px-4 py-2.5 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg text-sm font-medium hover:bg-primary-500/90 dark:hover:bg-primary-600/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {submitting ? 'Submitting...' : 'Submit Rating'}
       </button>

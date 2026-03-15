@@ -586,9 +586,9 @@
             <span>{downloadProgress.status}</span>
             <span>{downloadProgress.percentage.toFixed(1)}%</span>
           </div>
-          <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+          <div class="w-full bg-white/20 dark:bg-white/10 rounded-full h-2">
             <div
-              class="bg-primary-600 h-2 rounded-full transition-all"
+              class="bg-primary-500/80 h-2 rounded-full transition-all"
               style="width: {downloadProgress.percentage}%"
             ></div>
           </div>
@@ -602,7 +602,7 @@
         <button
           onclick={handleDownloadGeth}
           disabled={isDownloading}
-          class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          class="w-full px-4 py-3 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg hover:bg-primary-500/90 dark:hover:bg-primary-600/80 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <Download class="w-5 h-5" />
           Download Geth
@@ -634,7 +634,7 @@
         {#if gethStatus?.running}
           <button
             onclick={handleStopGeth}
-            class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+            class="flex-1 px-4 py-2 backdrop-blur-md bg-red-500/70 dark:bg-red-600/60 border border-red-400/30 text-white rounded-lg hover:bg-red-500/80 dark:hover:bg-red-600/70 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
           >
             <Square class="w-4 h-4" />
             Stop Node
@@ -643,7 +643,7 @@
           <button
             onclick={handleStartGeth}
             disabled={isStartingGeth}
-            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+            class="flex-1 px-4 py-2 backdrop-blur-md bg-green-500/70 dark:bg-green-600/60 border border-green-400/30 text-white rounded-lg hover:bg-green-500/80 dark:hover:bg-green-600/70 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
           >
             {#if isStartingGeth}
               <Loader2 class="w-4 h-4 animate-spin" />
@@ -816,7 +816,7 @@
       {#if $networkConnected}
         <button
           onclick={disconnectFromNetwork}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 backdrop-blur-md bg-red-500/70 dark:bg-red-600/60 border border-red-400/30 text-white rounded-lg hover:bg-red-500/80 dark:hover:bg-red-600/70 transition focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
         >
           <Square class="w-4 h-4" />
           <span>Disconnect</span>
@@ -825,7 +825,7 @@
         <button
           onclick={connectToNetwork}
           disabled={isConnecting}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 text-white rounded-lg hover:bg-primary-500/90 dark:hover:bg-primary-600/80 transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
         >
           {#if isConnecting}
             <Loader2 class="w-4 h-4 animate-spin" />
@@ -909,7 +909,7 @@
                 <div class="space-y-1.5">
                   {#each dhtHealth.listeningAddresses as addr}
                     <div class="flex items-start gap-2 text-xs">
-                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(addr) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}">
+                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(addr) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-white/10 dark:bg-white/8 text-gray-600 dark:text-gray-300'}">
                         {addrType(addr)}
                       </span>
                       <span class="font-mono break-all dark:text-gray-300">{extractIpPort(addr)}</span>
@@ -926,7 +926,7 @@
                   {#each dhtHealth.bootstrapNodes as node}
                     <div class="flex items-start gap-2 text-xs">
                       <div class="w-2 h-2 rounded-full mt-1 {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(node.address) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}">
+                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(node.address) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-white/10 dark:bg-white/8 text-gray-600 dark:text-gray-300'}">
                         {addrType(node.address)}
                       </span>
                       <span class="font-mono break-all dark:text-gray-300">{extractIpPort(node.address)}</span>
@@ -1068,7 +1068,7 @@
       {:else}
         <div class="space-y-2">
           {#each filteredPeers as peer}
-            <div class="p-3 bg-white/8 dark:bg-white/5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+            <div class="p-3 bg-white/8 dark:bg-white/5 rounded-lg hover:bg-white/10 dark:hover:bg-white/5 transition-colors">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
                   <div class="font-mono text-sm break-all dark:text-gray-200">{peer.id}</div>
@@ -1078,7 +1078,7 @@
                 </div>
                 <button
                   onclick={() => pingPeer(peer.id)}
-                  class="flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white text-sm rounded hover:bg-primary-700 transition shrink-0"
+                  class="flex items-center gap-1 px-3 py-1.5 backdrop-blur-md bg-primary-500/80 border border-primary-400/30 text-white text-sm rounded hover:bg-primary-500/90 transition shrink-0"
                   title="Ping this peer"
                 >
                   <Radio class="w-3 h-3" />
@@ -1127,7 +1127,7 @@
       />
       <button
         onclick={addToBlacklist}
-        class="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors shrink-0"
+        class="flex items-center gap-1.5 px-4 py-2 backdrop-blur-md bg-red-500/70 border border-red-400/30 text-white text-sm rounded-lg hover:bg-red-500/80 transition-colors shrink-0"
       >
         <Plus class="w-4 h-4" />
         Add

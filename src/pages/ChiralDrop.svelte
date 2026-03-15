@@ -608,10 +608,10 @@
       <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20"></div>
       <div class="network-dot-grid absolute inset-0 opacity-45 dark:opacity-30"></div>
 
-      <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-200 dark:ring-gray-700">
+      <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/40 dark:bg-white/10 border border-white/30 dark:border-white/15 backdrop-blur-md px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-sm">
         Live Peer Mesh
       </div>
-      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs text-slate-600 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-300 dark:ring-gray-700">
+      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/40 dark:bg-white/10 border border-white/30 dark:border-white/15 backdrop-blur-md px-3 py-1 text-xs text-slate-600 dark:text-slate-300 shadow-sm">
         {$nearbyPeers.length} discovered
       </div>
 
@@ -629,7 +629,7 @@
         >
           <User class="h-8 w-8 text-white" />
         </div>
-        <span class="mt-2 rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm ring-1 ring-gray-200 backdrop-blur dark:bg-gray-700/80 dark:text-gray-100 dark:ring-gray-600">
+        <span class="mt-2 rounded-full bg-white/60 dark:bg-white/10 border border-white/30 dark:border-white/15 backdrop-blur-md px-3 py-1 text-xs font-semibold text-gray-700 dark:text-gray-100">
           You
         </span>
       </div>
@@ -649,7 +649,7 @@
             >
               <User class="h-6 w-6 text-white" />
             </div>
-            <span class="mt-1 whitespace-nowrap rounded-full bg-white/90 px-2 py-0.5 text-xs font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 backdrop-blur dark:bg-gray-700/80 dark:text-gray-100 dark:ring-gray-600">
+            <span class="mt-1 whitespace-nowrap rounded-full bg-white/60 dark:bg-white/10 border border-white/30 dark:border-white/15 backdrop-blur-md px-2 py-0.5 text-xs font-medium text-gray-700 dark:text-gray-100">
               {peer.alias.displayName}
             </span>
           </div>
@@ -660,7 +660,7 @@
       {#if $nearbyPeers.length === 0}
         <div class="absolute inset-0 flex items-center justify-center p-6">
           <div class="max-w-sm rounded-2xl border border-white/70 bg-white/75 p-6 text-center shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-900/75">
-            <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-gray-700 dark:text-gray-300">
+            <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/15 dark:bg-white/8 border border-white/20 dark:border-white/10 text-gray-500 dark:text-gray-300">
               <User class="h-6 w-6" />
             </div>
             <p class="text-lg font-semibold text-gray-800 dark:text-gray-100">No nearby users found</p>
@@ -685,7 +685,7 @@
     <div class="flex min-h-0 flex-col gap-4 xl:flex-1">
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
-        <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-800/85">
+        <div class="rounded-2xl border border-amber-400/20 dark:border-amber-500/15 backdrop-blur-xl bg-white/15 dark:bg-white/10 p-4 shadow-sm">
           <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Incoming Transfers</h3>
           <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
@@ -713,7 +713,7 @@
                 <div class="mt-3 flex gap-2">
                   <button
                     onclick={() => handleAccept(transfer)}
-                    class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                    class="flex-1 rounded-lg backdrop-blur-md bg-emerald-500/70 border border-emerald-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-500/80 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                   >
                     <span class="inline-flex items-center justify-center gap-1">
                       <Check class="h-4 w-4" />
@@ -724,7 +724,7 @@
                   </button>
                   <button
                     onclick={() => handleDecline(transfer)}
-                    class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+                    class="flex-1 rounded-lg backdrop-blur-md bg-rose-500/70 border border-rose-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-500/80 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
                   >
                     <span class="inline-flex items-center justify-center gap-1">
                       <X class="h-4 w-4" />
@@ -784,7 +784,7 @@
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+            class="w-full rounded-xl backdrop-blur-md bg-primary-500/80 dark:bg-primary-600/70 border border-primary-400/30 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-500/90 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />
@@ -794,7 +794,7 @@
         </div>
       {:else}
         <div class="rounded-2xl border border-dashed border-white/20 backdrop-blur-xl bg-white/10 p-5 text-center shadow-lg shadow-black/5 dark:border-white/10 dark:bg-white/5">
-          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
+          <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/10 dark:bg-white/5">
             <Upload class="h-6 w-6 text-gray-400" />
           </div>
           <p class="text-sm text-gray-600 dark:text-gray-400">Select a nearby user to start a transfer</p>

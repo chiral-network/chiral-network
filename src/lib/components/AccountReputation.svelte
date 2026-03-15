@@ -121,7 +121,7 @@
     <p class="text-gray-500 dark:text-gray-400">{error}</p>
   </div>
 {:else}
-  <div class="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-5 mb-5">
+  <div class="backdrop-blur-md bg-white/8 dark:bg-white/5 border border-white/15 dark:border-white/10 rounded-xl p-5 mb-5">
     <div class="flex flex-wrap items-center gap-6">
       <div class="flex flex-col items-center">
         <div class="text-4xl font-bold dark:text-white">{elo.toFixed(1)}</div>
@@ -130,26 +130,26 @@
       <button
         onclick={() => loadReputation()}
         disabled={loading}
-        class="ml-auto p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40"
+        class="ml-auto p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors rounded-lg hover:bg-white/10 dark:hover:bg-white/5 disabled:opacity-40"
         title="Refresh reputation"
       >
         <RefreshCw class="w-4 h-4 {loading ? 'animate-spin' : ''}" />
       </button>
 
       <div class="flex-1 grid grid-cols-2 gap-3 text-sm">
-        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+        <div class="backdrop-blur-sm bg-white/10 dark:bg-white/5 rounded-lg px-3 py-2 border border-white/15 dark:border-white/10">
           <p class="text-xs text-gray-500 dark:text-gray-400">Completed</p>
           <p class="font-semibold text-green-600 dark:text-green-400">{completedCount}</p>
         </div>
-        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+        <div class="backdrop-blur-sm bg-white/10 dark:bg-white/5 rounded-lg px-3 py-2 border border-white/15 dark:border-white/10">
           <p class="text-xs text-gray-500 dark:text-gray-400">Failed</p>
           <p class="font-semibold text-red-600 dark:text-red-400">{failedCount}</p>
         </div>
-        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+        <div class="backdrop-blur-sm bg-white/10 dark:bg-white/5 rounded-lg px-3 py-2 border border-white/15 dark:border-white/10">
           <p class="text-xs text-gray-500 dark:text-gray-400">Ratings</p>
           <p class="font-semibold text-gray-900 dark:text-white">{ratingCount}</p>
         </div>
-        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
+        <div class="backdrop-blur-sm bg-white/10 dark:bg-white/5 rounded-lg px-3 py-2 border border-white/15 dark:border-white/10">
           <p class="text-xs text-gray-500 dark:text-gray-400">Earned (180d)</p>
           <p class="font-semibold text-gray-900 dark:text-white">{formatWeiAsChi(totalEarnedWei)} CHI</p>
         </div>
@@ -159,19 +159,19 @@
 
   {#if events.length === 0}
     <div class="text-center py-12">
-      <ShieldCheck class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+      <ShieldCheck class="w-12 h-12 mx-auto text-gray-300/50 dark:text-gray-600/50 mb-3" />
       <p class="text-gray-500 dark:text-gray-400">No reputation events yet</p>
       <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">
         Complete downloads and ratings will contribute to your Elo
       </p>
     </div>
   {:else}
-    <div class="rounded-xl border border-gray-200 dark:border-gray-600 divide-y divide-gray-100 dark:divide-gray-600">
+    <div class="rounded-xl border border-white/15 dark:border-white/10 divide-y divide-white/10 dark:divide-white/5">
       {#each paginatedEvents as event (event.id)}
         <div class="p-4">
           <div class="flex items-start justify-between gap-4">
             <div class="flex items-start gap-3 min-w-0">
-              <div class="p-2 bg-gray-100 dark:bg-gray-700 rounded-full flex-shrink-0">
+              <div class="p-2 bg-white/10 dark:bg-white/5 rounded-full flex-shrink-0">
                 <User class="w-4 h-4 text-gray-500 dark:text-gray-400" />
               </div>
               <div class="min-w-0">
@@ -179,7 +179,7 @@
                   <span class="text-sm font-medium text-gray-900 dark:text-white font-mono">
                     {formatAddr(event.downloaderWallet)}
                   </span>
-                  <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full {event.outcome === 'completed' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}">
+                  <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full {event.outcome === 'completed' ? 'bg-green-500/15 text-green-700 dark:text-green-400' : 'bg-red-500/15 text-red-700 dark:text-red-400'}">
                     {#if event.outcome === 'completed'}
                       <CheckCircle2 class="w-3.5 h-3.5" />
                       Completed
@@ -197,7 +197,7 @@
                   <div class="flex items-center gap-1 mt-1.5">
                     {#each [1, 2, 3, 4, 5] as star}
                       <Star
-                        class="w-3.5 h-3.5 {event.ratingScore >= star ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300 dark:text-gray-600'}"
+                        class="w-3.5 h-3.5 {event.ratingScore >= star ? 'text-yellow-400 fill-yellow-400' : 'text-gray-400/30 dark:text-gray-600/30'}"
                       />
                     {/each}
                   </div>
@@ -228,7 +228,7 @@
         <button
           onclick={() => currentPage = Math.max(0, currentPage - 1)}
           disabled={currentPage === 0}
-          class="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          class="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-white/10 dark:hover:bg-white/5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <ChevronLeft class="w-4 h-4" />
           Previous
@@ -239,7 +239,7 @@
         <button
           onclick={() => currentPage = Math.min(totalPages - 1, currentPage + 1)}
           disabled={currentPage >= totalPages - 1}
-          class="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          class="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-white/10 dark:hover:bg-white/5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Next
           <ChevronRight class="w-4 h-4" />
