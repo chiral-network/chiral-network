@@ -38,7 +38,7 @@
   }
 
   async function createLink() {
-    const price = hasPrice ? itemPrice! : '0.001';
+    const price = hasPrice ? itemPrice! : '0';
 
     creating = true;
     try {
@@ -118,19 +118,11 @@
     <div class="space-y-3 mb-6">
       <p class="text-sm text-gray-600 dark:text-gray-400">
         {#if hasPrice}
-          Create a share link at <strong class="text-emerald-600 dark:text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
+          Share at <strong class="text-emerald-600 dark:text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
         {:else}
-          Create a free share link. To set a price, use "Edit Price" from the context menu first.
+          Share for free. Use "Edit Price" from the right-click menu to set a price.
         {/if}
       </p>
-
-      <div class="flex items-center gap-3">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" bind:checked={isPublic} class="rounded border-gray-300 dark:border-gray-600" />
-          <Globe class="w-4 h-4 text-gray-500" />
-          <span class="text-sm text-gray-700 dark:text-gray-300">Public</span>
-        </label>
-      </div>
 
       <button
         onclick={createLink}
