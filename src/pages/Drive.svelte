@@ -469,25 +469,10 @@
     toasts.show(`Stopped seeding "${item.name}"`, 'info');
   }
 
-  async function handleEditPrice(item: DriveItem) {
-    const currentPrice = item.priceChi || '';
-    const input = prompt('Enter new price in CHI (leave empty for Free):', currentPrice);
-    if (input === null) return; // cancelled
-    const priceChi = input.trim() || undefined;
-    if (priceChi !== undefined) {
-      const parsed = Number(priceChi);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        toasts.show('Invalid price', 'error');
-        return;
-      }
-    }
-    const protocol = item.protocol === 'BitTorrent' ? 'BitTorrent' as const : 'WebRTC' as const;
-    const updated = await driveStore.seedFile(item.id, protocol, priceChi);
-    if (updated) {
-      toasts.show(priceChi ? `Updated "${item.name}" to ${priceChi} CHI` : `Updated "${item.name}" to Free`, 'success');
-    } else {
-      toasts.show(`Failed to update price for "${item.name}"`, 'error');
-    }
+  function handleEditPrice(item: DriveItem) {
+    seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
+    seedPrice = item.priceChi || '';
+    seedModalItem = item;
   }
 
   async function handleCopyMerkleHash(item: DriveItem) {
@@ -781,9 +766,9 @@
       class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
-      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Seed to Network</h3>
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        Share <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
+        {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
       </p>
 
       <div class="space-y-4">
@@ -832,7 +817,7 @@
         <button
           onclick={confirmSeed}
           class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition"
-        >Start Seeding</button>
+        >{seedModalItem?.seeding ? 'Update' : 'Start Seeding'}</button>
       </div>
     </div>
   </div>
