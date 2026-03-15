@@ -606,7 +606,7 @@
  {#if !searchQuery}
  <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
  {:else}
- <p class="text-sm text-white/50">
+ <p class="text-sm text-[var(--text-secondary)]">
  Search results for"<span class="font-medium">{searchQuery}</span>" — {currentItems.length} result{currentItems.length !== 1 ?'s' :''}
  </p>
  {/if}
@@ -621,10 +621,10 @@
  placeholder="Folder name"
  bind:value={newFolderName}
  onkeydown={(e) => { if (e.key ==='Enter') confirmNewFolder(); if (e.key ==='Escape') cancelNewFolder(); }}
- class="px-3 py-1.5 bg-white/[0.07] border border-gray-800/60 rounded-lg text-sm text-white focus:outline-none focus:border-blue-400/40 w-64"
+ class="px-3 py-1.5 bg-[var(--surface-1)] border border-[var(--border)]/60 rounded-lg text-sm text-white focus:outline-none focus:border-blue-400/40 w-64"
  />
  <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition">Create</button>
- <button onclick={cancelNewFolder} class="px-3 py-1.5 text-white/50 text-sm hover:bg-white/[0.05] rounded-lg transition">Cancel</button>
+ <button onclick={cancelNewFolder} class="px-3 py-1.5 text-[var(--text-secondary)] text-sm hover:bg-[var(--surface-1)] rounded-lg transition">Cancel</button>
  </div>
  {/if}
 
@@ -652,13 +652,13 @@
  {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
  <!-- Empty state -->
  <div class="flex flex-col items-center justify-center py-16 text-center">
- <div class="w-16 h-16 bg-white/[0.07] rounded-full flex items-center justify-center mb-4">
- <HardDrive class="w-8 h-8 text-white/50" />
+ <div class="w-16 h-16 bg-[var(--surface-1)] rounded-full flex items-center justify-center mb-4">
+ <HardDrive class="w-8 h-8 text-[var(--text-secondary)]" />
  </div>
  <h3 class="text-lg font-medium text-white mb-1">
  {searchQuery ?'No files found' :'This folder is empty'}
  </h3>
- <p class="text-sm text-white/50 mb-6">
+ <p class="text-sm text-[var(--text-secondary)] mb-6">
  {searchQuery ?'Try a different search term' :'Upload files or create a folder to get started'}
  </p>
  {#if !searchQuery}
@@ -672,7 +672,7 @@
  </button>
  <button
  onclick={handleNewFolder}
- class="flex items-center gap-2 px-4 py-2 bg-white/[0.07] hover:bg-white/[0.1] text-white/70 rounded-lg transition text-sm font-medium focus:outline-none focus:border-blue-400/40"
+ class="flex items-center gap-2 px-4 py-2 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] text-white/70 rounded-lg transition text-sm font-medium focus:outline-none focus:border-blue-400/40"
  >
  <FolderPlus class="w-4 h-4" />
  New Folder
@@ -684,14 +684,14 @@
  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
  {#each currentItems as item (item.id)}
  {#if renamingId === item.id}
- <div class="bg-gray-950 border border-indigo-400 rounded-xl p-4">
+ <div class="bg-[var(--surface-0)] border border-indigo-400 rounded-xl p-4">
  <input
  id="rename-input"
  type="text"
  bind:value={renameValue}
  onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-white/[0.07] border border-gray-800/60 rounded text-white focus:outline-none focus:border-blue-400/40"
+ class="w-full px-2 py-1 text-sm bg-[var(--surface-1)] border border-[var(--border)]/60 rounded text-white focus:outline-none focus:border-blue-400/40"
  />
  </div>
  {:else}
@@ -704,20 +704,20 @@
  {/each}
  </div>
  {:else}
- <div class="bg-gray-950 rounded-xl border border-gray-800/60 overflow-hidden">
+ <div class="bg-[var(--surface-0)] rounded-xl border border-[var(--border)]/60 overflow-hidden">
  <table class="w-full">
  <thead>
- <tr class="border-b border-gray-800/60 text-left">
- <th class="py-2.5 px-3 text-xs font-medium text-white/50 uppercase tracking-wide">Name</th>
- <th class="py-2.5 px-3 text-xs font-medium text-white/50 uppercase tracking-wide w-24">Size</th>
- <th class="py-2.5 px-3 text-xs font-medium text-white/50 uppercase tracking-wide w-32">Modified</th>
+ <tr class="border-b border-[var(--border)]/60 text-left">
+ <th class="py-2.5 px-3 text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">Name</th>
+ <th class="py-2.5 px-3 text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide w-24">Size</th>
+ <th class="py-2.5 px-3 text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide w-32">Modified</th>
  <th class="py-2.5 px-3 w-12"></th>
  </tr>
  </thead>
  <tbody>
  {#each currentItems as item (item.id)}
  {#if renamingId === item.id}
- <tr class="border-b border-gray-800/60">
+ <tr class="border-b border-[var(--border)]/60">
  <td colspan="4" class="py-2 px-3">
  <input
  id="rename-input"
@@ -725,7 +725,7 @@
  bind:value={renameValue}
  onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-white/[0.07] border border-gray-800/60 rounded text-white focus:outline-none focus:border-blue-400/40"
+ class="w-full px-2 py-1 text-sm bg-[var(--surface-1)] border border-[var(--border)]/60 rounded text-white focus:outline-none focus:border-blue-400/40"
  />
  </td>
  </tr>
@@ -775,30 +775,30 @@
 {#if seedModalItem}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/40"
  onclick={() => seedModalItem = null}
  onkeydown={(e) => { if (e.key ==='Escape') seedModalItem = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="bg-gray-950 rounded-xl  p-6 max-w-sm w-full mx-4"
+ class="bg-[var(--surface-0)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
  <h3 class="text-lg font-semibold text-white mb-4">{seedModalItem.seeding ?'Edit Seeding' :'Seed to Network'}</h3>
- <p class="text-sm text-white/50 mb-4">
+ <p class="text-sm text-[var(--text-secondary)] mb-4">
  {seedModalItem.seeding ?'Update' :'Share'} <strong class="text-white">"{seedModalItem.name}"</strong> on the network.
  </p>
 
  <div class="space-y-4">
  <!-- Protocol picker -->
  <div>
- <label class="block text-xs font-medium text-white/50 mb-1.5">Protocol</label>
- <div class="flex rounded-lg overflow-hidden border border-gray-800/60">
+ <label class="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Protocol</label>
+ <div class="flex rounded-lg overflow-hidden border border-[var(--border)]/60">
  <button
  onclick={() => seedProtocol ='WebRTC'}
  class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol ==='WebRTC'
  ?'bg-indigo-600 text-white'
- :'bg-white/[0.07] text-white/70 hover:bg-white/[0.05]'}"
+ :'bg-[var(--surface-1)] text-white/70 hover:bg-[var(--surface-1)]'}"
  >
  WebRTC
  </button>
@@ -806,7 +806,7 @@
  onclick={() => seedProtocol ='BitTorrent'}
  class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol ==='BitTorrent'
  ?'bg-green-600 text-white'
- :'bg-white/[0.07] text-white/70 hover:bg-white/[0.05]'}"
+ :'bg-[var(--surface-1)] text-white/70 hover:bg-[var(--surface-1)]'}"
  >
  BitTorrent
  </button>
@@ -815,14 +815,14 @@
 
  <!-- Price input -->
  <div>
- <label class="block text-xs font-medium text-white/50 mb-1.5">Price (CHI)</label>
+ <label class="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Price (CHI)</label>
  <input
  type="number"
  step="0.001"
  min="0"
  placeholder="Free"
  bind:value={seedPrice}
- class="w-full px-3 py-1.5 text-sm bg-white/[0.07] border border-gray-800/60 rounded-lg text-white placeholder:text-white/30 focus:outline-none focus:border-blue-400/40"
+ class="w-full px-3 py-1.5 text-sm bg-[var(--surface-1)] border border-[var(--border)]/60 rounded-lg text-white placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-blue-400/40"
  />
  </div>
  </div>
@@ -830,7 +830,7 @@
  <div class="flex justify-end gap-3 mt-5">
  <button
  onclick={() => seedModalItem = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-white/70 bg-white/[0.07] hover:bg-white/[0.1] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-white/70 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] transition"
  >Cancel</button>
  <button
  onclick={confirmSeed}
@@ -855,28 +855,28 @@
 {#if deleteConfirmItem}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/40"
  onclick={() => deleteConfirmItem = null}
  onkeydown={(e) => { if (e.key ==='Escape') deleteConfirmItem = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="bg-gray-950 rounded-xl  p-6 max-w-sm w-full mx-4"
+ class="bg-[var(--surface-0)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
  <h3 class="text-lg font-semibold text-white mb-2">Delete {deleteConfirmItem.type ==='folder' ?'Folder' :'File'}</h3>
- <p class="text-sm text-white/50 mb-1">
+ <p class="text-sm text-[var(--text-secondary)] mb-1">
  Are you sure you want to delete <strong class="text-white">"{deleteConfirmItem.name}"</strong>?
  </p>
  {#if deleteConfirmItem.type ==='folder'}
  <p class="text-sm text-amber-400 mb-4">This will delete all contents inside the folder.</p>
  {:else}
- <p class="text-sm text-white/40 mb-4">This will remove it from your Drive.</p>
+ <p class="text-sm text-[var(--text-tertiary)] mb-4">This will remove it from your Drive.</p>
  {/if}
  <div class="flex justify-end gap-3">
  <button
  onclick={() => deleteConfirmItem = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-white/70 bg-white/[0.07] hover:bg-white/[0.1] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-white/70 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] transition"
  >Cancel</button>
  <button
  onclick={confirmDelete}

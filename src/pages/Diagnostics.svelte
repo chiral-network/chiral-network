@@ -838,7 +838,7 @@
  id="geth-log-lines"
  bind:value={gethLogLines}
  onchange={() => loadGethLog()}
- class="text-xs px-2 py-1 bg-white/[0.07] border border-gray-800/60 rounded"
+ class="text-xs px-2 py-1 bg-white/[0.07] border border-white/[0.06]/60 rounded"
  >
  <option value={50}>50</option>
  <option value={100}>100</option>
@@ -936,7 +936,7 @@
  <Filter class="w-4 h-4 text-white/50" />
  <select
  bind:value={logFilter}
- class="text-xs px-2 py-1 bg-white/[0.07] border border-gray-800/60 rounded"
+ class="text-xs px-2 py-1 bg-white/[0.07] border border-white/[0.06]/60 rounded"
  >
  <option value="all">All Levels</option>
  <option value="info">Info</option>
@@ -946,7 +946,7 @@
  </select>
  <select
  bind:value={sourceFilter}
- class="text-xs px-2 py-1 bg-white/[0.07] border border-gray-800/60 rounded"
+ class="text-xs px-2 py-1 bg-white/[0.07] border border-white/[0.06]/60 rounded"
  >
  <option value="all">All Sources</option>
  <option value="dht">DHT</option>

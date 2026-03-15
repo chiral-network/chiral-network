@@ -667,7 +667,7 @@
  {/if}
 
  <!-- Bootstrap Health Check -->
- <div class="mt-4 border-t border-gray-800/60 pt-4">
+ <div class="mt-4 border-t border-white/[0.06]/60 pt-4">
  <div class="flex items-center justify-between mb-3">
  <div class="flex items-center gap-2">
  <Activity class="w-4 h-4 text-white/50" />
@@ -839,7 +839,7 @@
  </div>
 
  <!-- Health Check -->
- <div class="border-t border-gray-800/60 pt-4">
+ <div class="border-t border-white/[0.06]/60 pt-4">
  <div class="flex items-center justify-between mb-3">
  <div class="flex items-center gap-2">
  <HeartPulse class="w-4 h-4 text-white/50" />
@@ -961,7 +961,7 @@
  </div>
 
  <!-- Traffic Statistics -->
- <div class="border-t border-gray-800/60 pt-4 mt-4">
+ <div class="border-t border-white/[0.06]/60 pt-4 mt-4">
  <div class="flex items-center gap-2 mb-3">
  <Activity class="w-4 h-4 text-white/50" />
  <span class="text-sm font-medium text-white/70">Traffic Statistics</span>
@@ -999,7 +999,7 @@
  </div>
 
  <!-- NAT Traversal / Relay Status -->
- <div class="border-t border-gray-800/60 pt-4 mt-4">
+ <div class="border-t border-white/[0.06]/60 pt-4 mt-4">
  <div class="flex items-center gap-2 mb-3">
  <Globe class="w-4 h-4 text-white/50" />
  <span class="text-sm font-medium text-white/70">NAT Traversal</span>
@@ -1051,7 +1051,7 @@
  </div>
 
  <!-- Connected Peers -->
- <div class="border-t border-gray-800/60 pt-4 mt-4">
+ <div class="border-t border-white/[0.06]/60 pt-4 mt-4">
  <div class="flex items-center gap-2 mb-3">
  <Radio class="w-4 h-4 text-white/50" />
  <span class="text-sm font-medium text-white/70">Connected Peers</span>
@@ -1115,14 +1115,14 @@
  type="text"
  bind:value={blacklistAddress}
  placeholder="Wallet or peer address"
- class="flex-1 px-3 py-2 text-sm border border-gray-800/60 rounded-lg bg-white/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
+ class="flex-1 px-3 py-2 text-sm border border-white/[0.06]/60 rounded-lg bg-white/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
  onkeydown={(e: KeyboardEvent) => { if (e.key ==='Enter') addToBlacklist(); }}
  />
  <input
  type="text"
  bind:value={blacklistReason}
  placeholder="Reason (optional)"
- class="w-48 px-3 py-2 text-sm border border-gray-800/60 rounded-lg bg-white/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
+ class="w-48 px-3 py-2 text-sm border border-white/[0.06]/60 rounded-lg bg-white/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
  onkeydown={(e: KeyboardEvent) => { if (e.key ==='Enter') addToBlacklist(); }}
  />
  <button

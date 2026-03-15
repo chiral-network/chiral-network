@@ -29,7 +29,7 @@
 
  <button
  onclick={onNewFolder}
- class="flex items-center gap-2 px-4 py-2 bg-white/[0.07] hover:bg-white/[0.1] text-white/70 rounded-lg transition text-sm font-medium"
+ class="flex items-center gap-2 px-4 py-2 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] text-white/70 rounded-lg transition text-sm font-medium"
  >
  <FolderPlus class="w-4 h-4" />
  New Folder
@@ -38,27 +38,27 @@
  <div class="flex-1"></div>
 
  <div class="relative">
- <Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/50" />
+ <Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)]" />
  <input
  type="text"
  placeholder="Search files..."
  value={searchQuery}
  oninput={(e) => onSearchChange((e.target as HTMLInputElement).value)}
- class="pl-9 pr-3 py-2 bg-white/[0.07] border border-gray-800/60 rounded-lg text-sm text-white placeholder:text-white/30 w-48 focus:outline-none focus:border-blue-400/40"
+ class="pl-9 pr-3 py-2 bg-[var(--surface-1)] border border-[var(--border)]/60 rounded-lg text-sm text-white placeholder:text-[var(--text-tertiary)] w-48 focus:outline-none focus:border-blue-400/40"
  />
  </div>
 
- <div class="flex items-center bg-white/[0.07] rounded-lg p-0.5">
+ <div class="flex items-center bg-[var(--surface-1)] rounded-lg p-0.5">
  <button
  onclick={() => onViewModeChange('grid')}
- class="p-1.5 rounded transition {viewMode ==='grid' ?'bg-gray-950 ' :'hover:bg-white/[0.1]'}"
+ class="p-1.5 rounded transition {viewMode ==='grid' ?'bg-[var(--surface-0)] ' :'hover:bg-[var(--surface-1)]'}"
  title="Grid view"
  >
  <LayoutGrid class="w-4 h-4 text-white/70" />
  </button>
  <button
  onclick={() => onViewModeChange('list')}
- class="p-1.5 rounded transition {viewMode ==='list' ?'bg-gray-950 ' :'hover:bg-white/[0.1]'}"
+ class="p-1.5 rounded transition {viewMode ==='list' ?'bg-[var(--surface-0)] ' :'hover:bg-[var(--surface-1)]'}"
  title="List view"
  >
  <List class="w-4 h-4 text-white/70" />

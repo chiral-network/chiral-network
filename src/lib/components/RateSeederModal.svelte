@@ -119,7 +119,7 @@
  maxlength={500}
  rows={3}
  placeholder="Share your experience..."
- class="w-full px-3 py-2 bg-white/[0.07] border border-gray-800/60 rounded-lg text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-blue-400/40 resize-none"
+ class="w-full px-3 py-2 bg-white/[0.07] border border-white/[0.06]/60 rounded-lg text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-blue-400/40 resize-none"
  ></textarea>
  <p class="text-xs text-white/40 mt-1 text-right">{comment.length}/500</p>
  </div>
@@ -128,7 +128,7 @@
  <div class="flex gap-3">
  <button
  onclick={onclose}
- class="flex-1 px-4 py-2.5 border border-gray-800/60 rounded-lg text-sm font-medium text-white/70 hover:bg-white/[0.05] transition-colors"
+ class="flex-1 px-4 py-2.5 border border-white/[0.06]/60 rounded-lg text-sm font-medium text-white/70 hover:bg-white/[0.05] transition-colors"
  >
  Skip
  </button>

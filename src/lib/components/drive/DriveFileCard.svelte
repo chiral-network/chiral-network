@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
- class="group relative bg-gray-950 border border-gray-800/60 rounded-xl p-4 hover:shadow-sm hover:border-indigo-300 transition cursor-pointer select-none"
+ class="group relative bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl p-4 hover:shadow-sm hover:border-indigo-300 transition cursor-pointer select-none"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -51,14 +51,14 @@
  {/if}
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-white/[0.05] rounded"
+ class="p-1 hover:bg-[var(--surface-1)] rounded"
  >
- <MoreVertical class="w-4 h-4 text-white/40" />
+ <MoreVertical class="w-4 h-4 text-[var(--text-tertiary)]" />
  </button>
  </div>
 
  <!-- Icon -->
- <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-50' :'bg-white/[0.07]'}">
+ <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-50' :'bg-[var(--surface-1)]'}">
  {#if item.type ==='folder'}
  <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
  {:else}
@@ -73,7 +73,7 @@
  {item.name}
  </p>
  {#if item.type ==='file' && item.size}
- <p class="text-xs text-white/50 mt-0.5">{formatSize(item.size)}</p>
+ <p class="text-xs text-[var(--text-secondary)] mt-0.5">{formatSize(item.size)}</p>
  {/if}
  {#if getPriceLabel(item)}
  {@const priceLabel = getPriceLabel(item)}
@@ -84,7 +84,7 @@
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
  <span class="text-[10px] text-green-400 font-medium">Seeding</span>
  {#if item.protocol}
- <span class="text-[10px] text-white/50">({item.protocol})</span>
+ <span class="text-[10px] text-[var(--text-secondary)]">({item.protocol})</span>
  {/if}
  </div>
  {/if}

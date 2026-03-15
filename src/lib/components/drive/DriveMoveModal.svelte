@@ -43,26 +43,26 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onclick={onClose}>
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/40" onclick={onClose}>
  <div
- class="bg-gray-950 rounded-xl  w-full max-w-sm mx-4 p-6"
+ class="bg-[var(--surface-0)] rounded-xl w-full max-w-sm mx-4 p-6"
  onclick={(e) => e.stopPropagation()}
  >
  <div class="flex items-center justify-between mb-4">
  <h3 class="text-lg font-semibold text-white">Move"{item.name}"</h3>
- <button onclick={onClose} class="p-1 hover:bg-white/[0.05] rounded-lg transition">
- <X class="w-5 h-5 text-white/40" />
+ <button onclick={onClose} class="p-1 hover:bg-[var(--surface-1)] rounded-lg transition">
+ <X class="w-5 h-5 text-[var(--text-tertiary)]" />
  </button>
  </div>
 
- <div class="max-h-64 overflow-y-auto border border-gray-800/60 rounded-lg">
+ <div class="max-h-64 overflow-y-auto border border-[var(--border)]/60 rounded-lg">
  <!-- Root -->
  <button
  onclick={() => selectedFolderId = null}
  class="flex items-center gap-2 w-full px-3 py-2.5 text-sm transition
  {selectedFolderId === null
  ?'bg-indigo-900/30 text-indigo-300'
- :'text-white/70 hover:bg-white/[0.05]'}"
+ :'text-white/70 hover:bg-[var(--surface-1)]'}"
  >
  <Folder class="w-4 h-4 text-yellow-500 fill-yellow-500 opacity-80" />
  <span class="font-medium">My Drive</span>
@@ -75,7 +75,7 @@
  class="flex items-center gap-2 w-full px-3 py-2 text-sm transition
  {selectedFolderId === folder.id
  ?'bg-indigo-900/30 text-indigo-300'
- :'text-white/70 hover:bg-white/[0.05]'}"
+ :'text-white/70 hover:bg-[var(--surface-1)]'}"
  style="padding-left: {12 + depth * 20}px"
  >
  <Folder class="w-4 h-4 text-yellow-500 fill-yellow-500 opacity-80 shrink-0" />
@@ -91,7 +91,7 @@
  <div class="flex justify-end gap-2 mt-4">
  <button
  onclick={onClose}
- class="px-4 py-2 text-sm font-medium text-white/70 hover:bg-white/[0.05] rounded-lg transition"
+ class="px-4 py-2 text-sm font-medium text-white/70 hover:bg-[var(--surface-1)] rounded-lg transition"
  >
  Cancel
  </button>

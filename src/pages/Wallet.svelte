@@ -58,7 +58,7 @@
 
  <button
  onclick={handleUseExisting}
- class="w-full flex items-start gap-4 px-5 py-4 border border-gray-800/60 bg-white/[0.07] hover:bg-white/[0.06] hover:border-blue-400/30 text-white/90 rounded-xl transition-all focus:outline-none"
+ class="w-full flex items-start gap-4 px-5 py-4 border border-white/[0.06]/60 bg-white/[0.07] hover:bg-white/[0.06] hover:border-blue-400/30 text-white/90 rounded-xl transition-all focus:outline-none"
  >
  <div class="flex-shrink-0 mt-0.5 p-2 bg-white/[0.06] rounded-lg">
  <KeyRound class="w-5 h-5 text-pink-400" />

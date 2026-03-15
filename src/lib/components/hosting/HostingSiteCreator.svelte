@@ -36,7 +36,7 @@
  let totalSize = $derived(selectedFiles.reduce((s, f) => s + f.size, 0));
 </script>
 
-<div class="rounded-xl border border-gray-800/60 bg-white/[0.07] backdrop-blur-xl p-5  backdrop-blur">
+<div class="rounded-xl border border-[var(--border)]/60 bg-[var(--surface-1)] p-5 
  <h2 class="mb-4 text-base font-semibold text-white flex items-center gap-2">
  <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-400/[0.06]">
  <Plus class="h-3.5 w-3.5 text-blue-400" />
@@ -47,15 +47,15 @@
  <div class="space-y-4">
  <!-- Site Name -->
  <div>
- <label for="site-name" class="mb-1.5 block text-xs font-medium text-white/50 uppercase tracking-wide">Site Name</label>
+ <label for="site-name" class="mb-1.5 block text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">Site Name</label>
  <input
  id="site-name"
  type="text"
  value={newSiteName}
  oninput={(e) => onNameChange(e.currentTarget.value)}
  placeholder="e.g. My Portfolio"
- class="w-full rounded-xl border border-gray-800/60 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder:text-white/30 transition-all
- focus:border-violet-400 focus:bg-black focus:outline-none focus:ring-blue-400/20/20
+ class="w-full rounded-xl border border-[var(--border)]/60 bg-[var(--surface-1)] px-4 py-2.5 text-sm text-white placeholder:text-[var(--text-tertiary)] transition-all
+ focus:border-violet-400 focus:bg-[var(--surface-0)] focus:outline-none focus:ring-blue-400/20/20
 "
  />
  </div>
@@ -73,8 +73,8 @@
  </button>
  <button
  onclick={onSelectFiles}
- class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white/50 border border-gray-800/60
- rounded-lg hover:bg-white/[0.05] transition-colors
+ class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--text-secondary)] border border-[var(--border)]/60
+ rounded-lg hover:bg-[var(--surface-1)] transition-colors
  focus:outline-none focus:border-blue-400/40"
  >
  <FolderOpen class="w-3.5 h-3.5" />
@@ -91,15 +91,15 @@
  class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 px-4 transition-all
  {isDragOver
  ?'border-blue-400 bg-blue-500/[0.06]/60 scale-[1.01]'
- :'border-gray-800/60 bg-white/[0.04] hover:border-white/[0.08] hover:bg-white/[0.04]'}"
+ :'border-[var(--border)]/60 bg-[var(--surface-1)] hover:border-[var(--border)] hover:bg-[var(--surface-1)]'}"
  >
- <div class="flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.06]">
- <FolderOpen class="h-6 w-6 text-white/40" />
+ <div class="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--surface-1)]">
+ <FolderOpen class="h-6 w-6 text-[var(--text-tertiary)]" />
  </div>
- <p class="text-sm font-medium text-white/50">
+ <p class="text-sm font-medium text-[var(--text-secondary)]">
  {isDragOver ?'Release to add files' :'Drop files here'}
  </p>
- <p class="cyber-label">
+ <p class="
  HTML, CSS, JS, images, photos, documents
  </p>
  </div>
@@ -108,18 +108,18 @@
  {#if selectedFiles.length > 0}
  <div class="space-y-2">
  <div class="flex items-center justify-between">
- <p class="text-xs font-medium text-white/50 uppercase tracking-wide">
+ <p class="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">
  {selectedFiles.length} file{selectedFiles.length === 1 ?'' :'s'} selected
  </p>
- <p class="text-xs text-white/50 tabular-nums">{formatFileSize(totalSize)}</p>
+ <p class="text-xs text-[var(--text-secondary)] tabular-nums">{formatFileSize(totalSize)}</p>
  </div>
- <div class="max-h-40 overflow-y-auto rounded-xl border border-gray-800/60 divide-y divide-white/[0.06]">
+ <div class="max-h-40 overflow-y-auto rounded-xl border border-[var(--border)]/60 divide-y divide-white/[0.06]">
  {#each selectedFiles as file, i (file.path)}
  <div class="flex items-center justify-between px-3 py-2 hover:bg-[var(--surface-2)]/80 transition-colors group">
  <div class="flex items-center gap-2.5 min-w-0">
- <FileIcon class="h-4 w-4 flex-shrink-0 text-white/50" />
+ <FileIcon class="h-4 w-4 flex-shrink-0 text-[var(--text-secondary)]" />
  <span class="truncate text-sm text-white/70">{file.name}</span>
- <span class="text-xs text-white/50 tabular-nums flex-shrink-0">{formatFileSize(file.size)}</span>
+ <span class="text-xs text-[var(--text-secondary)] tabular-nums flex-shrink-0">{formatFileSize(file.size)}</span>
  </div>
  <button
  onclick={(e: MouseEvent) => { e.stopPropagation(); onRemoveFile(i); }}
@@ -141,8 +141,8 @@
  disabled={!canCreate}
  class="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition-all
  {canCreate
- ?'bg-blue-500/[0.06]0 hover:bg-blue-400  shadow-blue-400/10 hover:shadow-sm hover:shadow-blue-400/10 active:scale-[0.98]'
- :'bg-white/[0.05] cursor-not-allowed'}
+ ?'bg-blue-500/[0.06]0 hover:bg-blue-400 shadow-blue-400/10 hover:shadow-sm hover:shadow-blue-400/10 active:scale-[0.98]'
+ :'bg-[var(--surface-1)] cursor-not-allowed'}
  focus:outline-none focus:border-blue-400/40/50"
  >
  {#if isCreating}

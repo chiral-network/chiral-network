@@ -37,7 +37,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <tr
- class="group hover:bg-white/[0.05] transition cursor-pointer select-none border-b border-gray-800/60"
+ class="group hover:bg-white/[0.05] transition cursor-pointer select-none border-b border-white/[0.06]/60"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >

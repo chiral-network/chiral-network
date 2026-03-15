@@ -275,7 +275,7 @@
  <div class="flex items-center gap-2">
  <select
  bind:value={miningThreads}
- class="px-3 py-2 border border-gray-800/60 rounded-lg text-sm"
+ class="px-3 py-2 border border-white/[0.06]/60 rounded-lg text-sm"
  >
  {#each [1, 2, 4, 8] as threads}
  <option value={threads}>{threads} thread{threads > 1 ?'s' :''}</option>
@@ -308,7 +308,7 @@
  </div>
  </div>
  {:else if !$walletAccount}
- <div class="bg-white/[0.04] border border-gray-800/60 rounded-lg p-3 mt-4">
+ <div class="bg-white/[0.04] border border-white/[0.06]/60 rounded-lg p-3 mt-4">
  <p class="text-sm text-white/50">
  Connect your wallet on the Account page to start mining and earn CHI.
  </p>

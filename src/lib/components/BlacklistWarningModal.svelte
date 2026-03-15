@@ -58,7 +58,7 @@
  <div class="flex gap-3">
  <button
  onclick={oncancel}
- class="flex-1 px-4 py-2.5 border border-gray-800/60 rounded-lg text-sm font-medium text-white/70 hover:bg-white/[0.05] transition-colors"
+ class="flex-1 px-4 py-2.5 border border-white/[0.06]/60 rounded-lg text-sm font-medium text-white/70 hover:bg-white/[0.05] transition-colors"
  >
  Cancel
  </button>
