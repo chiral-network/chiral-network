@@ -290,8 +290,14 @@
     toasts.show('URL copied to clipboard', 'success');
   }
 
-  function openSite(site: HostedSite) {
-    window.open(buildHostedSiteUrl(site.id, site.relayUrl, serverStatus.address, port), '_blank');
+  async function openSite(site: HostedSite) {
+    const url = buildHostedSiteUrl(site.id, site.relayUrl, serverStatus.address, port);
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(url);
+    } catch {
+      window.open(url, '_blank');
+    }
   }
 
   async function publishToRelay(siteId: string) {
