@@ -73,7 +73,7 @@
  </div>
 
  <!-- Seeder info -->
- <div class="bg-[var(--surface-0)]/[0.05] rounded-lg p-3 mb-4">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3 mb-4">
  <div class="flex justify-between items-center">
  <span class="text-xs text-[var(--text-secondary)]">Seeder</span>
  <span class="text-sm font-mono text-white">{formatAddr(seederWallet)}</span>
@@ -119,7 +119,7 @@
  maxlength={500}
  rows={3}
  placeholder="Share your experience..."
- class="w-full px-3 py-2 bg-[var(--surface-0)]/[0.07] border border-[var(--border)]/60 rounded-lg text-sm text-white placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-blue-400/40 resize-none"
+ class="w-full px-3 py-2 bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-sm text-white placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-violet-500/50 resize-none"
  ></textarea>
  <p class="text-xs text-[var(--text-tertiary)] mt-1 text-right">{comment.length}/500</p>
  </div>
@@ -128,14 +128,14 @@
  <div class="flex gap-3">
  <button
  onclick={onclose}
- class="flex-1 px-4 py-2.5 border border-[var(--border)]/60 rounded-lg text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-0)]/[0.05] transition-colors"
+ class="flex-1 px-4 py-2.5 border border-[var(--border)]/60 rounded-lg text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors"
  >
  Skip
  </button>
  <button
  onclick={handleSubmit}
  disabled={selectedScore === 0 || submitting}
- class="flex-1 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+ class="flex-1 px-4 py-2.5 bg-violet-600 text-white rounded-lg text-sm font-medium hover:bg-violet-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
  >
  {submitting ?'Submitting...' :'Submit Rating'}
  </button>

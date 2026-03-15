@@ -50,44 +50,44 @@
  }
 </script>
 
-<div class="rounded-xl border border-white/[0.06]/60 bg-white/[0.05] p-5">
+<div class="rounded-xl border border-[var(--border)]/60 bg-[var(--surface-1)] p-5">
  <h2 class="mb-4 text-base font-semibold text-white flex items-center gap-2">
- <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.03]">
- <Globe class="h-3.5 w-3.5 text-white/50" />
+ <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--surface-2)]">
+ <Globe class="h-3.5 w-3.5 text-[var(--text-secondary)]" />
  </div>
  Hosted Sites
  {#if sites.length > 0}
- <span class="rounded-full bg-violet-600/10 px-2 py-0.5 text-xs font-medium text-violet-400">
+ <span class="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-400">
  {sites.length}
  </span>
  {/if}
  </h2>
 
  {#if sites.length === 0}
- <div class="flex flex-col items-center justify-center py-16 text-white/50">
- <div class="flex h-16 w-16 items-center justify-center rounded-xl bg-white/[0.03] mb-4">
+ <div class="flex flex-col items-center justify-center py-16 text-[var(--text-secondary)]">
+ <div class="flex h-16 w-16 items-center justify-center rounded-xl bg-[var(--surface-2)] mb-4">
  <Server class="h-8 w-8 opacity-40" />
  </div>
- <p class="text-sm font-medium text-white/50">No hosted sites yet</p>
- <p class="text-xs mt-1 text-white/50">Create a site above to start hosting</p>
+ <p class="text-sm font-medium text-[var(--text-secondary)]">No hosted sites yet</p>
+ <p class="text-xs mt-1 text-[var(--text-secondary)]">Create a site above to start hosting</p>
  </div>
  {:else}
  <div class="space-y-3">
  {#each sites as site (site.id)}
- <div class="group rounded-xl border border-white/[0.06]/60 bg-white/[0.03] p-4 transition-all
- hover:border-white/[0.06] hover:shadow-sm
+ <div class="group rounded-xl border border-[var(--border)]/60 bg-[var(--surface-2)] p-4 transition-all
+ hover:border-[var(--border)] 
 ">
  <div class="flex items-start justify-between gap-3">
  <div class="min-w-0 flex-1">
  <div class="flex items-center gap-2">
  <h3 class="font-semibold text-white">{site.name}</h3>
  {#if site.relayUrl}
- <span class="inline-flex items-center gap-1 rounded-full bg-green-500/[0.08] px-2 py-0.5 text-[10px] font-semibold text-green-400 uppercase tracking-wide">
+ <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 uppercase tracking-wide">
  <Check class="h-2.5 w-2.5" />
  Published
  </span>
  {:else}
- <span class="inline-flex items-center rounded-full bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-white/50 uppercase tracking-wide">
+ <span class="inline-flex items-center rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] uppercase tracking-wide">
  Local
  </span>
  {/if}
@@ -95,16 +95,16 @@
 
  <!-- URL -->
  <p class="mt-1 font-mono text-xs truncate
- {site.relayUrl ?'text-green-400' :'text-violet-400'}">
+ {site.relayUrl ?'text-emerald-400' :'text-violet-400'}">
  {site.relayUrl || siteUrl(site)}
  </p>
 
  <!-- Meta -->
- <div class="mt-2 flex items-center gap-3 text-xs text-white/50">
+ <div class="mt-2 flex items-center gap-3 text-xs text-[var(--text-secondary)]">
  <span>{site.files.length} file{site.files.length === 1 ?'' :'s'}</span>
- <span aria-hidden="true" class="text-white/50">|</span>
+ <span aria-hidden="true" class="text-[var(--text-secondary)]">|</span>
  <span class="tabular-nums">{formatFileSize(totalSize(site.files))}</span>
- <span aria-hidden="true" class="text-white/50">|</span>
+ <span aria-hidden="true" class="text-[var(--text-secondary)]">|</span>
  <span>Created {timeAgo(site.createdAt)}</span>
  </div>
 
@@ -112,12 +112,12 @@
  {#if site.files.length > 0}
  <div class="mt-2.5 flex flex-wrap gap-1.5">
  {#each site.files.slice(0, 5) as file}
- <span class="rounded-xl bg-white/[0.03] px-1.5 py-0.5 text-[10px] font-medium text-white/50">
+ <span class="rounded-xl bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]">
  {file.path}
  </span>
  {/each}
  {#if site.files.length > 5}
- <span class="rounded-xl bg-white/[0.03] px-1.5 py-0.5 text-[10px] font-medium text-white/50">
+ <span class="rounded-xl bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)]">
  +{site.files.length - 5} more
  </span>
  {/if}
@@ -133,11 +133,11 @@
  disabled={publishingStates[site.id]}
  title="Unpublish from network"
  aria-label="Unpublish {site.name} from network"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-orange-50 hover:text-orange-500
+ class="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-orange-50 hover:text-orange-500
  focus:outline-none focus: disabled:opacity-50"
  >
  {#if publishingStates[site.id]}
- <div class="h-4 w-4 animate-spin rounded-full border-2 border-white/[0.06] border-t-orange-500"></div>
+ <div class="h-4 w-4 animate-spin rounded-full border-2 border-[var(--border)] border-t-orange-500"></div>
  {:else}
  <CloudOff class="h-4 w-4" />
  {/if}
@@ -148,11 +148,11 @@
  disabled={publishingStates[site.id]}
  title="Publish to network"
  aria-label="Publish {site.name} to network"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-green-50 hover:text-green-500
+ class="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-green-50 hover:text-green-500
  focus:outline-none focus: disabled:opacity-50"
  >
  {#if publishingStates[site.id]}
- <div class="h-4 w-4 animate-spin rounded-full border-2 border-white/[0.06] border-t-green-500"></div>
+ <div class="h-4 w-4 animate-spin rounded-full border-2 border-[var(--border)] border-t-green-500"></div>
  {:else}
  <Upload class="h-4 w-4" />
  {/if}
@@ -163,8 +163,8 @@
  onclick={() => onCopyUrl(site)}
  title="Copy URL"
  aria-label="Copy URL for {site.name}"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-white/[0.03] hover:text-white/50
- focus:outline-none focus:border-blue-400/40"
+ class="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-secondary)]
+ focus:outline-none focus:border-violet-500/50"
  >
  <Copy class="h-4 w-4" />
  </button>
@@ -172,7 +172,7 @@
  onclick={() => onOpenSite(site)}
  title="Open in browser"
  aria-label="Open {site.name} in browser"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-indigo-50 hover:text-indigo-500
+ class="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-violet-500/10 hover:text-violet-400
  focus:outline-none focus:"
  >
  <ExternalLink class="h-4 w-4" />
@@ -181,7 +181,7 @@
  onclick={() => onDeleteSite(site.id, site.name)}
  title="Delete site"
  aria-label="Delete {site.name}"
- class="rounded-lg p-2 text-white/50 transition-colors hover:bg-red-50 hover:text-red-500
+ class="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-red-50 hover:text-red-500
  focus:outline-none focus:"
  >
  <Trash2 class="h-4 w-4" />

@@ -844,15 +844,15 @@
  <!-- Header -->
  <div class="flex items-start justify-between gap-4">
  <div>
- <h1 class="text-2xl font-light tracking-tight text-white">Hosts</h1>
- <p class="text-sm text-white/50 mt-1">
+ <h1 class="text-2xl font-semibold tracking-tight text-white">Hosts</h1>
+ <p class="text-sm text-[var(--text-secondary)] mt-1">
  Host websites and files, find hosting providers, and manage agreements
  </p>
  </div>
  <!-- Quick stats -->
  <div class="hidden sm:flex items-center gap-3">
  {#if sites.length > 0}
- <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-600/10 text-xs font-medium text-violet-400">
+ <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/10 text-xs font-medium text-violet-400">
  <Server class="w-3.5 h-3.5" />
  {sites.length} site{sites.length !== 1 ?'s' :''}
  </div>
@@ -878,15 +878,15 @@
  />
 
  <!-- Tab bar -->
- <div class="flex gap-1 bg-white/[0.03] rounded-xl p-1" role="tablist" aria-label="Hosting sections">
+ <div class="flex gap-1 bg-[var(--surface-2)] rounded-xl p-1" role="tablist" aria-label="Hosting sections">
  <button
  onclick={() => activeTab ='sites'}
  role="tab"
  aria-selected={activeTab ==='sites'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='sites'
- ?'bg-white/[0.03] text-white border border-white/[0.06]/60/50'
- :'text-white/50 hover:text-white/50 hover:bg-[#13111C]/70'}"
+ ?'bg-[var(--surface-2)] text-white border border-[var(--border)]/60/50'
+ :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)]/70'}"
  >
  <Server class="w-4 h-4" />
  <span class="hidden sm:inline">My Sites</span>
@@ -897,8 +897,8 @@
  aria-selected={activeTab ==='marketplace'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='marketplace'
- ?'bg-white/[0.03] text-white border border-white/[0.06]/60/50'
- :'text-white/50 hover:text-white/50 hover:bg-[#13111C]/70'}"
+ ?'bg-[var(--surface-2)] text-white border border-[var(--border)]/60/50'
+ :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)]/70'}"
  >
  <Users class="w-4 h-4" />
  <span class="hidden sm:inline">Marketplace</span>
@@ -909,13 +909,13 @@
  aria-selected={activeTab ==='agreements'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='agreements'
- ?'bg-white/[0.03] text-white border border-white/[0.06]/60/50'
- :'text-white/50 hover:text-white/50 hover:bg-[#13111C]/70'}"
+ ?'bg-[var(--surface-2)] text-white border border-[var(--border)]/60/50'
+ :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)]/70'}"
  >
  <Shield class="w-4 h-4" />
  <span class="hidden sm:inline">Agreements</span>
  {#if incomingProposals.length > 0}
- <span class="ml-0.5 min-w-[1.25rem] px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500 text-white leading-none text-center animate-pulse">
+ <span class="ml-0.5 min-w-[1.25rem] px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-violet-500 text-white leading-none text-center animate-pulse">
  {incomingProposals.length}
  </span>
  {/if}
@@ -950,8 +950,8 @@
  {:else if activeTab ==='marketplace'}
  {#if marketplaceError}
  <div class="text-center py-20">
- <AlertCircle class="w-12 h-12 mx-auto text-white/50 mb-3" />
- <p class="text-white/50">{marketplaceError}</p>
+ <AlertCircle class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
+ <p class="text-[var(--text-secondary)]">{marketplaceError}</p>
  </div>
  {:else}
  <HostingMarketplace
@@ -1016,24 +1016,24 @@
 {#if deleteConfirm}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-[#13111C]/40"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-1)]/40"
  onclick={() => deleteConfirm = null}
  onkeydown={(e) => { if (e.key ==='Escape') deleteConfirm = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="bg-white/[0.03] rounded-xl p-6 max-w-sm w-full mx-4"
+ class="bg-[var(--surface-2)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
  <h3 class="text-lg font-semibold text-white mb-2">Delete Site</h3>
- <p class="text-sm text-white/50 mb-1">
+ <p class="text-sm text-[var(--text-secondary)] mb-1">
  Are you sure you want to delete <strong class="text-white">"{deleteConfirm.name}"</strong>?
  </p>
  <p class="text-sm text-amber-400 mb-4">This cannot be undone.</p>
  <div class="flex justify-end gap-3">
  <button
  onclick={() => deleteConfirm = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-white/50 bg-white/[0.03] hover:bg-white/[0.03] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--text-secondary)] bg-[var(--surface-2)] hover:bg-[var(--surface-2)] transition"
  >Cancel</button>
  <button
  onclick={confirmDeleteSite}

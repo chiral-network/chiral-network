@@ -65,15 +65,15 @@
  <!-- Header -->
  <div class="flex items-center justify-between p-5 pb-4 border-b border-[var(--border)]/60">
  <div class="flex items-center gap-2.5">
- <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-600/10">
+ <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10">
  <HardDrive class="w-4 h-4 text-violet-400" />
  </div>
  <h3 class="text-base font-semibold text-white">Select from Drive</h3>
  </div>
  <button
  onclick={onClose}
- class="p-1.5 text-white/[0.06] hover:text-[var(--text-secondary)] rounded-lg hover:bg-[var(--surface-0)] transition-colors
- focus:outline-none focus:border-blue-400/40"
+ class="p-1.5 text-[var(--text-secondary)] hover:text-[var(--text-secondary)] rounded-lg hover:bg-[var(--surface-2)] transition-colors
+ focus:outline-none focus:border-violet-500/50"
  aria-label="Close"
  >
  <X class="w-5 h-5" />
@@ -82,27 +82,27 @@
 
  {#if loading}
  <div class="flex flex-col items-center justify-center py-16">
- <Loader2 class="w-6 h-6 text-white/[0.06] animate-spin mb-3" />
- <span class="text-sm text-white/[0.06]">Loading Drive files...</span>
+ <Loader2 class="w-6 h-6 text-[var(--text-secondary)] animate-spin mb-3" />
+ <span class="text-sm text-[var(--text-secondary)]">Loading Drive files...</span>
  </div>
  {:else if files.length === 0}
  <div class="flex flex-col items-center justify-center py-16">
  <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-[var(--surface-0)] mb-3">
- <HardDrive class="w-7 h-7 text-white/[0.06] opacity-40" />
+ <HardDrive class="w-7 h-7 text-[var(--text-secondary)] opacity-40" />
  </div>
- <p class="text-sm font-medium text-white/[0.06]">No files in Drive</p>
- <p class="text-xs text-white/[0.08] mt-1">Upload files in the Drive page first</p>
+ <p class="text-sm font-medium text-[var(--text-secondary)]">No files in Drive</p>
+ <p class="text-xs text-[var(--text-secondary)] mt-1">Upload files in the Drive page first</p>
  </div>
  {:else}
  <!-- Select all -->
  <div class="px-4 py-2.5 border-b border-[var(--border)]/60 bg-[var(--surface-0)]">
  <button
  onclick={toggleAll}
- class="flex items-center gap-2 text-xs font-medium text-white/[0.06] hover:text-[var(--text-secondary)] transition-colors
+ class="flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-secondary)] transition-colors
  focus:outline-none focus:underline"
  >
  <div class="w-4.5 h-4.5 rounded border-2 flex items-center justify-center flex-shrink-0
- {selected.size === files.length && files.length > 0 ?'border-blue-400 bg-violet-600/100' :'border-[var(--border)]/60'}">
+ {selected.size === files.length && files.length > 0 ?'border-violet-500 bg-violet-600' :'border-[var(--border)]/60'}">
  {#if selected.size === files.length && files.length > 0}
  <Check class="w-3 h-3 text-white" />
  {/if}
@@ -117,30 +117,30 @@
  <button
  onclick={() => toggleFile(file.id)}
  class="flex items-center justify-between w-full px-4 py-3 text-left text-sm transition-colors
- {selected.has(file.id) ?'bg-violet-600/10/50' :'hover:bg-[var(--surface-0)]'}
+ {selected.has(file.id) ?'bg-violet-500/10/50' :'hover:bg-[var(--surface-2)]'}
  focus:outline-none focus:bg-[var(--surface-0)]"
  >
  <div class="flex items-center gap-2.5 min-w-0">
  <div class="w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors
- {selected.has(file.id) ?'border-blue-400 bg-violet-600/100' :'border-[var(--border)]/60'}">
+ {selected.has(file.id) ?'border-violet-500 bg-violet-600' :'border-[var(--border)]/60'}">
  {#if selected.has(file.id)}
  <Check class="w-3 h-3 text-white" />
  {/if}
  </div>
- <FileText class="w-4 h-4 text-white/[0.06] flex-shrink-0" />
+ <FileText class="w-4 h-4 text-[var(--text-secondary)] flex-shrink-0" />
  <span class="truncate text-[var(--text-secondary)]">{file.name}</span>
  </div>
- <span class="text-xs text-white/[0.06] ml-2 flex-shrink-0 tabular-nums">{formatBytes(file.size)}</span>
+ <span class="text-xs text-[var(--text-secondary)] ml-2 flex-shrink-0 tabular-nums">{formatBytes(file.size)}</span>
  </button>
  {/each}
  </div>
 
  <!-- Footer -->
  <div class="flex items-center justify-between p-4 border-t border-[var(--border)]/60 bg-[var(--surface-0)]">
- <div class="text-xs text-white/[0.06]">
+ <div class="text-xs text-[var(--text-secondary)]">
  <span class="font-medium">{selected.size}</span> file{selected.size !== 1 ?'s' :''}
  {#if selected.size > 0}
- <span class="text-white/[0.06] mx-1">|</span>
+ <span class="text-[var(--text-secondary)] mx-1">|</span>
  <span class="tabular-nums">{formatBytes(selectedSize)}</span>
  {/if}
  </div>
@@ -148,15 +148,15 @@
  <button
  onclick={onClose}
  class="px-3 py-1.5 text-sm font-medium text-[var(--text-secondary)] border border-[var(--border)]/60 rounded-lg
- hover:bg-[var(--surface-0)] transition-colors focus:outline-none focus:border-blue-400/40"
+ hover:bg-[var(--surface-2)] transition-colors focus:outline-none focus:border-violet-500/50"
  >
  Cancel
  </button>
  <button
  onclick={confirm}
  disabled={selected.size === 0}
- class="px-3.5 py-1.5 text-sm font-semibold bg-violet-500 hover:bg-violet-600 text-white rounded-lg transition-colors
- focus:outline-none focus:border-blue-400/40/50
+ class="px-3.5 py-1.5 text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white rounded-lg transition-colors
+ focus:outline-none focus:border-violet-500/50/50
  disabled:opacity-50 disabled:cursor-not-allowed"
  >
  Add {selected.size > 0 ? `${selected.size} file${selected.size !== 1 ?'s' :''}` :'Files'}

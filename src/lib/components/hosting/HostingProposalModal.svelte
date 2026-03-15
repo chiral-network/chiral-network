@@ -70,14 +70,14 @@
  <div class="flex items-center justify-between p-5 pb-4 border-b border-[var(--border)]/60">
  <div>
  <h3 class="text-lg font-semibold text-white">Propose Hosting Agreement</h3>
- <p class="text-xs text-white/[0.06] mt-0.5 font-mono">
+ <p class="text-xs text-[var(--text-secondary)] mt-0.5 font-mono">
  {formatPeerId(proposalHost.advertisement.peerId)}
  </p>
  </div>
  <button
  onclick={onClose}
- class="p-1.5 text-white/[0.06] hover:text-[var(--text-secondary)] rounded-lg hover:bg-[var(--surface-0)] transition-colors
- focus:outline-none focus:border-blue-400/40"
+ class="p-1.5 text-[var(--text-secondary)] hover:text-[var(--text-secondary)] rounded-lg hover:bg-[var(--surface-2)] transition-colors
+ focus:outline-none focus:border-violet-500/50"
  aria-label="Close"
  >
  <X class="w-5 h-5" />
@@ -88,29 +88,29 @@
  <!-- Host summary -->
  <div class="grid grid-cols-3 gap-3">
  <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-[var(--surface-0)]">
- <Coins class="w-4 h-4 text-white/[0.06]" />
+ <Coins class="w-4 h-4 text-[var(--text-secondary)]" />
  <span class="text-xs font-semibold text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.pricePerMbPerDayWei)}</span>
- <span class="text-[10px] text-white/[0.06] uppercase tracking-wide">per MB/day</span>
+ <span class="text-[10px] text-[var(--text-secondary)] uppercase tracking-wide">per MB/day</span>
  </div>
  <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-[var(--surface-0)]">
- <Shield class="w-4 h-4 text-white/[0.06]" />
+ <Shield class="w-4 h-4 text-[var(--text-secondary)]" />
  <span class="text-xs font-semibold text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
- <span class="text-[10px] text-white/[0.06] uppercase tracking-wide">deposit</span>
+ <span class="text-[10px] text-[var(--text-secondary)] uppercase tracking-wide">deposit</span>
  </div>
  <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-[var(--surface-0)]">
- <HardDrive class="w-4 h-4 text-white/[0.06]" />
+ <HardDrive class="w-4 h-4 text-[var(--text-secondary)]" />
  <span class="text-xs font-semibold text-white tabular-nums">{formatBytes(proposalHost.availableStorageBytes)}</span>
- <span class="text-[10px] text-white/[0.06] uppercase tracking-wide">available</span>
+ <span class="text-[10px] text-[var(--text-secondary)] uppercase tracking-wide">available</span>
  </div>
  </div>
 
  <!-- File hashes -->
  <div>
  <div class="flex items-center justify-between mb-2">
- <label for="proposal-file-hashes" class="text-xs font-medium text-white/[0.06] uppercase tracking-wide">
+ <label for="proposal-file-hashes" class="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">
  File Hashes
  {#if hashCount > 0}
- <span class="ml-1 text-white/[0.06] normal-case tracking-normal">({hashCount})</span>
+ <span class="ml-1 text-[var(--text-secondary)] normal-case tracking-normal">({hashCount})</span>
  {/if}
  </label>
  <button
@@ -128,28 +128,28 @@
  oninput={(e) => onFileHashesChange(e.currentTarget.value)}
  rows="3"
  placeholder="Paste file hashes, one per line..."
- class="w-full p-3 text-sm font-mono bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl text-white placeholder:text-white/[0.08]
- focus:ring-blue-400/20 focus:border-blue-400/30 focus:outline-none resize-none transition-all"
+ class="w-full p-3 text-sm font-mono bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl text-white placeholder:text-[var(--text-secondary)]
+ focus:ring-blue-400/20 focus:border-violet-500/30 focus:outline-none resize-none transition-all"
  ></textarea>
 
  {#if showDrivePicker}
  <div class="mt-2 max-h-40 overflow-y-auto rounded-xl border border-[var(--border)]/60 bg-[var(--surface-0)] divide-y divide-white/[0.06]">
  {#if driveFiles.length === 0}
- <p class="text-xs text-white/[0.08] p-4 text-center">No files in Drive</p>
+ <p class="text-xs text-[var(--text-secondary)] p-4 text-center">No files in Drive</p>
  {:else}
  {#each driveFiles as file (file.id)}
  <button
  onclick={() => onAddDriveFile(file.id, file.name)}
  disabled={publishingDriveFile === file.id}
- class="flex items-center justify-between w-full px-3 py-2.5 text-left text-sm hover:bg-[var(--surface-0)]/50 transition-colors
+ class="flex items-center justify-between w-full px-3 py-2.5 text-left text-sm hover:bg-[var(--surface-2)]/50 transition-colors
  disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:bg-[var(--surface-0)]"
  >
  <div class="flex items-center gap-2.5 min-w-0">
- <FileText class="w-4 h-4 text-white/[0.06] flex-shrink-0" />
+ <FileText class="w-4 h-4 text-[var(--text-secondary)] flex-shrink-0" />
  <span class="truncate text-[var(--text-secondary)]">{file.name}</span>
  </div>
  <div class="flex items-center gap-2 flex-shrink-0 ml-2">
- <span class="text-xs text-white/[0.06] tabular-nums">{formatBytes(file.size)}</span>
+ <span class="text-xs text-[var(--text-secondary)] tabular-nums">{formatBytes(file.size)}</span>
  {#if publishingDriveFile === file.id}
  <Loader2 class="w-3.5 h-3.5 text-violet-400 animate-spin" />
  {/if}
@@ -164,7 +164,7 @@
  <!-- Duration -->
  <div>
  <label for="proposal-duration" class="flex items-center justify-between mb-2">
- <span class="text-xs font-medium text-white/[0.06] uppercase tracking-wide flex items-center gap-1.5">
+ <span class="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide flex items-center gap-1.5">
  <Calendar class="w-3.5 h-3.5" />
  Duration
  </span>
@@ -182,19 +182,19 @@
  step="1"
  class="w-full accent-blue-400 h-2 rounded-full"
  />
- <div class="flex justify-between text-[10px] text-white/[0.08] mt-1 tabular-nums">
+ <div class="flex justify-between text-[10px] text-[var(--text-secondary)] mt-1 tabular-nums">
  <span>1 day</span>
  <span>1 year</span>
  </div>
  </div>
 
  <!-- Cost summary -->
- <div class="p-4 rounded-xl bg-violet-600/10/50 border border-[var(--border)]/60">
+ <div class="p-4 rounded-xl bg-violet-500/10/50 border border-[var(--border)]/60">
  <div class="flex justify-between text-sm">
- <span class="text-white/[0.06]">Required Deposit</span>
+ <span class="text-[var(--text-secondary)]">Required Deposit</span>
  <span class="font-semibold text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
  </div>
- <p class="text-[11px] text-white/[0.08] mt-1.5">
+ <p class="text-[11px] text-[var(--text-secondary)] mt-1.5">
  Total cost depends on file sizes and will be calculated after the host accepts.
  </p>
  </div>
@@ -205,17 +205,17 @@
  <button
  onclick={onClose}
  class="px-4 py-2.5 text-sm font-medium text-[var(--text-secondary)] border border-[var(--border)]/60 rounded-xl
- hover:bg-[var(--surface-0)] transition-colors focus:outline-none focus:border-blue-400/40"
+ hover:bg-[var(--surface-2)] transition-colors focus:outline-none focus:border-violet-500/50"
  >
  Cancel
  </button>
  <button
  onclick={onSendProposal}
  disabled={isProposing || hashCount === 0}
- class="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold bg-violet-500 hover:bg-violet-600 text-white rounded-xl transition-all
- shadow-blue-400/10 hover:shadow-sm hover:shadow-blue-400/10 active:scale-[0.98]
- focus:outline-none focus:border-blue-400/40/50 
- disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
+ class="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold bg-violet-600 hover:bg-violet-500 text-white rounded-xl transition-all
+  active:scale-[0.98]
+ focus:outline-none focus:border-violet-500/50/50 
+ disabled:opacity-50 disabled:cursor-not-allowed "
  >
  {#if isProposing}
  <Loader2 class="w-4 h-4 animate-spin" />

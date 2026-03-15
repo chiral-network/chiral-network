@@ -27,15 +27,15 @@ export function getFileIcon(fileName: string) {
 export function getFileColor(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
 
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-indigo-500';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-violet-400';
   if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return 'text-purple-500';
   if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return 'text-green-500';
   if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return 'text-orange-500';
   if (['js', 'ts', 'html', 'css', 'py', 'java', 'cpp', 'c', 'php', 'rb', 'go', 'rs'].includes(ext)) return 'text-red-500';
-  if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return 'text-gray-600';
+  if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return 'text-[var(--text-secondary)]';
   if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return 'text-emerald-500';
 
-  return 'text-gray-400';
+  return 'text-[var(--text-secondary)]';
 }
 
 export function getFolderIcon() {

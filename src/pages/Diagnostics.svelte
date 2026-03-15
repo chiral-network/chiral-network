@@ -340,7 +340,7 @@
  switch (level) {
  case'error': return'text-red-500';
  case'warn': return'text-yellow-500';
- case'info': return'text-indigo-500';
+ case'info': return'text-violet-400';
  case'debug': return'text-[var(--text-tertiary)]';
  default: return'text-[var(--text-tertiary)]';
  }
@@ -348,23 +348,23 @@
 
  function levelBg(level: string): string {
  switch (level) {
- case'error': return'bg-red-500/[0.08] text-red-400';
- case'warn': return'bg-yellow-900/30 text-yellow-400';
- case'info': return'bg-indigo-900/30 text-indigo-400';
- case'debug': return'bg-[var(--surface-0)]/[0.07] text-[var(--text-secondary)]';
- default: return'bg-[var(--surface-0)]/[0.07]';
+ case'error': return'bg-red-500/10 text-red-400';
+ case'warn': return'bg-yellow-500/10 text-yellow-400';
+ case'info': return'bg-violet-900/20 text-violet-400';
+ case'debug': return'bg-[var(--surface-2)] text-[var(--text-secondary)]';
+ default: return'bg-[var(--surface-2)]';
  }
  }
 
  function sourceBg(source: string): string {
  const normalized = source.toLowerCase();
  switch (normalized) {
- case'geth': return'bg-blue-100 text-blue-600';
+ case'geth': return'bg-violet-500/10 text-violet-400';
  case'mining': return'bg-amber-900/30 text-amber-300';
  case'dht': return'bg-emerald-900/30 text-emerald-700';
  case'bootstrap': return'bg-orange-100 text-orange-700';
- case'system': return'bg-violet-600/10 text-violet-400';
- default: return'bg-[var(--surface-0)]/[0.07] text-[var(--text-secondary)]';
+ case'system': return'bg-violet-500/10 text-violet-400';
+ default: return'bg-[var(--surface-2)] text-[var(--text-secondary)]';
  }
  }
 
@@ -376,7 +376,7 @@
  return'text-yellow-400';
  }
  if (level ==='DEBUG') {
- return'text-slate-400';
+ return'text-[var(--text-secondary)]';
  }
  return'text-[var(--text-secondary)]';
  }
@@ -407,7 +407,7 @@
 <div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
  <div class="flex items-center justify-between">
  <div>
- <h1 class="text-2xl font-light tracking-tight">Diagnostics</h1>
+ <h1 class="text-2xl font-semibold tracking-tight">Diagnostics</h1>
  <p class="text-[var(--text-secondary)] mt-1">Developer tools for debugging and monitoring</p>
  </div>
  <div class="flex items-center gap-3">
@@ -417,7 +417,7 @@
  </label>
  <button
  onclick={refreshAll}
- class="p-2 hover:bg-[var(--surface-0)]/[0.05] rounded-lg transition-colors focus:outline-none focus:border-blue-400/40"
+ class="p-2 hover:bg-[var(--surface-2)] rounded-lg transition-colors focus:outline-none focus:border-violet-500/50"
  title="Refresh all"
  >
  <RefreshCw class="w-5 h-5" />
@@ -432,8 +432,8 @@
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 {$networkConnected ?'bg-green-500/[0.08]' :'bg-[var(--surface-0)]/[0.07]'} rounded-lg">
- <Globe class="w-6 h-6 {$networkConnected ?'text-green-400' :'text-[var(--text-secondary)]'}" />
+ <div class="p-2 {$networkConnected ?'bg-emerald-500/10' :'bg-[var(--surface-2)]'} rounded-lg">
+ <Globe class="w-6 h-6 {$networkConnected ?'text-emerald-400' :'text-[var(--text-secondary)]'}" />
  </div>
  <div>
  <h2 class="font-semibold">DHT Diagnostics</h2>
@@ -453,7 +453,7 @@
  <button
  onclick={loadDhtHealth}
  disabled={isLoadingDht}
- class="text-xs px-3 py-1.5 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingDht}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -466,35 +466,35 @@
 
  {#if dhtHealth}
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
- <p class="text-sm font-bold {dhtHealth.running ?'text-green-400' :'text-red-400'}">
+ <p class="text-sm font-bold {dhtHealth.running ?'text-emerald-400' :'text-red-400'}">
  {dhtHealth.running ?'Running' :'Stopped'}
  </p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Connected Peers</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{dhtHealth.connectedPeerCount}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Kademlia Peers</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{dhtHealth.kademliaPeers}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Shared Files</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{dhtHealth.sharedFiles}</p>
  </div>
  </div>
 
  {#if dhtHealth.peerId}
- <div class="p-3 bg-[var(--surface-0)]/[0.07] rounded-lg">
+ <div class="p-3 bg-[var(--surface-2)] rounded-lg">
  <p class="text-xs text-[var(--text-secondary)] mb-1">Peer ID</p>
  <p class="font-mono text-xs break-all">{dhtHealth.peerId}</p>
  </div>
  {/if}
 
  {#if dhtHealth.listeningAddresses.length > 0}
- <div class="p-3 bg-[var(--surface-0)]/[0.07] rounded-lg">
+ <div class="p-3 bg-[var(--surface-2)] rounded-lg">
  <p class="text-xs text-[var(--text-secondary)] mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
  <div class="space-y-1">
  {#each dhtHealth.listeningAddresses as addr}
@@ -505,11 +505,11 @@
  {/if}
 
  {#if dhtHealth.protocols.length > 0}
- <div class="p-3 bg-[var(--surface-0)]/[0.07] rounded-lg">
+ <div class="p-3 bg-[var(--surface-2)] rounded-lg">
  <p class="text-xs text-[var(--text-secondary)] mb-2">Active Protocols ({dhtHealth.protocols.length})</p>
  <div class="flex flex-wrap gap-1.5">
  {#each dhtHealth.protocols as protocol}
- <span class="px-2 py-0.5 bg-indigo-900/30 text-indigo-400 text-xs rounded-full font-mono">
+ <span class="px-2 py-0.5 bg-violet-900/20 text-violet-400 text-xs rounded-full font-mono">
  {protocol}
  </span>
  {/each}
@@ -518,14 +518,14 @@
  {/if}
 
  {#if dhtHealth.bootstrapNodes.length > 0}
- <div class="p-3 bg-[var(--surface-0)]/[0.07] rounded-lg">
+ <div class="p-3 bg-[var(--surface-2)] rounded-lg">
  <p class="text-xs text-[var(--text-secondary)] mb-2">DHT Bootstrap Nodes</p>
  <div class="space-y-1.5">
  {#each dhtHealth.bootstrapNodes as node}
  <div class="flex items-center gap-2 text-xs">
  <div class="w-2 h-2 rounded-full {node.reachable ?'bg-green-500' :'bg-red-500'} shrink-0"></div>
  <span class="font-mono break-all">{node.address}</span>
- <span class="{node.reachable ?'text-green-400' :'text-red-400'} shrink-0">
+ <span class="{node.reachable ?'text-emerald-400' :'text-red-400'} shrink-0">
  {node.reachable ?'Reachable' :'Unreachable'}
  </span>
  </div>
@@ -570,7 +570,7 @@
  <button
  onclick={runBootstrapCheck}
  disabled={isLoadingBootstrap}
- class="text-xs px-3 py-1.5 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingBootstrap}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -583,17 +583,17 @@
 
  {#if bootstrapHealth}
  <div class="grid grid-cols-3 gap-3">
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
- <p class="text-sm font-bold {bootstrapHealth.isHealthy ?'text-green-400' :'text-red-400'}">
+ <p class="text-sm font-bold {bootstrapHealth.isHealthy ?'text-emerald-400' :'text-red-400'}">
  {bootstrapHealth.isHealthy ?'Healthy' :'Degraded'}
  </p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Healthy Nodes</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Last Checked</p>
  <p class="text-sm font-bold">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
  </div>
@@ -601,7 +601,7 @@
 
  <div class="space-y-2">
  {#each bootstrapHealth.nodes as node}
- <div class="flex items-center justify-between p-3 bg-[var(--surface-0)]/[0.07] rounded-lg text-xs">
+ <div class="flex items-center justify-between p-3 bg-[var(--surface-2)] rounded-lg text-xs">
  <div class="flex items-center gap-2">
  <div class="w-2 h-2 rounded-full {node.reachable ?'bg-green-500' :'bg-red-500'} shrink-0"></div>
  <div>
@@ -611,11 +611,11 @@
  </div>
  <div class="text-right shrink-0">
  {#if node.reachable && node.latencyMs}
- <span class="text-green-400 tabular-nums">{node.latencyMs}ms</span>
+ <span class="text-emerald-400 tabular-nums">{node.latencyMs}ms</span>
  {:else if node.error}
  <span class="text-red-500">{node.error}</span>
  {:else}
- <span class="{node.reachable ?'text-green-400' :'text-red-400'}">
+ <span class="{node.reachable ?'text-emerald-400' :'text-red-400'}">
  {node.reachable ?'Reachable' :'Unreachable'}
  </span>
  {/if}
@@ -639,8 +639,8 @@
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 {gethStatus?.running ?'bg-green-500/[0.08]' :'bg-[var(--surface-0)]/[0.07]'} rounded-lg">
- <Server class="w-6 h-6 {gethStatus?.running ?'text-green-400' :'text-[var(--text-secondary)]'}" />
+ <div class="p-2 {gethStatus?.running ?'bg-emerald-500/10' :'bg-[var(--surface-2)]'} rounded-lg">
+ <Server class="w-6 h-6 {gethStatus?.running ?'text-emerald-400' :'text-[var(--text-secondary)]'}" />
  </div>
  <div>
  <h2 class="font-semibold">Geth Diagnostics</h2>
@@ -660,7 +660,7 @@
  <button
  onclick={loadGethStatus}
  disabled={isLoadingGeth}
- class="text-xs px-3 py-1.5 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingGeth}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -673,39 +673,39 @@
 
  {#if gethStatus}
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Installed</p>
- <p class="text-sm font-bold {gethStatus.installed ?'text-green-400' :'text-red-400'}">
+ <p class="text-sm font-bold {gethStatus.installed ?'text-emerald-400' :'text-red-400'}">
  {gethStatus.installed ?'Yes' :'No'}
  </p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
- <p class="text-sm font-bold {gethStatus.running ?'text-green-400' :'text-[var(--text-secondary)]'}">
+ <p class="text-sm font-bold {gethStatus.running ?'text-emerald-400' :'text-[var(--text-secondary)]'}">
  {gethStatus.running ?'Running' :'Stopped'}
  </p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Syncing</p>
  <p class="text-sm font-bold">{gethStatus.syncing ?'Yes' :'No'}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Chain ID</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.chainId ||'N/A'}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Current Block</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.currentBlock.toLocaleString()}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Highest Block</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.highestBlock.toLocaleString()}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Blockchain Peers</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.peerCount}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Sync Progress</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">
  {#if gethStatus.syncing && gethStatus.highestBlock > 0}
@@ -734,7 +734,7 @@
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 {miningStatus?.mining ?'bg-amber-900/30' :'bg-[var(--surface-0)]/[0.07]'} rounded-lg">
+ <div class="p-2 {miningStatus?.mining ?'bg-amber-900/30' :'bg-[var(--surface-2)]'} rounded-lg">
  <Pickaxe class="w-6 h-6 {miningStatus?.mining ?'text-amber-400' :'text-[var(--text-secondary)]'}" />
  </div>
  <div>
@@ -755,7 +755,7 @@
  <button
  onclick={loadMiningStatus}
  disabled={isLoadingMining}
- class="text-xs px-3 py-1.5 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingMining}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -768,33 +768,33 @@
 
  {#if miningStatus}
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
  <p class="text-sm font-bold {miningStatus.mining ?'text-amber-400' :'text-[var(--text-secondary)]'}">
  {miningStatus.mining ?'Mining' :'Inactive'}
  </p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Hash Rate</p>
  <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{formatHashRate(miningStatus.hashRate)}</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Total Mined</p>
  <p class="text-sm font-bold text-amber-400 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
  </div>
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-3">
+ <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Total Mined (Wei)</p>
  <p class="text-sm font-bold font-mono tabular-nums">{miningStatus.totalMinedWei}</p>
  </div>
  </div>
 
  {#if miningStatus.minerAddress}
- <div class="p-3 bg-[var(--surface-0)]/[0.07] rounded-lg">
+ <div class="p-3 bg-[var(--surface-2)] rounded-lg">
  <p class="text-xs text-[var(--text-secondary)] mb-1">Miner Address (Coinbase)</p>
  <p class="font-mono text-xs break-all">{miningStatus.minerAddress}</p>
  </div>
  {:else}
- <div class="p-3 bg-yellow-50 rounded-lg">
+ <div class="p-3 bg-yellow-500/10 rounded-lg">
  <p class="text-xs text-yellow-400">No miner address set. Set your wallet address to receive mining rewards.</p>
  </div>
  {/if}
@@ -814,7 +814,7 @@
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 bg-blue-100 rounded-lg">
+ <div class="p-2 bg-violet-500/10 rounded-lg">
  <FileText class="w-6 h-6 text-violet-400" />
  </div>
  <div>
@@ -838,7 +838,7 @@
  id="geth-log-lines"
  bind:value={gethLogLines}
  onchange={() => loadGethLog()}
- class="text-xs px-2 py-1 bg-[var(--surface-0)]/[0.07] border border-[var(--border)]/60 rounded"
+ class="text-xs px-2 py-1 bg-[var(--surface-2)] border border-[var(--border)]/60 rounded"
  >
  <option value={50}>50</option>
  <option value={100}>100</option>
@@ -855,7 +855,7 @@
  });
  }
  }}
- class="text-xs px-2 py-1 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1"
  >
  <Copy class="w-3 h-3" />
  Copy
@@ -863,7 +863,7 @@
  <button
  onclick={loadGethLog}
  disabled={isLoadingGethLog}
- class="text-xs px-3 py-1.5 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingGethLog}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -875,11 +875,11 @@
  </div>
  </div>
 
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
+ <div class="bg-[var(--surface-2)] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
  {#if gethLogContent}
  {#each gethLogContent.split('\n') as line}
  {@const parsed = parseStructuredGethLine(line)}
- <div class="flex gap-2 py-0.5 hover:bg-[var(--surface-0)]/[0.06] px-1 rounded">
+ <div class="flex gap-2 py-0.5 hover:bg-[var(--surface-2)] px-1 rounded">
  {#if parsed.timestamp}
  <span class="text-[var(--text-tertiary)] shrink-0">{parsed.timestamp}</span>
  {/if}
@@ -913,8 +913,8 @@
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 bg-purple-900/30 rounded-lg">
- <Terminal class="w-6 h-6 text-purple-400" />
+ <div class="p-2 bg-violet-500/10 rounded-lg">
+ <Terminal class="w-6 h-6 text-violet-400" />
  </div>
  <div>
  <h2 class="font-semibold">Event Logs</h2>
@@ -936,7 +936,7 @@
  <Filter class="w-4 h-4 text-[var(--text-secondary)]" />
  <select
  bind:value={logFilter}
- class="text-xs px-2 py-1 bg-[var(--surface-0)]/[0.07] border border-[var(--border)]/60 rounded"
+ class="text-xs px-2 py-1 bg-[var(--surface-2)] border border-[var(--border)]/60 rounded"
  >
  <option value="all">All Levels</option>
  <option value="info">Info</option>
@@ -946,7 +946,7 @@
  </select>
  <select
  bind:value={sourceFilter}
- class="text-xs px-2 py-1 bg-[var(--surface-0)]/[0.07] border border-[var(--border)]/60 rounded"
+ class="text-xs px-2 py-1 bg-[var(--surface-2)] border border-[var(--border)]/60 rounded"
  >
  <option value="all">All Sources</option>
  <option value="dht">DHT</option>
@@ -963,7 +963,7 @@
  </label>
  <button
  onclick={copyLogs}
- class="text-xs px-2 py-1 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1"
  title="Copy logs to clipboard"
  >
  <Copy class="w-3 h-3" />
@@ -971,7 +971,7 @@
  </button>
  <button
  onclick={exportLogs}
- class="text-xs px-2 py-1 bg-[var(--surface-0)]/[0.07] hover:bg-[var(--surface-0)]/[0.1] rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-[var(--surface-2)] hover:bg-[var(--surface-3)] rounded transition-colors flex items-center gap-1"
  title="Export logs as file"
  >
  <Download class="w-3 h-3" />
@@ -979,7 +979,7 @@
  </button>
  <button
  onclick={clearLogs}
- class="text-xs px-2 py-1 bg-red-500/[0.08] hover:bg-red-200 text-red-400 rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded transition-colors flex items-center gap-1"
  title="Clear logs"
  >
  <Trash2 class="w-3 h-3" />
@@ -989,12 +989,12 @@
  </div>
 
  <!-- Log Output -->
- <div class="bg-[var(--surface-0)]/[0.07] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
+ <div class="bg-[var(--surface-2)] rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
  {#if filteredLogs.length === 0}
  <p class="text-[var(--text-tertiary)] text-center py-8">No log entries{logFilter !=='all' || sourceFilter !=='all' ?' matching filters' :''}</p>
  {:else}
  {#each filteredLogs as entry (entry.id)}
- <div class="flex gap-2 py-0.5 hover:bg-[var(--surface-0)]/[0.06] px-1 rounded">
+ <div class="flex gap-2 py-0.5 hover:bg-[var(--surface-2)] px-1 rounded">
  <span class="text-[var(--text-tertiary)] shrink-0">{entry.timestamp.toLocaleTimeString()}</span>
  <span class="shrink-0 px-1 rounded {levelBg(entry.level)} text-[10px] uppercase font-bold">{entry.level}</span>
  <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {sourceBg(entry.source)}">{entry.source}</span>

@@ -12,10 +12,10 @@
  let { message, type ='info', index = 0, onClose }: Props = $props();
 
  const typeStyles = {
- success:'bg-[var(--surface-0)]/[0.07] border border-green-800 text-green-400',
- error:'bg-[var(--surface-0)]/[0.07] border border-red-800 text-red-400',
- info:'bg-[var(--surface-0)]/[0.07] border border-indigo-800 text-indigo-400',
- warning:'bg-[var(--surface-0)]/[0.07] border border-yellow-800 text-yellow-800'
+ success:'bg-[var(--surface-1)] border border-emerald-500/20 text-emerald-400',
+ error:'bg-[var(--surface-1)] border border-red-500/20 text-red-400',
+ info:'bg-[var(--surface-1)] border border-violet-500/20 text-violet-400',
+ warning:'bg-[var(--surface-1)] border border-yellow-500/20 text-yellow-400'
  };
 
  // Calculate vertical offset based on index (each toast is ~56px tall + 8px gap)
@@ -24,15 +24,15 @@
 
 <div
  transition:fly={{ y: -20, duration: 300 }}
- class="fixed right-4 z-50 flex items-center gap-3 {typeStyles[type]} px-6 py-3 rounded-xl max-w-md"
+ class="fixed right-4 z-50 flex items-center gap-3 {typeStyles[type]} px-5 py-3 rounded-lg max-w-md"
  style="top: {topOffset}px;"
 >
- <span class="flex-1">{message}</span>
+ <span class="flex-1 text-sm">{message}</span>
  <button
  onclick={onClose}
- class="text-[var(--text-secondary)] hover:text-[var(--text-secondary)] transition-colors"
+ class="text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
  aria-label="Close toast"
  >
- <X size={18} />
+ <X size={16} />
  </button>
 </div>

@@ -87,8 +87,8 @@
  >
  <div class="flex items-center justify-between mb-4">
  <h3 class="text-lg font-semibold text-white">Share"{item.name}"</h3>
- <button onclick={onClose} class="p-1 hover:bg-[var(--surface-0)] rounded-lg transition">
- <X class="w-5 h-5 text-white/[0.08]" />
+ <button onclick={onClose} class="p-1 hover:bg-[var(--surface-2)] rounded-lg transition">
+ <X class="w-5 h-5 text-[var(--text-secondary)]" />
  </button>
  </div>
 
@@ -108,7 +108,7 @@
  disabled={toggling}
  class="px-3 py-1.5 text-sm font-medium rounded-lg transition disabled:opacity-50 {isItemPublic
  ?'bg-orange-100 text-orange-700 hover:bg-orange-200'
- :'bg-green-500/[0.08] text-green-400 hover:bg-green-200'}"
+ :'bg-emerald-500/10 text-emerald-400 hover:bg-green-200'}"
  >
  {isItemPublic ?'Make Private' :'Make Public'}
  </button>
@@ -116,7 +116,7 @@
  {/if}
 
  <div class="space-y-3 mb-6">
- <p class="text-sm text-white/[0.06]">
+ <p class="text-sm text-[var(--text-secondary)]">
  {#if hasPrice}
  Share at <strong class="text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
  {:else}
@@ -127,7 +127,7 @@
  <button
  onclick={createLink}
  disabled={creating}
- class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
+ class="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
  >
  {#if creating}
  <Loader2 class="w-4 h-4 animate-spin" />
@@ -139,7 +139,7 @@
  </button>
 
  {#if !isItemPublic}
- <div class="p-3 bg-yellow-50 border border-yellow-800 rounded-lg">
+ <div class="p-3 bg-yellow-500/10 border border-yellow-800 rounded-lg">
  <p class="text-xs text-yellow-300">
  This file is currently private. Share links won't work until you make it public.
  </p>
@@ -147,9 +147,9 @@
  {/if}
 
  {#if justCreatedUrl}
- <div class="flex items-center gap-2 p-3 bg-green-500/[0.08] border border-green-800 rounded-lg">
+ <div class="flex items-center gap-2 p-3 bg-emerald-500/10 border border-green-800 rounded-lg">
  <Check class="w-4 h-4 text-green-500 shrink-0" />
- <code class="flex-1 text-xs font-mono text-green-400 break-all select-all">{justCreatedUrl}</code>
+ <code class="flex-1 text-xs font-mono text-emerald-400 break-all select-all">{justCreatedUrl}</code>
  <button
  onclick={async () => {
  try {
@@ -162,7 +162,7 @@
  class="p-1.5 hover:bg-green-900/30 rounded transition shrink-0"
  title="Copy link"
  >
- <Copy class="w-4 h-4 text-green-400" />
+ <Copy class="w-4 h-4 text-emerald-400" />
  </button>
  </div>
  {/if}
@@ -177,11 +177,11 @@
  {#each existingShares as share (share.id)}
  <div class="flex items-center gap-2 p-2 bg-[var(--surface-0)] rounded-lg">
  <div class="flex-1 min-w-0">
- <code class="text-xs text-white/[0.06] font-mono truncate block">
+ <code class="text-xs text-[var(--text-secondary)] font-mono truncate block">
  {driveStore.getShareUrl(share.id)}
  </code>
  <div class="flex flex-wrap items-center gap-2 mt-0.5">
- <span class="text-xs text-white/[0.06]">
+ <span class="text-xs text-[var(--text-secondary)]">
  Created {formatDate(share.createdAt)}
  </span>
  {#if share.isPublic}
@@ -190,23 +190,23 @@
  <span class="text-xs text-emerald-500">
  {share.priceChi} CHI
  </span>
- <span class="text-xs text-white/[0.08] break-all">
+ <span class="text-xs text-[var(--text-secondary)] break-all">
  to {share.recipientWallet}
  </span>
- <span class="text-xs text-white/[0.06]">
+ <span class="text-xs text-[var(--text-secondary)]">
  {share.downloadCount} download{share.downloadCount !== 1 ?'s' :''}
  </span>
  </div>
  </div>
  <button
  onclick={() => copyUrl(share)}
- class="p-1.5 hover:bg-[var(--surface-0)] rounded transition"
+ class="p-1.5 hover:bg-[var(--surface-2)] rounded transition"
  title="Copy link"
  >
  {#if copied === share.id}
  <Check class="w-4 h-4 text-green-500" />
  {:else}
- <Copy class="w-4 h-4 text-white/[0.08]" />
+ <Copy class="w-4 h-4 text-[var(--text-secondary)]" />
  {/if}
  </button>
  <button
@@ -222,11 +222,11 @@
  </div>
  {/if}
 
- <div class="mt-4 p-3 bg-indigo-50 rounded-lg">
- <p class="text-xs text-indigo-300">
+ <div class="mt-4 p-3 bg-violet-500/10 rounded-lg">
+ <p class="text-xs text-violet-300">
  <strong>File:</strong> {item.name}
  {#if item.size}
- <span class="ml-2 text-indigo-500">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
+ <span class="ml-2 text-violet-400">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
  {/if}
  </p>
  </div>

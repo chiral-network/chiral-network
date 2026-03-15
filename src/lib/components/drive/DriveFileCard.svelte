@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
- class="group relative bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl p-4 hover:shadow-sm hover:border-indigo-300 transition cursor-pointer select-none"
+ class="group relative bg-[var(--surface-1)] border border-[var(--border)] rounded-xl p-4 hover:border-[var(--border-hover)] transition cursor-pointer select-none"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -44,21 +44,21 @@
  {/if}
  {#if item.shared}
  {#if item.isPublic}
- <Link class="w-3.5 h-3.5 text-indigo-500" />
+ <Link class="w-3.5 h-3.5 text-violet-400" />
  {:else}
  <EyeOff class="w-3.5 h-3.5 text-orange-500" />
  {/if}
  {/if}
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-[var(--surface-0)] rounded"
+ class="p-1 hover:bg-[var(--surface-2)] rounded"
  >
- <MoreVertical class="w-4 h-4 text-white/[0.08]" />
+ <MoreVertical class="w-4 h-4 text-[var(--text-secondary)]" />
  </button>
  </div>
 
  <!-- Icon -->
- <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-50' :'bg-[var(--surface-0)]'}">
+ <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-500/10' :'bg-[var(--surface-2)]'}">
  {#if item.type ==='folder'}
  <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
  {:else}
@@ -73,7 +73,7 @@
  {item.name}
  </p>
  {#if item.type ==='file' && item.size}
- <p class="text-xs text-white/[0.06] mt-0.5">{formatSize(item.size)}</p>
+ <p class="text-xs text-[var(--text-secondary)] mt-0.5">{formatSize(item.size)}</p>
  {/if}
  {#if getPriceLabel(item)}
  {@const priceLabel = getPriceLabel(item)}
@@ -82,9 +82,9 @@
  {#if item.seeding && $networkConnected}
  <div class="flex items-center justify-center gap-1 mt-1">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
- <span class="text-[10px] text-green-400 font-medium">Seeding</span>
+ <span class="text-[10px] text-emerald-400 font-medium">Seeding</span>
  {#if item.protocol}
- <span class="text-[10px] text-white/[0.06]">({item.protocol})</span>
+ <span class="text-[10px] text-[var(--text-secondary)]">({item.protocol})</span>
  {/if}
  </div>
  {/if}

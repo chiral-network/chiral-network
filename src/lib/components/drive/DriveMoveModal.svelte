@@ -50,8 +50,8 @@
  >
  <div class="flex items-center justify-between mb-4">
  <h3 class="text-lg font-semibold text-white">Move"{item.name}"</h3>
- <button onclick={onClose} class="p-1 hover:bg-[var(--surface-0)] rounded-lg transition">
- <X class="w-5 h-5 text-white/[0.08]" />
+ <button onclick={onClose} class="p-1 hover:bg-[var(--surface-2)] rounded-lg transition">
+ <X class="w-5 h-5 text-[var(--text-secondary)]" />
  </button>
  </div>
 
@@ -61,8 +61,8 @@
  onclick={() => selectedFolderId = null}
  class="flex items-center gap-2 w-full px-3 py-2.5 text-sm transition
  {selectedFolderId === null
- ?'bg-indigo-900/30 text-indigo-300'
- :'text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
+ ?'bg-violet-900/20 text-violet-300'
+ :'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}"
  >
  <Folder class="w-4 h-4 text-yellow-500 fill-yellow-500 opacity-80" />
  <span class="font-medium">My Drive</span>
@@ -74,8 +74,8 @@
  onclick={() => selectedFolderId = folder.id}
  class="flex items-center gap-2 w-full px-3 py-2 text-sm transition
  {selectedFolderId === folder.id
- ?'bg-indigo-900/30 text-indigo-300'
- :'text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
+ ?'bg-violet-900/20 text-violet-300'
+ :'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}"
  style="padding-left: {12 + depth * 20}px"
  >
  <Folder class="w-4 h-4 text-yellow-500 fill-yellow-500 opacity-80 shrink-0" />
@@ -91,13 +91,13 @@
  <div class="flex justify-end gap-2 mt-4">
  <button
  onclick={onClose}
- class="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-0)] rounded-lg transition"
+ class="px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] rounded-lg transition"
  >
  Cancel
  </button>
  <button
  onclick={handleMove}
- class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition"
+ class="px-4 py-2 text-sm font-medium text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition"
  >
  Move Here
  </button>

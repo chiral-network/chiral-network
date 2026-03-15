@@ -61,7 +61,7 @@
 <div class="max-w-2xl mx-auto p-6">
  <div class="bg-[var(--surface-0)] rounded-lg p-8">
  <div class="flex items-center mb-6">
- <button on:click={onBack} class="mr-4 p-2 hover:bg-[var(--surface-0)] rounded-lg transition">
+ <button on:click={onBack} class="mr-4 p-2 hover:bg-[var(--surface-2)] rounded-lg transition">
  <ArrowLeft class="w-5 h-5" />
  </button>
  <h2 class="text-2xl font-bold">Use Existing Wallet</h2>
@@ -70,7 +70,7 @@
  <div class="flex gap-3 mb-6">
  <button
  on:click={() => method ='privateKey'}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method ==='privateKey' ?'bg-violet-500 text-white' :'bg-[var(--surface-0)] hover:bg-[var(--surface-0)]'}"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method ==='privateKey' ?'bg-violet-500 text-white' :'bg-[var(--surface-0)] hover:bg-[var(--surface-2)]'}"
  >
  <KeyRound class="w-5 h-5" />
  <span>Private Key</span>
@@ -78,7 +78,7 @@
 
  <button
  on:click={() => method ='mnemonic'}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method ==='mnemonic' ?'bg-violet-500 text-white' :'bg-[var(--surface-0)] hover:bg-[var(--surface-0)]'}"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method ==='mnemonic' ?'bg-violet-500 text-white' :'bg-[var(--surface-0)] hover:bg-[var(--surface-2)]'}"
  >
  <FileText class="w-5 h-5" />
  <span>Recovery Phrase</span>
@@ -95,10 +95,10 @@
  type="password"
  bind:value={privateKeyInput}
  on:keydown={(e) => e.key ==='Enter' && handleLogin()}
- class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent font-mono text-sm bg-[var(--surface-0)]"
+ class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-violet-500/50 focus:border-transparent font-mono text-sm bg-[var(--surface-0)]"
  placeholder="Enter your private key (with or without 0x prefix)"
  />
- <p class="text-xs text-white/[0.06] mt-2">
+ <p class="text-xs text-[var(--text-secondary)] mt-2">
  Your private key should be a 64-character hexadecimal string
  </p>
  </div>
@@ -111,17 +111,17 @@
  id="mnemonic-input"
  bind:value={mnemonicInput}
  rows="3"
- class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[var(--surface-0)]"
+ class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-violet-500/50 focus:border-transparent bg-[var(--surface-0)]"
  placeholder="Enter your 12-word recovery phrase"
  ></textarea>
- <p class="text-xs text-white/[0.06] mt-2">
+ <p class="text-xs text-[var(--text-secondary)] mt-2">
  Enter all 12 words separated by spaces
  </p>
  </div>
  {/if}
 
  {#if error}
- <div class="bg-red-500/[0.08] border-l-4 border-red-400 p-4 mb-6">
+ <div class="bg-red-500/10 border-l-2 border-red-400 p-4 mb-6">
  <p class="text-sm text-red-400">{error}</p>
  </div>
  {/if}
@@ -129,13 +129,13 @@
  <div class="flex gap-3">
  <button
  on:click={onBack}
- class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-0)] transition"
+ class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-2)] transition"
  >
  Cancel
  </button>
  <button
  on:click={handleLogin}
- class="flex-1 px-6 py-3 bg-violet-500 text-white rounded-lg hover:bg-violet-600 transition"
+ class="flex-1 px-6 py-3 bg-violet-600 text-white rounded-lg hover:bg-violet-500 transition"
  >
  Login
  </button>

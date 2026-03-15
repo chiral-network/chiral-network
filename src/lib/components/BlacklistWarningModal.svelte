@@ -26,7 +26,7 @@
  <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6 max-w-md w-full mx-4">
  <!-- Header -->
  <div class="flex items-center gap-3 mb-4">
- <div class="p-2.5 bg-red-500/[0.08] rounded-full">
+ <div class="p-2.5 bg-red-500/10 rounded-full">
  <ShieldBan class="w-6 h-6 text-red-400" />
  </div>
  <div>
@@ -36,7 +36,7 @@
  </div>
 
  <!-- Details -->
- <div class="bg-[var(--surface-0)]/[0.05] rounded-lg p-4 mb-4 space-y-2">
+ <div class="bg-[var(--surface-2)] rounded-lg p-4 mb-4 space-y-2">
  <div class="flex justify-between items-start gap-2">
  <span class="text-xs text-[var(--text-secondary)] shrink-0">Address</span>
  <span class="text-sm font-mono text-white text-right break-all">{formatAddr(address)}</span>
@@ -49,7 +49,7 @@
 
  <!-- Warning -->
  <div class="bg-amber-50 border border-amber-800 rounded-lg p-3 mb-5">
- <p class="text-sm text-amber-800">
+ <p class="text-sm text-amber-400">
  Are you sure you want to <strong>{action}</strong>?
  </p>
  </div>
@@ -58,7 +58,7 @@
  <div class="flex gap-3">
  <button
  onclick={oncancel}
- class="flex-1 px-4 py-2.5 border border-[var(--border)]/60 rounded-lg text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-0)]/[0.05] transition-colors"
+ class="flex-1 px-4 py-2.5 border border-[var(--border)]/60 rounded-lg text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors"
  >
  Cancel
  </button>

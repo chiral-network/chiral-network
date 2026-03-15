@@ -37,7 +37,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <tr
- class="group hover:bg-[var(--surface-0)]/[0.05] transition cursor-pointer select-none border-b border-[var(--border)]/60"
+ class="group hover:bg-[var(--surface-2)] transition cursor-pointer select-none border-b border-[var(--border)]/60"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -55,20 +55,20 @@
  {/if}
  {#if item.shared}
  {#if item.isPublic}
- <Link class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+ <Link class="w-3.5 h-3.5 text-violet-400 shrink-0" />
  {:else}
  <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
  {/if}
  {/if}
  {#if item.seeding && $networkConnected}
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-500/[0.08] text-green-400 shrink-0">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-500/10 text-emerald-400 shrink-0">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
  Seeding{#if item.protocol} ({item.protocol}){/if}
  </span>
  {/if}
  {#if getPriceLabel(item)}
  {@const priceLabel = getPriceLabel(item)}
- <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-800 shrink-0">
+ <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/10 text-amber-400 shrink-0">
  {priceLabel}
  </span>
  {/if}
@@ -83,7 +83,7 @@
  <td class="py-2.5 px-3 text-right">
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-[var(--surface-0)]/[0.1] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+ class="p-1 hover:bg-[var(--surface-3)] rounded opacity-0 group-hover:opacity-100 transition-opacity"
  >
  <MoreVertical class="w-4 h-4 text-[var(--text-tertiary)]" />
  </button>

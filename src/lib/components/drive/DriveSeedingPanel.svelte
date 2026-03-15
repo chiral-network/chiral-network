@@ -67,8 +67,8 @@
 
  function getProtocolColor(protocol?: string): string {
  return protocol ==='BitTorrent'
- ?'bg-green-500/[0.08] text-green-400'
- :'bg-indigo-900/30 text-indigo-400';
+ ?'bg-emerald-500/10 text-emerald-400'
+ :'bg-violet-900/20 text-violet-400';
  }
 
  function normalizePriceChi(value: string | number | null | undefined): string {
@@ -137,13 +137,13 @@
  <div class="flex flex-wrap items-end gap-4">
  <!-- Protocol toggle -->
  <div>
- <label class="block text-xs font-medium text-white/[0.06] mb-1.5">Protocol</label>
+ <label class="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Protocol</label>
  <div class="flex rounded-lg overflow-hidden border border-[var(--border)]/60">
  <button
  onclick={() => selectedProtocol ='WebRTC'}
  class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol ==='WebRTC'
- ?'bg-indigo-600 text-white'
- :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
+ ?'bg-violet-600 text-white'
+ :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}"
  >
  WebRTC
  </button>
@@ -151,7 +151,7 @@
  onclick={() => selectedProtocol ='BitTorrent'}
  class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol ==='BitTorrent'
  ?'bg-green-600 text-white'
- :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
+ :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}"
  >
  BitTorrent
  </button>
@@ -160,14 +160,14 @@
 
  <!-- Price input -->
  <div>
- <label class="block text-xs font-medium text-white/[0.06] mb-1.5">Price (CHI)</label>
+ <label class="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Price (CHI)</label>
  <input
  type="number"
  step="0.001"
  min="0"
  placeholder="Free"
  bind:value={filePrice}
- class="w-28 px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
+ class="w-28 px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-white placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
  />
  </div>
 
@@ -175,7 +175,7 @@
  <button
  onclick={handleAddFiles}
  disabled={!$networkConnected}
- class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-[var(--surface-0)] text-white rounded-lg transition text-sm font-medium"
+ class="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-[var(--surface-0)] text-white rounded-lg transition text-sm font-medium"
  >
  <Plus class="w-4 h-4" />
  Add Files to Seed
@@ -191,7 +191,7 @@
 
  <!-- Seeding files list -->
  {#if seedingItems.length === 0}
- <div class="text-center py-12 text-white/[0.06]">
+ <div class="text-center py-12 text-[var(--text-secondary)]">
  <Globe class="w-12 h-12 mx-auto mb-3 opacity-40" />
  <p class="text-sm font-medium">No files being seeded</p>
  <p class="text-xs mt-1">Add files above or right-click any file in"All Files" and choose"Seed to Network"</p>
@@ -215,23 +215,23 @@
  {item.protocol ||'WebRTC'}
  </span>
  {#if item.priceChi && item.priceChi !=='0'}
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-500/10 text-amber-400">
  {item.priceChi} CHI
  </span>
  {:else}
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-500/[0.08] text-green-400">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-emerald-500/10 text-emerald-400">
  Free
  </span>
  {/if}
  </div>
 
- <div class="flex items-center gap-3 mt-1 text-xs text-white/[0.06]">
+ <div class="flex items-center gap-3 mt-1 text-xs text-[var(--text-secondary)]">
  <span>{formatFileSize(item.size)}</span>
  <span>{formatDate(item.modifiedAt)}</span>
  </div>
 
  <div class="mt-2 flex flex-wrap items-center gap-2">
- <span class="text-xs text-white/[0.06]">Price (CHI)</span>
+ <span class="text-xs text-[var(--text-secondary)]">Price (CHI)</span>
  <input
  type="number"
  step="0.001"
@@ -239,15 +239,15 @@
  placeholder="Free"
  value={getPriceDraft(item)}
  oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
- class="w-24 px-2 py-1 text-xs bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
+ class="w-24 px-2 py-1 text-xs bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
  />
  <button
  onclick={() => handleUpdatePrice(item)}
  disabled={!isPriceDirty(item)}
  class="px-2.5 py-1 text-xs font-medium rounded transition
  {isPriceDirty(item)
- ?'bg-indigo-600 text-white hover:bg-indigo-700'
- :'bg-[var(--surface-0)] text-white/[0.06] cursor-not-allowed'}"
+ ?'bg-violet-600 text-white hover:bg-violet-500'
+ :'bg-[var(--surface-0)] text-[var(--text-secondary)] cursor-not-allowed'}"
  >
  Update Price
  </button>
@@ -256,15 +256,15 @@
  <!-- Merkle hash -->
  {#if item.merkleRoot}
  <div class="flex items-center gap-2 mt-2">
- <span class="text-xs text-white/[0.06] font-mono truncate">
+ <span class="text-xs text-[var(--text-secondary)] font-mono truncate">
  {item.merkleRoot}
  </span>
  <button
  onclick={() => copyToClipboard(item.merkleRoot!,'Hash')}
- class="flex-shrink-0 p-1 hover:bg-[var(--surface-0)] rounded"
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-2)] rounded"
  title="Copy hash"
  >
- <Copy class="w-3.5 h-3.5 text-white/[0.06]" />
+ <Copy class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
  </button>
  </div>
  {/if}
@@ -274,10 +274,10 @@
  <div class="flex items-center gap-1 flex-shrink-0">
  <button
  onclick={() => expandedFileId = expandedFileId === item.id ? null : item.id}
- class="p-1.5 hover:bg-[var(--surface-0)] rounded-lg transition"
+ class="p-1.5 hover:bg-[var(--surface-2)] rounded-lg transition"
  title="Share options"
  >
- <Link class="w-4 h-4 text-white/[0.08]" />
+ <Link class="w-4 h-4 text-[var(--text-secondary)]" />
  </button>
  <button
  onclick={() => handleStopSeeding(item)}
@@ -294,7 +294,7 @@
  <div class="mt-3 pt-3 border-t border-[var(--border)]/60 space-y-2">
  <!-- Magnet link -->
  <div class="flex items-center gap-2">
- <span class="text-xs text-white/[0.06] w-16 flex-shrink-0">Magnet</span>
+ <span class="text-xs text-[var(--text-secondary)] w-16 flex-shrink-0">Magnet</span>
  <input
  type="text"
  readonly
@@ -303,15 +303,15 @@
  />
  <button
  onclick={() => copyToClipboard(generateMagnetLink(item),'Magnet link')}
- class="flex-shrink-0 p-1 hover:bg-[var(--surface-0)] rounded"
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-2)] rounded"
  >
- <Copy class="w-3.5 h-3.5 text-white/[0.06]" />
+ <Copy class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
  </button>
  </div>
 
  <!-- Hash -->
  <div class="flex items-center gap-2">
- <span class="text-xs text-white/[0.06] w-16 flex-shrink-0">Hash</span>
+ <span class="text-xs text-[var(--text-secondary)] w-16 flex-shrink-0">Hash</span>
  <input
  type="text"
  readonly
@@ -320,16 +320,16 @@
  />
  <button
  onclick={() => copyToClipboard(item.merkleRoot!,'Hash')}
- class="flex-shrink-0 p-1 hover:bg-[var(--surface-0)] rounded"
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-2)] rounded"
  >
- <Copy class="w-3.5 h-3.5 text-white/[0.06]" />
+ <Copy class="w-3.5 h-3.5 text-[var(--text-secondary)]" />
  </button>
  </div>
 
  <!-- Export torrent -->
  <button
  onclick={() => handleExportTorrent(item)}
- class="flex items-center gap-1.5 text-xs text-indigo-400 hover:underline"
+ class="flex items-center gap-1.5 text-xs text-violet-400 hover:underline"
  >
  <ExternalLink class="w-3.5 h-3.5" />
  Export .torrent file
