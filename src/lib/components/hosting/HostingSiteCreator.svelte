@@ -36,9 +36,9 @@
   let totalSize = $derived(selectedFiles.reduce((s, f) => s + f.size, 0));
 </script>
 
-<div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 p-5 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm">
+<div class="rounded-2xl border border-gray-800/60 bg-gray-950 p-5  backblur-sm">
   <h2 class="mb-4 text-base font-semibold text-gray-100 flex items-center gap-2">
-    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/10">
+    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/[0.06]">
       <Plus class="h-3.5 w-3.5 text-cyan-400" />
     </div>
     Create New Site
@@ -54,8 +54,8 @@
         value={newSiteName}
         oninput={(e) => onNameChange(e.currentTarget.value)}
         placeholder="e.g. My Portfolio"
-        class="w-full rounded-xl border border-cyan-500/15 bg-gray-800 px-4 py-2.5 text-sm text-gray-100 placeholder-gray-400 transition-all
-          focus:border-cyan-500 focus:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-cyan-500/20
+        class="w-full rounded-xl border border-gray-800/60 bg-gray-800 px-4 py-2.5 text-sm text-gray-100 placeholder-gray-400 transition-all
+          focus:border-cyan-500 focus:bg-gray-950 focus:outline-none focus:ring-2 focus:ring-cyan-500/20
           text-gray-100"
       />
     </div>
@@ -65,7 +65,7 @@
       <button
         onclick={onSelectFromDrive}
         class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-cyan-400 border border-primary-200
-          rounded-lg hover:bg-cyan-500/10 transition-colors
+          rounded-lg hover:bg-white/[0.03] transition-colors
           focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
       >
         <HardDrive class="w-3.5 h-3.5" />
@@ -73,8 +73,8 @@
       </button>
       <button
         onclick={onSelectFiles}
-        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-400 border border-cyan-500/20
-          rounded-lg hover:bg-cyan-500/5 transition-colors
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-400 border border-gray-800/60
+          rounded-lg hover:bg-white/[0.02] transition-colors
           focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
       >
         <FolderOpen class="w-3.5 h-3.5" />
@@ -90,8 +90,8 @@
       onkeydown={(e) => e.key === 'Enter' && onSelectFiles()}
       class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 px-4 transition-all
         {isDragOver
-          ? 'border-cyan-500/40 bg-cyan-500/10 scale-[1.01]'
-          : 'border-cyan-500/15 bg-gray-800 hover:border-cyan-500/20 hover:bg-cyan-500/5'}"
+          ? 'border-cyan-500/40 bg-cyan-500/[0.06] scale-[1.01]'
+          : 'border-gray-800/50 bg-gray-800 hover:border-gray-800/50 hover:bg-white/[0.02]'}"
     >
       <div class="flex h-12 w-12 items-center justify-center rounded-full bg-gray-800/60">
         <FolderOpen class="h-6 w-6 text-gray-500" />
@@ -113,9 +113,9 @@
           </p>
           <p class="text-xs text-gray-400 tabular-nums">{formatFileSize(totalSize)}</p>
         </div>
-        <div class="max-h-40 overflow-y-auto rounded-xl border border-cyan-500/10 divide-y divide-cyan-500/10">
+        <div class="max-h-40 overflow-y-auto rounded-xl border border-gray-800/40 divide-y divide-cyan-500/10">
           {#each selectedFiles as file, i (file.path)}
-            <div class="flex items-center justify-between px-3 py-2 hover:bg-cyan-500/5 transition-colors group">
+            <div class="flex items-center justify-between px-3 py-2 hover:bg-white/[0.02] transition-colors group">
               <div class="flex items-center gap-2.5 min-w-0">
                 <FileIcon class="h-4 w-4 flex-shrink-0 text-gray-400" />
                 <span class="truncate text-sm text-gray-300">{file.name}</span>
@@ -141,7 +141,7 @@
         disabled={!canCreate}
         class="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition-all
           {canCreate
-            ? 'bg-cyan-500 hover:bg-cyan-600/80 shadow-[0_0_10px_rgba(6,182,212,0.05)] shadow-primary-500/20 hover:shadow-[0_0_15px_rgba(6,182,212,0.08)] hover:shadow-primary-500/25 active:scale-[0.98]'
+            ? 'bg-cyan-500 hover:bg-cyan-500  shadow-primary-500/20 hover: hover:shadow-primary-500/25 active:scale-[0.98]'
             : 'bg-gray-300 cursor-not-allowed'}
           focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-2"
       >

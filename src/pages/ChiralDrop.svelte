@@ -197,7 +197,7 @@
         });
 
         // Listen for paid file transfer requests (sent via chiraldrop with price > 0)
-        unlistenPaidRequest = await listen<any>('chiraldrop-paid-request', (event) => {
+        unlistenPaidRequest = await listen<any>('chiralpaid-request', (event) => {
           const { transferId, fromPeerId, fileName, fileHash, fileSize, priceWei, senderWallet } = event.payload;
           const fromAlias = aliasFromPeerId(fromPeerId);
           const toAlias = $userAlias;
@@ -223,7 +223,7 @@
         });
 
         // Listen for payment sent (buyer side) — record in both histories
-        unlistenPaymentSent = await listen<any>('chiraldrop-payment-sent', async (event) => {
+        unlistenPaymentSent = await listen<any>('chiralpayment-sent', async (event) => {
           const { requestId, fileHash, fileName, txHash, priceWei, toWallet, balanceBefore, balanceAfter } = event.payload;
           log.info('Payment sent for ChiralDrop file:', fileName, 'tx:', txHash);
 
@@ -247,7 +247,7 @@
         });
 
         // Listen for payment received (seller side) — record in Account history
-        unlistenPaymentReceived = await listen<any>('chiraldrop-payment-received', async (event) => {
+        unlistenPaymentReceived = await listen<any>('chiralpayment-received', async (event) => {
           const { fileHash, txHash, priceWei, fromWallet } = event.payload;
           log.info('Payment received for file:', fileHash, 'tx:', txHash);
 
@@ -576,7 +576,7 @@
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-      <div class="inline-flex items-center rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-300">
+      <div class="inline-flex items-center rounded-full border border-gray-800/60 bg-cyan-500/[0.06] px-3 py-1 text-xs font-medium text-cyan-300">
         {$nearbyPeers.length} peers online
       </div>
       {#if $incomingPendingTransfers.length > 0}
@@ -586,7 +586,7 @@
       {/if}
       <button
         onclick={() => showHistory = !showHistory}
-        class="inline-flex items-center gap-2 rounded-xl border border-cyan-500/15 bg-gray-900 px-4 py-2 text-sm font-medium text-gray-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] transition hover:bg-cyan-500/5 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 text-gray-300"
+        class="inline-flex items-center gap-2 rounded-xl border border-gray-800/60 bg-gray-950 px-4 py-2 text-sm font-medium text-gray-300  transition hover:bg-white/[0.02] focus:outline-none focus:ring-2 focus:ring-cyan-500/30 text-gray-300"
       >
         <History class="h-4 w-4" />
         <span>{showHistory ? 'Hide History' : 'Show History'}</span>
@@ -600,7 +600,7 @@
   >
     <!-- Peer Map -->
     <div
-      class="relative overflow-hidden rounded-2xl border border-cyan-500/15 bg-gray-900 shadow-[0_0_10px_rgba(6,182,212,0.05)] min-h-[22rem] xl:min-h-0"
+      class="relative overflow-hidden rounded-2xl border border-gray-800/60 bg-gray-950  min-h-[22rem] xl:min-h-0"
       style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` : ''}
     >
       <div class="absolute inset-0 bg-gray-950"></div>
@@ -608,10 +608,10 @@
       <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-500/5 blur-3xl"></div>
       <div class="network-dot-grid absolute inset-0 opacity-30"></div>
 
-      <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-gray-900/90 px-3 py-1 text-xs font-semibold text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
+      <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-gray-950 px-3 py-1 text-xs font-semibold text-cyan-300  ring-1 ring-gray-800/60 backblur">
         Live Peer Mesh
       </div>
-      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-gray-900/85 px-3 py-1 text-xs text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
+      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-gray-950 px-3 py-1 text-xs text-cyan-300  ring-1 ring-gray-800/60 backblur">
         {$nearbyPeers.length} discovered
       </div>
 
@@ -624,12 +624,12 @@
         </div>
         <span class="absolute -inset-4 rounded-full bg-cyan-500/15 blur-xl/20"></span>
         <div
-          class="relative h-16 w-16 rounded-full border-4 border-cyan-500/30 shadow-[0_0_25px_rgba(6,182,212,0.12)] ring-4 ring-cyan-500/20 flex items-center justify-center"
+          class="relative h-16 w-16 rounded-full border-4 border-cyan-500/30  ring-4 ring-cyan-500/20 flex items-center justify-center"
           style="background-color: {$userAlias.colorHex}"
         >
           <User class="h-8 w-8 text-white" />
         </div>
-        <span class="mt-2 rounded-full bg-gray-900/90 px-3 py-1 text-xs font-semibold text-gray-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
+        <span class="mt-2 rounded-full bg-gray-950 px-3 py-1 text-xs font-semibold text-gray-300  ring-1 ring-gray-800/60 backblur">
           You
         </span>
       </div>
@@ -641,15 +641,15 @@
           class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2"
           style="left: {peer.position.x}%; top: {peer.position.y}%; transform: translate(-50%, -50%);"
         >
-          <span class="peer-glow absolute inset-0 rounded-full bg-cyan-500/10 blur-md/20"></span>
+          <span class="peer-glow absolute inset-0 rounded-full bg-cyan-500/[0.06] blur-md/20"></span>
           <div class="relative z-10 flex flex-col items-center">
             <div
-              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-transform duration-200 group-hover:scale-110 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-cyan-500/30' : ''}"
+              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-cyan-500/30  transition-transform duration-200 group-hover:scale-110 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-cyan-500/30' : ''}"
               style="background-color: {peer.alias.colorHex}"
             >
               <User class="h-6 w-6 text-white" />
             </div>
-            <span class="mt-1 whitespace-nowrap rounded-full bg-gray-900/90 px-2 py-0.5 text-xs font-medium text-gray-300 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20 backdrop-blur">
+            <span class="mt-1 whitespace-nowrap rounded-full bg-gray-950 px-2 py-0.5 text-xs font-medium text-gray-300  ring-1 ring-gray-800/60 backblur">
               {peer.alias.displayName}
             </span>
           </div>
@@ -659,7 +659,7 @@
       <!-- Empty state -->
       {#if $nearbyPeers.length === 0}
         <div class="absolute inset-0 flex items-center justify-center p-6">
-          <div class="max-w-sm rounded-2xl border border-cyan-500/30 bg-gray-900/75 p-6 text-center shadow-[0_0_20px_rgba(6,182,212,0.1)] backdrop-blur">
+          <div class="max-w-sm rounded-2xl border border-gray-800/60 bg-gray-950 p-6 text-center  backblur">
             <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800 text-gray-400 text-gray-300">
               <User class="h-6 w-6" />
             </div>
@@ -685,14 +685,14 @@
     <div class="flex min-h-0 flex-col gap-4 xl:flex-1">
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
-        <div class="rounded-2xl border border-amber-500/20 bg-gray-900/90 p-4 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm">
+        <div class="rounded-2xl border border-amber-500/20 bg-gray-950 p-4  backblur-sm">
           <h3 class="mb-3 font-semibold text-gray-100">Incoming Transfers</h3>
           <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
               <div class="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
                 <div class="flex items-start gap-3">
                   <div
-                    class="h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-[0_0_10px_rgba(6,182,212,0.05)]"
+                    class="h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0 "
                     style="background-color: {transfer.fromAlias.colorHex}"
                   >
                     <User class="h-4 w-4 text-white" />
@@ -740,19 +740,19 @@
 
       <!-- Selected Peer Panel -->
       {#if $selectedPeer}
-        <div class="rounded-2xl border border-cyan-500/15 bg-gray-900 p-4 shadow-[0_0_10px_rgba(6,182,212,0.05)]">
+        <div class="rounded-2xl border border-gray-800/60 bg-gray-950 p-4 ">
           <div class="mb-4 flex items-center justify-between">
             <h3 class="font-semibold text-gray-100">Send to Peer</h3>
             <button
               onclick={() => selectPeer(null)}
-              class="rounded-lg p-1 transition hover:bg-cyan-500/10"
+              class="rounded-lg p-1 transition hover:bg-white/[0.03]"
             >
               <X class="h-4 w-4 text-gray-500" />
             </button>
           </div>
           <div class="mb-4 flex items-center gap-3 rounded-xl bg-gray-800 p-3/70">
             <div
-              class="h-12 w-12 rounded-full flex items-center justify-center shadow-[0_0_10px_rgba(6,182,212,0.05)]"
+              class="h-12 w-12 rounded-full flex items-center justify-center "
               style="background-color: {$selectedPeer.alias.colorHex}"
             >
               <User class="h-6 w-6 text-white" />
@@ -763,19 +763,19 @@
             </div>
           </div>
           <div class="mb-3">
-            <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-gray-500">
+            <label for="chiralprice" class="mb-1 block text-xs font-medium text-gray-500">
               Price (CHI) — leave empty for free
             </label>
             <div class="flex items-center gap-2">
               <Coins class="h-4 w-4 flex-shrink-0 text-amber-500" />
               <input
-                id="chiraldrop-price"
+                id="chiralprice"
                 type="number"
                 step="0.001"
                 min="0"
                 placeholder="0 (free)"
                 bind:value={sendPrice}
-                class="flex-1 rounded-lg border border-cyan-500/15 bg-gray-800 px-3 py-2 text-sm text-gray-100 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30 text-gray-100 "
+                class="flex-1 rounded-lg border border-gray-800/60 bg-gray-800 px-3 py-2 text-sm text-gray-100 outline-none transition focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/30 text-gray-100 "
               />
             </div>
             {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -784,7 +784,7 @@
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-600/80 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+            class="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />
@@ -793,7 +793,7 @@
           </button>
         </div>
       {:else}
-        <div class="rounded-2xl border border-dashed border-cyan-500/20 bg-gray-900/80 p-5 text-center shadow-[0_0_10px_rgba(6,182,212,0.05)]/85">
+        <div class="rounded-2xl border border-dashed border-gray-800/50 bg-gray-950 p-5 text-center /85">
           <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800">
             <Upload class="h-6 w-6 text-gray-400" />
           </div>
@@ -803,14 +803,14 @@
 
       <!-- Transaction History -->
       {#if showHistory}
-        <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-cyan-500/15 bg-gray-900 p-4 shadow-[0_0_10px_rgba(6,182,212,0.05)]">
+        <div class="flex min-h-0 flex-1 flex-col rounded-xl border border-gray-800/60 border-t-2 border-t-pink-500/40 bg-gray-950 p-4">
           <h3 class="mb-3 font-semibold text-gray-100">Transaction History</h3>
           <div class="flex-1 space-y-2 overflow-y-auto pr-1">
             {#if $transferHistory.length === 0}
               <p class="py-4 text-center text-sm text-gray-500">No transfers yet</p>
             {:else}
               {#each $transferHistory as transfer (transfer.id)}
-                <div class="rounded-xl border border-cyan-500/10 bg-gray-800 p-3/60">
+                <div class="rounded-xl border border-gray-800/40 bg-gray-800 p-3/60">
                   <div class="flex items-start gap-2.5">
                     <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
                     <div class="min-w-0 flex-1">

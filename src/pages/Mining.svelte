@@ -417,7 +417,7 @@
     <button
       onclick={refreshAll}
       disabled={isLoading}
-      class="p-2 hover:bg-cyan-500/10 rounded-lg transition-colors disabled:opacity-50 text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+      class="p-2 hover:bg-white/[0.03] rounded-lg transition-colors disabled:opacity-50 text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoading ? 'animate-spin' : ''}" />
@@ -430,7 +430,7 @@
     </div>
   {:else if !gethStatus?.installed || !gethStatus?.localRunning}
     <!-- Geth Not Running Locally - Direct to Network Page -->
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-yellow-500/10 rounded-lg">
           <AlertTriangle class="w-6 h-6 text-yellow-400" />
@@ -460,7 +460,7 @@
       </div>
       <button
         onclick={() => goto('/network')}
-        class="w-full px-4 py-3 bg-cyan-600/80 text-white rounded-lg hover:bg-cyan-500/90 transition-colors flex items-center justify-center gap-2"
+        class="w-full px-4 py-3 bg-cyan-500 text-black font-medium rounded-lg hover:bg-cyan-400 transition-colors flex items-center justify-center gap-2"
       >
         <Globe class="w-5 h-5" />
         Go to Network Page
@@ -468,7 +468,7 @@
     </div>
   {:else}
     <!-- Mining Control Card -->
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <div class="p-2 {isAnyMining ? 'bg-yellow-500/10' : 'bg-gray-800'} rounded-lg">
@@ -579,14 +579,14 @@
           <button
             onclick={() => (miningMode = 'cpu')}
             disabled={isAnyMining}
-            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'cpu' ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300' : 'bg-gray-900 border-cyan-500/20 text-gray-300'}"
+            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'cpu' ? 'bg-cyan-500/[0.06] border-cyan-500/30 text-cyan-300' : 'bg-gray-950 border-gray-800/50 text-gray-300'}"
           >
             CPU Miner
           </button>
           <button
             onclick={() => (miningMode = 'gpu')}
             disabled={isAnyMining}
-            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'gpu' ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300' : 'bg-gray-900 border-cyan-500/20 text-gray-300'}"
+            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'gpu' ? 'bg-cyan-500/[0.06] border-cyan-500/30 text-cyan-300' : 'bg-gray-950 border-gray-800/50 text-gray-300'}"
           >
             GPU Miner
           </button>
@@ -671,11 +671,11 @@
               GPU Devices ({selectedGpuDevices.length} selected)
             </div>
             {#if gpuCapabilities.devices.length === 0}
-              <div class="rounded-lg border border-cyan-500/20 bg-gray-800 p-3 text-sm text-gray-300">
+              <div class="rounded-lg border border-gray-800/60 bg-gray-800 p-3 text-sm text-gray-300">
                 No devices were reported by the miner binary. You can still try starting GPU mining with auto-detection.
               </div>
             {:else}
-              <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-cyan-500/20 p-3 bg-gray-800">
+              <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-gray-800/60 p-3 bg-gray-800">
                 {#each gpuCapabilities.devices as device (device.id)}
                   <label class="flex items-center gap-2 text-sm text-gray-300">
                     <input
@@ -683,7 +683,7 @@
                       checked={selectedGpuDevices.includes(device.id)}
                       onchange={() => toggleGpuDevice(device.id)}
                       disabled={isAnyMining}
-                      class="rounded border-cyan-500/25 bg-gray-900/80"
+                      class="rounded border-cyan-500/25 bg-gray-950"
                     />
                     <span class="font-mono text-xs text-gray-500">[{device.id}]</span>
                     <span>{device.name}</span>
@@ -734,7 +734,7 @@
     </div>
 
     <!-- Mining History -->
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-pink-500/40  border border-gray-800/60">
       <button
         onclick={() => showHistory = !showHistory}
         class="w-full flex items-center justify-between p-6 text-left"
@@ -766,7 +766,7 @@
             <button
               onclick={loadMinedBlocks}
               disabled={isLoadingHistory}
-              class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+              class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
             >
               {#if isLoadingHistory}
                 <Loader2 class="w-3 h-3 animate-spin" />
@@ -808,7 +808,7 @@
             <div class="overflow-x-auto">
               <table class="w-full text-sm">
                 <thead>
-                  <tr class="border-b border-cyan-500/20">
+                  <tr class="border-b border-gray-800/50">
                     <th class="text-left py-2 px-3 text-xs font-medium text-gray-500">Block #</th>
                     <th class="text-left py-2 px-3 text-xs font-medium text-gray-500">Time</th>
                     <th class="text-right py-2 px-3 text-xs font-medium text-gray-500">Reward</th>
@@ -817,7 +817,7 @@
                 </thead>
                 <tbody>
                   {#each minedBlocks as block (block.blockNumber)}
-                    <tr class="border-b border-cyan-500/10 hover:bg-cyan-500/5 transition-colors">
+                    <tr class="border-b border-gray-800/40 hover:bg-white/[0.02] transition-colors">
                       <td class="py-2 px-3 font-mono text-xs tabular-nums text-gray-300">
                         #{block.blockNumber.toLocaleString()}
                       </td>

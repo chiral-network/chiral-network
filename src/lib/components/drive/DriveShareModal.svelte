@@ -82,12 +82,12 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={onClose}>
   <div
-    class="bg-gray-900/80 rounded-xl shadow-[0_0_30px_rgba(6,182,212,0.15)] w-full max-w-lg mx-4 p-6"
+    class="bg-gray-950 rounded-xl  w-full max-w-lg mx-4 p-6"
     onclick={(e) => e.stopPropagation()}
   >
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-semibold text-gray-100">Share "{item.name}"</h3>
-      <button onclick={onClose} class="p-1 hover:bg-cyan-500/10 rounded-lg transition">
+      <button onclick={onClose} class="p-1 hover:bg-white/[0.03] rounded-lg transition">
         <X class="w-5 h-5 text-gray-500" />
       </button>
     </div>
@@ -127,7 +127,7 @@
       <button
         onclick={createLink}
         disabled={creating}
-        class="flex items-center gap-2 px-4 py-2 bg-cyan-600/80 hover:bg-cyan-500/90 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
+        class="flex items-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
       >
         {#if creating}
           <Loader2 class="w-4 h-4 animate-spin" />
@@ -169,7 +169,7 @@
     </div>
 
     {#if existingShares.length > 0}
-      <div class="border-t border-cyan-500/20 pt-4">
+      <div class="border-t border-gray-800/50 pt-4">
         <h4 class="text-sm font-medium text-gray-300 mb-3">
           Active Links ({existingShares.length})
         </h4>
@@ -200,7 +200,7 @@
               </div>
               <button
                 onclick={() => copyUrl(share)}
-                class="p-1.5 hover:bg-cyan-500/15 rounded transition"
+                class="p-1.5 hover:bg-white/[0.04] rounded transition"
                 title="Copy link"
               >
                 {#if copied === share.id}
@@ -222,7 +222,7 @@
       </div>
     {/if}
 
-    <div class="mt-4 p-3 bg-cyan-500/10 rounded-lg">
+    <div class="mt-4 p-3 bg-cyan-500/[0.06] rounded-lg">
       <p class="text-xs text-cyan-300">
         <strong>File:</strong> {item.name}
         {#if item.size}

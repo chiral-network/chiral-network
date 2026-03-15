@@ -59,7 +59,7 @@
 </script>
 
 <div class="max-w-2xl mx-auto p-6">
-  <div class="bg-gray-900 rounded-lg border border-cyan-500/20 p-8">
+  <div class="bg-gray-950 rounded-lg border border-gray-800/60 p-8">
     <div class="flex items-center mb-6">
       <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-800 rounded-lg transition">
         <ArrowLeft class="w-5 h-5" />
@@ -95,7 +95,7 @@
           type="password"
           bind:value={privateKeyInput}
           on:keydown={(e) => e.key === 'Enter' && handleLogin()}
-          class="w-full px-4 py-2 border border-cyan-500/20 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-gray-900"
+          class="w-full px-4 py-2 border border-gray-800/60 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-gray-900"
           placeholder="Enter your private key (with or without 0x prefix)"
         />
         <p class="text-xs text-gray-500 mt-2">
@@ -111,7 +111,7 @@
           id="mnemonic-input"
           bind:value={mnemonicInput}
           rows="3"
-          class="w-full px-4 py-2 border border-cyan-500/20 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-gray-900"
+          class="w-full px-4 py-2 border border-gray-800/60 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-gray-900"
           placeholder="Enter your 12-word recovery phrase"
         ></textarea>
         <p class="text-xs text-gray-500 mt-2">
@@ -129,7 +129,7 @@
     <div class="flex gap-3">
       <button
         on:click={onBack}
-        class="flex-1 px-6 py-3 border border-cyan-500/20 rounded-lg hover:bg-gray-900 transition"
+        class="flex-1 px-6 py-3 border border-gray-800/60 rounded-lg hover:bg-gray-950 transition"
       >
         Cancel
       </button>

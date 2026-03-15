@@ -133,17 +133,17 @@
 
 <div class="space-y-4">
   <!-- Protocol selector + Price input + Add files button -->
-  <div class="bg-gray-900 border border-cyan-500/20 rounded-xl p-4">
+  <div class="bg-gray-950 border border-gray-800/60 rounded-xl p-4">
     <div class="flex flex-wrap items-end gap-4">
       <!-- Protocol toggle -->
       <div>
         <label class="block text-xs font-medium text-gray-500 mb-1.5">Protocol</label>
-        <div class="flex rounded-lg overflow-hidden border border-cyan-500/20">
+        <div class="flex rounded-lg overflow-hidden border border-gray-800/60">
           <button
             onclick={() => selectedProtocol = 'WebRTC'}
             class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'WebRTC'
               ? 'bg-blue-600 text-white'
-              : 'bg-gray-800 text-gray-400 hover:bg-cyan-500/10'}"
+              : 'bg-gray-800 text-gray-400 hover:bg-white/[0.03]'}"
           >
             WebRTC
           </button>
@@ -151,7 +151,7 @@
             onclick={() => selectedProtocol = 'BitTorrent'}
             class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol === 'BitTorrent'
               ? 'bg-green-600 text-white'
-              : 'bg-gray-800 text-gray-400 hover:bg-cyan-500/10'}"
+              : 'bg-gray-800 text-gray-400 hover:bg-white/[0.03]'}"
           >
             BitTorrent
           </button>
@@ -167,7 +167,7 @@
           min="0"
           placeholder="Free"
           bind:value={filePrice}
-          class="w-28 px-3 py-1.5 text-sm bg-gray-800 border border-cyan-500/20 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          class="w-28 px-3 py-1.5 text-sm bg-gray-800 border border-gray-800/60 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
       </div>
 
@@ -200,7 +200,7 @@
     <div class="space-y-2">
       {#each seedingItems as item (item.id)}
         {@const Icon = getFileIcon(item.name)}
-        <div class="bg-gray-900 border border-cyan-500/20 rounded-xl p-4">
+        <div class="bg-gray-950 border border-gray-800/60 rounded-xl p-4">
           <div class="flex items-start gap-3">
             <!-- File icon -->
             <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center">
@@ -239,7 +239,7 @@
                   placeholder="Free"
                   value={getPriceDraft(item)}
                   oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
-                  class="w-24 px-2 py-1 text-xs bg-gray-800 border border-cyan-500/20 rounded text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  class="w-24 px-2 py-1 text-xs bg-gray-800 border border-gray-800/60 rounded text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <button
                   onclick={() => handleUpdatePrice(item)}
@@ -261,7 +261,7 @@
                   </span>
                   <button
                     onclick={() => copyToClipboard(item.merkleRoot!, 'Hash')}
-                    class="flex-shrink-0 p-1 hover:bg-cyan-500/10 rounded"
+                    class="flex-shrink-0 p-1 hover:bg-white/[0.03] rounded"
                     title="Copy hash"
                   >
                     <Copy class="w-3.5 h-3.5 text-gray-400" />
@@ -274,7 +274,7 @@
             <div class="flex items-center gap-1 flex-shrink-0">
               <button
                 onclick={() => expandedFileId = expandedFileId === item.id ? null : item.id}
-                class="p-1.5 hover:bg-cyan-500/10 rounded-lg transition"
+                class="p-1.5 hover:bg-white/[0.03] rounded-lg transition"
                 title="Share options"
               >
                 <Link class="w-4 h-4 text-gray-500" />
@@ -299,11 +299,11 @@
                   type="text"
                   readonly
                   value={generateMagnetLink(item)}
-                  class="flex-1 text-xs font-mono bg-gray-800 border border-cyan-500/20 rounded px-2 py-1 text-gray-400"
+                  class="flex-1 text-xs font-mono bg-gray-800 border border-gray-800/60 rounded px-2 py-1 text-gray-400"
                 />
                 <button
                   onclick={() => copyToClipboard(generateMagnetLink(item), 'Magnet link')}
-                  class="flex-shrink-0 p-1 hover:bg-cyan-500/10 rounded"
+                  class="flex-shrink-0 p-1 hover:bg-white/[0.03] rounded"
                 >
                   <Copy class="w-3.5 h-3.5 text-gray-400" />
                 </button>
@@ -316,11 +316,11 @@
                   type="text"
                   readonly
                   value={item.merkleRoot}
-                  class="flex-1 text-xs font-mono bg-gray-800 border border-cyan-500/20 rounded px-2 py-1 text-gray-400"
+                  class="flex-1 text-xs font-mono bg-gray-800 border border-gray-800/60 rounded px-2 py-1 text-gray-400"
                 />
                 <button
                   onclick={() => copyToClipboard(item.merkleRoot!, 'Hash')}
-                  class="flex-shrink-0 p-1 hover:bg-cyan-500/10 rounded"
+                  class="flex-shrink-0 p-1 hover:bg-white/[0.03] rounded"
                 >
                   <Copy class="w-3.5 h-3.5 text-gray-400" />
                 </button>

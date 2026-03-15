@@ -114,7 +114,7 @@
 </script>
 
 <!-- Host Marketplace Settings -->
-<div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm overflow-hidden">
+<div class="rounded-2xl border border-gray-800/60 bg-gray-950  backblur-sm overflow-hidden">
   <div class="flex items-center justify-between gap-4 p-5 pb-4">
     <div class="flex items-center gap-3">
       <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-800">
@@ -136,14 +136,14 @@
       aria-label="Toggle hosting"
     >
       <span
-        class="absolute top-0.5 left-0.5 w-6 h-6 bg-gray-900 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.05)] transition-transform
+        class="absolute top-0.5 left-0.5 w-6 h-6 bg-gray-950 rounded-full  transition-transform
           {$settings.hostingConfig.enabled ? 'translate-x-5' : 'translate-x-0'}"
       ></span>
     </button>
   </div>
 
   {#if $settings.hostingConfig.enabled}
-    <div class="border-t border-cyan-500/10 px-5 py-4">
+    <div class="border-t border-gray-800/40 px-5 py-4">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
         <div>
           <label for="host-max-storage-gb" class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
@@ -158,7 +158,7 @@
               step="1"
               value={Math.round($settings.hostingConfig.maxStorageBytes / (1024 * 1024 * 1024))}
               oninput={(e) => updateMaxStorageGb(Number(e.currentTarget.value))}
-              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
             <span class="text-xs text-gray-500 font-medium">GB</span>
@@ -178,7 +178,7 @@
               step="0.000001"
               value={weiToChiNumber($settings.hostingConfig.pricePerMbPerDayWei, 0.001)}
               oninput={(e) => updatePriceChi(Number(e.currentTarget.value))}
-              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
             <span class="text-xs text-gray-500 font-medium">CHI/MB/day</span>
@@ -198,7 +198,7 @@
               step="0.000001"
               value={weiToChiNumber($settings.hostingConfig.minDepositWei, 0.1)}
               oninput={(e) => updateDepositChi(Number(e.currentTarget.value))}
-              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
             <span class="text-xs text-gray-500 font-medium">CHI</span>
@@ -219,7 +219,7 @@
               aria-label="Toggle auto accept"
             >
               <span
-                class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-900 rounded-full shadow-[0_0_10px_rgba(6,182,212,0.05)] transition-transform
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-950 rounded-full  transition-transform
                   {$settings.hostingConfig.autoAcceptByElo ? 'translate-x-4' : 'translate-x-0'}"
               ></span>
             </button>
@@ -234,7 +234,7 @@
               value={$settings.hostingConfig.minAutoAcceptElo}
               oninput={(e) => updateAutoAcceptMinElo(Number(e.currentTarget.value))}
               disabled={!$settings.hostingConfig.autoAcceptByElo}
-              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-cyan-500/20 rounded-lg text-gray-100 tabular-nums
+              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20
                 disabled:opacity-40 disabled:cursor-not-allowed"
             />
@@ -246,11 +246,11 @@
         </div>
       </div>
 
-      <div class="mt-5 flex items-center gap-3 pt-4 border-t border-cyan-500/10">
+      <div class="mt-5 flex items-center gap-3 pt-4 border-t border-gray-800/40">
         <button
           onclick={onPublish}
           disabled={hostingPublishing}
-          class="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-lg transition-colors
+          class="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-cyan-500 hover:bg-cyan-400 text-black font-medium rounded-lg transition-colors
             focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-2
             disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -262,8 +262,8 @@
         <button
           onclick={onUnpublish}
           disabled={hostingPublishing}
-          class="px-4 py-2 text-sm font-medium text-gray-400 border border-cyan-500/20 rounded-lg
-            hover:bg-cyan-500/5 transition-colors
+          class="px-4 py-2 text-sm font-medium text-gray-400 border border-gray-800/60 rounded-lg
+            hover:bg-white/[0.02] transition-colors
             focus:outline-none focus:ring-2 focus:ring-cyan-500/30
             disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -275,7 +275,7 @@
 </div>
 
 <!-- Available Hosts -->
-<div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 p-5 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm">
+<div class="rounded-2xl border border-gray-800/60 bg-gray-950 p-5  backblur-sm">
   <div class="flex items-center justify-between mb-4">
     <div class="flex items-center gap-3">
       <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-500/10">
@@ -298,7 +298,7 @@
         value={sortBy}
         onchange={(e) => onSortChange(e.currentTarget.value as 'reputation' | 'price' | 'storage')}
         aria-label="Sort hosts by"
-        class="text-xs bg-gray-800/60 border border-cyan-500/20 rounded-lg px-2.5 py-1.5 text-gray-300
+        class="text-xs bg-gray-800/60 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-gray-300
           focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
       >
         <option value="reputation">Reputation</option>
@@ -308,7 +308,7 @@
       <button
         onclick={onRefreshHosts}
         disabled={loadingHosts}
-        class="p-2 text-gray-400 hover:text-gray-400 rounded-lg hover:bg-cyan-500/10 transition-colors
+        class="p-2 text-gray-400 hover:text-gray-400 rounded-lg hover:bg-white/[0.03] transition-colors
           focus:outline-none focus:ring-2 focus:ring-cyan-500/30 disabled:opacity-50"
         title="Refresh host list"
         aria-label="Refresh host list"
@@ -336,8 +336,8 @@
   {:else}
     <div class="space-y-3">
       {#each sortedHostList as host (host.advertisement.peerId)}
-        <div class="group p-4 rounded-xl border border-cyan-500/10 bg-gray-800
-          hover:border-cyan-500/15 hover:shadow-[0_0_10px_rgba(6,182,212,0.05)] transition-all">
+        <div class="group p-4 rounded-xl border border-gray-800/40 bg-gray-800
+          hover:border-gray-800/50 hover: transition-all">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0 flex-1">
               <!-- Header row -->
@@ -380,8 +380,8 @@
 
             <button
               onclick={() => onPropose(host)}
-              class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-xl transition-all flex-shrink-0
-                shadow-[0_0_10px_rgba(6,182,212,0.05)] shadow-primary-500/10 hover:shadow-[0_0_15px_rgba(6,182,212,0.08)] hover:shadow-primary-500/20 active:scale-[0.98]
+              class="flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium bg-cyan-500 hover:bg-cyan-400 text-black font-medium rounded-xl transition-all flex-shrink-0
+                 shadow-primary-500/10 hover: hover:shadow-primary-500/20 active:scale-[0.98]
                 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:ring-offset-2"
             >
               <Rocket class="w-3.5 h-3.5" />

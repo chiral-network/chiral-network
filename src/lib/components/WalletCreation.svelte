@@ -129,7 +129,7 @@
 
 <div class="max-w-2xl mx-auto p-6">
   {#if step === 'generate'}
-    <div class="bg-gray-900 rounded-lg border border-cyan-500/20 p-8">
+    <div class="bg-gray-950 rounded-lg border border-gray-800/60 p-8">
       <div class="flex items-center mb-6">
         <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-800 rounded-lg transition">
           <ArrowLeft class="w-5 h-5" />
@@ -150,7 +150,7 @@
 
         <div class="grid grid-cols-3 gap-3 bg-gray-900/50 p-6 rounded-lg mb-4">
           {#each mnemonicWords as word, index}
-            <div class="bg-gray-800 p-3 rounded border border-cyan-500/20">
+            <div class="bg-gray-800 p-3 rounded border border-gray-800/60">
               <span class="text-xs text-gray-500">{index + 1}.</span>
               <span class="ml-2 font-mono">{word}</span>
             </div>
@@ -192,7 +192,7 @@
       <div class="flex gap-3">
         <button
           on:click={onBack}
-          class="flex-1 px-6 py-3 border border-cyan-500/20 rounded-lg hover:bg-gray-900 transition"
+          class="flex-1 px-6 py-3 border border-gray-800/60 rounded-lg hover:bg-gray-950 transition"
         >
           Cancel
         </button>
@@ -205,7 +205,7 @@
       </div>
     </div>
   {:else if step === 'verify'}
-    <div class="bg-gray-900 rounded-lg border border-cyan-500/20 p-8">
+    <div class="bg-gray-950 rounded-lg border border-gray-800/60 p-8">
       <h2 class="text-2xl font-bold mb-6">Verify Recovery Phrase</h2>
 
       <p class="text-gray-400 mb-6">
@@ -221,7 +221,7 @@
             id="word-{index}"
             type="text"
             bind:value={userInputs[i]}
-            class="w-full px-4 py-2 border border-cyan-500/20 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-gray-900"
+            class="w-full px-4 py-2 border border-gray-800/60 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-gray-900"
             placeholder="Enter word {index + 1}"
           />
         </div>
@@ -236,7 +236,7 @@
       <div class="flex gap-3">
         <button
           on:click={() => step = 'generate'}
-          class="flex-1 px-6 py-3 border border-cyan-500/20 rounded-lg hover:bg-gray-900 transition"
+          class="flex-1 px-6 py-3 border border-gray-800/60 rounded-lg hover:bg-gray-950 transition"
         >
           Back
         </button>
@@ -249,7 +249,7 @@
       </div>
     </div>
   {:else}
-    <div class="bg-gray-900 rounded-lg border border-cyan-500/20 p-8">
+    <div class="bg-gray-950 rounded-lg border border-gray-800/60 p-8">
       <div class="flex items-center gap-2 mb-3">
         <Mail class="w-5 h-5 text-primary-600" />
         <h2 class="text-2xl font-bold">One-Time Email Backup</h2>
@@ -259,7 +259,7 @@
         Enter your email to receive a one-time copy of your recovery phrase and wallet credentials.
       </p>
 
-      <div class="bg-cyan-500/10 border-l-4 border-blue-400 p-4 mb-6">
+      <div class="bg-cyan-500/[0.06] border-l-4 border-blue-400 p-4 mb-6">
         <p class="text-sm text-blue-400">
           This email address is only used to send this backup now. Chiral does not store it.
         </p>
@@ -273,7 +273,7 @@
           id="backup-email"
           type="email"
           bind:value={emailInput}
-          class="w-full px-4 py-2 border border-cyan-500/20 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-gray-900"
+          class="w-full px-4 py-2 border border-gray-800/60 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-gray-900"
           placeholder="you@example.com"
           autocomplete="email"
         />
@@ -288,7 +288,7 @@
       <div class="flex gap-3">
         <button
           on:click={() => step = 'verify'}
-          class="flex-1 px-6 py-3 border border-cyan-500/20 rounded-lg hover:bg-gray-900 transition"
+          class="flex-1 px-6 py-3 border border-gray-800/60 rounded-lg hover:bg-gray-950 transition"
           disabled={sendingEmail}
         >
           Back

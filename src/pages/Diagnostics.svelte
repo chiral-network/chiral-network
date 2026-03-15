@@ -359,7 +359,7 @@
   function sourceBg(source: string): string {
     const normalized = source.toLowerCase();
     switch (normalized) {
-      case 'geth': return 'bg-cyan-500/10 text-cyan-700';
+      case 'geth': return 'bg-cyan-500/[0.06] text-cyan-700';
       case 'mining': return 'bg-amber-500/10 text-amber-400';
       case 'dht': return 'bg-emerald-500/10 text-emerald-400';
       case 'bootstrap': return 'bg-orange-500/10 text-orange-400';
@@ -417,7 +417,7 @@
       </label>
       <button
         onclick={refreshAll}
-        class="p-2 hover:bg-cyan-500/10 rounded-lg transition-colors text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+        class="p-2 hover:bg-white/[0.03] rounded-lg transition-colors text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         title="Refresh all"
       >
         <RefreshCw class="w-5 h-5" />
@@ -426,7 +426,7 @@
   </div>
 
   <!-- DHT Diagnostics -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60">
     <button
       onclick={() => showDhtSection = !showDhtSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -453,7 +453,7 @@
           <button
             onclick={loadDhtHealth}
             disabled={isLoadingDht}
-            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingDht}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -543,7 +543,7 @@
   </div>
 
   <!-- Bootstrap Diagnostics -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60">
     <button
       onclick={() => showBootstrapSection = !showBootstrapSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -570,7 +570,7 @@
           <button
             onclick={runBootstrapCheck}
             disabled={isLoadingBootstrap}
-            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingBootstrap}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -633,7 +633,7 @@
   </div>
 
   <!-- Geth Diagnostics -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60">
     <button
       onclick={() => showGethSection = !showGethSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -660,7 +660,7 @@
           <button
             onclick={loadGethStatus}
             disabled={isLoadingGeth}
-            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingGeth}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -728,7 +728,7 @@
   </div>
 
   <!-- Mining Diagnostics -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60">
     <button
       onclick={() => showMiningSection = !showMiningSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -755,7 +755,7 @@
           <button
             onclick={loadMiningStatus}
             disabled={isLoadingMining}
-            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isLoadingMining}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -808,13 +808,13 @@
   </div>
 
   <!-- Geth Log Viewer -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60">
     <button
       onclick={() => showGethLogSection = !showGethLogSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 bg-cyan-500/10 rounded-lg">
+        <div class="p-2 bg-cyan-500/[0.06] rounded-lg">
           <FileText class="w-6 h-6 text-cyan-400" />
         </div>
         <div>
@@ -838,7 +838,7 @@
               id="geth-log-lines"
               bind:value={gethLogLines}
               onchange={() => loadGethLog()}
-              class="text-xs px-2 py-1 bg-gray-800 border border-cyan-500/20 rounded text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 border border-gray-800/60 rounded text-gray-300"
             >
               <option value={50}>50</option>
               <option value={100}>100</option>
@@ -855,7 +855,7 @@
                   });
                 }
               }}
-              class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 text-gray-300"
             >
               <Copy class="w-3 h-3" />
               Copy
@@ -863,7 +863,7 @@
             <button
               onclick={loadGethLog}
               disabled={isLoadingGethLog}
-              class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+              class="text-xs px-3 py-1.5 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
             >
               {#if isLoadingGethLog}
                 <Loader2 class="w-3 h-3 animate-spin" />
@@ -875,7 +875,7 @@
           </div>
         </div>
 
-        <div class="bg-gray-900 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
+        <div class="bg-gray-950 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto whitespace-pre-wrap">
           {#if gethLogContent}
             {#each gethLogContent.split('\n') as line}
               {@const parsed = parseStructuredGethLine(line)}
@@ -907,7 +907,7 @@
   </div>
 
   <!-- Event Logs -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60">
     <button
       onclick={() => showLogsSection = !showLogsSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -936,7 +936,7 @@
             <Filter class="w-4 h-4 text-gray-400" />
             <select
               bind:value={logFilter}
-              class="text-xs px-2 py-1 bg-gray-800 border border-cyan-500/20 rounded text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 border border-gray-800/60 rounded text-gray-300"
             >
               <option value="all">All Levels</option>
               <option value="info">Info</option>
@@ -946,7 +946,7 @@
             </select>
             <select
               bind:value={sourceFilter}
-              class="text-xs px-2 py-1 bg-gray-800 border border-cyan-500/20 rounded text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 border border-gray-800/60 rounded text-gray-300"
             >
               <option value="all">All Sources</option>
               <option value="dht">DHT</option>
@@ -963,7 +963,7 @@
             </label>
             <button
               onclick={copyLogs}
-              class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 text-gray-300"
               title="Copy logs to clipboard"
             >
               <Copy class="w-3 h-3" />
@@ -971,7 +971,7 @@
             </button>
             <button
               onclick={exportLogs}
-              class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 text-gray-300"
               title="Export logs as file"
             >
               <Download class="w-3 h-3" />
@@ -989,7 +989,7 @@
         </div>
 
         <!-- Log Output -->
-        <div class="bg-gray-900 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
+        <div class="bg-gray-950 rounded-lg p-4 font-mono text-xs max-h-96 overflow-y-auto" id="log-output">
           {#if filteredLogs.length === 0}
             <p class="text-gray-500 text-center py-8">No log entries{logFilter !== 'all' || sourceFilter !== 'all' ? ' matching filters' : ''}</p>
           {:else}

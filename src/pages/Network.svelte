@@ -517,7 +517,7 @@
     <button
       onclick={loadGethStatus}
       disabled={isLoadingGeth}
-      class="p-2 hover:bg-cyan-500/10 rounded-lg transition-colors disabled:opacity-50 text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+      class="p-2 hover:bg-white/[0.03] rounded-lg transition-colors disabled:opacity-50 text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoadingGeth ? 'animate-spin' : ''}" />
@@ -534,7 +534,7 @@
   {/if}
 
   <!-- Blockchain Node Section -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6 mb-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
         <div class="p-2 {gethStatus?.running ? 'bg-emerald-500/10' : 'bg-gray-800'} rounded-lg">
@@ -588,7 +588,7 @@
           </div>
           <div class="w-full bg-gray-700 rounded-full h-2">
             <div
-              class="bg-cyan-600/80 h-2 rounded-full transition-all"
+              class="bg-cyan-500 h-2 rounded-full transition-all"
               style="width: {downloadProgress.percentage}%"
             ></div>
           </div>
@@ -602,7 +602,7 @@
         <button
           onclick={handleDownloadGeth}
           disabled={isDownloading}
-          class="w-full px-4 py-3 bg-cyan-600/80 text-white rounded-lg hover:bg-cyan-500/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+          class="w-full px-4 py-3 bg-cyan-500 text-black font-medium rounded-lg hover:bg-cyan-400 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <Download class="w-5 h-5" />
           Download Geth
@@ -658,7 +658,7 @@
 
       <!-- Connecting Info -->
       {#if showGethConnectingMsg}
-        <div class="mt-4 p-3 bg-cyan-500/10 border border-primary-200 rounded-lg">
+        <div class="mt-4 p-3 bg-cyan-500/[0.06] border border-primary-200 rounded-lg">
           <p class="text-sm text-primary-800">
             <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
             This may take a moment. Peer count will update automatically.
@@ -667,7 +667,7 @@
       {/if}
 
       <!-- Bootstrap Health Check -->
-      <div class="mt-4 border-t border-cyan-500/20 pt-4">
+      <div class="mt-4 border-t border-gray-800/50 pt-4">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <Activity class="w-4 h-4 text-gray-500" />
@@ -676,7 +676,7 @@
           <button
             onclick={checkBootstrapHealth}
             disabled={isCheckingBootstrap}
-            class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+            class="text-xs px-2 py-1 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
           >
             {#if isCheckingBootstrap}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -763,7 +763,7 @@
   </div>
 
   <!-- P2P Network (DHT) Section -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6 mb-6">
     <!-- Header with status and controls -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
@@ -825,7 +825,7 @@
         <button
           onclick={connectToNetwork}
           disabled={isConnecting}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-cyan-600/80 text-white rounded-lg hover:bg-cyan-500/90 transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-cyan-500 text-black font-medium rounded-lg hover:bg-cyan-400 transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2"
         >
           {#if isConnecting}
             <Loader2 class="w-4 h-4 animate-spin" />
@@ -839,7 +839,7 @@
     </div>
 
     <!-- Health Check -->
-    <div class="border-t border-cyan-500/20 pt-4">
+    <div class="border-t border-gray-800/50 pt-4">
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
           <HeartPulse class="w-4 h-4 text-gray-500" />
@@ -848,7 +848,7 @@
         <button
           onclick={checkDhtHealth}
           disabled={isCheckingDhtHealth}
-          class="text-xs px-2 py-1 bg-gray-800 hover:bg-cyan-500/15 rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+          class="text-xs px-2 py-1 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
         >
           {#if isCheckingDhtHealth}
             <Loader2 class="w-3 h-3 animate-spin" />
@@ -944,7 +944,7 @@
                 <p class="text-xs text-gray-500 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
                 <div class="flex flex-wrap gap-1.5">
                   {#each dhtHealth.protocols as protocol}
-                    <span class="px-2 py-0.5 bg-cyan-500/10 text-cyan-300 text-xs rounded-full font-mono">
+                    <span class="px-2 py-0.5 bg-cyan-500/[0.06] text-cyan-300 text-xs rounded-full font-mono">
                       {protocol}
                     </span>
                   {/each}
@@ -961,7 +961,7 @@
     </div>
 
     <!-- Traffic Statistics -->
-    <div class="border-t border-cyan-500/20 pt-4 mt-4">
+    <div class="border-t border-gray-800/50 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
         <Activity class="w-4 h-4 text-gray-500" />
         <span class="text-sm font-medium text-gray-300">Traffic Statistics</span>
@@ -999,7 +999,7 @@
     </div>
 
     <!-- NAT Traversal / Relay Status -->
-    <div class="border-t border-cyan-500/20 pt-4 mt-4">
+    <div class="border-t border-gray-800/50 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
         <Globe class="w-4 h-4 text-gray-500" />
         <span class="text-sm font-medium text-gray-300">NAT Traversal</span>
@@ -1051,7 +1051,7 @@
     </div>
 
     <!-- Connected Peers -->
-    <div class="border-t border-cyan-500/20 pt-4 mt-4">
+    <div class="border-t border-gray-800/50 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
         <Radio class="w-4 h-4 text-gray-500" />
         <span class="text-sm font-medium text-gray-300">Connected Peers</span>
@@ -1068,7 +1068,7 @@
       {:else}
         <div class="space-y-2">
           {#each filteredPeers as peer}
-            <div class="p-3 bg-gray-800 rounded-lg hover:bg-cyan-500/10 transition-colors">
+            <div class="p-3 bg-gray-800 rounded-lg hover:bg-white/[0.03] transition-colors">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
                   <div class="font-mono text-sm break-all text-gray-200">{peer.id}</div>
@@ -1078,7 +1078,7 @@
                 </div>
                 <button
                   onclick={() => pingPeer(peer.id)}
-                  class="flex items-center gap-1 px-3 py-1.5 bg-cyan-600/80 text-white text-sm rounded hover:bg-cyan-500/90 transition shrink-0"
+                  class="flex items-center gap-1 px-3 py-1.5 bg-cyan-500 text-black font-medium text-sm rounded hover:bg-cyan-400 transition shrink-0"
                   title="Ping this peer"
                 >
                   <Radio class="w-3 h-3" />
@@ -1093,7 +1093,7 @@
   </div>
 
   <!-- Blacklist Section -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mt-6">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6 mt-6">
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-red-500/10 rounded-lg">
         <ShieldBan class="w-5 h-5 text-red-400" />
@@ -1115,14 +1115,14 @@
         type="text"
         bind:value={blacklistAddress}
         placeholder="Wallet or peer address"
-        class="flex-1 px-3 py-2 text-sm border border-cyan-500/25 rounded-lg bg-gray-900 text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
+        class="flex-1 px-3 py-2 text-sm border border-gray-800/60 rounded-lg bg-gray-950 text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
         onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
       />
       <input
         type="text"
         bind:value={blacklistReason}
         placeholder="Reason (optional)"
-        class="w-48 px-3 py-2 text-sm border border-cyan-500/25 rounded-lg bg-gray-900 text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
+        class="w-48 px-3 py-2 text-sm border border-gray-800/60 rounded-lg bg-gray-950 text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
         onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
       />
       <button

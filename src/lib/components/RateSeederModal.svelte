@@ -63,7 +63,7 @@
   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') onclose(); }}
   onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) onclose(); }}
 >
-  <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6 max-w-md w-full mx-4">
+  <div class="bg-gray-950 rounded-xl border border-gray-800/60 p-6 max-w-md w-full mx-4">
     <!-- Header -->
     <div class="mb-4">
       <h3 class="font-semibold text-lg text-gray-100">Rate This Download</h3>
@@ -119,7 +119,7 @@
         maxlength={500}
         rows={3}
         placeholder="Share your experience..."
-        class="w-full px-3 py-2 bg-gray-900 border border-cyan-500/20 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+        class="w-full px-3 py-2 bg-gray-950 border border-gray-800/60 rounded-lg text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
       ></textarea>
       <p class="text-xs text-gray-400 mt-1 text-right">{comment.length}/500</p>
     </div>
@@ -128,7 +128,7 @@
     <div class="flex gap-3">
       <button
         onclick={onclose}
-        class="flex-1 px-4 py-2.5 border border-cyan-500/20 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-900 transition-colors"
+        class="flex-1 px-4 py-2.5 border border-gray-800/60 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-950 transition-colors"
       >
         Skip
       </button>

@@ -137,7 +137,7 @@
   </div>
 
   <!-- Appearance Section -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-pink-500/40  border border-gray-800/60 p-6 mb-6">
     <div class="flex items-center gap-3 mb-6">
       <div class="p-2 bg-purple-500/10 rounded-lg">
         <Palette class="w-5 h-5 text-purple-400" />
@@ -158,8 +158,8 @@
             onclick={() => setTheme(option.value)}
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.theme === option.value
-                ? 'border-cyan-500/40 bg-cyan-500/10'
-                : 'border-cyan-500/20 hover:border-cyan-500/20 bg-gray-800'}"
+                ? 'border-cyan-500/40 bg-cyan-500/[0.06]'
+                : 'border-gray-800/50 hover:border-gray-800/50 bg-gray-800'}"
           >
             {#if $settings.theme === option.value}
               <div class="absolute top-2 right-2">
@@ -198,7 +198,7 @@
             aria-label="Set accent color to {ct.label}"
           >
             {#if $settings.colorTheme === ct.value}
-              <Check class="w-5 h-5 text-white absolute inset-0 m-auto drop-shadow" />
+              <Check class="w-5 h-5 text-white absolute inset-0 m-auto shadow" />
             {/if}
           </button>
         {/each}
@@ -206,7 +206,7 @@
     </div>
 
     <!-- Compact Mode -->
-    <div class="flex items-center justify-between py-4 border-t border-cyan-500/20">
+    <div class="flex items-center justify-between py-4 border-t border-gray-800/50">
       <div class="flex items-center gap-3">
         <LayoutGrid class="w-5 h-5 text-gray-500" />
         <div>
@@ -223,14 +223,14 @@
         aria-label="Toggle compact mode"
       >
         <span
-          class="absolute top-0.5 left-0.5 w-5 h-5 bg-gray-900 rounded-full shadow transition-transform
+          class="absolute top-0.5 left-0.5 w-5 h-5 bg-gray-950 rounded-full shadow transition-transform
             {$settings.compactMode ? 'translate-x-6' : 'translate-x-0'}"
         ></span>
       </button>
     </div>
 
     <!-- Navigation Style -->
-    <div class="py-4 border-t border-cyan-500/20">
+    <div class="py-4 border-t border-gray-800/50">
       <span class="block text-sm font-medium text-gray-300 mb-3">Navigation Style</span>
       <div class="grid grid-cols-2 gap-3">
         {#each navStyleOptions as option}
@@ -239,8 +239,8 @@
             onclick={() => setNavStyle(option.value)}
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.navStyle === option.value
-                ? 'border-cyan-500/40 bg-cyan-500/10'
-                : 'border-cyan-500/20 hover:border-cyan-500/20 bg-gray-800'}"
+                ? 'border-cyan-500/40 bg-cyan-500/[0.06]'
+                : 'border-gray-800/50 hover:border-gray-800/50 bg-gray-800'}"
           >
             {#if $settings.navStyle === option.value}
               <div class="absolute top-2 right-2">
@@ -257,9 +257,9 @@
     </div>
 
     <!-- Preview -->
-    <div class="pt-4 border-t border-cyan-500/20">
+    <div class="pt-4 border-t border-gray-800/50">
       <span class="block text-sm font-medium text-gray-300 mb-3">Preview</span>
-      <div class="p-4 rounded-lg bg-gray-950 border border-cyan-500/20">
+      <div class="p-4 rounded-lg bg-gray-950 border border-gray-800/60">
         <div class="flex items-center gap-3 mb-3">
           <div class="w-10 h-10 rounded-full bg-cyan-500"></div>
           <div>
@@ -268,11 +268,11 @@
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
-          <div class="p-3 rounded-lg bg-gray-900/80 border border-cyan-500/20">
+          <div class="p-3 rounded-lg bg-gray-950 border border-gray-800/60">
             <p class="text-xs text-gray-500">Balance</p>
             <p class="text-lg font-bold text-gray-100 tabular-nums">100.00 CHI</p>
           </div>
-          <div class="p-3 rounded-lg bg-gray-900/80 border border-cyan-500/20">
+          <div class="p-3 rounded-lg bg-gray-950 border border-gray-800/60">
             <p class="text-xs text-gray-500">Peers</p>
             <p class="text-lg font-bold text-gray-100">12</p>
           </div>
@@ -283,9 +283,9 @@
 
   <!-- Storage Section -->
   {#if isTauri}
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-pink-500/40  border border-gray-800/60 p-6 mb-6">
       <div class="flex items-center gap-3 mb-6">
-        <div class="p-2 bg-cyan-500/10 rounded-lg">
+        <div class="p-2 bg-cyan-500/[0.06] rounded-lg">
           <HardDrive class="w-5 h-5 text-cyan-400" />
         </div>
         <div>
@@ -298,7 +298,7 @@
       <div>
         <span class="block text-sm font-medium text-gray-300 mb-2">Download Directory</span>
         <div class="flex items-center gap-3">
-          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-800 border border-cyan-500/20 rounded-lg">
+          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-800 border border-gray-800/60 rounded-lg">
             <FolderOpen class="w-4 h-4 text-gray-400 flex-shrink-0" />
             <span class="text-sm text-gray-300 truncate font-mono">
               {displayDownloadDir || 'Loading...'}
@@ -306,7 +306,7 @@
           </div>
           <button
             onclick={browseDownloadDirectory}
-            class="px-4 py-2.5 bg-cyan-600/80 text-white text-sm font-medium rounded-lg hover:bg-cyan-500/90 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+            class="px-4 py-2.5 bg-cyan-500 text-black font-medium text-sm font-medium rounded-lg hover:bg-cyan-400 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             Browse
           </button>
@@ -332,7 +332,7 @@
   {/if}
 
   <!-- Notification Settings Section -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6 mb-6">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-pink-500/40  border border-gray-800/60 p-6 mb-6">
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-amber-500/10 rounded-lg">
         <Bell class="w-5 h-5 text-amber-400" />
@@ -347,7 +347,7 @@
       {#each notificationOptions as option}
         <button
           onclick={() => toggleNotification(option.key)}
-          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-cyan-500/5 transition-colors group"
+          class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-white/[0.02] transition-colors group"
           role="switch"
           aria-checked={$settings.notifications?.[option.key] ?? true}
           title={option.description}
@@ -356,7 +356,7 @@
           <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
             {$settings.notifications?.[option.key] ? 'bg-cyan-500' : 'bg-gray-300'}">
             <span
-              class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-900 rounded-full shadow transition-transform
+              class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-950 rounded-full shadow transition-transform
                 {$settings.notifications?.[option.key] ? 'translate-x-4' : 'translate-x-0'}"
             ></span>
           </div>
@@ -366,7 +366,7 @@
   </div>
 
   <!-- Reset Section -->
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6">
     <div class="flex items-center justify-between">
       <div>
         <h3 class="font-semibold text-gray-100">Reset Settings</h3>

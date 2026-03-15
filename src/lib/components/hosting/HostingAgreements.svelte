@@ -48,7 +48,7 @@
 
 <!-- Incoming Proposals -->
 {#if !loadingAgreements && incomingProposals.length > 0}
-  <div class="rounded-2xl border-2 border-cyan-500/20 bg-cyan-500/10 p-5 shadow-[0_0_10px_rgba(6,182,212,0.05)]">
+  <div class="rounded-2xl border-2 border-gray-800/50 bg-cyan-500/[0.06] p-5 ">
     <div class="flex items-center gap-3 mb-4">
       <div class="relative flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/10">
         <Send class="w-4.5 h-4.5 text-cyan-400" />
@@ -66,7 +66,7 @@
 
     <div class="space-y-2.5">
       {#each incomingProposals as proposal (proposal.agreementId)}
-        <div class="flex items-center justify-between gap-3 p-4 rounded-xl bg-gray-900 border border-cyan-500/15">
+        <div class="flex items-center justify-between gap-3 p-4 rounded-xl bg-gray-950 border border-gray-800/60">
           <div class="min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
               <span class="text-sm font-semibold text-gray-100 font-mono">
@@ -112,10 +112,10 @@
 {/if}
 
 <!-- My Agreements -->
-<div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm overflow-hidden">
+<div class="rounded-2xl border border-gray-800/60 bg-gray-950  backblur-sm overflow-hidden">
   <button
     onclick={() => showAgreements = !showAgreements}
-    class="flex items-center justify-between w-full p-5 hover:bg-cyan-500/5 transition-colors
+    class="flex items-center justify-between w-full p-5 hover:bg-white/[0.02] transition-colors
       focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500/30"
     aria-expanded={showAgreements}
   >
@@ -149,7 +149,7 @@
   </button>
 
   {#if showAgreements}
-    <div class="border-t border-cyan-500/10 p-5 pt-4">
+    <div class="border-t border-gray-800/40 p-5 pt-4">
       {#if loadingAgreements}
         <div class="flex flex-col items-center justify-center py-12">
           <Loader2 class="w-6 h-6 text-gray-400 animate-spin mb-3" />
@@ -171,7 +171,7 @@
             <div class="p-4 rounded-xl border transition-all
               {hasCancelRequest && agreement.cancelRequestedBy !== myPeerId
                 ? 'border-orange-200 bg-orange-50/50'
-                : 'border-gray-100 bg-gray-800 hover:border-cyan-500/15'}">
+                : 'border-gray-100 bg-gray-800 hover:border-gray-800/50'}">
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
@@ -223,8 +223,8 @@
                       </button>
                       <button
                         onclick={() => onRespondToCancellation(agreement.agreementId, false)}
-                        class="text-xs font-medium px-3 py-1.5 text-gray-400 border border-cyan-500/20 rounded-lg
-                          hover:bg-cyan-500/5 transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                        class="text-xs font-medium px-3 py-1.5 text-gray-400 border border-gray-800/60 rounded-lg
+                          hover:bg-white/[0.02] transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                       >
                         Deny
                       </button>
@@ -263,7 +263,7 @@
 
 <!-- Files I'm Hosting -->
 {#if !loadingAgreements && hostedFiles.length > 0}
-  <div class="rounded-2xl border border-cyan-500/15 bg-gray-900/90 p-5 shadow-[0_0_10px_rgba(6,182,212,0.05)] backdrop-blur-sm">
+  <div class="rounded-2xl border border-gray-800/60 bg-gray-950 p-5  backblur-sm">
     <div class="flex items-center gap-3 mb-4">
       <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10">
         <HardDrive class="w-4.5 h-4.5 text-emerald-400" />
@@ -276,9 +276,9 @@
       </div>
     </div>
 
-    <div class="space-y-2 rounded-xl border border-cyan-500/10 divide-y divide-cyan-500/10 overflow-hidden">
+    <div class="space-y-2 rounded-xl border border-gray-800/40 divide-y divide-cyan-500/10 overflow-hidden">
       {#each hostedFiles as file (file.fileHash + file.agreementId)}
-        <div class="flex items-center justify-between p-3.5 hover:bg-cyan-500/5 transition-colors">
+        <div class="flex items-center justify-between p-3.5 hover:bg-white/[0.02] transition-colors">
           <div class="flex items-center gap-3 min-w-0">
             <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 flex-shrink-0">
               <FileText class="w-4 h-4 text-green-500" />

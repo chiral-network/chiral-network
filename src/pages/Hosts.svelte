@@ -852,7 +852,7 @@
     <!-- Quick stats -->
     <div class="hidden sm:flex items-center gap-3">
       {#if sites.length > 0}
-        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 text-xs font-medium text-cyan-300">
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/[0.06] text-xs font-medium text-cyan-300">
           <Server class="w-3.5 h-3.5" />
           {sites.length} site{sites.length !== 1 ? 's' : ''}
         </div>
@@ -885,8 +885,8 @@
       aria-selected={activeTab === 'sites'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'sites'
-          ? 'bg-gray-900 text-gray-100 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-cyan-500/5'}"
+          ? 'bg-gray-950 text-gray-100  ring-1 ring-gray-800/60'
+          : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
     >
       <Server class="w-4 h-4" />
       <span class="hidden sm:inline">My Sites</span>
@@ -897,8 +897,8 @@
       aria-selected={activeTab === 'marketplace'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'marketplace'
-          ? 'bg-gray-900 text-gray-100 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-cyan-500/5'}"
+          ? 'bg-gray-950 text-gray-100  ring-1 ring-gray-800/60'
+          : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
     >
       <Users class="w-4 h-4" />
       <span class="hidden sm:inline">Marketplace</span>
@@ -909,8 +909,8 @@
       aria-selected={activeTab === 'agreements'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'agreements'
-          ? 'bg-gray-900 text-gray-100 shadow-[0_0_10px_rgba(6,182,212,0.05)] ring-1 ring-cyan-500/20'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-cyan-500/5'}"
+          ? 'bg-gray-950 text-gray-100  ring-1 ring-gray-800/60'
+          : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
     >
       <Shield class="w-4 h-4" />
       <span class="hidden sm:inline">Agreements</span>
@@ -1022,7 +1022,7 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-gray-900/80 rounded-2xl shadow-[0_0_30px_rgba(6,182,212,0.15)] p-6 max-w-sm w-full mx-4"
+      class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
       <h3 class="text-lg font-semibold text-gray-100 mb-2">Delete Site</h3>
@@ -1033,7 +1033,7 @@
       <div class="flex justify-end gap-3">
         <button
           onclick={() => deleteConfirm = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-300 bg-gray-800 hover:bg-cyan-500/15 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-300 bg-gray-800 hover:bg-white/[0.04] transition"
         >Cancel</button>
         <button
           onclick={confirmDeleteSite}

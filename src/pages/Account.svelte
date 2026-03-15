@@ -445,8 +445,8 @@
   {#if $walletAccount}
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <!-- Wallet Overview Card -->
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 overflow-hidden">
-      <div class="bg-cyan-900/40 border-b border-cyan-500/20 p-6 text-gray-100">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 overflow-hidden">
+      <div class="bg-cyan-900/40 border-b border-gray-800/50 p-6 text-gray-100">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="p-3 bg-cyan-500/15 rounded-full">
@@ -463,7 +463,7 @@
         </div>
 
         <!-- Balance Display -->
-        <div class="bg-cyan-500/10 rounded-xl p-4 mt-4">
+        <div class="bg-cyan-500/[0.06] rounded-xl p-4 mt-4">
           <div class="flex items-center justify-between">
             <div>
               <p class="text-cyan-200 text-sm mb-1">Balance</p>
@@ -482,7 +482,7 @@
             <button
               onclick={loadBalance}
               disabled={isLoadingBalance}
-              class="p-2 hover:bg-cyan-500/10 rounded-lg transition-colors disabled:opacity-50"
+              class="p-2 hover:bg-white/[0.03] rounded-lg transition-colors disabled:opacity-50"
               title="Refresh balance"
             >
               <RefreshCw class="w-5 h-5 {isLoadingBalance ? 'animate-spin' : ''}" />
@@ -506,11 +506,11 @@
               type="text"
               readonly
               value={$walletAccount.address}
-              class="flex-1 px-4 py-3 bg-gray-800 border border-cyan-500/20 rounded-lg font-mono text-sm text-gray-200"
+              class="flex-1 px-4 py-3 bg-gray-800 border border-gray-800/60 rounded-lg font-mono text-sm text-gray-200"
             />
             <button
               onclick={() => copyToClipboard($walletAccount!.address, 'address')}
-              class="p-3 hover:bg-cyan-500/10 rounded-lg transition-colors border border-cyan-500/20 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+              class="p-3 hover:bg-white/[0.03] rounded-lg transition-colors border border-gray-800/60 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
               title="Copy address"
             >
               {#if copied === 'address'}
@@ -546,11 +546,11 @@
                 type={privateKeyVisible ? 'text' : 'password'}
                 readonly
                 value={$walletAccount.privateKey}
-                class="w-full px-4 py-3 bg-gray-800 border border-cyan-500/20 rounded-lg font-mono text-sm pr-12 text-gray-200"
+                class="w-full px-4 py-3 bg-gray-800 border border-gray-800/60 rounded-lg font-mono text-sm pr-12 text-gray-200"
               />
               <button
                 onclick={() => privateKeyVisible = !privateKeyVisible}
-                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-cyan-500/15 rounded transition-colors"
+                class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-white/[0.04] rounded transition-colors"
                 title={privateKeyVisible ? 'Hide private key' : 'Show private key'}
               >
                 {#if privateKeyVisible}
@@ -562,7 +562,7 @@
             </div>
             <button
               onclick={() => copyToClipboard($walletAccount!.privateKey, 'privateKey')}
-              class="p-3 hover:bg-cyan-500/10 rounded-lg transition-colors border border-cyan-500/20 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+              class="p-3 hover:bg-white/[0.03] rounded-lg transition-colors border border-gray-800/60 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
               title="Copy private key"
             >
               {#if copied === 'privateKey'}
@@ -577,9 +577,9 @@
     </div>
 
     <!-- Send CHI Card -->
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-cyan-500/10 rounded-lg">
+        <div class="p-2 bg-cyan-500/[0.06] rounded-lg">
           <Send class="w-6 h-6 text-cyan-400" />
         </div>
         <div>
@@ -618,13 +618,13 @@
                   type="text"
                   bind:value={newRecipientLabel}
                   placeholder="Label (e.g. Alice)"
-                  class="flex-1 px-3 py-2 border border-cyan-500/20 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 text-gray-200"
+                  class="flex-1 px-3 py-2 border border-gray-800/60 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 text-gray-200"
                   onkeydown={(e) => { if (e.key === 'Enter') addRecipient(); }}
                 />
                 <button
                   onclick={addRecipient}
                   disabled={!newRecipientLabel.trim()}
-                  class="px-3 py-2 bg-cyan-600/80 text-white text-sm rounded-lg hover:bg-cyan-500/90 disabled:opacity-50 transition-colors"
+                  class="px-3 py-2 bg-cyan-500 text-black font-medium text-sm rounded-lg hover:bg-cyan-400 disabled:opacity-50 transition-colors"
                 >
                   Save
                 </button>
@@ -641,7 +641,7 @@
               type="text"
               bind:value={recipientAddress}
               placeholder="0x..."
-              class="w-full px-4 py-3 border border-cyan-500/20 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 text-gray-200"
+              class="w-full px-4 py-3 border border-gray-800/60 rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 text-gray-200"
             />
           </div>
 
@@ -658,7 +658,7 @@
                 pattern="[0-9]*\.?[0-9]*"
                 bind:value={sendAmount}
                 placeholder="0.00"
-                class="w-full px-4 py-3 border border-cyan-500/20 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 text-gray-200"
+                class="w-full px-4 py-3 border border-gray-800/60 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 text-gray-200"
               />
               <button
                 onclick={() => sendAmount = balance}
@@ -672,7 +672,7 @@
           <button
             onclick={handleSend}
             disabled={!recipientAddress || !sendAmount}
-            class="w-full px-4 py-3 bg-cyan-600/80 text-white rounded-lg hover:bg-cyan-500/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+            class="w-full px-4 py-3 bg-cyan-500 text-black font-medium rounded-lg hover:bg-cyan-400 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             <Send class="w-4 h-4" />
             Send CHI
@@ -680,17 +680,17 @@
 
           <!-- Saved Recipients List -->
           {#if savedRecipients.length > 0}
-            <div class="border-t border-cyan-500/20 pt-4">
+            <div class="border-t border-gray-800/50 pt-4">
               <span class="block text-sm font-medium text-gray-300 mb-2">Saved Recipients</span>
               <div class="space-y-1 max-h-48 overflow-y-auto">
                 {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
-                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-cyan-500/5 transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-cyan-500/10 border-l-2 border-cyan-500/40' : ''}"
+                  <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.02] transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ? 'bg-cyan-500/[0.06] border-l-2 border-cyan-500/40' : ''}"
                     role="button"
                     tabindex="0"
                     onclick={() => selectRecipient(r)}
                     onkeydown={(e) => { if (e.key === 'Enter') selectRecipient(r); }}
                   >
-                    <div class="w-8 h-8 rounded-full bg-cyan-500/10 flex items-center justify-center flex-shrink-0">
+                    <div class="w-8 h-8 rounded-full bg-cyan-500/[0.06] flex items-center justify-center flex-shrink-0">
                       <span class="text-sm font-semibold text-cyan-400">{r.label.charAt(0).toUpperCase()}</span>
                     </div>
                     <div class="flex-1 min-w-0">
@@ -734,7 +734,7 @@
                 {/if}
               </span>
             </div>
-            <div class="flex justify-between border-t border-cyan-500/20 pt-3">
+            <div class="flex justify-between border-t border-gray-800/50 pt-3">
               <span class="text-sm text-gray-500">Amount</span>
               <span class="text-lg font-bold text-cyan-400">{sendAmount} CHI</span>
             </div>
@@ -750,14 +750,14 @@
             <button
               onclick={() => showConfirmSend = false}
               disabled={isSending}
-              class="flex-1 px-4 py-2 border border-cyan-500/25 rounded-lg hover:bg-cyan-500/5 transition-colors disabled:opacity-50 text-gray-300"
+              class="flex-1 px-4 py-2 border border-gray-800/60 rounded-lg hover:bg-white/[0.02] transition-colors disabled:opacity-50 text-gray-300"
             >
               Back
             </button>
             <button
               onclick={confirmSend}
               disabled={isSending}
-              class="flex-1 px-4 py-2 bg-cyan-600/80 text-white rounded-lg hover:bg-cyan-500/90 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              class="flex-1 px-4 py-2 bg-cyan-500 text-black font-medium rounded-lg hover:bg-cyan-400 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {#if isSending}
                 <Loader2 class="w-4 h-4 animate-spin" />
@@ -774,10 +774,10 @@
     </div>
 
     <!-- Transaction History Card -->
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <div class="p-2 bg-cyan-500/10 rounded-lg">
+          <div class="p-2 bg-cyan-500/[0.06] rounded-lg">
             <History class="w-6 h-6 text-cyan-400" />
           </div>
           <div>
@@ -788,7 +788,7 @@
         <button
           onclick={loadTransactionHistory}
           disabled={isLoadingHistory}
-          class="p-2 hover:bg-cyan-500/10 rounded-lg transition-colors disabled:opacity-50 text-gray-300"
+          class="p-2 hover:bg-white/[0.03] rounded-lg transition-colors disabled:opacity-50 text-gray-300"
           title="Refresh history"
         >
           <RefreshCw class="w-5 h-5 {isLoadingHistory ? 'animate-spin' : ''}" />
@@ -810,7 +810,7 @@
           {#each transactions as tx}
             {@const style = getTxTypeStyle(tx)}
             {@const isExpanded = expandedTxHash === tx.hash}
-            <div class="bg-gray-800 rounded-lg hover:bg-cyan-500/10 transition-colors">
+            <div class="bg-gray-800 rounded-lg hover:bg-white/[0.03] transition-colors">
               <!-- Main row -->
               <button
                 onclick={() => expandedTxHash = isExpanded ? null : tx.hash}
@@ -863,7 +863,7 @@
 
               <!-- Expanded details -->
               {#if isExpanded}
-                <div class="px-4 pb-4 pt-1 border-t border-cyan-500/20 space-y-2">
+                <div class="px-4 pb-4 pt-1 border-t border-gray-800/50 space-y-2">
                   <!-- File info for download payments -->
                   {#if tx.fileName}
                     <div class="flex items-center gap-2 p-2 bg-amber-500/10 rounded-lg">
@@ -917,7 +917,7 @@
                         <p class="font-mono text-gray-300 truncate flex-1">{tx.hash}</p>
                         <button
                           onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(tx.hash); toasts.show('Transaction hash copied', 'success'); }}
-                          class="p-1 hover:bg-cyan-500/15 rounded transition-colors flex-shrink-0"
+                          class="p-1 hover:bg-white/[0.04] rounded transition-colors flex-shrink-0"
                           title="Copy transaction hash"
                         >
                           <Copy class="w-3.5 h-3.5 text-gray-400" />
@@ -934,10 +934,10 @@
     </div>
 
     <!-- My Reputation -->
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-6">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-pink-500/40  border border-gray-800/60 p-6">
       <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-yellow-500/10 rounded-lg">
-          <ShieldCheck class="w-6 h-6 text-yellow-400" />
+        <div class="p-2 bg-pink-500/10 rounded-lg">
+          <ShieldCheck class="w-6 h-6 text-pink-400" />
         </div>
         <div>
           <h3 class="font-semibold text-gray-100">My Reputation</h3>
@@ -948,7 +948,7 @@
     </div>
 
   {:else}
-    <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_10px_rgba(6,182,212,0.05)] border border-cyan-500/20 p-12 text-center">
+    <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-12 text-center">
       <Wallet class="w-16 h-16 mx-auto text-gray-300 mb-4" />
       <h2 class="text-xl font-semibold text-gray-300 mb-2">No Wallet Connected</h2>
       <p class="text-gray-500 mb-6">Please create or import a wallet to view account details.</p>
@@ -971,7 +971,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showLogoutModal = false} onkeydown={(e) => e.key === 'Escape' && (showLogoutModal = false)}>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-gray-900/80 rounded-xl shadow-[0_0_25px_rgba(6,182,212,0.12)] p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+    <div class="bg-gray-950 rounded-xl  p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-red-500/10 rounded-lg">
           <LogOut class="w-6 h-6 text-red-400" />
@@ -986,7 +986,7 @@
       <div class="flex gap-3">
         <button
           onclick={() => showLogoutModal = false}
-          class="flex-1 px-4 py-2 border border-cyan-500/25 rounded-lg hover:bg-cyan-500/5 transition-colors text-gray-300"
+          class="flex-1 px-4 py-2 border border-gray-800/60 rounded-lg hover:bg-white/[0.02] transition-colors text-gray-300"
         >
           Cancel
         </button>

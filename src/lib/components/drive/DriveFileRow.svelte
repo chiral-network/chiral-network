@@ -37,7 +37,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <tr
-  class="group hover:bg-cyan-500/5 transition cursor-pointer select-none border-b border-cyan-500/10"
+  class="group hover:bg-white/[0.02] transition cursor-pointer select-none border-b border-gray-800/40"
   ondblclick={() => onOpen(item)}
   oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -83,7 +83,7 @@
   <td class="py-2.5 px-3 text-right">
     <button
       onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
-      class="p-1 hover:bg-cyan-500/15 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+      class="p-1 hover:bg-white/[0.04] rounded opacity-0 group-hover:opacity-100 transition-opacity"
     >
       <MoreVertical class="w-4 h-4 text-gray-500" />
     </button>

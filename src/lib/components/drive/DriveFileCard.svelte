@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="group relative bg-gray-900/80 border border-cyan-500/20 rounded-xl p-4 hover:shadow-[0_0_15px_rgba(6,182,212,0.08)] hover:border-cyan-500/30 transition cursor-pointer select-none"
+  class="group relative bg-gray-950 border border-gray-800/60 rounded-xl p-4 hover: hover:border-cyan-500/30 transition cursor-pointer select-none"
   ondblclick={() => onOpen(item)}
   oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -51,7 +51,7 @@
     {/if}
     <button
       onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
-      class="p-1 hover:bg-cyan-500/10 rounded"
+      class="p-1 hover:bg-white/[0.03] rounded"
     >
       <MoreVertical class="w-4 h-4 text-gray-500" />
     </button>

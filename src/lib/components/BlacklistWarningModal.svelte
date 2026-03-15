@@ -23,7 +23,7 @@
   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') oncancel(); }}
   onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) oncancel(); }}
 >
-  <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6 max-w-md w-full mx-4">
+  <div class="bg-gray-950 rounded-xl border border-gray-800/60 p-6 max-w-md w-full mx-4">
     <!-- Header -->
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2.5 bg-red-500/10 rounded-full">
@@ -58,7 +58,7 @@
     <div class="flex gap-3">
       <button
         onclick={oncancel}
-        class="flex-1 px-4 py-2.5 border border-cyan-500/20 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-900 transition-colors"
+        class="flex-1 px-4 py-2.5 border border-gray-800/60 rounded-lg text-sm font-medium text-gray-300 hover:bg-gray-950 transition-colors"
       >
         Cancel
       </button>

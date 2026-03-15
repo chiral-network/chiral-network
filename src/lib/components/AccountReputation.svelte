@@ -137,19 +137,19 @@
       </button>
 
       <div class="flex-1 grid grid-cols-2 gap-3 text-sm">
-        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-cyan-500/20">
+        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-gray-800/60">
           <p class="text-xs text-gray-500">Completed</p>
           <p class="font-semibold text-green-600">{completedCount}</p>
         </div>
-        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-cyan-500/20">
+        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-gray-800/60">
           <p class="text-xs text-gray-500">Failed</p>
           <p class="font-semibold text-red-600">{failedCount}</p>
         </div>
-        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-cyan-500/20">
+        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-gray-800/60">
           <p class="text-xs text-gray-500">Ratings</p>
           <p class="font-semibold text-gray-100">{ratingCount}</p>
         </div>
-        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-cyan-500/20">
+        <div class="rounded-lg bg-gray-800 px-3 py-2 border border-gray-800/60">
           <p class="text-xs text-gray-500">Earned (180d)</p>
           <p class="font-semibold text-gray-100">{formatWeiAsChi(totalEarnedWei)} CHI</p>
         </div>
@@ -166,7 +166,7 @@
       </p>
     </div>
   {:else}
-    <div class="rounded-xl border border-cyan-500/20 divide-y divide-cyan-500/10">
+    <div class="rounded-xl border border-gray-800/60 divide-y divide-cyan-500/10">
       {#each paginatedEvents as event (event.id)}
         <div class="p-4">
           <div class="flex items-start justify-between gap-4">

@@ -1150,7 +1150,7 @@
         txHash: string;
         priceWei: string;
         toWallet: string;
-      }>('chiraldrop-payment-sent', (event) => {
+      }>('chiralpayment-sent', (event) => {
         const { requestId, fileHash, fileName, txHash, priceWei, toWallet } = event.payload;
         const current = getTransferContext(requestId, fileHash);
         const next: TransferReputationContext = current
@@ -1345,7 +1345,7 @@
   {/if}
 
   <!-- Add New Download Section -->
-  <div class="bg-gray-900/80 rounded-2xl border border-cyan-500/20 p-6">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40 border border-gray-800/60 p-6">
     <div class="flex items-center gap-2 mb-4">
       <Plus class="w-5 h-5 text-gray-400" />
       <h2 class="text-lg font-semibold text-gray-100">Add New Download</h2>
@@ -1355,21 +1355,21 @@
     <div class="flex gap-2 mb-4">
       <button
         onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300' : 'border-cyan-500/25 text-gray-300 hover:bg-cyan-500/5'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-cyan-500/40 bg-cyan-500/[0.06] text-cyan-300' : 'border-cyan-500/25 text-gray-300 hover:bg-white/[0.02]'}"
       >
         <Search class="w-4 h-4" />
         Merkle Hash
       </button>
       <button
         onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 text-purple-400' : 'border-cyan-500/25 text-gray-300 hover:bg-cyan-500/5'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 text-purple-400' : 'border-cyan-500/25 text-gray-300 hover:bg-white/[0.02]'}"
       >
         <Link class="w-4 h-4" />
         Magnet Link
       </button>
       <button
         onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-emerald-500/10 text-emerald-400' : 'border-cyan-500/25 text-gray-300 hover:bg-cyan-500/5'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-emerald-500/10 text-emerald-400' : 'border-cyan-500/25 text-gray-300 hover:bg-white/[0.02]'}"
       >
         <FileUp class="w-4 h-4" />
         .torrent File
@@ -1397,7 +1397,7 @@
               type="text"
               bind:value={searchQuery}
               placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-cyan-500/25 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40 font-mono text-sm text-gray-200"
+              class="w-full px-4 py-3 border border-gray-800/60 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40 font-mono text-sm text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1407,7 +1407,7 @@
           <button
             onclick={searchFile}
             disabled={isSearching || !$networkConnected}
-            class="px-6 py-3 bg-cyan-600/80 text-white rounded-lg hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2"
+            class="px-6 py-3 bg-cyan-500 text-black font-medium rounded-lg hover:bg-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2"
           >
             {#if isSearching}
               <Loader2 class="w-5 h-5 animate-spin" />
@@ -1432,10 +1432,10 @@
     <!-- Search Result -->
     {#if searchResult}
       {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
-      <div class="mt-6 bg-gray-800 rounded-lg p-4 border border-cyan-500/20">
+      <div class="mt-6 bg-gray-800 rounded-lg p-4 border border-gray-800/60">
         <!-- File info row -->
         <div class="flex items-start gap-4">
-          <div class="flex items-center justify-center w-14 h-14 bg-gray-900/80 rounded-lg border border-cyan-500/20 flex-shrink-0">
+          <div class="flex items-center justify-center w-14 h-14 bg-gray-950 rounded-lg border border-gray-800/60 flex-shrink-0">
             <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
           </div>
 
@@ -1470,7 +1470,7 @@
 
         <!-- Seeder Selection (when multiple seeders available) -->
         {#if searchResult.seeders.length > 1}
-          <div class="mt-4 pt-4 border-t border-cyan-500/20">
+          <div class="mt-4 pt-4 border-t border-gray-800/50">
             <p class="text-sm font-medium text-gray-300 mb-3">Select Seeder</p>
             <div class="space-y-2 max-h-48 overflow-y-auto">
               {#each searchResult.seeders as seeder, i}
@@ -1479,8 +1479,8 @@
                   onclick={() => selectedSeederIndex = i}
                   class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
                     {selectedSeederIndex === i
-                      ? 'border-cyan-500/40 bg-cyan-500/10'
-                      : 'border-cyan-500/20 hover:border-gray-400'
+                      ? 'border-cyan-500/40 bg-cyan-500/[0.06]'
+                      : 'border-gray-800/50 hover:border-gray-400'
                     }"
                 >
                   <div class="flex items-center gap-2 min-w-0">
@@ -1516,7 +1516,7 @@
         {/if}
 
         <!-- Speed Tier Selector -->
-        <div class="mt-4 pt-4 border-t border-cyan-500/20">
+        <div class="mt-4 pt-4 border-t border-gray-800/50">
           <p class="text-sm font-medium text-gray-300 mb-3">Select Download Speed</p>
           <div class="grid grid-cols-3 gap-3">
             {#each TIERS as tier}
@@ -1533,10 +1533,10 @@
                 disabled={isDisabled}
                 class="relative p-3 rounded-lg border-2 text-left transition-all
                   {isSelected
-                    ? 'border-cyan-500/40 bg-cyan-500/10 ring-1 ring-cyan-500'
+                    ? 'border-cyan-500/40 bg-cyan-500/[0.06] ring-1 ring-cyan-500'
                     : isDisabled
-                      ? 'border-cyan-500/20 opacity-50 cursor-not-allowed'
-                      : 'border-cyan-500/20 hover:border-gray-400 cursor-pointer'
+                      ? 'border-gray-800/50 opacity-50 cursor-not-allowed'
+                      : 'border-gray-800/50 hover:border-gray-400 cursor-pointer'
                   }"
               >
                 <div class="flex items-center gap-2 mb-1">
@@ -1615,9 +1615,9 @@
   </div>
 
   <!-- Downloads -->
-  <div class="bg-gray-900/80 rounded-2xl border border-cyan-500/20">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40 border border-gray-800/60">
     <!-- Tabs -->
-    <div class="flex items-center justify-between border-b border-cyan-500/20 px-4">
+    <div class="flex items-center justify-between border-b border-gray-800/50 px-4">
       <div class="flex">
         <button
           onclick={() => downloadsTab = 'active'}
@@ -1677,7 +1677,7 @@
             {@const TierIcon = getTierIcon(download.speedTier || 'standard')}
             {@const isActive = download.status === 'downloading' || download.status === 'paused'}
             {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
-            <div class="p-4 hover:bg-cyan-500/5 transition-colors">
+            <div class="p-4 hover:bg-white/[0.02] transition-colors">
               <!-- Top row: icon, name, badges, actions -->
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
@@ -1729,7 +1729,7 @@
                   {#if download.status === 'downloading' || download.status === 'paused'}
                     <button
                       onclick={() => togglePause(download.id)}
-                      class="p-1.5 hover:bg-cyan-500/15 rounded-lg transition-colors"
+                      class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
                       title={download.status === 'downloading' ? 'Pause' : 'Resume'}
                     >
                       {#if download.status === 'downloading'}
@@ -1766,14 +1766,14 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(download.filePath!)}
-                        class="p-1.5 hover:bg-cyan-500/10 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-white/[0.03] rounded-lg transition-colors"
                         title="Open file"
                       >
                         <ExternalLink class="w-4 h-4 text-cyan-400" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(download.filePath!)}
-                        class="p-1.5 hover:bg-cyan-500/15 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
                         title="Show in folder"
                       >
                         <FolderOpen class="w-4 h-4 text-gray-500" />
@@ -1781,7 +1781,7 @@
                     {/if}
                     <button
                       onclick={() => moveToHistory(download.id)}
-                      class="px-2.5 py-1 text-xs text-gray-500 hover:bg-cyan-500/15 rounded-lg transition-colors"
+                      class="px-2.5 py-1 text-xs text-gray-500 hover:bg-white/[0.04] rounded-lg transition-colors"
                       title="Dismiss"
                     >
                       Dismiss
@@ -1834,7 +1834,7 @@
           {#each downloadHistory as entry (entry.id)}
             {@const EntryIcon = getFileIcon(entry.fileName)}
             {@const EntryTierIcon = getTierIcon(entry.speedTier || 'standard')}
-            <div class="p-4 hover:bg-cyan-500/5 transition-colors">
+            <div class="p-4 hover:bg-white/[0.02] transition-colors">
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
                   {entry.status === 'completed' ? 'bg-emerald-500/10' :
@@ -1902,14 +1902,14 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(entry.filePath!)}
-                        class="p-1.5 hover:bg-cyan-500/10 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-white/[0.03] rounded-lg transition-colors"
                         title="Open file"
                       >
                         <ExternalLink class="w-4 h-4 text-cyan-400" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(entry.filePath!)}
-                        class="p-1.5 hover:bg-cyan-500/15 rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
                         title="Show in folder"
                       >
                         <FolderOpen class="w-4 h-4 text-gray-500" />
@@ -1917,7 +1917,7 @@
                     {/if}
                     <button
                       onclick={() => { searchQuery = entry.hash; searchMode = 'hash'; searchFile(); }}
-                      class="p-1.5 hover:bg-cyan-500/15 rounded-lg transition-colors"
+                      class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
                       title="Download again"
                     >
                       <Download class="w-4 h-4 text-gray-400" />
@@ -1942,15 +1942,15 @@
     onclick={(e) => e.target === e.currentTarget && closeViewer()}
     onkeydown={(e) => e.key === 'Escape' && closeViewer()}
   >
-    <div class="w-full max-w-5xl max-h-[90vh] bg-gray-950 rounded-xl border border-cyan-500/20 shadow-[0_0_30px_rgba(6,182,212,0.15)] flex flex-col">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-cyan-500/20">
+    <div class="w-full max-w-5xl max-h-[90vh] bg-gray-950 rounded-xl border border-gray-800/60  flex flex-col">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800/50">
         <div class="min-w-0">
           <p class="text-sm font-semibold truncate text-gray-100">{viewerName}</p>
           <p class="text-xs text-gray-500 capitalize">{viewerType} preview</p>
         </div>
         <button
           onclick={closeViewer}
-          class="p-1.5 rounded-lg hover:bg-cyan-500/10 transition-colors"
+          class="p-1.5 rounded-lg hover:bg-white/[0.03] transition-colors"
           title="Close preview"
         >
           <X class="w-5 h-5 text-gray-500 text-gray-300" />
@@ -1989,7 +1989,7 @@
           />
         {:else if viewerType === 'pdf'}
           <iframe
-            class="w-full h-[75vh] rounded-lg border border-cyan-500/20 bg-gray-900"
+            class="w-full h-[75vh] rounded-lg border border-gray-800/60 bg-gray-900"
             src={viewerSource}
             title={viewerName}
           ></iframe>
@@ -2025,7 +2025,7 @@
     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') pendingDownload = null; }}
     onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
   >
-    <div class="bg-gray-900/80 rounded-xl shadow-[0_0_25px_rgba(6,182,212,0.12)] border border-cyan-500/20 p-6 max-w-md w-full mx-4">
+    <div class="bg-gray-950 rounded-xl  border border-gray-800/60 p-6 max-w-md w-full mx-4">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2.5 bg-amber-500/10 rounded-lg">
           <AlertTriangle class="w-6 h-6 text-amber-400" />
@@ -2070,7 +2070,7 @@
               <span class="font-medium text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
             </div>
           {/if}
-          <div class="flex justify-between text-sm pt-2 border-t border-cyan-500/20">
+          <div class="flex justify-between text-sm pt-2 border-t border-gray-800/50">
             <span class="font-semibold text-gray-100">Total</span>
             <span class="font-semibold text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
           </div>
@@ -2085,7 +2085,7 @@
       <div class="flex gap-3">
         <button
           onclick={() => { pendingDownload = null; }}
-          class="flex-1 px-4 py-2.5 border border-cyan-500/25 rounded-lg hover:bg-cyan-500/5 transition-colors text-gray-300 font-medium"
+          class="flex-1 px-4 py-2.5 border border-gray-800/60 rounded-lg hover:bg-white/[0.02] transition-colors text-gray-300 font-medium"
         >
           Cancel
         </button>

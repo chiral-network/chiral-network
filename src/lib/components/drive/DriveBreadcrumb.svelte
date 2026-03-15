@@ -8,7 +8,7 @@
 <nav class="flex items-center gap-1 text-sm text-gray-400 flex-wrap">
   <button
     onclick={() => onNavigate(null)}
-    class="flex items-center gap-1 hover:text-gray-100 transition font-medium px-1.5 py-0.5 rounded hover:bg-cyan-500/10"
+    class="flex items-center gap-1 hover:text-gray-100 transition font-medium px-1.5 py-0.5 rounded hover:bg-white/[0.03]"
   >
     <HardDrive class="w-4 h-4" />
     <span>My Drive</span>
@@ -18,7 +18,7 @@
     <ChevronRight class="w-3 h-3 text-gray-400 shrink-0" />
     <button
       onclick={() => onNavigate(crumb.id)}
-      class="hover:text-gray-100 transition font-medium px-1.5 py-0.5 rounded hover:bg-cyan-500/10
+      class="hover:text-gray-100 transition font-medium px-1.5 py-0.5 rounded hover:bg-white/[0.03]
         {i === breadcrumb.length - 1 ? 'text-gray-100' : ''}"
     >
       {crumb.name}

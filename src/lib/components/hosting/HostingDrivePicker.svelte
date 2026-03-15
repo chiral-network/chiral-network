@@ -55,24 +55,24 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+  class="fixed inset-0 bg-black/60 backblur-sm z-50 flex items-center justify-center p-4"
   onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
   role="dialog"
   aria-modal="true"
   aria-label="Select files from Drive"
 >
-  <div class="bg-gray-900/80 rounded-2xl shadow-[0_0_30px_rgba(6,182,212,0.15)] border border-cyan-500/20 w-full max-w-md overflow-hidden">
+  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 w-full max-w-md overflow-hidden">
     <!-- Header -->
-    <div class="flex items-center justify-between p-5 pb-4 border-b border-cyan-500/10">
+    <div class="flex items-center justify-between p-5 pb-4 border-b border-gray-800/40">
       <div class="flex items-center gap-2.5">
-        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/10">
+        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/[0.06]">
           <HardDrive class="w-4 h-4 text-cyan-400" />
         </div>
         <h3 class="text-base font-semibold text-gray-100">Select from Drive</h3>
       </div>
       <button
         onclick={onClose}
-        class="p-1.5 text-gray-400 hover:text-gray-400 rounded-lg hover:bg-cyan-500/10 transition-colors
+        class="p-1.5 text-gray-400 hover:text-gray-400 rounded-lg hover:bg-white/[0.03] transition-colors
           focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         aria-label="Close"
       >
@@ -95,7 +95,7 @@
       </div>
     {:else}
       <!-- Select all -->
-      <div class="px-4 py-2.5 border-b border-cyan-500/10 bg-gray-800">
+      <div class="px-4 py-2.5 border-b border-gray-800/40 bg-gray-800">
         <button
           onclick={toggleAll}
           class="flex items-center gap-2 text-xs font-medium text-gray-500 hover:text-gray-300 transition-colors
@@ -117,7 +117,7 @@
           <button
             onclick={() => toggleFile(file.id)}
             class="flex items-center justify-between w-full px-4 py-3 text-left text-sm transition-colors
-              {selected.has(file.id) ? 'bg-cyan-500/10' : 'hover:bg-cyan-500/5'}
+              {selected.has(file.id) ? 'bg-cyan-500/[0.06]' : 'hover:bg-white/[0.02]'}
               focus:outline-none focus:bg-gray-800"
           >
             <div class="flex items-center gap-2.5 min-w-0">
@@ -136,7 +136,7 @@
       </div>
 
       <!-- Footer -->
-      <div class="flex items-center justify-between p-4 border-t border-cyan-500/10 bg-gray-800">
+      <div class="flex items-center justify-between p-4 border-t border-gray-800/40 bg-gray-800">
         <div class="text-xs text-gray-500">
           <span class="font-medium">{selected.size}</span> file{selected.size !== 1 ? 's' : ''}
           {#if selected.size > 0}
@@ -147,15 +147,15 @@
         <div class="flex gap-2">
           <button
             onclick={onClose}
-            class="px-3 py-1.5 text-sm font-medium text-gray-300 border border-cyan-500/20 rounded-lg
-              hover:bg-cyan-500/10 transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+            class="px-3 py-1.5 text-sm font-medium text-gray-300 border border-gray-800/60 rounded-lg
+              hover:bg-white/[0.03] transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             Cancel
           </button>
           <button
             onclick={confirm}
             disabled={selected.size === 0}
-            class="px-3.5 py-1.5 text-sm font-semibold bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-lg transition-colors
+            class="px-3.5 py-1.5 text-sm font-semibold bg-cyan-500 hover:bg-cyan-400 text-black font-medium rounded-lg transition-colors
               focus:outline-none focus:ring-2 focus:ring-cyan-500/50
               disabled:opacity-50 disabled:cursor-not-allowed"
           >

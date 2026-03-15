@@ -30,7 +30,7 @@
       <!-- Logo and title -->
       <div class="text-center mb-10">
         <div class="inline-flex items-center justify-center w-20 h-20 mb-6">
-          <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-shadow-[0_0_20px_rgba(6,182,212,0.1)]" />
+          <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-" />
         </div>
         <h1 class="text-4xl font-bold text-gray-100 mb-3">
           Chiral Network
@@ -39,12 +39,12 @@
       </div>
 
       <!-- Card -->
-      <div class="bg-gray-900/80 border border-cyan-500/20 rounded-2xl p-8 shadow-[0_0_20px_rgba(6,182,212,0.1)]">
+      <div class="bg-gray-950 border border-gray-800/60 rounded-2xl p-8 ">
         <h2 class="text-2xl font-semibold text-gray-100 mb-6">Get Started</h2>
 
         <button
           onclick={handleCreateWallet}
-          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-cyan-600/80 hover:bg-cyan-500/90 text-white rounded-xl transition-all shadow-[0_0_10px_rgba(6,182,212,0.05)] focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+          class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-cyan-500 hover:bg-cyan-400 text-black font-medium rounded-xl transition-all  focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         >
           <div class="flex-shrink-0 mt-0.5 p-2 bg-cyan-500/15 rounded-lg">
             <Plus class="w-5 h-5" />
@@ -57,7 +57,7 @@
 
         <button
           onclick={handleUseExisting}
-          class="w-full flex items-start gap-4 px-5 py-4 border border-cyan-500/20 bg-gray-800 hover:bg-cyan-500/10 text-gray-100 rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-800/60 bg-gray-800 hover:bg-white/[0.03] text-gray-100 rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         >
           <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-700 rounded-lg">
             <KeyRound class="w-5 h-5" />

@@ -130,7 +130,7 @@
 <div class="space-y-4">
   <!-- Installation Status -->
   {#if !isInstalled}
-    <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6">
+    <div class="bg-gray-950 rounded-xl border border-gray-800/60 p-6">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-primary-100 rounded-lg">
           <Download class="w-6 h-6 text-primary-600" />
@@ -166,7 +166,7 @@
     </div>
   {:else}
     <!-- Geth Status Card -->
-    <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6">
+    <div class="bg-gray-950 rounded-xl border border-gray-800/60 p-6">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <div class="p-2 {$gethStatus?.running ? 'bg-emerald-500/10' : 'bg-gray-800'} rounded-lg">
@@ -219,17 +219,17 @@
 
       {#if $gethStatus?.running}
         <div class="grid grid-cols-3 gap-4 mt-4">
-          <div class="bg-gray-900 rounded-lg p-3 text-center">
+          <div class="bg-gray-950 rounded-lg p-3 text-center">
             <Users class="w-5 h-5 mx-auto text-gray-400 mb-1" />
             <p class="text-lg font-semibold">{$gethStatus?.peerCount || 0}</p>
             <p class="text-xs text-gray-500">Peers</p>
           </div>
-          <div class="bg-gray-900 rounded-lg p-3 text-center">
+          <div class="bg-gray-950 rounded-lg p-3 text-center">
             <Box class="w-5 h-5 mx-auto text-gray-400 mb-1" />
             <p class="text-lg font-semibold">{$gethStatus?.currentBlock?.toLocaleString() || 0}</p>
             <p class="text-xs text-gray-500">Block</p>
           </div>
-          <div class="bg-gray-900 rounded-lg p-3 text-center">
+          <div class="bg-gray-950 rounded-lg p-3 text-center">
             {#if $gethStatus?.syncing}
               <Loader2 class="w-5 h-5 mx-auto text-yellow-500 mb-1 animate-spin" />
               <p class="text-lg font-semibold text-yellow-600">Syncing</p>
@@ -245,7 +245,7 @@
 
     <!-- Mining Card -->
     {#if $gethStatus?.running}
-      <div class="bg-gray-900 rounded-xl border border-cyan-500/20 p-6">
+      <div class="bg-gray-950 rounded-xl border border-gray-800/60 p-6">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="p-2 {$miningStatus?.mining ? 'bg-yellow-100' : 'bg-gray-800'} rounded-lg">
@@ -275,7 +275,7 @@
             <div class="flex items-center gap-2">
               <select
                 bind:value={miningThreads}
-                class="px-3 py-2 border border-cyan-500/20 rounded-lg text-sm"
+                class="px-3 py-2 border border-gray-800/60 rounded-lg text-sm"
               >
                 {#each [1, 2, 4, 8] as threads}
                   <option value={threads}>{threads} thread{threads > 1 ? 's' : ''}</option>
@@ -308,7 +308,7 @@
             </div>
           </div>
         {:else if !$walletAccount}
-          <div class="bg-gray-900 border border-cyan-500/20 rounded-lg p-3 mt-4">
+          <div class="bg-gray-950 border border-gray-800/60 rounded-lg p-3 mt-4">
             <p class="text-sm text-gray-400">
               Connect your wallet on the Account page to start mining and earn CHI.
             </p>
