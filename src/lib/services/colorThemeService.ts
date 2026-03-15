@@ -3,6 +3,19 @@ import type { ColorTheme } from '$lib/stores';
 // Each theme maps shade -> space-separated RGB values (for Tailwind opacity support)
 // Values from Tailwind CSS default color palette
 const themeColors: Record<ColorTheme, Record<number, string>> = {
+  indigo: {
+    50:  '238 242 255',
+    100: '224 231 255',
+    200: '199 210 254',
+    300: '165 180 252',
+    400: '129 140 248',
+    500: '99 102 241',
+    600: '79 70 229',
+    700: '67 56 202',
+    800: '55 48 163',
+    900: '49 46 129',
+    950: '30 27 75',
+  },
   blue: {
     50:  '239 246 255',
     100: '219 234 254',
@@ -82,6 +95,7 @@ export function applyColorTheme(theme: ColorTheme): void {
 }
 
 export const availableThemes: { value: ColorTheme; label: string; previewHex: string }[] = [
+  { value: 'indigo', label: 'Indigo', previewHex: '#6366f1' },
   { value: 'blue',   label: 'Blue',   previewHex: '#3b82f6' },
   { value: 'purple', label: 'Purple', previewHex: '#a855f7' },
   { value: 'green',  label: 'Green',  previewHex: '#22c55e' },

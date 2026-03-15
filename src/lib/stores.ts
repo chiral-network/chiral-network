@@ -31,7 +31,7 @@ export const networkStats = writable({
 // ============================================================================
 
 export type ThemeMode = 'light' | 'dark' | 'system';
-export type ColorTheme = 'blue' | 'purple' | 'green' | 'red' | 'orange';
+export type ColorTheme = 'indigo' | 'blue' | 'purple' | 'green' | 'red' | 'orange';
 export type NavStyle = 'navbar' | 'sidebar';
 
 export interface NotificationSettings {
@@ -69,7 +69,7 @@ const defaultNotifications: NotificationSettings = {
 
 const defaultSettings: AppSettings = {
   theme: 'system',
-  colorTheme: 'blue',
+  colorTheme: 'indigo',
   navStyle: 'navbar',
   reducedMotion: false,
   compactMode: false,

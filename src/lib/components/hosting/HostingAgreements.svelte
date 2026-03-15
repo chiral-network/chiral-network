@@ -48,11 +48,11 @@
 
 <!-- Incoming Proposals -->
 {#if !loadingAgreements && incomingProposals.length > 0}
-  <div class="rounded-2xl border-2 border-blue-200 dark:border-blue-800/60 bg-blue-50/50 dark:bg-blue-900/10 p-5 shadow-sm">
+  <div class="rounded-2xl border-2 border-indigo-200 dark:border-indigo-800/60 bg-indigo-50/50 dark:bg-indigo-900/10 p-5 shadow-sm">
     <div class="flex items-center gap-3 mb-4">
-      <div class="relative flex h-9 w-9 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-900/40">
-        <Send class="w-4.5 h-4.5 text-blue-600 dark:text-blue-400" />
-        <span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-blue-500 text-[9px] font-bold text-white">
+      <div class="relative flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-100 dark:bg-indigo-900/40">
+        <Send class="w-4.5 h-4.5 text-indigo-600 dark:text-indigo-400" />
+        <span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500 text-[9px] font-bold text-white">
           {incomingProposals.length}
         </span>
       </div>
@@ -66,13 +66,13 @@
 
     <div class="space-y-2.5">
       {#each incomingProposals as proposal (proposal.agreementId)}
-        <div class="flex items-center justify-between gap-3 p-4 rounded-xl bg-white/80 dark:bg-gray-800/60 border border-blue-100 dark:border-blue-800/40">
+        <div class="flex items-center justify-between gap-3 p-4 rounded-xl bg-white/80 dark:bg-gray-950/60 border border-indigo-100 dark:border-indigo-800/40">
           <div class="min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
               <span class="text-sm font-semibold text-gray-900 dark:text-white font-mono">
                 {formatPeerId(proposal.clientPeerId)}
               </span>
-              <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300 font-medium">
+              <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300 font-medium">
                 {proposal.fileHashes.length} file{proposal.fileHashes.length !== 1 ? 's' : ''}
               </span>
             </div>
@@ -112,7 +112,7 @@
 {/if}
 
 <!-- My Agreements -->
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85 overflow-hidden">
+<div class="rounded-2xl border border-gray-200/70 bg-white/90 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-950/85 overflow-hidden">
   <button
     onclick={() => showAgreements = !showAgreements}
     class="flex items-center justify-between w-full p-5 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors
@@ -157,7 +157,7 @@
         </div>
       {:else if activeAgreements.length === 0}
         <div class="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
-          <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700/40 mb-3">
+          <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-900/40 mb-3">
             <Shield class="w-7 h-7 opacity-40" />
           </div>
           <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No agreements yet</p>
@@ -171,7 +171,7 @@
             <div class="p-4 rounded-xl border transition-all
               {hasCancelRequest && agreement.cancelRequestedBy !== myPeerId
                 ? 'border-orange-200 bg-orange-50/50 dark:border-orange-800/40 dark:bg-orange-900/10'
-                : 'border-gray-100 bg-gray-50/50 dark:border-gray-600/60 dark:bg-gray-700/30 hover:border-gray-200 dark:hover:border-gray-500/60'}">
+                : 'border-gray-100 bg-gray-50/50 dark:border-gray-600/60 dark:bg-gray-900/30 hover:border-gray-200 dark:hover:border-gray-500/60'}">
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
@@ -223,7 +223,7 @@
                       </button>
                       <button
                         onclick={() => onRespondToCancellation(agreement.agreementId, false)}
-                        class="text-xs font-medium px-3 py-1.5 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600 rounded-lg
+                        class="text-xs font-medium px-3 py-1.5 text-gray-600 dark:text-gray-400 border border-gray-200/60 dark:border-gray-800 rounded-lg
                           hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400/30"
                       >
                         Deny
@@ -263,7 +263,7 @@
 
 <!-- Files I'm Hosting -->
 {#if !loadingAgreements && hostedFiles.length > 0}
-  <div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
+  <div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-950/85">
     <div class="flex items-center gap-3 mb-4">
       <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-green-100 dark:bg-green-900/30">
         <HardDrive class="w-4.5 h-4.5 text-green-600 dark:text-green-400" />

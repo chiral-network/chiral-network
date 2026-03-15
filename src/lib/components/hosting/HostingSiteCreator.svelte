@@ -36,7 +36,7 @@
   let totalSize = $derived(selectedFiles.reduce((s, f) => s + f.size, 0));
 </script>
 
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
+<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-950/85">
   <h2 class="mb-4 text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
     <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-100 dark:bg-primary-900/30">
       <Plus class="h-3.5 w-3.5 text-primary-600 dark:text-primary-400" />
@@ -56,7 +56,7 @@
         placeholder="e.g. My Portfolio"
         class="w-full rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-all
           focus:border-primary-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-400/20
-          dark:border-gray-600 dark:bg-gray-700/50 dark:text-white dark:placeholder-gray-500 dark:focus:bg-gray-700"
+          dark:border-gray-600 dark:bg-gray-900/50 dark:text-white dark:placeholder-gray-500 dark:focus:bg-gray-700"
       />
     </div>
 
@@ -73,7 +73,7 @@
       </button>
       <button
         onclick={onSelectFiles}
-        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-600 dark:text-gray-400 border border-gray-200/60 dark:border-gray-800
           rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors
           focus:outline-none focus:ring-2 focus:ring-gray-400/30"
       >
@@ -91,9 +91,9 @@
       class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 px-4 transition-all
         {isDragOver
           ? 'border-primary-400 bg-primary-50/60 dark:border-primary-500 dark:bg-primary-900/20 scale-[1.01]'
-          : 'border-gray-200 bg-gray-50/30 hover:border-gray-300 hover:bg-gray-50/60 dark:border-gray-600/70 dark:bg-gray-700/20 dark:hover:border-gray-500'}"
+          : 'border-gray-200 bg-gray-50/30 hover:border-gray-300 hover:bg-gray-50/60 dark:border-gray-600/70 dark:bg-gray-900/20 dark:hover:border-gray-500'}"
     >
-      <div class="flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700/60">
+      <div class="flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-900/60">
         <FolderOpen class="h-6 w-6 text-gray-400 dark:text-gray-500" />
       </div>
       <p class="text-sm font-medium text-gray-600 dark:text-gray-400">
@@ -141,7 +141,7 @@
         disabled={!canCreate}
         class="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition-all
           {canCreate
-            ? 'bg-primary-500 hover:bg-primary-600 shadow-sm shadow-primary-500/20 hover:shadow-md hover:shadow-primary-500/25 active:scale-[0.98]'
+            ? 'bg-primary-500 hover:bg-primary-600 shadow-sm shadow-primary-500/20 hover:shadow-sm hover:shadow-primary-500/25 active:scale-[0.98]'
             : 'bg-gray-300 dark:bg-gray-600 cursor-not-allowed'}
           focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900"
       >

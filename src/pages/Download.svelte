@@ -141,7 +141,7 @@
   function getFileColor(fileName: string) {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
 
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-blue-500';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-indigo-500';
     if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return 'text-purple-500';
     if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return 'text-green-500';
     if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return 'text-orange-500';
@@ -1229,12 +1229,12 @@
   function getStatusBadgeColor(status: string): string {
     switch (status) {
       case 'completed': return 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-400';
-      case 'downloading': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-400';
+      case 'downloading': return 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-400';
       case 'paused': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-400';
       case 'failed': return 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-400';
-      case 'cancelled': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
-      case 'queued': return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
-      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400';
+      case 'cancelled': return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-400';
+      case 'queued': return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-400';
+      default: return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-400';
     }
   }
 
@@ -1306,7 +1306,7 @@
     switch (tier) {
       case 'ultra': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400';
       case 'premium': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400';
-      default: return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400';
+      default: return 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-400';
     }
   }
 
@@ -1325,7 +1325,7 @@
 
 <div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
   <div>
-    <h1 class="text-2xl font-bold dark:text-white">Download</h1>
+    <h1 class="text-2xl font-light tracking-tight dark:text-white">Download</h1>
     <p class="text-gray-600 dark:text-gray-400 mt-2">Search and download files from the Chiral Network</p>
   </div>
 
@@ -1345,7 +1345,7 @@
   {/if}
 
   <!-- Add New Download Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200/60 dark:border-gray-800 p-6">
     <div class="flex items-center gap-2 mb-4">
       <Plus class="w-5 h-5 text-gray-600 dark:text-gray-400" />
       <h2 class="text-lg font-semibold dark:text-white">Add New Download</h2>
@@ -1355,21 +1355,21 @@
     <div class="flex gap-2 mb-4">
       <button
         onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-200/60 dark:border-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <Search class="w-4 h-4" />
         Merkle Hash
       </button>
       <button
         onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' : 'border-gray-200/60 dark:border-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <Link class="w-4 h-4" />
         Magnet Link
       </button>
       <button
         onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'border-gray-200/60 dark:border-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
       >
         <FileUp class="w-4 h-4" />
         .torrent File
@@ -1378,7 +1378,7 @@
 
     <!-- Search Input -->
     {#if searchMode === 'torrent'}
-      <div class="text-center py-8 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+      <div class="text-center py-8 border-2 border-dashed border-gray-200/60 dark:border-gray-800 rounded-lg">
         <FileUp class="w-12 h-12 mx-auto text-gray-400 mb-3" />
         <p class="text-gray-600 dark:text-gray-400 mb-4">Upload a .torrent file to start downloading</p>
         <button
@@ -1397,7 +1397,7 @@
               type="text"
               bind:value={searchQuery}
               placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
+              class="w-full px-4 py-3 border border-gray-200/60 dark:border-gray-800 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-gray-900 dark:text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1432,10 +1432,10 @@
     <!-- Search Result -->
     {#if searchResult}
       {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
-      <div class="mt-6 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+      <div class="mt-6 bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200/60 dark:border-gray-800">
         <!-- File info row -->
         <div class="flex items-start gap-4">
-          <div class="flex items-center justify-center w-14 h-14 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 flex-shrink-0">
+          <div class="flex items-center justify-center w-14 h-14 bg-white dark:bg-gray-950 rounded-lg border border-gray-200/60 dark:border-gray-800 flex-shrink-0">
             <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
           </div>
 
@@ -1470,7 +1470,7 @@
 
         <!-- Seeder Selection (when multiple seeders available) -->
         {#if searchResult.seeders.length > 1}
-          <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+          <div class="mt-4 pt-4 border-t border-gray-200/60 dark:border-gray-800">
             <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Select Seeder</p>
             <div class="space-y-2 max-h-48 overflow-y-auto">
               {#each searchResult.seeders as seeder, i}
@@ -1480,7 +1480,7 @@
                   class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
                     {selectedSeederIndex === i
                       ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
-                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
+                      : 'border-gray-200/60 dark:border-gray-800 hover:border-gray-400 dark:hover:border-gray-500'
                     }"
                 >
                   <div class="flex items-center gap-2 min-w-0">
@@ -1516,7 +1516,7 @@
         {/if}
 
         <!-- Speed Tier Selector -->
-        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+        <div class="mt-4 pt-4 border-t border-gray-200/60 dark:border-gray-800">
           <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Select Download Speed</p>
           <div class="grid grid-cols-3 gap-3">
             {#each TIERS as tier}
@@ -1535,8 +1535,8 @@
                   {isSelected
                     ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 ring-1 ring-primary-500'
                     : isDisabled
-                      ? 'border-gray-200 dark:border-gray-600 opacity-50 cursor-not-allowed'
-                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
+                      ? 'border-gray-200/60 dark:border-gray-800 opacity-50 cursor-not-allowed'
+                      : 'border-gray-200/60 dark:border-gray-800 hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
                   }"
               >
                 <div class="flex items-center gap-2 mb-1">
@@ -1615,9 +1615,9 @@
   </div>
 
   <!-- Downloads -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200/60 dark:border-gray-800">
     <!-- Tabs -->
-    <div class="flex items-center justify-between border-b border-gray-200 dark:border-gray-700 px-4">
+    <div class="flex items-center justify-between border-b border-gray-200/60 dark:border-gray-800 px-4">
       <div class="flex">
         <button
           onclick={() => downloadsTab = 'active'}
@@ -1644,7 +1644,7 @@
           <History class="w-4 h-4" />
           History
           {#if downloadHistory.length > 0}
-            <span class="px-1.5 py-0.5 text-xs font-semibold bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 rounded-full">
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-gray-100 text-gray-600 dark:bg-gray-900 dark:text-gray-400 rounded-full">
               {downloadHistory.length}
             </span>
           {/if}
@@ -1681,7 +1681,7 @@
               <!-- Top row: icon, name, badges, actions -->
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
-                  {download.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-gray-100 dark:bg-gray-700'}">
+                  {download.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' : 'bg-gray-100 dark:bg-gray-900'}">
                   <DownloadIcon class="w-5 h-5 {download.status === 'completed' ? 'text-green-500' : getFileColor(download.name)}" />
                 </div>
 
@@ -1839,7 +1839,7 @@
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
                   {entry.status === 'completed' ? 'bg-green-50 dark:bg-green-900/20' :
                    entry.status === 'failed' ? 'bg-red-50 dark:bg-red-900/20' :
-                   'bg-gray-100 dark:bg-gray-700'}">
+                   'bg-gray-100 dark:bg-gray-900'}">
                   <EntryIcon class="w-5 h-5 {
                     entry.status === 'completed' ? 'text-green-500' :
                     entry.status === 'failed' ? 'text-red-400' :
@@ -1942,15 +1942,15 @@
     onclick={(e) => e.target === e.currentTarget && closeViewer()}
     onkeydown={(e) => e.key === 'Escape' && closeViewer()}
   >
-    <div class="w-full max-w-5xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-700 shadow-2xl flex flex-col">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+    <div class="w-full max-w-5xl max-h-[90vh] bg-white dark:bg-gray-900 rounded-xl border border-gray-200/60 dark:border-gray-800 shadow-sm flex flex-col">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200/60 dark:border-gray-800">
         <div class="min-w-0">
           <p class="text-sm font-semibold truncate dark:text-white">{viewerName}</p>
           <p class="text-xs text-gray-500 dark:text-gray-400 capitalize">{viewerType} preview</p>
         </div>
         <button
           onclick={closeViewer}
-          class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          class="p-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors"
           title="Close preview"
         >
           <X class="w-5 h-5 text-gray-500 dark:text-gray-300" />
@@ -1989,7 +1989,7 @@
           />
         {:else if viewerType === 'pdf'}
           <iframe
-            class="w-full h-[75vh] rounded-lg border border-gray-200 dark:border-gray-700 bg-white"
+            class="w-full h-[75vh] rounded-lg border border-gray-200/60 dark:border-gray-800 bg-white"
             src={viewerSource}
             title={viewerName}
           ></iframe>
@@ -2025,7 +2025,7 @@
     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') pendingDownload = null; }}
     onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
   >
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 p-6 max-w-md w-full mx-4">
+    <div class="bg-white dark:bg-gray-950 rounded-xl shadow-sm border border-gray-200/60 dark:border-gray-800 p-6 max-w-md w-full mx-4">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2.5 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
           <AlertTriangle class="w-6 h-6 text-amber-600 dark:text-amber-400" />
@@ -2034,7 +2034,7 @@
       </div>
 
       <div class="space-y-3 mb-5">
-        <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+        <div class="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3">
           <p class="text-sm text-gray-500 dark:text-gray-400">File</p>
           <p class="font-medium dark:text-white truncate">{pendingDownload.result.fileName}</p>
           {#if pendingDownload.result.fileSize > 0}
@@ -2043,7 +2043,7 @@
         </div>
 
         {#if selectedPendingSeeder}
-          <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+          <div class="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3">
             <p class="text-sm text-gray-500 dark:text-gray-400">Selected Seeder</p>
             <div class="flex items-center justify-between gap-2 mt-1 min-w-0">
               <span class="font-mono text-xs text-gray-600 dark:text-gray-300 truncate" title={selectedPendingSeeder.peerId}>
@@ -2056,7 +2056,7 @@
           </div>
         {/if}
 
-        <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-2">
+        <div class="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-3 space-y-2">
           <p class="text-sm text-gray-500 dark:text-gray-400">Cost Breakdown</p>
           {#if pendingDownload.seederPriceChi > 0}
             <div class="flex justify-between text-sm">
@@ -2070,7 +2070,7 @@
               <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
             </div>
           {/if}
-          <div class="flex justify-between text-sm pt-2 border-t border-gray-200 dark:border-gray-600">
+          <div class="flex justify-between text-sm pt-2 border-t border-gray-200/60 dark:border-gray-800">
             <span class="font-semibold dark:text-white">Total</span>
             <span class="font-semibold text-amber-600 dark:text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
           </div>
@@ -2085,7 +2085,7 @@
       <div class="flex gap-3">
         <button
           onclick={() => { pendingDownload = null; }}
-          class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300 font-medium"
+          class="flex-1 px-4 py-2.5 border border-gray-200/60 dark:border-gray-800 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300 font-medium"
         >
           Cancel
         </button>

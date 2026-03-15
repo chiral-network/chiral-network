@@ -12,10 +12,10 @@
   let { message, type = 'info', index = 0, onClose }: Props = $props();
 
   const typeStyles = {
-    success: 'bg-green-500',
-    error: 'bg-red-500',
-    info: 'bg-blue-500',
-    warning: 'bg-yellow-500'
+    success: 'bg-white dark:bg-gray-900 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-300',
+    error: 'bg-white dark:bg-gray-900 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300',
+    info: 'bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800 text-indigo-800 dark:text-indigo-300',
+    warning: 'bg-white dark:bg-gray-900 border border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300'
   };
 
   // Calculate vertical offset based on index (each toast is ~56px tall + 8px gap)
@@ -24,13 +24,13 @@
 
 <div
   transition:fly={{ y: -20, duration: 300 }}
-  class="fixed right-4 z-50 flex items-center gap-3 {typeStyles[type]} text-white px-6 py-3 rounded-lg shadow-lg max-w-md"
+  class="fixed right-4 z-50 flex items-center gap-3 {typeStyles[type]} px-6 py-3 rounded-xl shadow-sm max-w-md"
   style="top: {topOffset}px;"
 >
   <span class="flex-1">{message}</span>
   <button
     onclick={onClose}
-    class="text-white hover:text-gray-200 transition-colors"
+    class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
     aria-label="Close toast"
   >
     <X size={18} />

@@ -844,7 +844,7 @@
   <!-- Header -->
   <div class="flex items-start justify-between gap-4">
     <div>
-      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Hosts</h1>
+      <h1 class="text-2xl font-light tracking-tight text-gray-900 dark:text-white">Hosts</h1>
       <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
         Host websites and files, find hosting providers, and manage agreements
       </p>
@@ -878,14 +878,14 @@
   />
 
   <!-- Tab bar -->
-  <div class="flex gap-1 bg-gray-100 dark:bg-gray-800/60 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
+  <div class="flex gap-1 bg-gray-100 dark:bg-gray-950/60 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
     <button
       onclick={() => activeTab = 'sites'}
       role="tab"
       aria-selected={activeTab === 'sites'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'sites'
-          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
           : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
     >
       <Server class="w-4 h-4" />
@@ -897,7 +897,7 @@
       aria-selected={activeTab === 'marketplace'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'marketplace'
-          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
           : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
     >
       <Users class="w-4 h-4" />
@@ -909,13 +909,13 @@
       aria-selected={activeTab === 'agreements'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'agreements'
-          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
           : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
     >
       <Shield class="w-4 h-4" />
       <span class="hidden sm:inline">Agreements</span>
       {#if incomingProposals.length > 0}
-        <span class="ml-0.5 min-w-[1.25rem] px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-blue-500 text-white leading-none text-center animate-pulse">
+        <span class="ml-0.5 min-w-[1.25rem] px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500 text-white leading-none text-center animate-pulse">
           {incomingProposals.length}
         </span>
       {/if}
@@ -1022,7 +1022,7 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete Site</h3>
@@ -1033,7 +1033,7 @@
       <div class="flex justify-end gap-3">
         <button
           onclick={() => deleteConfirm = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
         >Cancel</button>
         <button
           onclick={confirmDeleteSite}

@@ -82,18 +82,18 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={onClose}>
   <div
-    class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg mx-4 p-6"
+    class="bg-white dark:bg-gray-950 rounded-xl shadow-sm w-full max-w-lg mx-4 p-6"
     onclick={(e) => e.stopPropagation()}
   >
     <div class="flex items-center justify-between mb-4">
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Share "{item.name}"</h3>
-      <button onclick={onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
+      <button onclick={onClose} class="p-1 hover:bg-gray-50 dark:hover:bg-gray-900 rounded-lg transition">
         <X class="w-5 h-5 text-gray-500" />
       </button>
     </div>
 
     {#if existingShares.length > 0}
-      <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg mb-4">
+      <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg mb-4">
         <div class="flex items-center gap-2">
           {#if isItemPublic}
             <Eye class="w-4 h-4 text-green-500" />
@@ -127,7 +127,7 @@
       <button
         onclick={createLink}
         disabled={creating}
-        class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
+        class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg transition text-sm font-medium"
       >
         {#if creating}
           <Loader2 class="w-4 h-4 animate-spin" />
@@ -169,13 +169,13 @@
     </div>
 
     {#if existingShares.length > 0}
-      <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
+      <div class="border-t border-gray-200/60 dark:border-gray-800 pt-4">
         <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
           Active Links ({existingShares.length})
         </h4>
         <div class="space-y-2 max-h-48 overflow-y-auto">
           {#each existingShares as share (share.id)}
-            <div class="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+            <div class="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
               <div class="flex-1 min-w-0">
                 <code class="text-xs text-gray-600 dark:text-gray-400 font-mono truncate block">
                   {driveStore.getShareUrl(share.id)}
@@ -222,11 +222,11 @@
       </div>
     {/if}
 
-    <div class="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-      <p class="text-xs text-blue-700 dark:text-blue-300">
+    <div class="mt-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg">
+      <p class="text-xs text-indigo-700 dark:text-indigo-300">
         <strong>File:</strong> {item.name}
         {#if item.size}
-          <span class="ml-2 text-blue-500">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
+          <span class="ml-2 text-indigo-500">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
         {/if}
       </p>
     </div>

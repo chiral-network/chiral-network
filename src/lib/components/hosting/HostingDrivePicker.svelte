@@ -61,7 +61,7 @@
   aria-modal="true"
   aria-label="Select files from Drive"
 >
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-full max-w-md overflow-hidden">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800 w-full max-w-md overflow-hidden">
     <!-- Header -->
     <div class="flex items-center justify-between p-5 pb-4 border-b border-gray-100 dark:border-gray-700/60">
       <div class="flex items-center gap-2.5">
@@ -72,7 +72,7 @@
       </div>
       <button
         onclick={onClose}
-        class="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors
+        class="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors
           focus:outline-none focus:ring-2 focus:ring-gray-400/30"
         aria-label="Close"
       >
@@ -87,7 +87,7 @@
       </div>
     {:else if files.length === 0}
       <div class="flex flex-col items-center justify-center py-16">
-        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700/40 mb-3">
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-900/40 mb-3">
           <HardDrive class="w-7 h-7 text-gray-400 opacity-40" />
         </div>
         <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No files in Drive</p>
@@ -95,14 +95,14 @@
       </div>
     {:else}
       <!-- Select all -->
-      <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/60 bg-gray-50/50 dark:bg-gray-800">
+      <div class="px-4 py-2.5 border-b border-gray-100 dark:border-gray-700/60 bg-gray-50/50 dark:bg-gray-950">
         <button
           onclick={toggleAll}
           class="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors
             focus:outline-none focus:underline"
         >
           <div class="w-4.5 h-4.5 rounded border-2 flex items-center justify-center flex-shrink-0
-            {selected.size === files.length && files.length > 0 ? 'border-primary-500 bg-primary-500' : 'border-gray-300 dark:border-gray-600'}">
+            {selected.size === files.length && files.length > 0 ? 'border-primary-500 bg-primary-500' : 'border-gray-200/60 dark:border-gray-800'}">
             {#if selected.size === files.length && files.length > 0}
               <Check class="w-3 h-3 text-white" />
             {/if}
@@ -122,7 +122,7 @@
           >
             <div class="flex items-center gap-2.5 min-w-0">
               <div class="w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors
-                {selected.has(file.id) ? 'border-primary-500 bg-primary-500' : 'border-gray-300 dark:border-gray-600'}">
+                {selected.has(file.id) ? 'border-primary-500 bg-primary-500' : 'border-gray-200/60 dark:border-gray-800'}">
                 {#if selected.has(file.id)}
                   <Check class="w-3 h-3 text-white" />
                 {/if}
@@ -136,7 +136,7 @@
       </div>
 
       <!-- Footer -->
-      <div class="flex items-center justify-between p-4 border-t border-gray-100 dark:border-gray-700/60 bg-gray-50/50 dark:bg-gray-800">
+      <div class="flex items-center justify-between p-4 border-t border-gray-100 dark:border-gray-700/60 bg-gray-50/50 dark:bg-gray-950">
         <div class="text-xs text-gray-500 dark:text-gray-400">
           <span class="font-medium">{selected.size}</span> file{selected.size !== 1 ? 's' : ''}
           {#if selected.size > 0}
@@ -147,8 +147,8 @@
         <div class="flex gap-2">
           <button
             onclick={onClose}
-            class="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-lg
-              hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+            class="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-200/60 dark:border-gray-800 rounded-lg
+              hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400/30"
           >
             Cancel
           </button>

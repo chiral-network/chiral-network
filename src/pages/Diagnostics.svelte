@@ -340,7 +340,7 @@
     switch (level) {
       case 'error': return 'text-red-500';
       case 'warn': return 'text-yellow-500';
-      case 'info': return 'text-blue-500';
+      case 'info': return 'text-indigo-500';
       case 'debug': return 'text-gray-500';
       default: return 'text-gray-500';
     }
@@ -350,9 +350,9 @@
     switch (level) {
       case 'error': return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400';
       case 'warn': return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
-      case 'info': return 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400';
-      case 'debug': return 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400';
-      default: return 'bg-gray-100 dark:bg-gray-700';
+      case 'info': return 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400';
+      case 'debug': return 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400';
+      default: return 'bg-gray-100 dark:bg-gray-900';
     }
   }
 
@@ -364,7 +364,7 @@
       case 'dht': return 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300';
       case 'bootstrap': return 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300';
       case 'system': return 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300';
-      default: return 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300';
+      default: return 'bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300';
     }
   }
 
@@ -407,7 +407,7 @@
 <div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-2xl font-bold dark:text-white">Diagnostics</h1>
+      <h1 class="text-2xl font-light tracking-tight dark:text-white">Diagnostics</h1>
       <p class="text-gray-600 dark:text-gray-400 mt-1">Developer tools for debugging and monitoring</p>
     </div>
     <div class="flex items-center gap-3">
@@ -417,7 +417,7 @@
       </label>
       <button
         onclick={refreshAll}
-        class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+        class="p-2 hover:bg-gray-50 dark:hover:bg-gray-900 rounded-lg transition-colors dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
         title="Refresh all"
       >
         <RefreshCw class="w-5 h-5" />
@@ -426,13 +426,13 @@
   </div>
 
   <!-- DHT Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800">
     <button
       onclick={() => showDhtSection = !showDhtSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+        <div class="p-2 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-900'} rounded-lg">
           <Globe class="w-6 h-6 {$networkConnected ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
         </div>
         <div>
@@ -453,7 +453,7 @@
           <button
             onclick={loadDhtHealth}
             disabled={isLoadingDht}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
             {#if isLoadingDht}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -466,35 +466,35 @@
 
         {#if dhtHealth}
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
               <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
                 {dhtHealth.running ? 'Running' : 'Stopped'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.connectedPeerCount}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.kademliaPeers}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{dhtHealth.sharedFiles}</p>
             </div>
           </div>
 
           {#if dhtHealth.peerId}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
               <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Peer ID</p>
               <p class="font-mono text-xs break-all dark:text-gray-300">{dhtHealth.peerId}</p>
             </div>
           {/if}
 
           {#if dhtHealth.listeningAddresses.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
               <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
               <div class="space-y-1">
                 {#each dhtHealth.listeningAddresses as addr}
@@ -505,11 +505,11 @@
           {/if}
 
           {#if dhtHealth.protocols.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
               <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Active Protocols ({dhtHealth.protocols.length})</p>
               <div class="flex flex-wrap gap-1.5">
                 {#each dhtHealth.protocols as protocol}
-                  <span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded-full font-mono">
+                  <span class="px-2 py-0.5 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 text-xs rounded-full font-mono">
                     {protocol}
                   </span>
                 {/each}
@@ -518,7 +518,7 @@
           {/if}
 
           {#if dhtHealth.bootstrapNodes.length > 0}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
               <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">DHT Bootstrap Nodes</p>
               <div class="space-y-1.5">
                 {#each dhtHealth.bootstrapNodes as node}
@@ -543,7 +543,7 @@
   </div>
 
   <!-- Bootstrap Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800">
     <button
       onclick={() => showBootstrapSection = !showBootstrapSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -570,7 +570,7 @@
           <button
             onclick={runBootstrapCheck}
             disabled={isLoadingBootstrap}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
             {#if isLoadingBootstrap}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -583,17 +583,17 @@
 
         {#if bootstrapHealth}
           <div class="grid grid-cols-3 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
               <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
                 {bootstrapHealth.isHealthy ? 'Healthy' : 'Degraded'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Healthy Nodes</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
               <p class="text-sm font-bold dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
             </div>
@@ -601,7 +601,7 @@
 
           <div class="space-y-2">
             {#each bootstrapHealth.nodes as node}
-              <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
+              <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-lg text-xs">
                 <div class="flex items-center gap-2">
                   <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
                   <div>
@@ -633,13 +633,13 @@
   </div>
 
   <!-- Geth Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800">
     <button
       onclick={() => showGethSection = !showGethSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+        <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-900'} rounded-lg">
           <Server class="w-6 h-6 {gethStatus?.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
         </div>
         <div>
@@ -660,7 +660,7 @@
           <button
             onclick={loadGethStatus}
             disabled={isLoadingGeth}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
             {#if isLoadingGeth}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -673,39 +673,39 @@
 
         {#if gethStatus}
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Installed</p>
               <p class="text-sm font-bold {gethStatus.installed ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
                 {gethStatus.installed ? 'Yes' : 'No'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
               <p class="text-sm font-bold {gethStatus.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}">
                 {gethStatus.running ? 'Running' : 'Stopped'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Syncing</p>
               <p class="text-sm font-bold dark:text-white">{gethStatus.syncing ? 'Yes' : 'No'}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Chain ID</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.chainId || 'N/A'}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Current Block</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.currentBlock.toLocaleString()}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Highest Block</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.highestBlock.toLocaleString()}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{gethStatus.peerCount}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Sync Progress</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">
                 {#if gethStatus.syncing && gethStatus.highestBlock > 0}
@@ -728,13 +728,13 @@
   </div>
 
   <!-- Mining Diagnostics -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800">
     <button
       onclick={() => showMiningSection = !showMiningSection}
       class="w-full flex items-center justify-between p-6 text-left"
     >
       <div class="flex items-center gap-3">
-        <div class="p-2 {miningStatus?.mining ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
+        <div class="p-2 {miningStatus?.mining ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-gray-100 dark:bg-gray-900'} rounded-lg">
           <Pickaxe class="w-6 h-6 {miningStatus?.mining ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}" />
         </div>
         <div>
@@ -755,7 +755,7 @@
           <button
             onclick={loadMiningStatus}
             disabled={isLoadingMining}
-            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+            class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
             {#if isLoadingMining}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -768,28 +768,28 @@
 
         {#if miningStatus}
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
               <p class="text-sm font-bold {miningStatus.mining ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}">
                 {miningStatus.mining ? 'Mining' : 'Inactive'}
               </p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Hash Rate</p>
               <p class="text-sm font-bold dark:text-white tabular-nums">{formatHashRate(miningStatus.hashRate)}</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined</p>
               <p class="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
             </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+            <div class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Total Mined (Wei)</p>
               <p class="text-sm font-bold dark:text-white font-mono tabular-nums">{miningStatus.totalMinedWei}</p>
             </div>
           </div>
 
           {#if miningStatus.minerAddress}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <div class="p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
               <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Miner Address (Coinbase)</p>
               <p class="font-mono text-xs break-all dark:text-gray-300">{miningStatus.minerAddress}</p>
             </div>
@@ -808,7 +808,7 @@
   </div>
 
   <!-- Geth Log Viewer -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800">
     <button
       onclick={() => showGethLogSection = !showGethLogSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -838,7 +838,7 @@
               id="geth-log-lines"
               bind:value={gethLogLines}
               onchange={() => loadGethLog()}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-900 border border-gray-200/60 dark:border-gray-800 rounded dark:text-gray-300"
             >
               <option value={50}>50</option>
               <option value={100}>100</option>
@@ -855,7 +855,7 @@
                   });
                 }
               }}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
             >
               <Copy class="w-3 h-3" />
               Copy
@@ -863,7 +863,7 @@
             <button
               onclick={loadGethLog}
               disabled={isLoadingGethLog}
-              class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+              class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
             >
               {#if isLoadingGethLog}
                 <Loader2 class="w-3 h-3 animate-spin" />
@@ -907,7 +907,7 @@
   </div>
 
   <!-- Event Logs -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800">
     <button
       onclick={() => showLogsSection = !showLogsSection}
       class="w-full flex items-center justify-between p-6 text-left"
@@ -936,7 +936,7 @@
             <Filter class="w-4 h-4 text-gray-400" />
             <select
               bind:value={logFilter}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-900 border border-gray-200/60 dark:border-gray-800 rounded dark:text-gray-300"
             >
               <option value="all">All Levels</option>
               <option value="info">Info</option>
@@ -946,7 +946,7 @@
             </select>
             <select
               bind:value={sourceFilter}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-900 border border-gray-200/60 dark:border-gray-800 rounded dark:text-gray-300"
             >
               <option value="all">All Sources</option>
               <option value="dht">DHT</option>
@@ -963,7 +963,7 @@
             </label>
             <button
               onclick={copyLogs}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
               title="Copy logs to clipboard"
             >
               <Copy class="w-3 h-3" />
@@ -971,7 +971,7 @@
             </button>
             <button
               onclick={exportLogs}
-              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
+              class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-900 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 dark:text-gray-300"
               title="Export logs as file"
             >
               <Download class="w-3 h-3" />

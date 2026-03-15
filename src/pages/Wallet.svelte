@@ -30,16 +30,16 @@
       <!-- Logo and title -->
       <div class="text-center mb-10">
         <div class="inline-flex items-center justify-center w-20 h-20 mb-6">
-          <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-shadow-lg" />
+          <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-shadow-sm" />
         </div>
-        <h1 class="text-4xl font-bold text-gray-900 dark:text-white mb-3">
+        <h1 class="text-4xl font-light text-gray-900 dark:text-white mb-3">
           Chiral Network
         </h1>
         <p class="text-lg text-gray-500 dark:text-gray-400">Decentralized File Sharing Network</p>
       </div>
 
       <!-- Card -->
-      <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-8 shadow-lg">
+      <div class="bg-white dark:bg-gray-950 border border-gray-200/60 dark:border-gray-800 rounded-2xl p-8 shadow-sm">
         <h2 class="text-2xl font-semibold text-gray-900 dark:text-white mb-6">Get Started</h2>
 
         <button
@@ -57,7 +57,7 @@
 
         <button
           onclick={handleUseExisting}
-          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200/60 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-900 text-gray-900 dark:text-white rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-gray-400/30"
         >
           <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-200 dark:bg-gray-600 rounded-lg">
             <KeyRound class="w-5 h-5" />

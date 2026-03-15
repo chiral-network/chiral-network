@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="group relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 hover:shadow-md hover:border-blue-300 dark:hover:border-blue-600 transition cursor-pointer select-none"
+  class="group relative bg-white dark:bg-gray-950 border border-gray-200/60 dark:border-gray-800 rounded-xl p-4 hover:shadow-sm hover:border-indigo-300 dark:hover:border-indigo-600 transition cursor-pointer select-none"
   ondblclick={() => onOpen(item)}
   oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -44,21 +44,21 @@
     {/if}
     {#if item.shared}
       {#if item.isPublic}
-        <Link class="w-3.5 h-3.5 text-blue-500" />
+        <Link class="w-3.5 h-3.5 text-indigo-500" />
       {:else}
         <EyeOff class="w-3.5 h-3.5 text-orange-500" />
       {/if}
     {/if}
     <button
       onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
-      class="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+      class="p-1 hover:bg-gray-50 dark:hover:bg-gray-900 rounded"
     >
       <MoreVertical class="w-4 h-4 text-gray-500" />
     </button>
   </div>
 
   <!-- Icon -->
-  <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type === 'folder' ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'bg-gray-50 dark:bg-gray-700'}">
+  <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type === 'folder' ? 'bg-yellow-50 dark:bg-yellow-900/20' : 'bg-gray-50 dark:bg-gray-900'}">
     {#if item.type === 'folder'}
       <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
     {:else}

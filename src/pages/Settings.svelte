@@ -132,12 +132,12 @@
 
 <div class="p-4 sm:p-6 max-w-6xl mx-auto">
   <div class="mb-6">
-    <h1 class="text-2xl font-bold dark:text-white">Settings</h1>
+    <h1 class="text-2xl font-light tracking-tight dark:text-white">Settings</h1>
     <p class="text-gray-600 dark:text-gray-400 mt-1">Customize your Chiral Network experience</p>
   </div>
 
   <!-- Appearance Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800 p-6 mb-6">
     <div class="flex items-center gap-3 mb-6">
       <div class="p-2 bg-purple-100 dark:bg-purple-900 rounded-lg">
         <Palette class="w-5 h-5 text-purple-600 dark:text-purple-400" />
@@ -159,7 +159,7 @@
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.theme === option.value
                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
-                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
+                : 'border-gray-200/60 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-900'}"
           >
             {#if $settings.theme === option.value}
               <div class="absolute top-2 right-2">
@@ -206,7 +206,7 @@
     </div>
 
     <!-- Compact Mode -->
-    <div class="flex items-center justify-between py-4 border-t border-gray-200 dark:border-gray-700">
+    <div class="flex items-center justify-between py-4 border-t border-gray-200/60 dark:border-gray-800">
       <div class="flex items-center gap-3">
         <LayoutGrid class="w-5 h-5 text-gray-500 dark:text-gray-400" />
         <div>
@@ -230,7 +230,7 @@
     </div>
 
     <!-- Navigation Style -->
-    <div class="py-4 border-t border-gray-200 dark:border-gray-700">
+    <div class="py-4 border-t border-gray-200/60 dark:border-gray-800">
       <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Navigation Style</span>
       <div class="grid grid-cols-2 gap-3">
         {#each navStyleOptions as option}
@@ -240,7 +240,7 @@
             class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
               {$settings.navStyle === option.value
                 ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
-                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
+                : 'border-gray-200/60 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-900'}"
           >
             {#if $settings.navStyle === option.value}
               <div class="absolute top-2 right-2">
@@ -257,9 +257,9 @@
     </div>
 
     <!-- Preview -->
-    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+    <div class="pt-4 border-t border-gray-200/60 dark:border-gray-800">
       <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Preview</span>
-      <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
+      <div class="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200/60 dark:border-gray-800">
         <div class="flex items-center gap-3 mb-3">
           <div class="w-10 h-10 rounded-full bg-primary-500"></div>
           <div>
@@ -268,11 +268,11 @@
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
-          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+          <div class="p-3 rounded-lg bg-white dark:bg-gray-950 border border-gray-200/60 dark:border-gray-800">
             <p class="text-xs text-gray-500 dark:text-gray-400">Balance</p>
             <p class="text-lg font-bold text-gray-900 dark:text-white tabular-nums">100.00 CHI</p>
           </div>
-          <div class="p-3 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+          <div class="p-3 rounded-lg bg-white dark:bg-gray-950 border border-gray-200/60 dark:border-gray-800">
             <p class="text-xs text-gray-500 dark:text-gray-400">Peers</p>
             <p class="text-lg font-bold text-gray-900 dark:text-white">12</p>
           </div>
@@ -283,7 +283,7 @@
 
   <!-- Storage Section -->
   {#if isTauri}
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+    <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800 p-6 mb-6">
       <div class="flex items-center gap-3 mb-6">
         <div class="p-2 bg-primary-100 dark:bg-primary-900 rounded-lg">
           <HardDrive class="w-5 h-5 text-primary-600 dark:text-primary-400" />
@@ -298,7 +298,7 @@
       <div>
         <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Download Directory</span>
         <div class="flex items-center gap-3">
-          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-200/60 dark:border-gray-800 rounded-lg">
             <FolderOpen class="w-4 h-4 text-gray-400 flex-shrink-0" />
             <span class="text-sm text-gray-700 dark:text-gray-300 truncate font-mono">
               {displayDownloadDir || 'Loading...'}
@@ -332,7 +332,7 @@
   {/if}
 
   <!-- Notification Settings Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800 p-6 mb-6">
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-amber-100 dark:bg-amber-900 rounded-lg">
         <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
@@ -366,7 +366,7 @@
   </div>
 
   <!-- Reset Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+  <div class="bg-white dark:bg-gray-950 rounded-2xl shadow-sm border border-gray-200/60 dark:border-gray-800 p-6">
     <div class="flex items-center justify-between">
       <div>
         <h3 class="font-semibold text-gray-900 dark:text-white">Reset Settings</h3>

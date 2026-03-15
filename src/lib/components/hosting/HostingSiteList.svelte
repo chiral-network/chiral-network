@@ -50,9 +50,9 @@
   }
 </script>
 
-<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/85">
+<div class="rounded-2xl border border-gray-200/70 bg-white/90 p-5 shadow-sm backdrop-blur dark:border-gray-700/60 dark:bg-gray-950/85">
   <h2 class="mb-4 text-base font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-700/50">
+    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-900/50">
       <Globe class="h-3.5 w-3.5 text-gray-500 dark:text-gray-400" />
     </div>
     Hosted Sites
@@ -65,7 +65,7 @@
 
   {#if sites.length === 0}
     <div class="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-500">
-      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-700/40 mb-4">
+      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-900/40 mb-4">
         <Server class="h-8 w-8 opacity-40" />
       </div>
       <p class="text-sm font-medium text-gray-500 dark:text-gray-400">No hosted sites yet</p>
@@ -76,7 +76,7 @@
       {#each sites as site (site.id)}
         <div class="group rounded-xl border border-gray-100 bg-gray-50/50 p-4 transition-all
           hover:border-gray-200 hover:shadow-sm
-          dark:border-gray-700/50 dark:bg-gray-700/30 dark:hover:border-gray-600">
+          dark:border-gray-700/50 dark:bg-gray-900/30 dark:hover:border-gray-600">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
@@ -87,7 +87,7 @@
                     Published
                   </span>
                 {:else}
-                  <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-700 dark:text-gray-400 uppercase tracking-wide">
+                  <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-gray-900 dark:text-gray-400 uppercase tracking-wide">
                     Local
                   </span>
                 {/if}
@@ -172,8 +172,8 @@
                 onclick={() => onOpenSite(site)}
                 title="Open in browser"
                 aria-label="Open {site.name} in browser"
-                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-500
-                  dark:hover:bg-blue-900/30 dark:hover:text-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+                class="rounded-lg p-2 text-gray-400 transition-colors hover:bg-indigo-50 hover:text-indigo-500
+                  dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/30"
               >
                 <ExternalLink class="h-4 w-4" />
               </button>

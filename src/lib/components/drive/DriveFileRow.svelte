@@ -55,7 +55,7 @@
       {/if}
       {#if item.shared}
         {#if item.isPublic}
-          <Link class="w-3.5 h-3.5 text-blue-500 shrink-0" />
+          <Link class="w-3.5 h-3.5 text-indigo-500 shrink-0" />
         {:else}
           <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
         {/if}

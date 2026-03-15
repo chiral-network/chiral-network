@@ -30,13 +30,13 @@
 <div class="rounded-2xl border p-4 transition-colors
   {serverRunning
     ? 'border-green-200/70 bg-green-50/50 dark:border-green-800/40 dark:bg-green-900/10'
-    : 'border-gray-200/70 bg-white/90 dark:border-gray-700/60 dark:bg-gray-800/85'}
+    : 'border-gray-200/70 bg-white/90 dark:border-gray-700/60 dark:bg-gray-950/85'}
   shadow-sm backdrop-blur">
   <div class="flex items-center justify-between gap-4 flex-wrap">
     <div class="flex items-center gap-3">
       <!-- Status indicator -->
       <div class="relative flex h-10 w-10 items-center justify-center rounded-xl
-        {serverRunning ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700/50'}">
+        {serverRunning ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-900/50'}">
         <Server class="h-5 w-5 {serverRunning ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500'}" />
         {#if serverRunning}
           <span class="absolute -top-0.5 -right-0.5 flex h-3 w-3">
@@ -77,7 +77,7 @@
             max="65535"
             class="w-20 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-900 text-center tabular-nums
               focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-400/30
-              dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+              dark:border-gray-600 dark:bg-gray-900 dark:text-white"
           />
         </div>
       {/if}

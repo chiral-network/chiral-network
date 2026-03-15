@@ -23,7 +23,7 @@
   onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') oncancel(); }}
   onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) oncancel(); }}
 >
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 p-6 max-w-md w-full mx-4">
+  <div class="bg-white dark:bg-gray-950 rounded-xl shadow-sm border border-gray-200/60 dark:border-gray-800 p-6 max-w-md w-full mx-4">
     <!-- Header -->
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2.5 bg-red-100 dark:bg-red-900/30 rounded-full">
@@ -36,7 +36,7 @@
     </div>
 
     <!-- Details -->
-    <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 mb-4 space-y-2">
+    <div class="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 mb-4 space-y-2">
       <div class="flex justify-between items-start gap-2">
         <span class="text-xs text-gray-500 dark:text-gray-400 shrink-0">Address</span>
         <span class="text-sm font-mono text-gray-900 dark:text-gray-200 text-right break-all">{formatAddr(address)}</span>
@@ -58,7 +58,7 @@
     <div class="flex gap-3">
       <button
         onclick={oncancel}
-        class="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+        class="flex-1 px-4 py-2.5 border border-gray-200/60 dark:border-gray-800 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
       >
         Cancel
       </button>

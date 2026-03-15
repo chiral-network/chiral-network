@@ -557,7 +557,7 @@
       case 'failed': return 'text-red-600';
       case 'declined': return 'text-gray-500';
       case 'pending': return 'text-yellow-600';
-      case 'accepted': return 'text-blue-600';
+      case 'accepted': return 'text-indigo-600';
       default: return 'text-gray-600';
     }
   }
@@ -586,7 +586,7 @@
       {/if}
       <button
         onclick={() => showHistory = !showHistory}
-        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+        class="inline-flex items-center gap-2 rounded-xl border border-gray-200/60 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-gray-800 dark:bg-gray-950 dark:text-gray-300 dark:hover:bg-gray-900"
       >
         <History class="h-4 w-4" />
         <span>{showHistory ? 'Hide History' : 'Show History'}</span>
@@ -600,12 +600,10 @@
   >
     <!-- Peer Map -->
     <div
-      class="relative overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800 min-h-[22rem] xl:min-h-0"
+      class="relative overflow-hidden rounded-2xl border border-gray-200/60/80 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-950 min-h-[22rem] xl:min-h-0"
       style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` : ''}
     >
-      <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-primary-50/70 to-cyan-50/60 dark:from-slate-900 dark:via-gray-900 dark:to-primary-950/50"></div>
-      <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-primary-300/25 blur-3xl dark:bg-primary-500/20"></div>
-      <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-cyan-300/30 blur-3xl dark:bg-cyan-500/20"></div>
+      <div class="absolute inset-0 bg-gray-50 dark:bg-gray-900"></div>
       <div class="network-dot-grid absolute inset-0 opacity-45 dark:opacity-30"></div>
 
       <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-200 dark:ring-gray-700">
@@ -624,7 +622,7 @@
         </div>
         <span class="absolute -inset-4 rounded-full bg-primary-400/25 blur-xl dark:bg-primary-500/20"></span>
         <div
-          class="relative h-16 w-16 rounded-full border-4 border-white shadow-xl ring-4 ring-primary-200/60 dark:border-gray-700 dark:ring-primary-900/60 flex items-center justify-center"
+          class="relative h-16 w-16 rounded-full border-4 border-white shadow-sm ring-4 ring-primary-200/60 dark:border-gray-800 dark:ring-primary-900/60 flex items-center justify-center"
           style="background-color: {$userAlias.colorHex}"
         >
           <User class="h-8 w-8 text-white" />
@@ -644,7 +642,7 @@
           <span class="peer-glow absolute inset-0 rounded-full bg-primary-400/20 blur-md dark:bg-primary-500/20"></span>
           <div class="relative z-10 flex flex-col items-center">
             <div
-              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-md transition-transform duration-200 group-hover:scale-110 dark:border-gray-700 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-primary-300/60 dark:ring-primary-900/70' : ''}"
+              class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-gray-800 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-primary-300/60 dark:ring-primary-900/70' : ''}"
               style="background-color: {peer.alias.colorHex}"
             >
               <User class="h-6 w-6 text-white" />
@@ -659,7 +657,7 @@
       <!-- Empty state -->
       {#if $nearbyPeers.length === 0}
         <div class="absolute inset-0 flex items-center justify-center p-6">
-          <div class="max-w-sm rounded-2xl border border-white/70 bg-white/75 p-6 text-center shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-900/75">
+          <div class="max-w-sm rounded-2xl border border-white/70 bg-white/75 p-6 text-center shadow-sm backdrop-blur dark:border-gray-800 dark:bg-gray-900/75">
             <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-gray-700 dark:text-gray-300">
               <User class="h-6 w-6" />
             </div>
@@ -685,7 +683,7 @@
     <div class="flex min-h-0 flex-col gap-4 xl:flex-1">
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
-        <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-800/85">
+        <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-950/85">
           <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Incoming Transfers</h3>
           <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
@@ -740,12 +738,12 @@
 
       <!-- Selected Peer Panel -->
       {#if $selectedPeer}
-        <div class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="rounded-2xl border border-gray-200/60 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-950">
           <div class="mb-4 flex items-center justify-between">
             <h3 class="font-semibold text-gray-900 dark:text-white">Send to Peer</h3>
             <button
               onclick={() => selectPeer(null)}
-              class="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-gray-700"
+              class="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-gray-900"
             >
               <X class="h-4 w-4 text-gray-500 dark:text-gray-400" />
             </button>
@@ -775,7 +773,7 @@
                 min="0"
                 placeholder="0 (free)"
                 bind:value={sendPrice}
-                class="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:focus:border-primary-500 dark:focus:ring-primary-900/50"
+                class="flex-1 rounded-lg border border-gray-200/60 bg-gray-50 px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:focus:border-primary-500 dark:focus:ring-primary-900/50"
               />
             </div>
             {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -793,7 +791,7 @@
           </button>
         </div>
       {:else}
-        <div class="rounded-2xl border border-dashed border-gray-300 bg-white/80 p-5 text-center shadow-sm dark:border-gray-700 dark:bg-gray-800/85">
+        <div class="rounded-2xl border border-dashed border-gray-300 bg-white/80 p-5 text-center shadow-sm dark:border-gray-800 dark:bg-gray-950/85">
           <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
             <Upload class="h-6 w-6 text-gray-400" />
           </div>
@@ -803,14 +801,14 @@
 
       <!-- Transaction History -->
       {#if showHistory}
-        <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-gray-200/60 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-950">
           <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Transaction History</h3>
           <div class="flex-1 space-y-2 overflow-y-auto pr-1">
             {#if $transferHistory.length === 0}
               <p class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">No transfers yet</p>
             {:else}
               {#each $transferHistory as transfer (transfer.id)}
-                <div class="rounded-xl border border-gray-100 bg-gray-50/80 p-3 dark:border-gray-700 dark:bg-gray-700/60">
+                <div class="rounded-xl border border-gray-100 bg-gray-50/80 p-3 dark:border-gray-800 dark:bg-gray-700/60">
                   <div class="flex items-start gap-2.5">
                     <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
                     <div class="min-w-0 flex-1">
@@ -868,7 +866,7 @@
     width: 64px;
     height: 64px;
     border-radius: 9999px;
-    border: 2px solid rgba(59, 130, 246, 0.45);
+    border: 2px solid rgba(99, 102, 241, 0.35);
     transform: translate(-50%, -50%);
     animation: userWavePulse 4s ease-out infinite;
     pointer-events: none;
