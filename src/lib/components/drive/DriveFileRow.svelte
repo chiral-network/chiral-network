@@ -37,7 +37,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <tr
- class="group hover:bg-[#13111C]/[0.05] transition cursor-pointer select-none border-b border-white/[0.06]/60"
+ class="group hover:bg-[var(--surface-0)]/[0.05] transition cursor-pointer select-none border-b border-[var(--border)]/60"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -74,18 +74,18 @@
  {/if}
  </div>
  </td>
- <td class="py-2.5 px-3 text-sm text-white/50">
+ <td class="py-2.5 px-3 text-sm text-[var(--text-secondary)]">
  {item.type ==='folder' ?'—' : formatSize(item.size)}
  </td>
- <td class="py-2.5 px-3 text-sm text-white/50">
+ <td class="py-2.5 px-3 text-sm text-[var(--text-secondary)]">
  {formatDate(item.modifiedAt)}
  </td>
  <td class="py-2.5 px-3 text-right">
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-[#13111C]/[0.1] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+ class="p-1 hover:bg-[var(--surface-0)]/[0.1] rounded opacity-0 group-hover:opacity-100 transition-opacity"
  >
- <MoreVertical class="w-4 h-4 text-white/40" />
+ <MoreVertical class="w-4 h-4 text-[var(--text-tertiary)]" />
  </button>
  </td>
 </tr>

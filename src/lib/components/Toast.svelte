@@ -12,10 +12,10 @@
  let { message, type ='info', index = 0, onClose }: Props = $props();
 
  const typeStyles = {
- success:'bg-[#13111C]/[0.07] border border-green-800 text-green-400',
- error:'bg-[#13111C]/[0.07] border border-red-800 text-red-400',
- info:'bg-[#13111C]/[0.07] border border-indigo-800 text-indigo-400',
- warning:'bg-[#13111C]/[0.07] border border-yellow-800 text-yellow-800'
+ success:'bg-[var(--surface-0)]/[0.07] border border-green-800 text-green-400',
+ error:'bg-[var(--surface-0)]/[0.07] border border-red-800 text-red-400',
+ info:'bg-[var(--surface-0)]/[0.07] border border-indigo-800 text-indigo-400',
+ warning:'bg-[var(--surface-0)]/[0.07] border border-yellow-800 text-yellow-800'
  };
 
  // Calculate vertical offset based on index (each toast is ~56px tall + 8px gap)
@@ -30,7 +30,7 @@
  <span class="flex-1">{message}</span>
  <button
  onclick={onClose}
- class="text-white/50 hover:text-white/50 transition-colors"
+ class="text-[var(--text-secondary)] hover:text-[var(--text-secondary)] transition-colors"
  aria-label="Close toast"
  >
  <X size={18} />

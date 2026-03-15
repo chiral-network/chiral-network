@@ -621,10 +621,10 @@
  placeholder="Folder name"
  bind:value={newFolderName}
  onkeydown={(e) => { if (e.key ==='Enter') confirmNewFolder(); if (e.key ==='Escape') cancelNewFolder(); }}
- class="px-3 py-1.5 bg-[#13111C] border border-white/[0.06]/60 rounded-lg text-sm text-white focus:outline-none focus:border-blue-400/40 w-64"
+ class="px-3 py-1.5 bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-sm text-white focus:outline-none focus:border-blue-400/40 w-64"
  />
  <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 transition">Create</button>
- <button onclick={cancelNewFolder} class="px-3 py-1.5 text-white/[0.06] text-sm hover:bg-[#13111C] rounded-lg transition">Cancel</button>
+ <button onclick={cancelNewFolder} class="px-3 py-1.5 text-white/[0.06] text-sm hover:bg-[var(--surface-0)] rounded-lg transition">Cancel</button>
  </div>
  {/if}
 
@@ -652,7 +652,7 @@
  {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
  <!-- Empty state -->
  <div class="flex flex-col items-center justify-center py-16 text-center">
- <div class="w-16 h-16 bg-[#13111C] rounded-full flex items-center justify-center mb-4">
+ <div class="w-16 h-16 bg-[var(--surface-0)] rounded-full flex items-center justify-center mb-4">
  <HardDrive class="w-8 h-8 text-white/[0.06]" />
  </div>
  <h3 class="text-lg font-medium text-white mb-1">
@@ -672,7 +672,7 @@
  </button>
  <button
  onclick={handleNewFolder}
- class="flex items-center gap-2 px-4 py-2 bg-[#13111C] hover:bg-[#13111C] text-white/70 rounded-lg transition text-sm font-medium focus:outline-none focus:border-blue-400/40"
+ class="flex items-center gap-2 px-4 py-2 bg-[var(--surface-0)] hover:bg-[var(--surface-0)] text-[var(--text-secondary)] rounded-lg transition text-sm font-medium focus:outline-none focus:border-blue-400/40"
  >
  <FolderPlus class="w-4 h-4" />
  New Folder
@@ -684,14 +684,14 @@
  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
  {#each currentItems as item (item.id)}
  {#if renamingId === item.id}
- <div class="bg-[#13111C] border border-indigo-400 rounded-xl p-4">
+ <div class="bg-[var(--surface-0)] border border-indigo-400 rounded-xl p-4">
  <input
  id="rename-input"
  type="text"
  bind:value={renameValue}
  onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-[#13111C] border border-white/[0.06]/60 rounded text-white focus:outline-none focus:border-blue-400/40"
+ class="w-full px-2 py-1 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white focus:outline-none focus:border-blue-400/40"
  />
  </div>
  {:else}
@@ -704,10 +704,10 @@
  {/each}
  </div>
  {:else}
- <div class="bg-[#13111C] rounded-xl border border-white/[0.06]/60 overflow-hidden">
+ <div class="bg-[var(--surface-0)] rounded-xl border border-[var(--border)]/60 overflow-hidden">
  <table class="w-full">
  <thead>
- <tr class="border-b border-white/[0.06]/60 text-left">
+ <tr class="border-b border-[var(--border)]/60 text-left">
  <th class="py-2.5 px-3 text-xs font-medium text-white/[0.06] uppercase tracking-wide">Name</th>
  <th class="py-2.5 px-3 text-xs font-medium text-white/[0.06] uppercase tracking-wide w-24">Size</th>
  <th class="py-2.5 px-3 text-xs font-medium text-white/[0.06] uppercase tracking-wide w-32">Modified</th>
@@ -717,7 +717,7 @@
  <tbody>
  {#each currentItems as item (item.id)}
  {#if renamingId === item.id}
- <tr class="border-b border-white/[0.06]/60">
+ <tr class="border-b border-[var(--border)]/60">
  <td colspan="4" class="py-2 px-3">
  <input
  id="rename-input"
@@ -725,7 +725,7 @@
  bind:value={renameValue}
  onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-[#13111C] border border-white/[0.06]/60 rounded text-white focus:outline-none focus:border-blue-400/40"
+ class="w-full px-2 py-1 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white focus:outline-none focus:border-blue-400/40"
  />
  </td>
  </tr>
@@ -775,13 +775,13 @@
 {#if seedModalItem}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-[#13111C]/40"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/40"
  onclick={() => seedModalItem = null}
  onkeydown={(e) => { if (e.key ==='Escape') seedModalItem = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="bg-[#13111C] rounded-xl p-6 max-w-sm w-full mx-4"
+ class="bg-[var(--surface-0)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
  <h3 class="text-lg font-semibold text-white mb-4">{seedModalItem.seeding ?'Edit Seeding' :'Seed to Network'}</h3>
@@ -793,12 +793,12 @@
  <!-- Protocol picker -->
  <div>
  <label class="block text-xs font-medium text-white/[0.06] mb-1.5">Protocol</label>
- <div class="flex rounded-lg overflow-hidden border border-white/[0.06]/60">
+ <div class="flex rounded-lg overflow-hidden border border-[var(--border)]/60">
  <button
  onclick={() => seedProtocol ='WebRTC'}
  class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol ==='WebRTC'
  ?'bg-indigo-600 text-white'
- :'bg-[#13111C] text-white/70 hover:bg-[#13111C]'}"
+ :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
  >
  WebRTC
  </button>
@@ -806,7 +806,7 @@
  onclick={() => seedProtocol ='BitTorrent'}
  class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol ==='BitTorrent'
  ?'bg-green-600 text-white'
- :'bg-[#13111C] text-white/70 hover:bg-[#13111C]'}"
+ :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
  >
  BitTorrent
  </button>
@@ -822,7 +822,7 @@
  min="0"
  placeholder="Free"
  bind:value={seedPrice}
- class="w-full px-3 py-1.5 text-sm bg-[#13111C] border border-white/[0.06]/60 rounded-lg text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
+ class="w-full px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
  />
  </div>
  </div>
@@ -830,7 +830,7 @@
  <div class="flex justify-end gap-3 mt-5">
  <button
  onclick={() => seedModalItem = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-white/70 bg-[#13111C] hover:bg-[#13111C] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--text-secondary)] bg-[var(--surface-0)] hover:bg-[var(--surface-0)] transition"
  >Cancel</button>
  <button
  onclick={confirmSeed}
@@ -855,13 +855,13 @@
 {#if deleteConfirmItem}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-[#13111C]/40"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/40"
  onclick={() => deleteConfirmItem = null}
  onkeydown={(e) => { if (e.key ==='Escape') deleteConfirmItem = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="bg-[#13111C] rounded-xl p-6 max-w-sm w-full mx-4"
+ class="bg-[var(--surface-0)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
  <h3 class="text-lg font-semibold text-white mb-2">Delete {deleteConfirmItem.type ==='folder' ?'Folder' :'File'}</h3>
@@ -876,7 +876,7 @@
  <div class="flex justify-end gap-3">
  <button
  onclick={() => deleteConfirmItem = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-white/70 bg-[#13111C] hover:bg-[#13111C] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--text-secondary)] bg-[var(--surface-0)] hover:bg-[var(--surface-0)] transition"
  >Cancel</button>
  <button
  onclick={confirmDelete}

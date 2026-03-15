@@ -133,17 +133,17 @@
 
 <div class="space-y-4">
  <!-- Protocol selector + Price input + Add files button -->
- <div class="bg-[#13111C] border border-white/[0.06]/60 rounded-xl p-4">
+ <div class="bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl p-4">
  <div class="flex flex-wrap items-end gap-4">
  <!-- Protocol toggle -->
  <div>
  <label class="block text-xs font-medium text-white/[0.06] mb-1.5">Protocol</label>
- <div class="flex rounded-lg overflow-hidden border border-white/[0.06]/60">
+ <div class="flex rounded-lg overflow-hidden border border-[var(--border)]/60">
  <button
  onclick={() => selectedProtocol ='WebRTC'}
  class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol ==='WebRTC'
  ?'bg-indigo-600 text-white'
- :'bg-[#13111C] text-white/70 hover:bg-[#13111C]'}"
+ :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
  >
  WebRTC
  </button>
@@ -151,7 +151,7 @@
  onclick={() => selectedProtocol ='BitTorrent'}
  class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol ==='BitTorrent'
  ?'bg-green-600 text-white'
- :'bg-[#13111C] text-white/70 hover:bg-[#13111C]'}"
+ :'bg-[var(--surface-0)] text-[var(--text-secondary)] hover:bg-[var(--surface-0)]'}"
  >
  BitTorrent
  </button>
@@ -167,7 +167,7 @@
  min="0"
  placeholder="Free"
  bind:value={filePrice}
- class="w-28 px-3 py-1.5 text-sm bg-[#13111C] border border-white/[0.06]/60 rounded-lg text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
+ class="w-28 px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
  />
  </div>
 
@@ -175,7 +175,7 @@
  <button
  onclick={handleAddFiles}
  disabled={!$networkConnected}
- class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-[#13111C] text-white rounded-lg transition text-sm font-medium"
+ class="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-[var(--surface-0)] text-white rounded-lg transition text-sm font-medium"
  >
  <Plus class="w-4 h-4" />
  Add Files to Seed
@@ -200,10 +200,10 @@
  <div class="space-y-2">
  {#each seedingItems as item (item.id)}
  {@const Icon = getFileIcon(item.name)}
- <div class="bg-[#13111C] border border-white/[0.06]/60 rounded-xl p-4">
+ <div class="bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl p-4">
  <div class="flex items-start gap-3">
  <!-- File icon -->
- <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-[#13111C] flex items-center justify-center">
+ <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-[var(--surface-0)] flex items-center justify-center">
  <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)}" />
  </div>
 
@@ -239,7 +239,7 @@
  placeholder="Free"
  value={getPriceDraft(item)}
  oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
- class="w-24 px-2 py-1 text-xs bg-[#13111C] border border-white/[0.06]/60 rounded text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
+ class="w-24 px-2 py-1 text-xs bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white placeholder:text-white/[0.08] focus:outline-none focus:border-blue-400/40"
  />
  <button
  onclick={() => handleUpdatePrice(item)}
@@ -247,7 +247,7 @@
  class="px-2.5 py-1 text-xs font-medium rounded transition
  {isPriceDirty(item)
  ?'bg-indigo-600 text-white hover:bg-indigo-700'
- :'bg-[#13111C] text-white/[0.06] cursor-not-allowed'}"
+ :'bg-[var(--surface-0)] text-white/[0.06] cursor-not-allowed'}"
  >
  Update Price
  </button>
@@ -261,7 +261,7 @@
  </span>
  <button
  onclick={() => copyToClipboard(item.merkleRoot!,'Hash')}
- class="flex-shrink-0 p-1 hover:bg-[#13111C] rounded"
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-0)] rounded"
  title="Copy hash"
  >
  <Copy class="w-3.5 h-3.5 text-white/[0.06]" />
@@ -274,7 +274,7 @@
  <div class="flex items-center gap-1 flex-shrink-0">
  <button
  onclick={() => expandedFileId = expandedFileId === item.id ? null : item.id}
- class="p-1.5 hover:bg-[#13111C] rounded-lg transition"
+ class="p-1.5 hover:bg-[var(--surface-0)] rounded-lg transition"
  title="Share options"
  >
  <Link class="w-4 h-4 text-white/[0.08]" />
@@ -291,7 +291,7 @@
 
  <!-- Expanded share options -->
  {#if expandedFileId === item.id && item.merkleRoot}
- <div class="mt-3 pt-3 border-t border-white/[0.06]/60 space-y-2">
+ <div class="mt-3 pt-3 border-t border-[var(--border)]/60 space-y-2">
  <!-- Magnet link -->
  <div class="flex items-center gap-2">
  <span class="text-xs text-white/[0.06] w-16 flex-shrink-0">Magnet</span>
@@ -299,11 +299,11 @@
  type="text"
  readonly
  value={generateMagnetLink(item)}
- class="flex-1 text-xs font-mono bg-[#13111C] border border-white/[0.06]/60 rounded px-2 py-1 text-white/70"
+ class="flex-1 text-xs font-mono bg-[var(--surface-0)] border border-[var(--border)]/60 rounded px-2 py-1 text-[var(--text-secondary)]"
  />
  <button
  onclick={() => copyToClipboard(generateMagnetLink(item),'Magnet link')}
- class="flex-shrink-0 p-1 hover:bg-[#13111C] rounded"
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-0)] rounded"
  >
  <Copy class="w-3.5 h-3.5 text-white/[0.06]" />
  </button>
@@ -316,11 +316,11 @@
  type="text"
  readonly
  value={item.merkleRoot}
- class="flex-1 text-xs font-mono bg-[#13111C] border border-white/[0.06]/60 rounded px-2 py-1 text-white/70"
+ class="flex-1 text-xs font-mono bg-[var(--surface-0)] border border-[var(--border)]/60 rounded px-2 py-1 text-[var(--text-secondary)]"
  />
  <button
  onclick={() => copyToClipboard(item.merkleRoot!,'Hash')}
- class="flex-shrink-0 p-1 hover:bg-[#13111C] rounded"
+ class="flex-shrink-0 p-1 hover:bg-[var(--surface-0)] rounded"
  >
  <Copy class="w-3.5 h-3.5 text-white/[0.06]" />
  </button>

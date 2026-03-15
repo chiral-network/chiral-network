@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
- class="group relative bg-[#13111C] border border-white/[0.06]/60 rounded-xl p-4 hover:shadow-sm hover:border-indigo-300 transition cursor-pointer select-none"
+ class="group relative bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl p-4 hover:shadow-sm hover:border-indigo-300 transition cursor-pointer select-none"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -51,14 +51,14 @@
  {/if}
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-[#13111C] rounded"
+ class="p-1 hover:bg-[var(--surface-0)] rounded"
  >
  <MoreVertical class="w-4 h-4 text-white/[0.08]" />
  </button>
  </div>
 
  <!-- Icon -->
- <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-50' :'bg-[#13111C]'}">
+ <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-50' :'bg-[var(--surface-0)]'}">
  {#if item.type ==='folder'}
  <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
  {:else}

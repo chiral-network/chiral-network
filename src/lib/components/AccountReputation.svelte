@@ -117,11 +117,11 @@
  </div>
 {:else if error}
  <div class="text-center py-12">
- <ShieldCheck class="w-12 h-12 mx-auto text-white/70 mb-3" />
+ <ShieldCheck class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
  <p class="text-white/[0.06]">{error}</p>
  </div>
 {:else}
- <div class="bg-[#13111C] rounded-xl p-5 mb-5">
+ <div class="bg-[var(--surface-0)] rounded-xl p-5 mb-5">
  <div class="flex flex-wrap items-center gap-6">
  <div class="flex flex-col items-center">
  <div class="text-4xl font-bold">{elo.toFixed(1)}</div>
@@ -130,26 +130,26 @@
  <button
  onclick={() => loadReputation()}
  disabled={loading}
- class="ml-auto p-2 text-white/[0.06] hover:text-white/70 transition-colors rounded-lg hover:bg-[#13111C] disabled:opacity-40"
+ class="ml-auto p-2 text-white/[0.06] hover:text-[var(--text-secondary)] transition-colors rounded-lg hover:bg-[var(--surface-0)] disabled:opacity-40"
  title="Refresh reputation"
  >
  <RefreshCw class="w-4 h-4 {loading ?'animate-spin' :''}" />
  </button>
 
  <div class="flex-1 grid grid-cols-2 gap-3 text-sm">
- <div class="rounded-lg bg-[#13111C] px-3 py-2 border border-white/[0.06]/60">
+ <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-white/[0.06]">Completed</p>
  <p class="font-semibold text-green-400">{completedCount}</p>
  </div>
- <div class="rounded-lg bg-[#13111C] px-3 py-2 border border-white/[0.06]/60">
+ <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-white/[0.06]">Failed</p>
  <p class="font-semibold text-red-400">{failedCount}</p>
  </div>
- <div class="rounded-lg bg-[#13111C] px-3 py-2 border border-white/[0.06]/60">
+ <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-white/[0.06]">Ratings</p>
  <p class="font-semibold text-white">{ratingCount}</p>
  </div>
- <div class="rounded-lg bg-[#13111C] px-3 py-2 border border-white/[0.06]/60">
+ <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-white/[0.06]">Earned (180d)</p>
  <p class="font-semibold text-white">{formatWeiAsChi(totalEarnedWei)} CHI</p>
  </div>
@@ -159,19 +159,19 @@
 
  {#if events.length === 0}
  <div class="text-center py-12">
- <ShieldCheck class="w-12 h-12 mx-auto text-white/70 mb-3" />
+ <ShieldCheck class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
  <p class="text-white/[0.06]">No reputation events yet</p>
  <p class="text-sm text-white/[0.08] mt-1">
  Complete downloads and ratings will contribute to your Elo
  </p>
  </div>
  {:else}
- <div class="rounded-xl border border-white/[0.06]/60 divide-y divide-white/[0.06]">
+ <div class="rounded-xl border border-[var(--border)]/60 divide-y divide-white/[0.06]">
  {#each paginatedEvents as event (event.id)}
  <div class="p-4">
  <div class="flex items-start justify-between gap-4">
  <div class="flex items-start gap-3 min-w-0">
- <div class="p-2 bg-[#13111C] rounded-full flex-shrink-0">
+ <div class="p-2 bg-[var(--surface-0)] rounded-full flex-shrink-0">
  <User class="w-4 h-4 text-white/[0.06]" />
  </div>
  <div class="min-w-0">
@@ -197,7 +197,7 @@
  <div class="flex items-center gap-1 mt-1.5">
  {#each [1, 2, 3, 4, 5] as star}
  <Star
- class="w-3.5 h-3.5 {event.ratingScore >= star ?'text-yellow-400 fill-yellow-400' :'text-white/70'}"
+ class="w-3.5 h-3.5 {event.ratingScore >= star ?'text-yellow-400 fill-yellow-400' :'text-[var(--text-secondary)]'}"
  />
  {/each}
  </div>
@@ -206,7 +206,7 @@
  {#if event.ratingComment}
  <div class="flex items-start gap-1.5 mt-1.5">
  <MessageSquare class="w-3.5 h-3.5 text-white/[0.06] mt-0.5 flex-shrink-0" />
- <p class="text-sm text-white/70">{event.ratingComment}</p>
+ <p class="text-sm text-[var(--text-secondary)]">{event.ratingComment}</p>
  </div>
  {/if}
 
@@ -228,7 +228,7 @@
  <button
  onclick={() => currentPage = Math.max(0, currentPage - 1)}
  disabled={currentPage === 0}
- class="flex items-center gap-1 px-3 py-1.5 text-sm text-white/[0.06] hover:bg-[#13111C] rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+ class="flex items-center gap-1 px-3 py-1.5 text-sm text-white/[0.06] hover:bg-[var(--surface-0)] rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
  >
  <ChevronLeft class="w-4 h-4" />
  Previous
@@ -239,7 +239,7 @@
  <button
  onclick={() => currentPage = Math.min(totalPages - 1, currentPage + 1)}
  disabled={currentPage >= totalPages - 1}
- class="flex items-center gap-1 px-3 py-1.5 text-sm text-white/[0.06] hover:bg-[#13111C] rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+ class="flex items-center gap-1 px-3 py-1.5 text-sm text-white/[0.06] hover:bg-[var(--surface-0)] rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
  >
  Next
  <ChevronRight class="w-4 h-4" />

@@ -4,48 +4,47 @@
 
 @layer base {
   :root {
-    --color-primary-50:  236 254 255;
-    --color-primary-100: 207 250 254;
-    --color-primary-200: 165 243 252;
-    --color-primary-300: 103 232 249;
-    --color-primary-400: 34 211 238;
-    --color-primary-500: 6 182 212;
-    --color-primary-600: 8 145 178;
-    --color-primary-700: 14 116 144;
-    --color-primary-800: 21 94 117;
-    --color-primary-900: 22 78 99;
-    --color-primary-950: 8 51 68;
-    --color-accent-400: 244 114 182;
-    --color-accent-500: 236 72 153;
-    --color-accent-600: 219 39 119;
+    --color-primary-50:  239 246 255;
+    --color-primary-100: 219 234 254;
+    --color-primary-200: 191 219 254;
+    --color-primary-300: 147 197 253;
+    --color-primary-400: 96 165 250;
+    --color-primary-500: 59 130 246;
+    --color-primary-600: 37 99 235;
+    --color-primary-700: 29 78 216;
+    --color-primary-800: 30 64 175;
+    --color-primary-900: 30 58 138;
+    --color-primary-950: 23 37 84;
   }
 
   html { color-scheme: dark; }
 
-  body { @apply bg-black text-gray-100; }
+  body { @apply bg-[#13111C] text-white/90 antialiased; }
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.07); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
-  * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.07) transparent; }
+  * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.08) transparent; }
+}
+
+@layer components {
+  .glass { @apply backdrop-blur-2xl bg-white/[0.07] border border-white/[0.08]; }
+  .glass-card { @apply backdrop-blur-2xl bg-white/[0.07] border border-white/[0.08] rounded-2xl shadow-xl shadow-black/[0.08]; }
+  .glass-panel { @apply backdrop-blur-xl bg-white/[0.05] border border-white/[0.06] rounded-xl; }
+  .glass-button { @apply bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.08] rounded-xl transition-all; }
+  .glass-button-primary { @apply bg-blue-500/90 hover:bg-blue-400/90 text-white rounded-xl shadow-lg shadow-blue-500/20 transition-all; }
+  .glass-input { @apply bg-white/[0.06] border border-white/[0.08] rounded-xl shadow-inner shadow-black/[0.06] text-white placeholder:text-white/30 focus:outline-none focus:border-blue-400/40; }
+  .glass-sidebar { @apply backdrop-blur-3xl bg-white/[0.08] border-r border-white/[0.06]; }
+  .glass-navbar { @apply backdrop-blur-3xl bg-white/[0.06] border-b border-white/[0.06]; }
+  .glass-modal { @apply backdrop-blur-3xl bg-white/[0.09] border border-white/[0.08] rounded-3xl shadow-2xl shadow-black/20; }
+  .glass-toast { @apply backdrop-blur-3xl bg-white/[0.1] border border-white/[0.06] rounded-2xl shadow-xl; }
+  .glass-stat { @apply backdrop-blur-lg bg-white/[0.04] border border-white/[0.06] rounded-2xl; }
+  .glass-pill-active { @apply bg-white/[0.12] rounded-lg; }
+  .glass-divider { @apply border-white/[0.06]; }
+  .glass-context-menu { @apply backdrop-blur-3xl bg-white/[0.12] border border-white/[0.08] rounded-2xl shadow-2xl shadow-black/20; }
 }
 
 @layer utilities {
-  .text-muted-foreground { @apply text-gray-500; }
-  .neon-border { border: 1px solid rgba(6, 182, 212, 0.12); }
-  .neon-border-bright { border: 1px solid rgba(6, 182, 212, 0.35); box-shadow: 0 0 10px rgba(6, 182, 212, 0.08); }
-  .neon-accent-pink { border: 1px solid rgba(236, 72, 153, 0.25); }
-  .neon-accent-pink-bright { border: 1px solid rgba(236, 72, 153, 0.4); box-shadow: 0 0 10px rgba(236, 72, 153, 0.08); }
-  .neon-glow { box-shadow: 0 0 12px rgba(6, 182, 212, 0.1); }
-  .neon-glow-strong { box-shadow: 0 0 20px rgba(6, 182, 212, 0.18); }
-  .neon-text { text-shadow: 0 0 8px rgba(6, 182, 212, 0.25); }
-  .cyber-panel { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(6, 182, 212, 0.45); }
-  .cyber-panel-pink { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(236, 72, 153, 0.45); }
-  .cyber-panel-amber { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(245, 158, 11, 0.45); }
-  .cyber-panel-green { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(34, 197, 94, 0.45); }
-  .cyber-data { @apply font-mono text-cyan-400/80 text-sm; }
-  .cyber-label { @apply text-[10px] uppercase tracking-[0.2em] text-gray-500 font-medium; }
-  .cyber-divider { @apply border-0 h-px; background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.15), transparent); }
-  .cyber-divider-pink { @apply border-0 h-px; background: linear-gradient(90deg, transparent, rgba(236, 72, 153, 0.15), transparent); }
+  .text-muted-foreground { @apply text-white/50; }
 }

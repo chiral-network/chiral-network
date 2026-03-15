@@ -129,9 +129,9 @@
 
 <div class="max-w-2xl mx-auto p-6">
  {#if step ==='generate'}
- <div class="bg-[#13111C] rounded-lg p-8">
+ <div class="bg-[var(--surface-0)] rounded-lg p-8">
  <div class="flex items-center mb-6">
- <button on:click={onBack} class="mr-4 p-2 hover:bg-[#13111C] rounded-lg transition">
+ <button on:click={onBack} class="mr-4 p-2 hover:bg-[var(--surface-0)] rounded-lg transition">
  <ArrowLeft class="w-5 h-5" />
  </button>
  <h2 class="text-2xl font-bold">Create New Wallet</h2>
@@ -148,9 +148,9 @@
  </p>
  </div>
 
- <div class="grid grid-cols-3 gap-3 bg-[#13111C] p-6 rounded-lg mb-4">
+ <div class="grid grid-cols-3 gap-3 bg-[var(--surface-0)] p-6 rounded-lg mb-4">
  {#each mnemonicWords as word, index}
- <div class="bg-[#13111C] p-3 rounded border border-white/[0.06]/60">
+ <div class="bg-[var(--surface-0)] p-3 rounded border border-[var(--border)]/60">
  <span class="text-xs text-white/[0.06]">{index + 1}.</span>
  <span class="ml-2 font-mono">{word}</span>
  </div>
@@ -160,7 +160,7 @@
  <div class="flex gap-3">
  <button
  on:click={copyToClipboard}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[#13111C] hover:bg-[#13111C] rounded-lg transition"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[var(--surface-0)] hover:bg-[var(--surface-0)] rounded-lg transition"
  >
  {#if copied}
  <Check class="w-4 h-4 text-green-400" />
@@ -173,7 +173,7 @@
 
  <button
  on:click={generateNewMnemonic}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[#13111C] hover:bg-[#13111C] rounded-lg transition"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[var(--surface-0)] hover:bg-[var(--surface-0)] rounded-lg transition"
  >
  <RefreshCw class="w-4 h-4" />
  <span class="text-white/[0.06]">Regenerate</span>
@@ -181,7 +181,7 @@
 
  <button
  on:click={downloadAsText}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[#13111C] hover:bg-[#13111C] rounded-lg transition"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[var(--surface-0)] hover:bg-[var(--surface-0)] rounded-lg transition"
  >
  <Download class="w-4 h-4" />
  <span class="text-white/[0.06]">Download</span>
@@ -192,20 +192,20 @@
  <div class="flex gap-3">
  <button
  on:click={onBack}
- class="flex-1 px-6 py-3 border border-white/[0.06]/60 rounded-lg hover:bg-[#13111C] transition"
+ class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-0)] transition"
  >
  Cancel
  </button>
  <button
  on:click={proceedToVerification}
- class="flex-1 px-6 py-3 bg-blue-400 text-white rounded-lg hover:bg-blue-500 transition"
+ class="flex-1 px-6 py-3 bg-violet-500 text-white rounded-lg hover:bg-violet-600 transition"
  >
  I've Saved It
  </button>
  </div>
  </div>
  {:else if step ==='verify'}
- <div class="bg-[#13111C] rounded-lg p-8">
+ <div class="bg-[var(--surface-0)] rounded-lg p-8">
  <h2 class="text-2xl font-bold mb-6">Verify Recovery Phrase</h2>
 
  <p class="text-white/[0.06] mb-6">
@@ -214,14 +214,14 @@
 
  {#each verificationIndices as index, i}
  <div class="mb-4">
- <label for="word-{index}" class="block text-sm font-medium text-white/70 mb-2">
+ <label for="word-{index}" class="block text-sm font-medium text-[var(--text-secondary)] mb-2">
  Word #{index + 1}
  </label>
  <input
  id="word-{index}"
  type="text"
  bind:value={userInputs[i]}
- class="w-full px-4 py-2 border border-white/[0.06]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[#13111C]"
+ class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[var(--surface-0)]"
  placeholder="Enter word {index + 1}"
  />
  </div>
@@ -236,22 +236,22 @@
  <div class="flex gap-3">
  <button
  on:click={() => step ='generate'}
- class="flex-1 px-6 py-3 border border-white/[0.06]/60 rounded-lg hover:bg-[#13111C] transition"
+ class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-0)] transition"
  >
  Back
  </button>
  <button
  on:click={verifyAndContinue}
- class="flex-1 px-6 py-3 bg-blue-400 text-white rounded-lg hover:bg-blue-500 transition"
+ class="flex-1 px-6 py-3 bg-violet-500 text-white rounded-lg hover:bg-violet-600 transition"
  >
  Continue
  </button>
  </div>
  </div>
  {:else}
- <div class="bg-[#13111C] rounded-lg p-8">
+ <div class="bg-[var(--surface-0)] rounded-lg p-8">
  <div class="flex items-center gap-2 mb-3">
- <Mail class="w-5 h-5 text-blue-400" />
+ <Mail class="w-5 h-5 text-violet-400" />
  <h2 class="text-2xl font-bold">One-Time Email Backup</h2>
  </div>
 
@@ -266,14 +266,14 @@
  </div>
 
  <div class="mb-4">
- <label for="backup-email" class="block text-sm font-medium text-white/70 mb-2">
+ <label for="backup-email" class="block text-sm font-medium text-[var(--text-secondary)] mb-2">
  Backup Email Address
  </label>
  <input
  id="backup-email"
  type="email"
  bind:value={emailInput}
- class="w-full px-4 py-2 border border-white/[0.06]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[#13111C]"
+ class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[var(--surface-0)]"
  placeholder="you@example.com"
  autocomplete="email"
  />
@@ -288,14 +288,14 @@
  <div class="flex gap-3">
  <button
  on:click={() => step ='verify'}
- class="flex-1 px-6 py-3 border border-white/[0.06]/60 rounded-lg hover:bg-[#13111C] transition"
+ class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-0)] transition"
  disabled={sendingEmail}
  >
  Back
  </button>
  <button
  on:click={sendBackupAndComplete}
- class="flex-1 px-6 py-3 bg-blue-400 text-white rounded-lg hover:bg-blue-500 transition disabled:opacity-60 disabled:cursor-not-allowed"
+ class="flex-1 px-6 py-3 bg-violet-500 text-white rounded-lg hover:bg-violet-600 transition disabled:opacity-60 disabled:cursor-not-allowed"
  disabled={sendingEmail}
  >
  {#if sendingEmail}

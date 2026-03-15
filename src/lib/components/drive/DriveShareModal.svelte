@@ -80,27 +80,27 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-[#13111C]/40" onclick={onClose}>
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/40" onclick={onClose}>
  <div
- class="bg-[#13111C] rounded-xl w-full max-w-lg mx-4 p-6"
+ class="bg-[var(--surface-0)] rounded-xl w-full max-w-lg mx-4 p-6"
  onclick={(e) => e.stopPropagation()}
  >
  <div class="flex items-center justify-between mb-4">
  <h3 class="text-lg font-semibold text-white">Share"{item.name}"</h3>
- <button onclick={onClose} class="p-1 hover:bg-[#13111C] rounded-lg transition">
+ <button onclick={onClose} class="p-1 hover:bg-[var(--surface-0)] rounded-lg transition">
  <X class="w-5 h-5 text-white/[0.08]" />
  </button>
  </div>
 
  {#if existingShares.length > 0}
- <div class="flex items-center justify-between p-3 bg-[#13111C] rounded-lg mb-4">
+ <div class="flex items-center justify-between p-3 bg-[var(--surface-0)] rounded-lg mb-4">
  <div class="flex items-center gap-2">
  {#if isItemPublic}
  <Eye class="w-4 h-4 text-green-500" />
- <span class="text-sm text-white/70">Public — share links are active</span>
+ <span class="text-sm text-[var(--text-secondary)]">Public — share links are active</span>
  {:else}
  <EyeOff class="w-4 h-4 text-orange-500" />
- <span class="text-sm text-white/70">Private — share links are blocked</span>
+ <span class="text-sm text-[var(--text-secondary)]">Private — share links are blocked</span>
  {/if}
  </div>
  <button
@@ -169,13 +169,13 @@
  </div>
 
  {#if existingShares.length > 0}
- <div class="border-t border-white/[0.06]/60 pt-4">
- <h4 class="text-sm font-medium text-white/70 mb-3">
+ <div class="border-t border-[var(--border)]/60 pt-4">
+ <h4 class="text-sm font-medium text-[var(--text-secondary)] mb-3">
  Active Links ({existingShares.length})
  </h4>
  <div class="space-y-2 max-h-48 overflow-y-auto">
  {#each existingShares as share (share.id)}
- <div class="flex items-center gap-2 p-2 bg-[#13111C] rounded-lg">
+ <div class="flex items-center gap-2 p-2 bg-[var(--surface-0)] rounded-lg">
  <div class="flex-1 min-w-0">
  <code class="text-xs text-white/[0.06] font-mono truncate block">
  {driveStore.getShareUrl(share.id)}
@@ -200,7 +200,7 @@
  </div>
  <button
  onclick={() => copyUrl(share)}
- class="p-1.5 hover:bg-[#13111C] rounded transition"
+ class="p-1.5 hover:bg-[var(--surface-0)] rounded transition"
  title="Copy link"
  >
  {#if copied === share.id}
