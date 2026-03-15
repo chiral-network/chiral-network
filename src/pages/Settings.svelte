@@ -133,7 +133,7 @@
 <div class="p-4 sm:p-6 max-w-6xl mx-auto">
  <div class="mb-6">
  <h1 class="text-2xl font-light tracking-tight">Settings</h1>
- <p class="text-[var(--text-secondary)] mt-1">Customize your Chiral Network experience</p>
+ <p class="text-white/[0.06] mt-1">Customize your Chiral Network experience</p>
  </div>
 
  <!-- Appearance Section -->
@@ -144,7 +144,7 @@
  </div>
  <div>
  <h2 class="font-semibold text-lg">Appearance</h2>
- <p class="text-sm text-[var(--text-secondary)]">Customize how the app looks</p>
+ <p class="text-sm text-white/[0.06]">Customize how the app looks</p>
  </div>
  </div>
 
@@ -159,21 +159,21 @@
  class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
  {$settings.theme === option.value
  ?'border-blue-400 bg-blue-500/[0.06]'
- :'border-[var(--border)]/60 hover:border-[var(--border)] bg-[var(--surface-1)]'}"
+ :'border-white/[0.06]/60 hover:border-white/[0.06] bg-[#13111C]'}"
  >
  {#if $settings.theme === option.value}
  <div class="absolute top-2 right-2">
  <Check class="w-4 h-4 text-blue-400" />
  </div>
  {/if}
- <Icon class="w-6 h-6 {$settings.theme === option.value ?'text-blue-400' :'text-[var(--text-secondary)]'}" />
+ <Icon class="w-6 h-6 {$settings.theme === option.value ?'text-blue-400' :'text-white/[0.06]'}" />
  <span class="text-sm font-medium {$settings.theme === option.value ?'text-blue-400' :'text-white/70'}">
  {option.label}
  </span>
  </button>
  {/each}
  </div>
- <p class="text-xs text-[var(--text-secondary)] mt-2">
+ <p class="text-xs text-white/[0.06] mt-2">
  {#if $settings.theme ==='system'}
  Currently using {$isDarkMode ?'dark' :'light'} mode based on your system preference
  {:else}
@@ -206,31 +206,31 @@
  </div>
 
  <!-- Compact Mode -->
- <div class="flex items-center justify-between py-4 border-t border-[var(--border)]/60">
+ <div class="flex items-center justify-between py-4 border-t border-white/[0.06]/60">
  <div class="flex items-center gap-3">
- <LayoutGrid class="w-5 h-5 text-[var(--text-secondary)]" />
+ <LayoutGrid class="w-5 h-5 text-white/[0.06]" />
  <div>
  <p class="font-medium text-white">Compact Mode</p>
- <p class="text-sm text-[var(--text-secondary)]">Use smaller spacing and font sizes</p>
+ <p class="text-sm text-white/[0.06]">Use smaller spacing and font sizes</p>
  </div>
  </div>
  <button
  onclick={toggleCompactMode}
  class="relative w-12 h-6 rounded-full transition-colors
- {$settings.compactMode ?'bg-blue-500/[0.06]0' :'bg-[var(--surface-1)]'}"
+ {$settings.compactMode ?'bg-blue-500/[0.06]0' :'bg-[#13111C]'}"
  role="switch"
  aria-checked={$settings.compactMode}
  aria-label="Toggle compact mode"
  >
  <span
- class="absolute top-0.5 left-0.5 w-5 h-5 bg-[var(--surface-0)] rounded-full shadow transition-transform
+ class="absolute top-0.5 left-0.5 w-5 h-5 bg-[#13111C] rounded-full shadow transition-transform
  {$settings.compactMode ?'translate-x-6' :'translate-x-0'}"
  ></span>
  </button>
  </div>
 
  <!-- Navigation Style -->
- <div class="py-4 border-t border-[var(--border)]/60">
+ <div class="py-4 border-t border-white/[0.06]/60">
  <span class="block text-sm font-medium text-white/70 mb-3">Navigation Style</span>
  <div class="grid grid-cols-2 gap-3">
  {#each navStyleOptions as option}
@@ -240,14 +240,14 @@
  class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
  {$settings.navStyle === option.value
  ?'border-blue-400 bg-blue-500/[0.06]'
- :'border-[var(--border)]/60 hover:border-[var(--border)] bg-[var(--surface-1)]'}"
+ :'border-white/[0.06]/60 hover:border-white/[0.06] bg-[#13111C]'}"
  >
  {#if $settings.navStyle === option.value}
  <div class="absolute top-2 right-2">
  <Check class="w-4 h-4 text-blue-400" />
  </div>
  {/if}
- <Icon class="w-6 h-6 {$settings.navStyle === option.value ?'text-blue-400' :'text-[var(--text-secondary)]'}" />
+ <Icon class="w-6 h-6 {$settings.navStyle === option.value ?'text-blue-400' :'text-white/[0.06]'}" />
  <span class="text-sm font-medium {$settings.navStyle === option.value ?'text-blue-400' :'text-white/70'}">
  {option.label}
  </span>
@@ -257,23 +257,23 @@
  </div>
 
  <!-- Preview -->
- <div class="pt-4 border-t border-[var(--border)]/60">
+ <div class="pt-4 border-t border-white/[0.06]/60">
  <span class="block text-sm font-medium text-white/70 mb-3">Preview</span>
- <div class="p-4 rounded-lg bg-[var(--surface-1)] border border-[var(--border)]/60">
+ <div class="p-4 rounded-lg bg-[#13111C] border border-white/[0.06]/60">
  <div class="flex items-center gap-3 mb-3">
  <div class="w-10 h-10 rounded-full bg-blue-500/[0.06]0"></div>
  <div>
  <p class="font-medium text-white">Sample User</p>
- <p class="text-sm text-[var(--text-secondary)]">0x1234...5678</p>
+ <p class="text-sm text-white/[0.06]">0x1234...5678</p>
  </div>
  </div>
  <div class="grid grid-cols-2 gap-3">
- <div class="p-3 rounded-lg bg-[var(--surface-0)] border border-[var(--border)]/60">
- <p class="text-xs text-[var(--text-secondary)]">Balance</p>
+ <div class="p-3 rounded-lg bg-[#13111C] border border-white/[0.06]/60">
+ <p class="text-xs text-white/[0.06]">Balance</p>
  <p class="text-lg font-bold text-white tabular-nums">100.00 CHI</p>
  </div>
- <div class="p-3 rounded-lg bg-[var(--surface-0)] border border-[var(--border)]/60">
- <p class="text-xs text-[var(--text-secondary)]">Peers</p>
+ <div class="p-3 rounded-lg bg-[#13111C] border border-white/[0.06]/60">
+ <p class="text-xs text-white/[0.06]">Peers</p>
  <p class="text-lg font-bold text-white">12</p>
  </div>
  </div>
@@ -290,7 +290,7 @@
  </div>
  <div>
  <h2 class="font-semibold text-lg">Storage</h2>
- <p class="text-sm text-[var(--text-secondary)]">Configure where downloaded files are saved</p>
+ <p class="text-sm text-white/[0.06]">Configure where downloaded files are saved</p>
  </div>
  </div>
 
@@ -298,8 +298,8 @@
  <div>
  <span class="block text-sm font-medium text-white/70 mb-2">Download Directory</span>
  <div class="flex items-center gap-3">
- <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-[var(--surface-1)] border border-[var(--border)]/60 rounded-lg">
- <FolderOpen class="w-4 h-4 text-[var(--text-secondary)] flex-shrink-0" />
+ <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-[#13111C] border border-white/[0.06]/60 rounded-lg">
+ <FolderOpen class="w-4 h-4 text-white/[0.06] flex-shrink-0" />
  <span class="text-sm text-white/70 truncate font-mono">
  {displayDownloadDir ||'Loading...'}
  </span>
@@ -313,14 +313,14 @@
  {#if $settings.downloadDirectory}
  <button
  onclick={resetDownloadDirectory}
- class="p-2.5 text-[var(--text-secondary)] hover:text-red-500 transition-colors flex-shrink-0"
+ class="p-2.5 text-white/[0.06] hover:text-red-500 transition-colors flex-shrink-0"
  title="Reset to system default"
  >
  <X class="w-4 h-4" />
  </button>
  {/if}
  </div>
- <p class="text-xs text-[var(--text-secondary)] mt-2">
+ <p class="text-xs text-white/[0.06] mt-2">
  {#if $settings.downloadDirectory}
  Using custom directory
  {:else}
@@ -339,7 +339,7 @@
  </div>
  <div>
  <h2 class="font-semibold text-lg">Notifications</h2>
- <p class="text-sm text-[var(--text-secondary)]">Toggle which toast notifications to show</p>
+ <p class="text-sm text-white/[0.06]">Toggle which toast notifications to show</p>
  </div>
  </div>
 
@@ -347,16 +347,16 @@
  {#each notificationOptions as option}
  <button
  onclick={() => toggleNotification(option.key)}
- class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-[var(--surface-1)] transition-colors group"
+ class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-[#13111C] transition-colors group"
  role="switch"
  aria-checked={$settings.notifications?.[option.key] ?? true}
  title={option.description}
  >
  <span class="text-sm text-white/70 text-left">{option.label}</span>
  <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
- {$settings.notifications?.[option.key] ?'bg-blue-500/[0.06]0' :'bg-[var(--surface-1)]'}">
+ {$settings.notifications?.[option.key] ?'bg-blue-500/[0.06]0' :'bg-[#13111C]'}">
  <span
- class="absolute top-0.5 left-0.5 w-4 h-4 bg-[var(--surface-0)] rounded-full shadow transition-transform
+ class="absolute top-0.5 left-0.5 w-4 h-4 bg-[#13111C] rounded-full shadow transition-transform
  {$settings.notifications?.[option.key] ?'translate-x-4' :'translate-x-0'}"
  ></span>
  </div>
@@ -370,7 +370,7 @@
  <div class="flex items-center justify-between">
  <div>
  <h3 class="font-semibold text-white">Reset Settings</h3>
- <p class="text-sm text-[var(--text-secondary)]">Restore all settings to their default values</p>
+ <p class="text-sm text-white/[0.06]">Restore all settings to their default values</p>
  </div>
  <button
  onclick={resetSettings}

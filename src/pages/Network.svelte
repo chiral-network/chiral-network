@@ -517,7 +517,7 @@
  <button
  onclick={loadGethStatus}
  disabled={isLoadingGeth}
- class="p-2 hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50 focus:outline-none focus:border-blue-400/40"
+ class="p-2 hover:bg-[#13111C]/[0.05] rounded-lg transition-colors disabled:opacity-50 focus:outline-none focus:border-blue-400/40"
  title="Refresh status"
  >
  <RefreshCw class="w-5 h-5 {isLoadingGeth ?'animate-spin' :''}" />
@@ -534,10 +534,10 @@
  {/if}
 
  <!-- Blockchain Node Section -->
- <div class="cyber-panel p-6 mb-6">
+ <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6 mb-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {gethStatus?.running ?'bg-green-500/[0.08]' :'bg-white/[0.07]'} rounded-lg">
+ <div class="p-2 {gethStatus?.running ?'bg-green-500/[0.08]' :'bg-[#13111C]/[0.07]'} rounded-lg">
  <Server class="w-6 h-6 {gethStatus?.running ?'text-green-400' :'text-white/50'}" />
  </div>
  <div>
@@ -552,8 +552,8 @@
  Running
  </span>
  {:else if gethStatus?.installed}
- <span class="flex items-center gap-2 px-3 py-1 bg-white/[0.07] text-white/70 rounded-full text-sm">
- <span class="w-2 h-2 bg-white/[0.06] rounded-full"></span>
+ <span class="flex items-center gap-2 px-3 py-1 bg-[#13111C]/[0.07] text-white/70 rounded-full text-sm">
+ <span class="w-2 h-2 bg-[#13111C]/[0.06] rounded-full"></span>
  Stopped
  </span>
  {:else}
@@ -586,7 +586,7 @@
  <span>{downloadProgress.status}</span>
  <span>{downloadProgress.percentage.toFixed(1)}%</span>
  </div>
- <div class="w-full bg-white/[0.04] rounded-full h-2">
+ <div class="w-full bg-[#13111C]/[0.04] rounded-full h-2">
  <div
  class="bg-blue-400 h-2 rounded-full transition-all"
  style="width: {downloadProgress.percentage}%"
@@ -611,19 +611,19 @@
  {:else}
  <!-- Geth Stats -->
  <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">Block Height</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">Blockchain Peers</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{gethStatus?.peerCount || 0}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">Chain ID</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{gethStatus?.chainId ||'N/A'}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">Sync Status</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{gethStatus?.syncing ?'Syncing' : gethStatus?.running ?'Synced' : gethStatus?.chainId ?'Remote' :'Offline'}</p>
  </div>
@@ -676,7 +676,7 @@
  <button
  onclick={checkBootstrapHealth}
  disabled={isCheckingBootstrap}
- class="text-xs px-2 py-1 bg-white/[0.07] hover:bg-white/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-2 py-1 bg-[#13111C]/[0.07] hover:bg-[#13111C]/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isCheckingBootstrap}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -689,17 +689,17 @@
 
  {#if bootstrapHealth}
  <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
- <div class="bg-white/[0.07] rounded-lg p-2.5">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-2.5">
  <p class="text-xs text-white/50">Status</p>
  <p class="text-sm font-bold {bootstrapHealth.isHealthy ?'text-green-400' :'text-red-400'}">
  {bootstrapHealth.isHealthy ?'Healthy' :'Degraded'}
  </p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-2.5">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-2.5">
  <p class="text-xs text-white/50">Healthy Nodes</p>
  <p class="text-sm font-bold tabular-nums font-mono text-blue-400/90">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-2.5">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-2.5">
  <p class="text-xs text-white/50">Last Checked</p>
  <p class="text-sm font-bold tabular-nums font-mono text-blue-400/90">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
  </div>
@@ -721,7 +721,7 @@
  {#if showBootstrapDetails}
  <div class="space-y-2">
  {#each bootstrapHealth.nodes as node}
- <div class="flex items-center justify-between p-2.5 bg-white/[0.07] rounded-lg text-xs">
+ <div class="flex items-center justify-between p-2.5 bg-[#13111C]/[0.07] rounded-lg text-xs">
  <div class="flex items-center gap-2">
  <div class="w-2 h-2 rounded-full {node.reachable ?'bg-green-500' :'bg-red-500'} shrink-0"></div>
  <div>
@@ -763,11 +763,11 @@
  </div>
 
  <!-- P2P Network (DHT) Section -->
- <div class="cyber-panel p-6 mb-6">
+ <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6 mb-6">
  <!-- Header with status and controls -->
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {$networkConnected ?'bg-green-500/[0.08]' :'bg-white/[0.07]'} rounded-lg">
+ <div class="p-2 {$networkConnected ?'bg-green-500/[0.08]' :'bg-[#13111C]/[0.07]'} rounded-lg">
  <Globe class="w-6 h-6 {$networkConnected ?'text-green-400' :'text-white/50'}" />
  </div>
  <div>
@@ -776,8 +776,8 @@
  </div>
  </div>
  <div class="flex items-center gap-2">
- <span class="flex items-center gap-2 px-3 py-1 {$networkConnected ?'bg-green-500/[0.08] text-green-400' :'bg-white/[0.07] text-white/70'} rounded-full text-sm">
- <span class="w-2 h-2 rounded-full {$networkConnected ?'bg-green-500 animate-pulse' :'bg-white/[0.06]'}"></span>
+ <span class="flex items-center gap-2 px-3 py-1 {$networkConnected ?'bg-green-500/[0.08] text-green-400' :'bg-[#13111C]/[0.07] text-white/70'} rounded-full text-sm">
+ <span class="w-2 h-2 rounded-full {$networkConnected ?'bg-green-500 animate-pulse' :'bg-[#13111C]/[0.06]'}"></span>
  {$networkConnected ?'Connected' :'Disconnected'}
  </span>
  </div>
@@ -785,19 +785,19 @@
 
  <!-- Stats Grid -->
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">DHT Peers</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{$networkStats.connectedPeers}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">Discovered Peers</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{$networkStats.totalPeers}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">Blockchain Peers</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{gethStatus?.peerCount || 0}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <p class="text-xs text-white/50">Block Height</p>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
  </div>
@@ -805,7 +805,7 @@
 
  <!-- Peer ID -->
  {#if localPeerId}
- <div class="mb-4 p-3 bg-white/[0.07] rounded-lg">
+ <div class="mb-4 p-3 bg-[#13111C]/[0.07] rounded-lg">
  <div class="text-xs text-white/50 mb-1">Your Peer ID</div>
  <div class="font-mono text-xs break-all">{localPeerId}</div>
  </div>
@@ -848,7 +848,7 @@
  <button
  onclick={checkDhtHealth}
  disabled={isCheckingDhtHealth}
- class="text-xs px-2 py-1 bg-white/[0.07] hover:bg-white/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-2 py-1 bg-[#13111C]/[0.07] hover:bg-[#13111C]/[0.1] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isCheckingDhtHealth}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -861,21 +861,21 @@
 
  {#if dhtHealth}
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
- <div class="bg-white/[0.07] rounded-lg p-2.5">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-2.5">
  <p class="text-xs text-white/50">Status</p>
  <p class="text-sm font-bold {dhtHealth.running ?'text-green-400' :'text-red-400'}">
  {dhtHealth.running ?'Running' :'Stopped'}
  </p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-2.5">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-2.5">
  <p class="text-xs text-white/50">Connected Peers</p>
  <p class="text-sm font-bold tabular-nums font-mono text-blue-400/90">{dhtHealth.connectedPeerCount}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-2.5">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-2.5">
  <p class="text-xs text-white/50">Kademlia Peers</p>
  <p class="text-sm font-bold tabular-nums font-mono text-blue-400/90">{dhtHealth.kademliaPeers}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-2.5">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-2.5">
  <p class="text-xs text-white/50">Shared Files</p>
  <p class="text-sm font-bold tabular-nums font-mono text-blue-400/90">{dhtHealth.sharedFiles}</p>
  </div>
@@ -897,19 +897,19 @@
  {#if showDhtHealthDetails}
  <div class="space-y-2">
  {#if dhtHealth.peerId}
- <div class="p-2.5 bg-white/[0.07] rounded-lg">
+ <div class="p-2.5 bg-[#13111C]/[0.07] rounded-lg">
  <p class="text-xs text-white/50 mb-1">Peer ID</p>
  <p class="font-mono text-xs break-all">{dhtHealth.peerId}</p>
  </div>
  {/if}
 
  {#if dhtHealth.listeningAddresses.length > 0}
- <div class="p-2.5 bg-white/[0.07] rounded-lg">
+ <div class="p-2.5 bg-[#13111C]/[0.07] rounded-lg">
  <p class="text-xs text-white/50 mb-2">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
  <div class="space-y-1.5">
  {#each dhtHealth.listeningAddresses as addr}
  <div class="flex items-start gap-2 text-xs">
- <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) ==='IPv6' ?'bg-purple-100 text-purple-700' : addrType(addr) ==='IPv4' ?'bg-indigo-900/30 text-indigo-300' :'bg-white/[0.05] text-white/70'}">
+ <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) ==='IPv6' ?'bg-purple-100 text-purple-700' : addrType(addr) ==='IPv4' ?'bg-indigo-900/30 text-indigo-300' :'bg-[#13111C]/[0.05] text-white/70'}">
  {addrType(addr)}
  </span>
  <span class="font-mono break-all">{extractIpPort(addr)}</span>
@@ -920,13 +920,13 @@
  {/if}
 
  {#if dhtHealth.bootstrapNodes.length > 0}
- <div class="p-2.5 bg-white/[0.07] rounded-lg">
+ <div class="p-2.5 bg-[#13111C]/[0.07] rounded-lg">
  <p class="text-xs text-white/50 mb-2">DHT Bootstrap Nodes</p>
  <div class="space-y-1.5">
  {#each dhtHealth.bootstrapNodes as node}
  <div class="flex items-start gap-2 text-xs">
  <div class="w-2 h-2 rounded-full mt-1 {node.reachable ?'bg-green-500' :'bg-red-500'} shrink-0"></div>
- <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) ==='IPv6' ?'bg-purple-100 text-purple-700' : addrType(node.address) ==='IPv4' ?'bg-indigo-900/30 text-indigo-300' :'bg-white/[0.05] text-white/70'}">
+ <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) ==='IPv6' ?'bg-purple-100 text-purple-700' : addrType(node.address) ==='IPv4' ?'bg-indigo-900/30 text-indigo-300' :'bg-[#13111C]/[0.05] text-white/70'}">
  {addrType(node.address)}
  </span>
  <span class="font-mono break-all">{extractIpPort(node.address)}</span>
@@ -940,7 +940,7 @@
  {/if}
 
  {#if dhtHealth.protocols.length > 0}
- <div class="p-2.5 bg-white/[0.07] rounded-lg">
+ <div class="p-2.5 bg-[#13111C]/[0.07] rounded-lg">
  <p class="text-xs text-white/50 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
  <div class="flex flex-wrap gap-1.5">
  {#each dhtHealth.protocols as protocol}
@@ -967,28 +967,28 @@
  <span class="text-sm font-medium text-white/70">Traffic Statistics</span>
  </div>
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <div class="flex items-center gap-2 mb-1">
  <ArrowDownToLine class="w-3.5 h-3.5 text-green-500" />
  <p class="text-xs text-white/50">Download Speed</p>
  </div>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{formatSpeed(trafficStats.downloadSpeed)}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <div class="flex items-center gap-2 mb-1">
  <ArrowUpFromLine class="w-3.5 h-3.5 text-indigo-500" />
  <p class="text-xs text-white/50">Upload Speed</p>
  </div>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{formatSpeed(trafficStats.uploadSpeed)}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <div class="flex items-center gap-2 mb-1">
  <Download class="w-3.5 h-3.5 text-green-500" />
  <p class="text-xs text-white/50">Total Downloaded</p>
  </div>
  <p class="text-lg font-bold tabular-nums font-mono text-blue-400/90">{formatBytes(trafficStats.totalDownloaded)}</p>
  </div>
- <div class="bg-white/[0.07] rounded-lg p-3">
+ <div class="bg-[#13111C]/[0.07] rounded-lg p-3">
  <div class="flex items-center gap-2 mb-1">
  <Upload class="w-3.5 h-3.5 text-indigo-500" />
  <p class="text-xs text-white/50">Total Uploaded</p>
@@ -1017,7 +1017,7 @@
  {#if relayReservations.length > 0}
  <div class="space-y-1.5 mb-3">
  {#each relayReservations as relay}
- <div class="flex items-center justify-between p-2 bg-white/[0.07] rounded-lg text-xs">
+ <div class="flex items-center justify-between p-2 bg-[#13111C]/[0.07] rounded-lg text-xs">
  <div class="flex items-center gap-2">
  <div class="w-2 h-2 rounded-full {relay.active ?'bg-green-500' :'bg-red-500'} shrink-0"></div>
  <span class="font-mono">{relay.relayPeerId.slice(0, 16)}...</span>
@@ -1055,7 +1055,7 @@
  <div class="flex items-center gap-2 mb-3">
  <Radio class="w-4 h-4 text-white/50" />
  <span class="text-sm font-medium text-white/70">Connected Peers</span>
- <span class="px-2 py-0.5 text-xs rounded-full bg-white/[0.07] text-white/50">
+ <span class="px-2 py-0.5 text-xs rounded-full bg-[#13111C]/[0.07] text-white/50">
  {filteredPeers.length}
  </span>
  </div>
@@ -1068,7 +1068,7 @@
  {:else}
  <div class="space-y-2">
  {#each filteredPeers as peer}
- <div class="p-3 bg-white/[0.07] rounded-lg hover:bg-white/[0.05] transition-colors">
+ <div class="p-3 bg-[#13111C]/[0.07] rounded-lg hover:bg-[#13111C]/[0.05] transition-colors">
  <div class="flex items-start justify-between gap-3">
  <div class="flex-1 min-w-0">
  <div class="font-mono text-sm break-all">{peer.id}</div>
@@ -1093,7 +1093,7 @@
  </div>
 
  <!-- Blacklist Section -->
- <div class="cyber-panel p-6 mt-6">
+ <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6 mt-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-red-500/[0.08] rounded-lg">
  <ShieldBan class="w-5 h-5 text-red-400" />
@@ -1115,14 +1115,14 @@
  type="text"
  bind:value={blacklistAddress}
  placeholder="Wallet or peer address"
- class="flex-1 px-3 py-2 text-sm border border-white/[0.06]/60 rounded-lg bg-white/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
+ class="flex-1 px-3 py-2 text-sm border border-white/[0.06]/60 rounded-lg bg-[#13111C]/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
  onkeydown={(e: KeyboardEvent) => { if (e.key ==='Enter') addToBlacklist(); }}
  />
  <input
  type="text"
  bind:value={blacklistReason}
  placeholder="Reason (optional)"
- class="w-48 px-3 py-2 text-sm border border-white/[0.06]/60 rounded-lg bg-white/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
+ class="w-48 px-3 py-2 text-sm border border-white/[0.06]/60 rounded-lg bg-[#13111C]/[0.07] text-white placeholder:text-white/30 focus:border-blue-400/40 focus:border-blue-400"
  onkeydown={(e: KeyboardEvent) => { if (e.key ==='Enter') addToBlacklist(); }}
  />
  <button
@@ -1144,15 +1144,15 @@
  {:else}
  <div class="space-y-2 max-h-64 overflow-y-auto">
  {#each $blacklist as entry}
- <div class="flex items-center justify-between gap-3 p-3 bg-white/[0.07] rounded-lg group">
+ <div class="flex items-center justify-between gap-3 p-3 bg-[#13111C]/[0.07] rounded-lg group">
  <div class="flex-1 min-w-0">
  <div class="font-mono text-sm truncate" title={entry.address}>
  {truncateAddress(entry.address)}
  </div>
  <div class="flex items-center gap-2 mt-0.5">
  <span class="text-xs text-white/50">{entry.reason}</span>
- <span class="cyber-label">&middot;</span>
- <span class="cyber-label">{new Date(entry.addedAt).toLocaleDateString()}</span>
+ <span class="text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)] font-medium">&middot;</span>
+ <span class="text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)] font-medium">{new Date(entry.addedAt).toLocaleDateString()}</span>
  </div>
  </div>
  <button

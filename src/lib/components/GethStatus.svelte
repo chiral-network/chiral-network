@@ -130,7 +130,7 @@
 <div class="space-y-4">
  <!-- Installation Status -->
  {#if !isInstalled}
- <div class="cyber-panel p-6">
+ <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-blue-400/[0.06] rounded-lg">
  <Download class="w-6 h-6 text-blue-400" />
@@ -147,7 +147,7 @@
  <span>{$downloadProgress?.status ||'Downloading...'}</span>
  <span>{$downloadProgress?.percentage?.toFixed(1) || 0}%</span>
  </div>
- <div class="w-full bg-white/[0.04] rounded-full h-2">
+ <div class="w-full bg-[#13111C]/[0.04] rounded-full h-2">
  <div
  class="bg-blue-400 h-2 rounded-full transition-all"
  style="width: {$downloadProgress?.percentage || 0}%"
@@ -166,10 +166,10 @@
  </div>
  {:else}
  <!-- Geth Status Card -->
- <div class="cyber-panel p-6">
+ <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {$gethStatus?.running ?'bg-green-500/[0.08]' :'bg-white/[0.05]'} rounded-lg">
+ <div class="p-2 {$gethStatus?.running ?'bg-green-500/[0.08]' :'bg-[#13111C]/[0.05]'} rounded-lg">
  <Server class="w-6 h-6 {$gethStatus?.running ?'text-green-600' :'text-white/50'}" />
  </div>
  <div>
@@ -219,17 +219,17 @@
 
  {#if $gethStatus?.running}
  <div class="grid grid-cols-3 gap-4 mt-4">
- <div class="bg-white/[0.04] rounded-lg p-3 text-center">
+ <div class="bg-[#13111C]/[0.04] rounded-lg p-3 text-center">
  <Users class="w-5 h-5 mx-auto text-white/50 mb-1" />
  <p class="text-lg font-semibold">{$gethStatus?.peerCount || 0}</p>
- <p class="cyber-label">Peers</p>
+ <p class="text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)] font-medium">Peers</p>
  </div>
- <div class="bg-white/[0.04] rounded-lg p-3 text-center">
+ <div class="bg-[#13111C]/[0.04] rounded-lg p-3 text-center">
  <Box class="w-5 h-5 mx-auto text-white/50 mb-1" />
  <p class="text-lg font-semibold">{$gethStatus?.currentBlock?.toLocaleString() || 0}</p>
- <p class="cyber-label">Block</p>
+ <p class="text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)] font-medium">Block</p>
  </div>
- <div class="bg-white/[0.04] rounded-lg p-3 text-center">
+ <div class="bg-[#13111C]/[0.04] rounded-lg p-3 text-center">
  {#if $gethStatus?.syncing}
  <Loader2 class="w-5 h-5 mx-auto text-yellow-500 mb-1 animate-spin" />
  <p class="text-lg font-semibold text-yellow-600">Syncing</p>
@@ -237,7 +237,7 @@
  <CheckCircle class="w-5 h-5 mx-auto text-green-500 mb-1" />
  <p class="text-lg font-semibold text-green-600">Synced</p>
  {/if}
- <p class="cyber-label">Status</p>
+ <p class="text-[10px] uppercase tracking-[0.2em] text-[var(--text-tertiary)] font-medium">Status</p>
  </div>
  </div>
  {/if}
@@ -245,10 +245,10 @@
 
  <!-- Mining Card -->
  {#if $gethStatus?.running}
- <div class="cyber-panel p-6">
+ <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {$miningStatus?.mining ?'bg-yellow-100' :'bg-white/[0.05]'} rounded-lg">
+ <div class="p-2 {$miningStatus?.mining ?'bg-yellow-100' :'bg-[#13111C]/[0.05]'} rounded-lg">
  <Pickaxe class="w-6 h-6 {$miningStatus?.mining ?'text-yellow-600' :'text-white/50'}" />
  </div>
  <div>
@@ -308,7 +308,7 @@
  </div>
  </div>
  {:else if !$walletAccount}
- <div class="bg-white/[0.04] border border-white/[0.06]/60 rounded-lg p-3 mt-4">
+ <div class="bg-[#13111C]/[0.04] border border-white/[0.06]/60 rounded-lg p-3 mt-4">
  <p class="text-sm text-white/50">
  Connect your wallet on the Account page to start mining and earn CHI.
  </p>

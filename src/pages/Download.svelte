@@ -146,10 +146,10 @@
  if (['mp3','wav','flac','aac','ogg','m4a','wma'].includes(ext)) return'text-green-500';
  if (['zip','rar','7z','tar','gz','bz2','xz'].includes(ext)) return'text-orange-500';
  if (['js','ts','html','css','py','java','cpp','c','php','rb','go','rs'].includes(ext)) return'text-red-500';
- if (['txt','md','pdf','doc','docx','rtf'].includes(ext)) return'text-[var(--text-secondary)]';
+ if (['txt','md','pdf','doc','docx','rtf'].includes(ext)) return'text-white/[0.06]';
  if (['xls','xlsx','csv','ods'].includes(ext)) return'text-emerald-500';
 
- return'text-[var(--text-secondary)]';
+ return'text-white/[0.06]';
  }
 
  function getFileExtension(fileNameOrPath: string): string {
@@ -1232,9 +1232,9 @@
  case'downloading': return'bg-indigo-900/30 text-indigo-400';
  case'paused': return'bg-yellow-100 text-yellow-800';
  case'failed': return'bg-red-500/[0.08] text-red-400';
- case'cancelled': return'bg-[var(--surface-1)] text-[var(--text-primary)]';
- case'queued': return'bg-[var(--surface-1)] text-[var(--text-primary)]';
- default: return'bg-[var(--surface-1)] text-[var(--text-primary)]';
+ case'cancelled': return'bg-[#13111C] text-white';
+ case'queued': return'bg-[#13111C] text-white';
+ default: return'bg-[#13111C] text-white';
  }
  }
 
@@ -1326,7 +1326,7 @@
 <div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
  <div>
  <h1 class="text-2xl font-light tracking-tight">Download</h1>
- <p class="text-[var(--text-secondary)] mt-2">Search and download files from the Chiral Network</p>
+ <p class="text-white/[0.06] mt-2">Search and download files from the Chiral Network</p>
  </div>
 
  <!-- Network Status Warning -->
@@ -1345,9 +1345,9 @@
  {/if}
 
  <!-- Add New Download Section -->
- <div class="bg-[var(--surface-0)] rounded-xl border border-[var(--border)]/60 p-6">
+ <div class="bg-[#13111C] rounded-xl border border-white/[0.06]/60 p-6">
  <div class="flex items-center gap-2 mb-4">
- <Plus class="w-5 h-5 text-[var(--text-secondary)]" />
+ <Plus class="w-5 h-5 text-white/[0.06]" />
  <h2 class="text-lg font-semibold">Add New Download</h2>
  </div>
 
@@ -1355,21 +1355,21 @@
  <div class="flex gap-2 mb-4">
  <button
  onclick={() => { searchMode ='hash'; searchQuery =''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='hash' ?'border-blue-400 bg-blue-500/[0.06] text-blue-400' :'border-[var(--border)]/60 text-white/70 hover:bg-[var(--surface-1)]'}"
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='hash' ?'border-blue-400 bg-blue-500/[0.06] text-blue-400' :'border-white/[0.06]/60 text-white/70 hover:bg-[#13111C]'}"
  >
  <Search class="w-4 h-4" />
  Merkle Hash
  </button>
  <button
  onclick={() => { searchMode ='magnet'; searchQuery =''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='magnet' ?'border-purple-500 bg-purple-50 text-purple-400' :'border-[var(--border)]/60 text-white/70 hover:bg-[var(--surface-1)]'}"
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='magnet' ?'border-purple-500 bg-purple-50 text-purple-400' :'border-white/[0.06]/60 text-white/70 hover:bg-[#13111C]'}"
  >
  <Link class="w-4 h-4" />
  Magnet Link
  </button>
  <button
  onclick={() => { searchMode ='torrent'; searchQuery =''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='torrent' ?'border-green-500 bg-green-500/[0.08] text-green-400' :'border-[var(--border)]/60 text-white/70 hover:bg-[var(--surface-1)]'}"
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='torrent' ?'border-green-500 bg-green-500/[0.08] text-green-400' :'border-white/[0.06]/60 text-white/70 hover:bg-[#13111C]'}"
  >
  <FileUp class="w-4 h-4" />
  .torrent File
@@ -1378,9 +1378,9 @@
 
  <!-- Search Input -->
  {#if searchMode ==='torrent'}
- <div class="text-center py-8 border-2 border-dashed border-[var(--border)]/60 rounded-lg">
- <FileUp class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
- <p class="text-[var(--text-secondary)] mb-4">Upload a .torrent file to start downloading</p>
+ <div class="text-center py-8 border-2 border-dashed border-white/[0.06]/60 rounded-lg">
+ <FileUp class="w-12 h-12 mx-auto text-white/[0.06] mb-3" />
+ <p class="text-white/[0.06] mb-4">Upload a .torrent file to start downloading</p>
  <button
  onclick={handleTorrentFile}
  disabled={!$networkConnected}
@@ -1397,7 +1397,7 @@
  type="text"
  bind:value={searchQuery}
  placeholder={searchMode ==='hash' ?'Enter SHA-256 hash (64 characters)' :'Paste magnet link (magnet:?xt=urn:btih:...)'}
- class="w-full px-4 py-3 border border-[var(--border)]/60 rounded-lg focus:border-blue-400/40 focus:border-blue-400 font-mono text-sm"
+ class="w-full px-4 py-3 border border-white/[0.06]/60 rounded-lg focus:border-blue-400/40 focus:border-blue-400 font-mono text-sm"
  onkeydown={(e) => e.key ==='Enter' && searchFile()}
  onfocus={() => showSearchHistory = true}
  onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1420,7 +1420,7 @@
  </div>
  </div>
 
- <p class="text-xs text-[var(--text-secondary)] mt-2">
+ <p class="text-xs text-white/[0.06] mt-2">
  {#if searchMode ==='hash'}
  Enter a 64-character SHA-256 Merkle root hash to search for files
  {:else}
@@ -1432,16 +1432,16 @@
  <!-- Search Result -->
  {#if searchResult}
  {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
- <div class="mt-6 bg-[var(--surface-1)] rounded-lg p-4 border border-[var(--border)]/60">
+ <div class="mt-6 bg-[#13111C] rounded-lg p-4 border border-white/[0.06]/60">
  <!-- File info row -->
  <div class="flex items-start gap-4">
- <div class="flex items-center justify-center w-14 h-14 bg-[var(--surface-0)] rounded-lg border border-[var(--border)]/60 flex-shrink-0">
+ <div class="flex items-center justify-center w-14 h-14 bg-[#13111C] rounded-lg border border-white/[0.06]/60 flex-shrink-0">
  <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
  </div>
 
  <div class="flex-1 min-w-0">
  <h3 class="text-lg font-semibold truncate">{searchResult.fileName}</h3>
- <div class="flex items-center gap-4 text-sm text-[var(--text-secondary)] mt-1">
+ <div class="flex items-center gap-4 text-sm text-white/[0.06] mt-1">
  {#if searchResult.fileSize > 0}
  <span class="tabular-nums">{formatFileSize(searchResult.fileSize)}</span>
  {/if}
@@ -1457,11 +1457,11 @@
  {/if}
  {/if}
  </div>
- <p class="text-xs text-[var(--text-secondary)] font-mono mt-2 truncate">
+ <p class="text-xs text-white/[0.06] font-mono mt-2 truncate">
  {searchResult.hash}
  </p>
  {#if searchResult.seeders.length > 0}
- <p class="text-xs text-[var(--text-tertiary)] mt-1">
+ <p class="text-xs text-white/[0.08] mt-1">
  Seeder availability is verified when download starts
  </p>
  {/if}
@@ -1470,7 +1470,7 @@
 
  <!-- Seeder Selection (when multiple seeders available) -->
  {#if searchResult.seeders.length > 1}
- <div class="mt-4 pt-4 border-t border-[var(--border)]/60">
+ <div class="mt-4 pt-4 border-t border-white/[0.06]/60">
  <p class="text-sm font-medium text-white/70 mb-3">Select Seeder</p>
  <div class="space-y-2 max-h-48 overflow-y-auto">
  {#each searchResult.seeders as seeder, i}
@@ -1480,7 +1480,7 @@
  class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
  {selectedSeederIndex === i
  ?'border-blue-400 bg-blue-500/[0.06]'
- :'border-[var(--border)]/60 hover:border-[var(--border)]'
+ :'border-white/[0.06]/60 hover:border-white/[0.06]'
  }"
  >
  <div class="flex items-center gap-2 min-w-0">
@@ -1502,7 +1502,7 @@
  {:else if searchResult.seeders.length === 1}
  {@const seeder = searchResult.seeders[0]}
  {@const seederElo = getSeederElo(seeder)}
- <div class="mt-3 flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+ <div class="mt-3 flex items-center gap-2 text-sm text-white/[0.06]">
  <span class="font-mono text-xs truncate" title={seeder.peerId}>
  Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
  </span>
@@ -1516,7 +1516,7 @@
  {/if}
 
  <!-- Speed Tier Selector -->
- <div class="mt-4 pt-4 border-t border-[var(--border)]/60">
+ <div class="mt-4 pt-4 border-t border-white/[0.06]/60">
  <p class="text-sm font-medium text-white/70 mb-3">Select Download Speed</p>
  <div class="grid grid-cols-3 gap-3">
  {#each TIERS as tier}
@@ -1533,17 +1533,17 @@
  disabled={isDisabled}
  class="relative p-3 rounded-lg border-2 text-left transition-all
  {isSelected
- ?'border-blue-400 bg-blue-500/[0.06] '
+ ?'border-blue-400 bg-blue-500/[0.06]'
  : isDisabled
- ?'border-[var(--border)]/60 opacity-50 cursor-not-allowed'
- :'border-[var(--border)]/60 hover:border-[var(--border)] cursor-pointer'
+ ?'border-white/[0.06]/60 opacity-50 cursor-not-allowed'
+ :'border-white/[0.06]/60 hover:border-white/[0.06] cursor-pointer'
  }"
  >
  <div class="flex items-center gap-2 mb-1">
- <TierIcon class="w-4 h-4 {isSelected ?'text-blue-400' :'text-[var(--text-secondary)]'}" />
+ <TierIcon class="w-4 h-4 {isSelected ?'text-blue-400' :'text-white/[0.06]'}" />
  <span class="text-sm font-semibold {isSelected ?'text-blue-400' :''}">{tier.name}</span>
  </div>
- <p class="text-xs text-[var(--text-secondary)]">{tier.speedLabel}</p>
+ <p class="text-xs text-white/[0.06]">{tier.speedLabel}</p>
  <p class="text-xs font-medium mt-1 text-amber-400">
  {#if fileSizeKnown}
  {formatCost(cost)}
@@ -1568,7 +1568,7 @@
  {@const tierCostVal = searchResult.fileSize > 0 ? calculateCost(selectedTier, searchResult.fileSize) : 0}
  {@const hasCost = seederPrice || tierCostVal > 0}
  <div class="mt-4 flex items-center justify-between">
- <div class="text-sm text-[var(--text-secondary)]">
+ <div class="text-sm text-white/[0.06]">
  Cost:
  {#if seederPrice}
  <span class="font-medium text-amber-400">{seederPrice}</span> (file)
@@ -1580,7 +1580,7 @@
  <span class="font-medium text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
  {/if}
  {#if $walletAccount}
- <span class="text-[var(--text-secondary)] mx-1">•</span>
+ <span class="text-white/[0.06] mx-1">•</span>
  Balance: <span class="font-medium tabular-nums">{parseFloat(walletBalance).toFixed(4)} CHI</span>
  {/if}
  </div>
@@ -1615,16 +1615,16 @@
  </div>
 
  <!-- Downloads -->
- <div class="bg-[var(--surface-0)] rounded-xl border border-[var(--border)]/60">
+ <div class="bg-[#13111C] rounded-xl border border-white/[0.06]/60">
  <!-- Tabs -->
- <div class="flex items-center justify-between border-b border-[var(--border)]/60 px-4">
+ <div class="flex items-center justify-between border-b border-white/[0.06]/60 px-4">
  <div class="flex">
  <button
  onclick={() => downloadsTab ='active'}
  class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
  {downloadsTab ==='active'
  ?'border-blue-400 text-blue-400'
- :'border-transparent text-[var(--text-secondary)] hover:text-white/70'}"
+ :'border-transparent text-white/[0.06] hover:text-white/70'}"
  >
  <Download class="w-4 h-4" />
  Active
@@ -1639,12 +1639,12 @@
  class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
  {downloadsTab ==='history'
  ?'border-blue-400 text-blue-400'
- :'border-transparent text-[var(--text-secondary)] hover:text-white/70'}"
+ :'border-transparent text-white/[0.06] hover:text-white/70'}"
  >
  <History class="w-4 h-4" />
  History
  {#if downloadHistory.length > 0}
- <span class="px-1.5 py-0.5 text-xs font-semibold bg-[var(--surface-1)] text-[var(--text-secondary)] rounded-full">
+ <span class="px-1.5 py-0.5 text-xs font-semibold bg-[#13111C] text-white/[0.06] rounded-full">
  {downloadHistory.length}
  </span>
  {/if}
@@ -1667,8 +1667,8 @@
  {#if downloads.length === 0}
  <div class="text-center py-16 px-6">
  <Download class="w-12 h-12 mx-auto text-white/70 mb-3" />
- <p class="text-[var(--text-secondary)]">No active downloads</p>
- <p class="text-sm text-[var(--text-tertiary)] mt-1">Search for a file above to start downloading</p>
+ <p class="text-white/[0.06]">No active downloads</p>
+ <p class="text-sm text-white/[0.08] mt-1">Search for a file above to start downloading</p>
  </div>
  {:else}
  <div class="divide-y divide-white/[0.06]">
@@ -1677,11 +1677,11 @@
  {@const TierIcon = getTierIcon(download.speedTier ||'standard')}
  {@const isActive = download.status ==='downloading' || download.status ==='paused'}
  {@const isFinished = ['completed','failed','cancelled'].includes(download.status)}
- <div class="p-4 hover:bg-[var(--surface-1)] transition-colors">
+ <div class="p-4 hover:bg-[#13111C] transition-colors">
  <!-- Top row: icon, name, badges, actions -->
  <div class="flex items-start gap-3">
  <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
- {download.status ==='completed' ?'bg-green-500/[0.08]' :'bg-[var(--surface-1)]'}">
+ {download.status ==='completed' ?'bg-green-500/[0.08]' :'bg-[#13111C]'}">
  <DownloadIcon class="w-5 h-5 {download.status ==='completed' ?'text-green-500' : getFileColor(download.name)}" />
  </div>
 
@@ -1698,7 +1698,7 @@
  </div>
 
  <!-- Stats row -->
- <div class="flex items-center gap-3 mt-1.5 text-xs text-[var(--text-secondary)]">
+ <div class="flex items-center gap-3 mt-1.5 text-xs text-white/[0.06]">
  {#if download.size > 0}
  <span class="flex items-center gap-1 tabular-nums">
  {formatFileSize(download.size)}
@@ -1717,11 +1717,11 @@
  Elo {download.seederElo.toFixed(1)}
  </span>
  {/if}
- <span class="text-[var(--text-tertiary)]">Started {formatDate(download.startedAt)}</span>
+ <span class="text-white/[0.08]">Started {formatDate(download.startedAt)}</span>
  </div>
 
  <!-- Hash (truncated) -->
- <p class="text-xs text-[var(--text-tertiary)] font-mono mt-1 truncate">{download.hash}</p>
+ <p class="text-xs text-white/[0.08] font-mono mt-1 truncate">{download.hash}</p>
  </div>
 
  <!-- Actions -->
@@ -1729,11 +1729,11 @@
  {#if download.status ==='downloading' || download.status ==='paused'}
  <button
  onclick={() => togglePause(download.id)}
- class="p-1.5 hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-[#13111C] rounded-lg transition-colors"
  title={download.status ==='downloading' ?'Pause' :'Resume'}
  >
  {#if download.status ==='downloading'}
- <Pause class="w-4 h-4 text-[var(--text-secondary)]" />
+ <Pause class="w-4 h-4 text-white/[0.06]" />
  {:else}
  <Play class="w-4 h-4 text-green-500" />
  {/if}
@@ -1743,7 +1743,7 @@
  class="p-1.5 hover:bg-red-900/30 rounded-lg transition-colors"
  title="Cancel"
  >
- <X class="w-4 h-4 text-[var(--text-secondary)] hover:text-red-500" />
+ <X class="w-4 h-4 text-white/[0.06] hover:text-red-500" />
  </button>
  {:else if download.status ==='queued'}
  <button
@@ -1751,7 +1751,7 @@
  class="p-1.5 hover:bg-red-900/30 rounded-lg transition-colors"
  title="Cancel"
  >
- <X class="w-4 h-4 text-[var(--text-secondary)] hover:text-red-500" />
+ <X class="w-4 h-4 text-white/[0.06] hover:text-red-500" />
  </button>
  {:else if isFinished}
  {#if download.status ==='completed' && download.filePath}
@@ -1773,15 +1773,15 @@
  </button>
  <button
  onclick={() => handleShowInFolder(download.filePath!)}
- class="p-1.5 hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-[#13111C] rounded-lg transition-colors"
  title="Show in folder"
  >
- <FolderOpen class="w-4 h-4 text-[var(--text-secondary)]" />
+ <FolderOpen class="w-4 h-4 text-white/[0.06]" />
  </button>
  {/if}
  <button
  onclick={() => moveToHistory(download.id)}
- class="px-2.5 py-1 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="px-2.5 py-1 text-xs text-white/[0.06] hover:bg-[#13111C] rounded-lg transition-colors"
  title="Dismiss"
  >
  Dismiss
@@ -1794,13 +1794,13 @@
  {#if isActive}
  <div class="mt-3 ml-13">
  <div class="flex items-center gap-3">
- <div class="flex-1 h-2 bg-[var(--surface-1)] rounded-full overflow-hidden">
+ <div class="flex-1 h-2 bg-[#13111C] rounded-full overflow-hidden">
  <div
  class="h-full rounded-full transition-all duration-300 {download.status ==='paused' ?'bg-yellow-500' :'bg-blue-500/[0.06]0'}"
  style="width: {download.progress}%"
  ></div>
  </div>
- <span class="text-xs font-medium text-[var(--text-secondary)] w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
+ <span class="text-xs font-medium text-white/[0.06] w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
  </div>
  </div>
  {/if}
@@ -1826,20 +1826,20 @@
  {#if downloadHistory.length === 0}
  <div class="text-center py-16 px-6">
  <History class="w-12 h-12 mx-auto text-white/70 mb-3" />
- <p class="text-[var(--text-secondary)]">No download history</p>
- <p class="text-sm text-[var(--text-tertiary)] mt-1">Completed and finished downloads will appear here</p>
+ <p class="text-white/[0.06]">No download history</p>
+ <p class="text-sm text-white/[0.08] mt-1">Completed and finished downloads will appear here</p>
  </div>
  {:else}
  <div class="divide-y divide-white/[0.06]">
  {#each downloadHistory as entry (entry.id)}
  {@const EntryIcon = getFileIcon(entry.fileName)}
  {@const EntryTierIcon = getTierIcon(entry.speedTier ||'standard')}
- <div class="p-4 hover:bg-[var(--surface-1)] transition-colors">
+ <div class="p-4 hover:bg-[#13111C] transition-colors">
  <div class="flex items-start gap-3">
  <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
  {entry.status ==='completed' ?'bg-green-500/[0.08]' :
  entry.status ==='failed' ?'bg-red-500/[0.08]' :
-'bg-[var(--surface-1)]'}">
+'bg-[#13111C]'}">
  <EntryIcon class="w-5 h-5 {
  entry.status ==='completed' ?'text-green-500' :
  entry.status ==='failed' ?'text-red-400' :
@@ -1861,7 +1861,7 @@
  {/if}
  </div>
 
- <div class="flex items-center gap-3 mt-1.5 text-xs text-[var(--text-secondary)]">
+ <div class="flex items-center gap-3 mt-1.5 text-xs text-white/[0.06]">
  {#if entry.fileSize > 0}
  <span class="tabular-nums">{formatFileSize(entry.fileSize)}</span>
  {/if}
@@ -1880,11 +1880,11 @@
  </div>
 
  {#if entry.balanceBefore && entry.balanceAfter}
- <p class="text-xs text-[var(--text-secondary)] mt-1">
+ <p class="text-xs text-white/[0.06] mt-1">
  Balance: {entry.balanceBefore} → {entry.balanceAfter} CHI
  </p>
  {/if}
- <p class="text-xs text-[var(--text-tertiary)] font-mono mt-1 truncate">{entry.hash}</p>
+ <p class="text-xs text-white/[0.08] font-mono mt-1 truncate">{entry.hash}</p>
  </div>
 
  <!-- File actions for completed entries -->
@@ -1909,18 +1909,18 @@
  </button>
  <button
  onclick={() => handleShowInFolder(entry.filePath!)}
- class="p-1.5 hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-[#13111C] rounded-lg transition-colors"
  title="Show in folder"
  >
- <FolderOpen class="w-4 h-4 text-[var(--text-secondary)]" />
+ <FolderOpen class="w-4 h-4 text-white/[0.06]" />
  </button>
  {/if}
  <button
  onclick={() => { searchQuery = entry.hash; searchMode ='hash'; searchFile(); }}
- class="p-1.5 hover:bg-[var(--surface-1)] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-[#13111C] rounded-lg transition-colors"
  title="Download again"
  >
- <Download class="w-4 h-4 text-[var(--text-secondary)]" />
+ <Download class="w-4 h-4 text-white/[0.06]" />
  </button>
  </div>
  {/if}
@@ -1935,36 +1935,36 @@
 
 {#if isViewerOpen}
  <div
- class="fixed inset-0 z-50 bg-[var(--surface-0)]/70 flex items-center justify-center p-4"
+ class="fixed inset-0 z-50 bg-[#13111C]/70 flex items-center justify-center p-4"
  role="dialog"
  aria-modal="true"
  tabindex="0"
  onclick={(e) => e.target === e.currentTarget && closeViewer()}
  onkeydown={(e) => e.key ==='Escape' && closeViewer()}
  >
- <div class="w-full max-w-5xl max-h-[90vh] bg-[var(--surface-1)] rounded-xl border border-[var(--border)]/60 flex flex-col">
- <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]/60">
+ <div class="w-full max-w-5xl max-h-[90vh] bg-[#13111C] rounded-xl border border-white/[0.06]/60 flex flex-col">
+ <div class="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]/60">
  <div class="min-w-0">
  <p class="text-sm font-semibold truncate">{viewerName}</p>
- <p class="text-xs text-[var(--text-secondary)] capitalize">{viewerType} preview</p>
+ <p class="text-xs text-white/[0.06] capitalize">{viewerType} preview</p>
  </div>
  <button
  onclick={closeViewer}
- class="p-1.5 rounded-lg hover:bg-[var(--surface-1)] transition-colors"
+ class="p-1.5 rounded-lg hover:bg-[#13111C] transition-colors"
  title="Close preview"
  >
  <X class="w-5 h-5 text-white/70" />
  </button>
  </div>
 
- <div class="flex-1 p-4 overflow-auto bg-[var(--surface-0)]">
+ <div class="flex-1 p-4 overflow-auto bg-[#13111C]">
  {#if viewerError}
  <div class="h-full flex items-center justify-center">
  <p class="text-sm text-red-400">{viewerError}</p>
  </div>
  {:else if viewerType ==='video'}
  <video
- class="w-full h-full max-h-[75vh] rounded-lg bg-[var(--surface-0)]"
+ class="w-full h-full max-h-[75vh] rounded-lg bg-[#13111C]"
  controls
  src={viewerSource}
  onerror={() => viewerError ='Video preview failed to load'}
@@ -1989,13 +1989,13 @@
  />
  {:else if viewerType ==='pdf'}
  <iframe
- class="w-full h-[75vh] rounded-lg border border-[var(--border)]/60 bg-[var(--surface-0)]"
+ class="w-full h-[75vh] rounded-lg border border-white/[0.06]/60 bg-[#13111C]"
  src={viewerSource}
  title={viewerName}
  ></iframe>
  {:else}
  <div class="h-full flex items-center justify-center">
- <p class="text-sm text-[var(--text-secondary)]">Preview is not supported for this file type.</p>
+ <p class="text-sm text-white/[0.06]">Preview is not supported for this file type.</p>
  </div>
  {/if}
  </div>
@@ -2021,7 +2021,7 @@
  {@const selectedPendingSeeder = pendingDownload.result.seeders[selectedSeederIndex] || pendingDownload.result.seeders[0]}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 bg-[var(--surface-0)]/40 flex items-center justify-center z-50"
+ class="fixed inset-0 bg-[#13111C]/40 flex items-center justify-center z-50"
  onkeydown={(e: KeyboardEvent) => { if (e.key ==='Escape') pendingDownload = null; }}
  onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
  >
@@ -2034,17 +2034,17 @@
  </div>
 
  <div class="space-y-3 mb-5">
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-sm text-[var(--text-secondary)]">File</p>
+ <div class="bg-[#13111C] rounded-lg p-3">
+ <p class="text-sm text-white/[0.06]">File</p>
  <p class="font-medium truncate">{pendingDownload.result.fileName}</p>
  {#if pendingDownload.result.fileSize > 0}
- <p class="text-xs text-[var(--text-secondary)] mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
+ <p class="text-xs text-white/[0.06] mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
  {/if}
  </div>
 
  {#if selectedPendingSeeder}
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-sm text-[var(--text-secondary)]">Selected Seeder</p>
+ <div class="bg-[#13111C] rounded-lg p-3">
+ <p class="text-sm text-white/[0.06]">Selected Seeder</p>
  <div class="flex items-center justify-between gap-2 mt-1 min-w-0">
  <span class="font-mono text-xs text-white/70 truncate" title={selectedPendingSeeder.peerId}>
  {selectedPendingSeeder.peerId.slice(0, 8)}...{selectedPendingSeeder.peerId.slice(-6)}
@@ -2056,8 +2056,8 @@
  </div>
  {/if}
 
- <div class="bg-[var(--surface-1)] rounded-lg p-3 space-y-2">
- <p class="text-sm text-[var(--text-secondary)]">Cost Breakdown</p>
+ <div class="bg-[#13111C] rounded-lg p-3 space-y-2">
+ <p class="text-sm text-white/[0.06]">Cost Breakdown</p>
  {#if pendingDownload.seederPriceChi > 0}
  <div class="flex justify-between text-sm">
  <span class="text-white/70">File price</span>
@@ -2070,13 +2070,13 @@
  <span class="font-medium text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
  </div>
  {/if}
- <div class="flex justify-between text-sm pt-2 border-t border-[var(--border)]/60">
+ <div class="flex justify-between text-sm pt-2 border-t border-white/[0.06]/60">
  <span class="font-semibold">Total</span>
  <span class="font-semibold text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
  </div>
  </div>
 
- <div class="flex justify-between text-sm text-[var(--text-secondary)] px-1">
+ <div class="flex justify-between text-sm text-white/[0.06] px-1">
  <span>Your balance</span>
  <span>{parseFloat(walletBalance).toFixed(4)} CHI</span>
  </div>
@@ -2085,7 +2085,7 @@
  <div class="flex gap-3">
  <button
  onclick={() => { pendingDownload = null; }}
- class="flex-1 px-4 py-2.5 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-1)] transition-colors font-medium"
+ class="flex-1 px-4 py-2.5 border border-white/[0.06]/60 rounded-lg hover:bg-[#13111C] transition-colors font-medium"
  >
  Cancel
  </button>

@@ -4,74 +4,48 @@
 
 @layer base {
   :root {
-    /* Violet primary palette (space-separated RGB) */
-    --color-primary-50:  245 243 255;
-    --color-primary-100: 237 233 254;
-    --color-primary-200: 221 214 254;
-    --color-primary-300: 196 181 253;
-    --color-primary-400: 167 139 250;
-    --color-primary-500: 124 58 237;
-    --color-primary-600: 109 40 217;
-    --color-primary-700: 91 33 182;
-    --color-primary-800: 76 29 149;
-    --color-primary-900: 63 27 120;
-    --color-primary-950: 38 15 82;
-
-    /* Surface depth system */
-    --surface-0: #09090B;
-    --surface-1: #111113;
-    --surface-2: #1A1A1E;
-    --surface-3: #222226;
-
-    /* Border tokens */
-    --border: #1F1F23;
-    --border-hover: #2E2E33;
-
-    /* Text hierarchy */
-    --text-primary: #FAFAFA;
-    --text-secondary: #A1A1AA;
-    --text-tertiary: #52525B;
+    --color-primary-50:  236 254 255;
+    --color-primary-100: 207 250 254;
+    --color-primary-200: 165 243 252;
+    --color-primary-300: 103 232 249;
+    --color-primary-400: 34 211 238;
+    --color-primary-500: 6 182 212;
+    --color-primary-600: 8 145 178;
+    --color-primary-700: 14 116 144;
+    --color-primary-800: 21 94 117;
+    --color-primary-900: 22 78 99;
+    --color-primary-950: 8 51 68;
+    --color-accent-400: 244 114 182;
+    --color-accent-500: 236 72 153;
+    --color-accent-600: 219 39 119;
   }
 
-  html {
-    color-scheme: dark;
-  }
+  html { color-scheme: dark; }
 
-  body {
-    @apply text-[#FAFAFA] antialiased;
-    background-color: var(--surface-0);
-  }
+  body { @apply bg-black text-gray-100; }
 
-  h1, h2, h3, h4, h5, h6 {
-    @apply tracking-tight;
-  }
-
-  ::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
-  }
-
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 3px;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.12);
-  }
-
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.06) transparent;
-  }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.07); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
+  * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.07) transparent; }
 }
 
 @layer utilities {
-  .text-muted-foreground {
-    @apply text-[#A1A1AA];
-  }
+  .text-muted-foreground { @apply text-gray-500; }
+  .neon-border { border: 1px solid rgba(6, 182, 212, 0.12); }
+  .neon-border-bright { border: 1px solid rgba(6, 182, 212, 0.35); box-shadow: 0 0 10px rgba(6, 182, 212, 0.08); }
+  .neon-accent-pink { border: 1px solid rgba(236, 72, 153, 0.25); }
+  .neon-accent-pink-bright { border: 1px solid rgba(236, 72, 153, 0.4); box-shadow: 0 0 10px rgba(236, 72, 153, 0.08); }
+  .neon-glow { box-shadow: 0 0 12px rgba(6, 182, 212, 0.1); }
+  .neon-glow-strong { box-shadow: 0 0 20px rgba(6, 182, 212, 0.18); }
+  .neon-text { text-shadow: 0 0 8px rgba(6, 182, 212, 0.25); }
+  .cyber-panel { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(6, 182, 212, 0.45); }
+  .cyber-panel-pink { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(236, 72, 153, 0.45); }
+  .cyber-panel-amber { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(245, 158, 11, 0.45); }
+  .cyber-panel-green { @apply bg-gray-950/80 rounded-xl border border-gray-800/80; border-top: 2px solid rgba(34, 197, 94, 0.45); }
+  .cyber-data { @apply font-mono text-cyan-400/80 text-sm; }
+  .cyber-label { @apply text-[10px] uppercase tracking-[0.2em] text-gray-500 font-medium; }
+  .cyber-divider { @apply border-0 h-px; background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.15), transparent); }
+  .cyber-divider-pink { @apply border-0 h-px; background: linear-gradient(90deg, transparent, rgba(236, 72, 153, 0.15), transparent); }
 }

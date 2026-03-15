@@ -412,12 +412,12 @@
  <div class="flex items-center justify-between">
  <div>
  <h1 class="text-2xl font-light tracking-tight">Mining</h1>
- <p class="text-[var(--text-secondary)] mt-1">Mine CHI tokens on the Chiral Network</p>
+ <p class="text-gray-400 mt-1">Mine CHI tokens on the Chiral Network</p>
  </div>
  <button
  onclick={refreshAll}
  disabled={isLoading}
- class="p-2 hover:bg-[var(--surface-1)] rounded-lg transition-colors disabled:opacity-50 focus:outline-none focus:border-blue-400/40"
+ class="p-2 hover:bg-gray-950 rounded-lg transition-colors disabled:opacity-50 focus:outline-none focus:border-blue-400/40"
  title="Refresh status"
  >
  <RefreshCw class="w-5 h-5 {isLoading ?'animate-spin' :''}" />
@@ -426,7 +426,7 @@
 
  {#if isLoading}
  <div class="flex items-center justify-center py-12">
- <Loader2 class="w-8 h-8 animate-spin text-[var(--text-secondary)]" />
+ <Loader2 class="w-8 h-8 animate-spin text-gray-400" />
  </div>
  {:else if !gethStatus?.installed || !gethStatus?.localRunning}
  <!-- Geth Not Running Locally - Direct to Network Page -->
@@ -437,7 +437,7 @@
  </div>
  <div>
  <h2 class="font-semibold">Local Blockchain Node Required</h2>
- <p class="text-sm text-[var(--text-secondary)]">
+ <p class="text-sm text-gray-400">
  {#if !gethStatus?.installed}
  Geth is not installed
  {:else}
@@ -471,12 +471,12 @@
  <div class=" p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {isAnyMining ?'bg-yellow-900/30' :'bg-[var(--surface-1)]'} rounded-lg">
- <Pickaxe class="w-6 h-6 {isAnyMining ?'text-yellow-400' :'text-[var(--text-secondary)]'}" />
+ <div class="p-2 {isAnyMining ?'bg-yellow-900/30' :'bg-gray-950'} rounded-lg">
+ <Pickaxe class="w-6 h-6 {isAnyMining ?'text-yellow-400' :'text-gray-400'}" />
  </div>
  <div>
  <h2 class="font-semibold">Mining</h2>
- <p class="text-sm text-[var(--text-secondary)]">Earn CHI by mining blocks with CPU or GPU</p>
+ <p class="text-sm text-gray-400">Earn CHI by mining blocks with CPU or GPU</p>
  </div>
  </div>
  <div class="flex items-center gap-2">
@@ -486,8 +486,8 @@
  Mining ({activeMiningBackend.toUpperCase()})
  </span>
  {:else}
- <span class="flex items-center gap-2 px-3 py-1 bg-[var(--surface-1)] text-white/70 rounded-full text-sm">
- <span class="w-2 h-2 bg-[var(--surface-1)] rounded-full"></span>
+ <span class="flex items-center gap-2 px-3 py-1 bg-gray-950 text-white/70 rounded-full text-sm">
+ <span class="w-2 h-2 bg-gray-950 rounded-full"></span>
  Idle
  </span>
  {/if}
@@ -496,50 +496,50 @@
 
  <!-- Mining Stats Grid -->
  <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
- <div class="bg-[var(--surface-1)] rounded-lg p-4">
+ <div class="bg-gray-950 rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Zap class="w-4 h-4 text-yellow-500" />
- <span class="text-sm text-[var(--text-secondary)]">Hash Rate</span>
+ <span class="text-sm text-gray-400">Hash Rate</span>
  </div>
  <p class="text-2xl font-light tracking-tight tabular-nums">
  {isAnyMining ? formatHashRate(displayHashRate) :'0 H/s'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-4">
+ <div class="bg-gray-950 rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Blocks class="w-4 h-4 text-red-500" />
- <span class="text-sm text-[var(--text-secondary)]">Block Height</span>
+ <span class="text-sm text-gray-400">Block Height</span>
  </div>
  <p class="text-2xl font-light tracking-tight tabular-nums">
  {gethStatus?.currentBlock?.toLocaleString() ??'0'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-4">
+ <div class="bg-gray-950 rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Coins class="w-4 h-4 text-amber-500" />
- <span class="text-sm text-[var(--text-secondary)]">Total Mined</span>
+ <span class="text-sm text-gray-400">Total Mined</span>
  </div>
  <p class="text-2xl font-light tracking-tight tabular-nums">
  {(miningStatus?.totalMinedChi ?? 0).toFixed(4)} CHI
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-4">
+ <div class="bg-gray-950 rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Clock class="w-4 h-4 text-purple-500" />
- <span class="text-sm text-[var(--text-secondary)]">Session Time</span>
+ <span class="text-sm text-gray-400">Session Time</span>
  </div>
  <p class="text-2xl font-light tracking-tight tabular-nums">
  {isAnyMining ? miningElapsed :'--:--:--'}
  </p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-4">
+ <div class="bg-gray-950 rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  {#if activeMiningBackend ==='gpu'}
  <Monitor class="w-4 h-4 text-blue-400" />
- <span class="text-sm text-[var(--text-secondary)]">GPUs Active</span>
+ <span class="text-sm text-gray-400">GPUs Active</span>
  {:else}
  <Cpu class="w-4 h-4 text-green-500" />
- <span class="text-sm text-[var(--text-secondary)]">Threads Active</span>
+ <span class="text-sm text-gray-400">Threads Active</span>
  {/if}
  </div>
  <p class="text-2xl font-light tracking-tight tabular-nums">
@@ -549,7 +549,7 @@
  {isAnyMining ? `${miningThreads} / ${maxThreads}` : `0 / ${maxThreads}`}
  {/if}
  </p>
- <p class="text-xs text-[var(--text-secondary)] mt-1">
+ <p class="text-xs text-gray-400 mt-1">
  {#if activeMiningBackend ==='gpu'}
  Target {activeGpuUtilization}%
  {:else}
@@ -560,10 +560,10 @@
  </div>
 
  <!-- Miner Address -->
- <div class="mb-4 p-3 bg-[var(--surface-1)] rounded-lg">
+ <div class="mb-4 p-3 bg-gray-950 rounded-lg">
  <div class="flex items-center gap-2 mb-1">
  <TrendingUp class="w-4 h-4 text-green-500" />
- <span class="text-sm text-[var(--text-secondary)]">Miner Address</span>
+ <span class="text-sm text-gray-400">Miner Address</span>
  </div>
  <p class="text-sm font-mono truncate">
  {miningStatus?.minerAddress || $walletAccount?.address ||'Not set'}
@@ -579,14 +579,14 @@
  <button
  onclick={() => (miningMode ='cpu')}
  disabled={isAnyMining}
- class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='cpu' ?'bg-blue-400/[0.06] border-blue-400/20 text-blue-400' :'bg-[var(--surface-1)] border-[var(--border)]/60 text-white/70'}"
+ class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='cpu' ?'bg-blue-400/[0.06] border-blue-400/20 text-blue-400' :'bg-gray-950 border-gray-800/60/60 text-white/70'}"
  >
  CPU Miner
  </button>
  <button
  onclick={() => (miningMode ='gpu')}
  disabled={isAnyMining}
- class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='gpu' ?'bg-blue-400/[0.06] border-blue-400/20 text-blue-400' :'bg-[var(--surface-1)] border-[var(--border)]/60 text-white/70'}"
+ class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='gpu' ?'bg-blue-400/[0.06] border-blue-400/20 text-blue-400' :'bg-gray-950 border-gray-800/60/60 text-white/70'}"
  >
  GPU Miner
  </button>
@@ -607,13 +607,13 @@
  step="1"
  bind:value={cpuUtilizationPercent}
  disabled={isAnyMining}
- class="w-full h-2 bg-[var(--surface-1)] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+ class="w-full h-2 bg-gray-950 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
  />
- <div class="flex justify-between text-xs text-[var(--text-secondary)] mt-1">
+ <div class="flex justify-between text-xs text-gray-400 mt-1">
  <span>{MIN_UTILIZATION_PERCENT}%</span>
  <span>{MAX_UTILIZATION_PERCENT}%</span>
  </div>
- <p class="text-xs text-[var(--text-secondary)] mt-2">
+ <p class="text-xs text-gray-400 mt-2">
  Effective CPU threads: <span class="font-medium">{miningThreads}</span> of {maxThreads}
  </p>
  </div>
@@ -631,9 +631,9 @@
  step="1"
  bind:value={gpuUtilizationPercent}
  disabled={isAnyMining}
- class="w-full h-2 bg-[var(--surface-1)] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+ class="w-full h-2 bg-gray-950 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
  />
- <div class="flex justify-between text-xs text-[var(--text-secondary)] mt-1">
+ <div class="flex justify-between text-xs text-gray-400 mt-1">
  <span>{MIN_UTILIZATION_PERCENT}%</span>
  <span>{MAX_UTILIZATION_PERCENT}%</span>
  </div>
@@ -671,11 +671,11 @@
  GPU Devices ({selectedGpuDevices.length} selected)
  </div>
  {#if gpuCapabilities.devices.length === 0}
- <div class="rounded-lg border border-[var(--border)]/60 bg-[var(--surface-1)] p-3 text-sm text-white/70">
+ <div class="rounded-lg border border-gray-800/60/60 bg-gray-950 p-3 text-sm text-white/70">
  No devices were reported by the miner binary. You can still try starting GPU mining with auto-detection.
  </div>
  {:else}
- <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-[var(--border)]/60 p-3 bg-[var(--surface-1)]">
+ <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-gray-800/60/60 p-3 bg-gray-950">
  {#each gpuCapabilities.devices as device (device.id)}
  <label class="flex items-center gap-2 text-sm text-white/70">
  <input
@@ -683,9 +683,9 @@
  checked={selectedGpuDevices.includes(device.id)}
  onchange={() => toggleGpuDevice(device.id)}
  disabled={isAnyMining}
- class="rounded border-[var(--border)]/60 bg-[var(--surface-0)]"
+ class="rounded border-gray-800/60/60 bg-black"
  />
- <span class="font-mono text-xs text-[var(--text-secondary)]">[{device.id}]</span>
+ <span class="font-mono text-xs text-gray-400">[{device.id}]</span>
  <span>{device.name}</span>
  </label>
  {/each}
@@ -745,7 +745,7 @@
  </div>
  <div>
  <h2 class="font-semibold">Mining History</h2>
- <p class="text-sm text-[var(--text-secondary)]">
+ <p class="text-sm text-gray-400">
  {minedBlocks.length} block{minedBlocks.length !== 1 ?'s' :''} mined
  {#if totalHistoryReward > 0}
  — {totalHistoryReward.toFixed(2)} CHI earned
@@ -754,9 +754,9 @@
  </div>
  </div>
  {#if showHistory}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-gray-400" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-gray-400" />
  {/if}
  </button>
 
@@ -766,7 +766,7 @@
  <button
  onclick={loadMinedBlocks}
  disabled={isLoadingHistory}
- class="text-xs px-3 py-1.5 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-gray-950 hover:bg-gray-950 rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingHistory}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -778,28 +778,28 @@
  </div>
  {#if isLoadingHistory && minedBlocks.length === 0}
  <div class="flex items-center justify-center py-8">
- <Loader2 class="w-6 h-6 animate-spin text-[var(--text-secondary)]" />
- <span class="ml-2 text-sm text-[var(--text-secondary)]">Scanning blockchain...</span>
+ <Loader2 class="w-6 h-6 animate-spin text-gray-400" />
+ <span class="ml-2 text-sm text-gray-400">Scanning blockchain...</span>
  </div>
  {:else if minedBlocks.length === 0}
  <div class="text-center py-8">
  <Pickaxe class="w-10 h-10 text-white/70 mx-auto mb-3" />
- <p class="text-sm text-[var(--text-secondary)]">No blocks mined yet.</p>
- <p class="text-xs text-[var(--text-tertiary)] mt-1">Start mining to earn CHI block rewards.</p>
+ <p class="text-sm text-gray-400">No blocks mined yet.</p>
+ <p class="text-xs text-gray-600 mt-1">Start mining to earn CHI block rewards.</p>
  </div>
  {:else}
  <!-- Summary Stats -->
  <div class="grid grid-cols-3 gap-3 mb-4">
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-secondary)]">Blocks Mined</p>
+ <div class="bg-gray-950 rounded-lg p-3">
+ <p class="text-xs text-gray-400">Blocks Mined</p>
  <p class="text-lg font-bold">{minedBlocks.length}</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-secondary)]">Total Earned</p>
+ <div class="bg-gray-950 rounded-lg p-3">
+ <p class="text-xs text-gray-400">Total Earned</p>
  <p class="text-lg font-bold text-emerald-400">{totalHistoryReward.toFixed(2)} CHI</p>
  </div>
- <div class="bg-[var(--surface-1)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-secondary)]">Reward per Block</p>
+ <div class="bg-gray-950 rounded-lg p-3">
+ <p class="text-xs text-gray-400">Reward per Block</p>
  <p class="text-lg font-bold">{minedBlocks[0]?.rewardChi ?? 0} CHI</p>
  </div>
  </div>
@@ -808,26 +808,26 @@
  <div class="overflow-x-auto">
  <table class="w-full text-sm">
  <thead>
- <tr class="border-b border-[var(--border)]/60">
- <th class="text-left py-2 px-3 text-xs font-medium text-[var(--text-secondary)]">Block #</th>
- <th class="text-left py-2 px-3 text-xs font-medium text-[var(--text-secondary)]">Time</th>
- <th class="text-right py-2 px-3 text-xs font-medium text-[var(--text-secondary)]">Reward</th>
- <th class="text-right py-2 px-3 text-xs font-medium text-[var(--text-secondary)]">Difficulty</th>
+ <tr class="border-b border-gray-800/60/60">
+ <th class="text-left py-2 px-3 text-xs font-medium text-gray-400">Block #</th>
+ <th class="text-left py-2 px-3 text-xs font-medium text-gray-400">Time</th>
+ <th class="text-right py-2 px-3 text-xs font-medium text-gray-400">Reward</th>
+ <th class="text-right py-2 px-3 text-xs font-medium text-gray-400">Difficulty</th>
  </tr>
  </thead>
  <tbody>
  {#each minedBlocks as block (block.blockNumber)}
- <tr class="border-b border-[var(--border)]/60 hover:bg-[var(--surface-1)] transition-colors">
+ <tr class="border-b border-gray-800/60/60 hover:bg-gray-950 transition-colors">
  <td class="py-2 px-3 font-mono text-xs tabular-nums">
  #{block.blockNumber.toLocaleString()}
  </td>
- <td class="py-2 px-3 text-xs text-[var(--text-secondary)]">
+ <td class="py-2 px-3 text-xs text-gray-400">
  {formatTimestamp(block.timestamp)}
  </td>
  <td class="py-2 px-3 text-right text-xs font-medium tabular-nums text-emerald-400">
  +{block.rewardChi} CHI
  </td>
- <td class="py-2 px-3 text-right text-xs tabular-nums text-[var(--text-secondary)] font-mono">
+ <td class="py-2 px-3 text-right text-xs tabular-nums text-gray-400 font-mono">
  {block.difficulty.toLocaleString()}
  </td>
  </tr>

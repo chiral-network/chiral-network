@@ -129,16 +129,16 @@
 
 <div class="max-w-2xl mx-auto p-6">
  {#if step ==='generate'}
- <div class="bg-[var(--surface-0)] rounded-lg p-8">
+ <div class="bg-[#13111C] rounded-lg p-8">
  <div class="flex items-center mb-6">
- <button on:click={onBack} class="mr-4 p-2 hover:bg-[var(--surface-1)] rounded-lg transition">
+ <button on:click={onBack} class="mr-4 p-2 hover:bg-[#13111C] rounded-lg transition">
  <ArrowLeft class="w-5 h-5" />
  </button>
  <h2 class="text-2xl font-bold">Create New Wallet</h2>
  </div>
 
  <div class="mb-6">
- <p class="text-[var(--text-secondary)] mb-4">
+ <p class="text-white/[0.06] mb-4">
  Write down these 12 words in order and keep them safe. You'll need them to recover your wallet.
  </p>
 
@@ -148,10 +148,10 @@
  </p>
  </div>
 
- <div class="grid grid-cols-3 gap-3 bg-[var(--surface-1)] p-6 rounded-lg mb-4">
+ <div class="grid grid-cols-3 gap-3 bg-[#13111C] p-6 rounded-lg mb-4">
  {#each mnemonicWords as word, index}
- <div class="bg-[var(--surface-0)] p-3 rounded border border-[var(--border)]/60">
- <span class="text-xs text-[var(--text-secondary)]">{index + 1}.</span>
+ <div class="bg-[#13111C] p-3 rounded border border-white/[0.06]/60">
+ <span class="text-xs text-white/[0.06]">{index + 1}.</span>
  <span class="ml-2 font-mono">{word}</span>
  </div>
  {/each}
@@ -160,31 +160,31 @@
  <div class="flex gap-3">
  <button
  on:click={copyToClipboard}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] rounded-lg transition"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[#13111C] hover:bg-[#13111C] rounded-lg transition"
  >
  {#if copied}
  <Check class="w-4 h-4 text-green-400" />
  <span class="text-green-400">Copied!</span>
  {:else}
  <Copy class="w-4 h-4" />
- <span class="text-[var(--text-secondary)]">Copy</span>
+ <span class="text-white/[0.06]">Copy</span>
  {/if}
  </button>
 
  <button
  on:click={generateNewMnemonic}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] rounded-lg transition"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[#13111C] hover:bg-[#13111C] rounded-lg transition"
  >
  <RefreshCw class="w-4 h-4" />
- <span class="text-[var(--text-secondary)]">Regenerate</span>
+ <span class="text-white/[0.06]">Regenerate</span>
  </button>
 
  <button
  on:click={downloadAsText}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] rounded-lg transition"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[#13111C] hover:bg-[#13111C] rounded-lg transition"
  >
  <Download class="w-4 h-4" />
- <span class="text-[var(--text-secondary)]">Download</span>
+ <span class="text-white/[0.06]">Download</span>
  </button>
  </div>
  </div>
@@ -192,7 +192,7 @@
  <div class="flex gap-3">
  <button
  on:click={onBack}
- class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-1)] transition"
+ class="flex-1 px-6 py-3 border border-white/[0.06]/60 rounded-lg hover:bg-[#13111C] transition"
  >
  Cancel
  </button>
@@ -205,10 +205,10 @@
  </div>
  </div>
  {:else if step ==='verify'}
- <div class="bg-[var(--surface-0)] rounded-lg p-8">
+ <div class="bg-[#13111C] rounded-lg p-8">
  <h2 class="text-2xl font-bold mb-6">Verify Recovery Phrase</h2>
 
- <p class="text-[var(--text-secondary)] mb-6">
+ <p class="text-white/[0.06] mb-6">
  To ensure you've saved your recovery phrase, please enter the following words:
  </p>
 
@@ -221,7 +221,7 @@
  id="word-{index}"
  type="text"
  bind:value={userInputs[i]}
- class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[var(--surface-1)]"
+ class="w-full px-4 py-2 border border-white/[0.06]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[#13111C]"
  placeholder="Enter word {index + 1}"
  />
  </div>
@@ -236,7 +236,7 @@
  <div class="flex gap-3">
  <button
  on:click={() => step ='generate'}
- class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-1)] transition"
+ class="flex-1 px-6 py-3 border border-white/[0.06]/60 rounded-lg hover:bg-[#13111C] transition"
  >
  Back
  </button>
@@ -249,13 +249,13 @@
  </div>
  </div>
  {:else}
- <div class="bg-[var(--surface-0)] rounded-lg p-8">
+ <div class="bg-[#13111C] rounded-lg p-8">
  <div class="flex items-center gap-2 mb-3">
  <Mail class="w-5 h-5 text-blue-400" />
  <h2 class="text-2xl font-bold">One-Time Email Backup</h2>
  </div>
 
- <p class="text-[var(--text-secondary)] mb-3">
+ <p class="text-white/[0.06] mb-3">
  Enter your email to receive a one-time copy of your recovery phrase and wallet credentials.
  </p>
 
@@ -273,7 +273,7 @@
  id="backup-email"
  type="email"
  bind:value={emailInput}
- class="w-full px-4 py-2 border border-[var(--border)]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[var(--surface-1)]"
+ class="w-full px-4 py-2 border border-white/[0.06]/60 rounded-lg focus:border-blue-400/40 focus:border-transparent bg-[#13111C]"
  placeholder="you@example.com"
  autocomplete="email"
  />
@@ -288,7 +288,7 @@
  <div class="flex gap-3">
  <button
  on:click={() => step ='verify'}
- class="flex-1 px-6 py-3 border border-[var(--border)]/60 rounded-lg hover:bg-[var(--surface-1)] transition"
+ class="flex-1 px-6 py-3 border border-white/[0.06]/60 rounded-lg hover:bg-[#13111C] transition"
  disabled={sendingEmail}
  >
  Back
