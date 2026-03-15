@@ -1,35 +1,35 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
- import { Server, Users, Shield, AlertCircle, FileText } from 'lucide-svelte';
- import { settings, walletAccount } from '$lib/stores';
- import { get } from 'svelte/store';
- import { toasts } from '$lib/toastStore';
- import { logger } from '$lib/logger';
- import { hostingService } from '$lib/services/hostingService';
- import { ratingApi } from '$lib/services/ratingApiService';
+ import { onMount, onDestroy } from'svelte';
+ import { Server, Users, Shield, AlertCircle, FileText } from'lucide-svelte';
+ import { settings, walletAccount } from'$lib/stores';
+ import { get } from'svelte/store';
+ import { toasts } from'$lib/toastStore';
+ import { logger } from'$lib/logger';
+ import { hostingService } from'$lib/services/hostingService';
+ import { ratingApi } from'$lib/services/ratingApiService';
  import {
  buildHostedSiteUrl,
  resolveHostingPort,
- } from '$lib/utils/hostingPageUtils';
- import type { HostEntry, HostingAgreement } from '$lib/types/hosting';
+ } from'$lib/utils/hostingPageUtils';
+ import type { HostEntry, HostingAgreement } from'$lib/types/hosting';
 
- import HostingServerBar from '$lib/components/hosting/HostingServerBar.svelte';
- import HostingSiteCreator from '$lib/components/hosting/HostingSiteCreator.svelte';
- import HostingSiteList from '$lib/components/hosting/HostingSiteList.svelte';
- import HostingMarketplace from '$lib/components/hosting/HostingMarketplace.svelte';
- import HostingAgreements from '$lib/components/hosting/HostingAgreements.svelte';
- import HostingProposalModal from '$lib/components/hosting/HostingProposalModal.svelte';
- import HostingDrivePicker from '$lib/components/hosting/HostingDrivePicker.svelte';
+ import HostingServerBar from'$lib/components/hosting/HostingServerBar.svelte';
+ import HostingSiteCreator from'$lib/components/hosting/HostingSiteCreator.svelte';
+ import HostingSiteList from'$lib/components/hosting/HostingSiteList.svelte';
+ import HostingMarketplace from'$lib/components/hosting/HostingMarketplace.svelte';
+ import HostingAgreements from'$lib/components/hosting/HostingAgreements.svelte';
+ import HostingProposalModal from'$lib/components/hosting/HostingProposalModal.svelte';
+ import HostingDrivePicker from'$lib/components/hosting/HostingDrivePicker.svelte';
 
  const log = logger('Hosting');
- const RELAY_GATEWAY = 'http://130.245.173.73:8080';
+ const RELAY_GATEWAY ='http://130.245.173.73:8080';
 
  // ---------------------------------------------------------------------------
  // Tauri check
  // ---------------------------------------------------------------------------
  let isTauri = $state(false);
  function checkTauriAvailability(): boolean {
- return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+ return typeof window !=='undefined' && ('__TAURI__' in window ||'__TAURI_INTERNALS__' in window);
  }
 
  // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@
  // ---------------------------------------------------------------------------
  // Tab state
  // ---------------------------------------------------------------------------
- type Tab = 'sites' | 'marketplace' | 'agreements';
+ type Tab ='sites' |'marketplace' |'agreements';
  let activeTab = $state<Tab>('sites');
 
  // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@
  let marketplaceError = $state<string | null>(null);
  let hosts = $state<HostEntry[]>([]);
  let myAgreements = $state<HostingAgreement[]>([]);
- let sortBy = $state<'reputation' | 'price' | 'storage'>('reputation');
+ let sortBy = $state<'reputation' |'price' |'storage'>('reputation');
  let myPeerId = $state<string | null>(null);
 
  // Proposal modal
@@ -99,12 +99,12 @@
 
  // Derived
  let incomingProposals = $derived(
- myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status === 'proposed')
+ myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status ==='proposed')
  );
  let activeAgreements = $derived(
  myAgreements.filter((a) =>
- a.status !== 'cancelled' &&
- (a.status !== 'proposed' || a.clientPeerId === myPeerId)
+ a.status !=='cancelled' &&
+ (a.status !=='proposed' || a.clientPeerId === myPeerId)
  )
  );
  let hostedFiles = $derived.by(() => {
@@ -112,7 +112,7 @@
  const files: { fileHash: string; agreementId: string; clientPeerId: string; expiresAt?: number }[] = [];
  for (const agreement of myAgreements) {
  if (agreement.hostPeerId !== myPeerId) continue;
- if (agreement.status !== 'active' && agreement.status !== 'accepted') continue;
+ if (agreement.status !=='active' && agreement.status !=='accepted') continue;
  for (const hash of agreement.fileHashes) {
  files.push({
  fileHash: hash,
@@ -146,10 +146,10 @@
  const { invoke } = await import('@tauri-apps/api/core');
  const addr = await invoke<string>('start_hosting_server', { port });
  serverStatus = { running: true, address: addr };
- toasts.show(`Hosting server started on ${addr}`, 'success');
+ toasts.show(`Hosting server started on ${addr}`,'success');
  localStorage.setItem('chiral-hosting-port', String(port));
  } catch (err: any) {
- toasts.show(`Failed to start server: ${err}`, 'error');
+ toasts.show(`Failed to start server: ${err}`,'error');
  } finally {
  isStartingServer = false;
  }
@@ -161,9 +161,9 @@
  const { invoke } = await import('@tauri-apps/api/core');
  await invoke('stop_hosting_server');
  serverStatus = { running: false, address: null };
- toasts.show('Hosting server stopped', 'info');
+ toasts.show('Hosting server stopped','info');
  } catch (err: any) {
- toasts.show(`Failed to stop server: ${err}`, 'error');
+ toasts.show(`Failed to stop server: ${err}`,'error');
  }
  }
 
@@ -199,7 +199,7 @@
  async function openDrivePickerForSite() {
  const wallet = get(walletAccount);
  if (!wallet?.address) {
- toasts.show('Connect your wallet first', 'error');
+ toasts.show('Connect your wallet first','error');
  return;
  }
  drivePickerLoading = true;
@@ -207,13 +207,13 @@
  try {
  const { invoke } = await import('@tauri-apps/api/core');
  const items = await invoke<{ id: string; name: string; itemType: string; size?: number }[]>(
- 'drive_list_items', { owner: wallet.address, parentId: null }
+'drive_list_items', { owner: wallet.address, parentId: null }
  );
  drivePickerFiles = items
- .filter((i) => i.itemType === 'file' && i.size)
+ .filter((i) => i.itemType ==='file' && i.size)
  .map((i) => ({ id: i.id, name: i.name, size: i.size! }));
  } catch {
- toasts.show('Failed to load Drive files', 'error');
+ toasts.show('Failed to load Drive files','error');
  showDrivePickerForSite = false;
  } finally {
  drivePickerLoading = false;
@@ -237,7 +237,7 @@
  }
  }
  } catch (err: any) {
- toasts.show(`Failed to resolve Drive file paths: ${err?.message || err}`, 'error');
+ toasts.show(`Failed to resolve Drive file paths: ${err?.message || err}`,'error');
  }
  }
 
@@ -256,11 +256,11 @@
  filePaths,
  });
  sites = [...sites, site];
- toasts.show(`Site "${site.name}" created`, 'success');
- newSiteName = '';
+ toasts.show(`Site"${site.name}" created`,'success');
+ newSiteName ='';
  selectedFiles = [];
  } catch (err: any) {
- toasts.show(`Failed to create site: ${err}`, 'error');
+ toasts.show(`Failed to create site: ${err}`,'error');
  } finally {
  isCreating = false;
  }
@@ -278,16 +278,16 @@
  const { invoke } = await import('@tauri-apps/api/core');
  await invoke('delete_hosted_site', { siteId: id });
  sites = sites.filter(s => s.id !== id);
- toasts.show(`Site "${name}" deleted`, 'info');
+ toasts.show(`Site"${name}" deleted`,'info');
  } catch (err: any) {
- toasts.show(`Failed to delete site: ${err}`, 'error');
+ toasts.show(`Failed to delete site: ${err}`,'error');
  }
  }
 
  function copySiteUrl(site: HostedSite) {
  const url = buildHostedSiteUrl(site.id, site.relayUrl, serverStatus.address, port);
  navigator.clipboard.writeText(url);
- toasts.show('URL copied to clipboard', 'success');
+ toasts.show('URL copied to clipboard','success');
  }
 
  async function openSite(site: HostedSite) {
@@ -296,7 +296,7 @@
  const { open } = await import('@tauri-apps/plugin-shell');
  await open(url);
  } catch {
- window.open(url, '_blank');
+ window.open(url,'_blank');
  }
  }
 
@@ -307,9 +307,9 @@
  const { invoke } = await import('@tauri-apps/api/core');
  const relayUrl = await invoke<string>('publish_site_to_relay', { siteId, relayUrl: RELAY_GATEWAY });
  await loadSites();
- toasts.show(`Published! URL: ${relayUrl}`, 'success');
+ toasts.show(`Published! URL: ${relayUrl}`,'success');
  } catch (err: any) {
- toasts.show(`Failed to publish: ${err}`, 'error');
+ toasts.show(`Failed to publish: ${err}`,'error');
  } finally {
  publishingStates = { ...publishingStates, [siteId]: false };
  }
@@ -322,9 +322,9 @@
  const { invoke } = await import('@tauri-apps/api/core');
  await invoke('unpublish_site_from_relay', { siteId });
  await loadSites();
- toasts.show('Site unpublished from network', 'info');
+ toasts.show('Site unpublished from network','info');
  } catch (err: any) {
- toasts.show(`Failed to unpublish: ${err}`, 'error');
+ toasts.show(`Failed to unpublish: ${err}`,'error');
  } finally {
  publishingStates = { ...publishingStates, [siteId]: false };
  }
@@ -382,9 +382,9 @@
  loadingHosts = true;
  try {
  hosts = await hostingService.discoverHosts();
- toasts.show('Host list refreshed', 'success');
+ toasts.show('Host list refreshed','success');
  } catch (err: any) {
- toasts.show(`Failed to refresh: ${err.message || err}`, 'error');
+ toasts.show(`Failed to refresh: ${err.message || err}`,'error');
  } finally {
  loadingHosts = false;
  }
@@ -393,13 +393,13 @@
  async function publishHosting() {
  if (hostingPublishing) return;
  const wallet = get(walletAccount);
- if (!wallet?.address) { toasts.show('Connect your wallet first', 'error'); return; }
+ if (!wallet?.address) { toasts.show('Connect your wallet first','error'); return; }
  hostingPublishing = true;
  try {
  await hostingService.publishHostAdvertisement($settings.hostingConfig, wallet.address);
- toasts.show('Host advertisement published to network', 'success');
+ toasts.show('Host advertisement published to network','success');
  } catch (err: any) {
- toasts.show(`Failed to publish: ${err?.message || err}`, 'error');
+ toasts.show(`Failed to publish: ${err?.message || err}`,'error');
  } finally {
  hostingPublishing = false;
  }
@@ -410,9 +410,9 @@
  hostingPublishing = true;
  try {
  await hostingService.unpublishHostAdvertisement();
- toasts.show('Host advertisement removed', 'info');
+ toasts.show('Host advertisement removed','info');
  } catch (err: any) {
- toasts.show(`Failed to unpublish: ${err?.message || err}`, 'error');
+ toasts.show(`Failed to unpublish: ${err?.message || err}`,'error');
  } finally {
  hostingPublishing = false;
  }
@@ -429,7 +429,7 @@
  if (wallet?.address) {
  await publishHosting();
  } else {
- toasts.show('Hosting enabled. It will auto-publish when wallet is connected.', 'info');
+ toasts.show('Hosting enabled. It will auto-publish when wallet is connected.','info');
  }
  return;
  }
@@ -439,9 +439,9 @@
  // Proposal flow
  function openProposalModal(host: HostEntry) {
  const wallet = get(walletAccount);
- if (!wallet?.address) { toasts.show('Connect your wallet first', 'error'); return; }
+ if (!wallet?.address) { toasts.show('Connect your wallet first','error'); return; }
  proposalHost = host;
- proposalFileHashes = '';
+ proposalFileHashes ='';
  proposalDurationDays = 7;
  }
 
@@ -451,14 +451,14 @@
  try {
  const { invoke } = await import('@tauri-apps/api/core');
  const items = await invoke<{ id: string; name: string; itemType: string; size?: number }[]>(
- 'drive_list_items', { owner: wallet.address, parentId: null }
+'drive_list_items', { owner: wallet.address, parentId: null }
  );
  proposalDriveFiles = items
- .filter((i) => i.itemType === 'file' && i.size)
+ .filter((i) => i.itemType ==='file' && i.size)
  .map((i) => ({ id: i.id, name: i.name, size: i.size! }));
  showProposalDrivePicker = true;
  } catch {
- toasts.show('Failed to load Drive files', 'error');
+ toasts.show('Failed to load Drive files','error');
  }
  }
 
@@ -473,14 +473,14 @@
  protocol: null, priceChi: null, walletAddress: wallet.address,
  });
  const hash = item.merkleRoot;
- if (!hash) { toasts.show(`${fileName} has no file hash`, 'error'); return; }
+ if (!hash) { toasts.show(`${fileName} has no file hash`,'error'); return; }
  const existing = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
  if (!existing.includes(hash)) {
  proposalFileHashes = [...existing, hash].join('\n');
  }
- toasts.show(`${fileName} published to network`, 'success');
+ toasts.show(`${fileName} published to network`,'success');
  } catch (err: any) {
- toasts.show(`Failed to publish ${fileName}: ${err.message || err}`, 'error');
+ toasts.show(`Failed to publish ${fileName}: ${err.message || err}`,'error');
  } finally {
  publishingDriveFile = null;
  }
@@ -490,11 +490,11 @@
  if (!proposalHost || isProposing) return;
  const wallet = get(walletAccount);
  if (!wallet?.address || !myPeerId) {
- toasts.show('Wallet or peer ID not available', 'error');
+ toasts.show('Wallet or peer ID not available','error');
  return;
  }
  const hashes = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
- if (hashes.length === 0) { toasts.show('Enter at least one file hash', 'error'); return; }
+ if (hashes.length === 0) { toasts.show('Enter at least one file hash','error'); return; }
 
  isProposing = true;
  try {
@@ -507,9 +507,9 @@
  );
  myAgreements = [...myAgreements, agreement];
  proposalHost = null;
- toasts.show('Hosting proposal sent!', 'success');
+ toasts.show('Hosting proposal sent!','success');
  } catch (err: any) {
- toasts.show(`Failed to send proposal: ${err.message || err}`, 'error');
+ toasts.show(`Failed to send proposal: ${err.message || err}`,'error');
  } finally {
  isProposing = false;
  }
@@ -524,21 +524,21 @@
  const updated = await hostingService.respondToAgreement(agreementId, accept);
  myAgreements = myAgreements.map((a) =>
  a.agreementId === agreementId
- ? { ...a, status: accept ? 'accepted' : 'rejected', respondedAt: Math.floor(Date.now() / 1000) }
+ ? { ...a, status: accept ?'accepted' :'rejected', respondedAt: Math.floor(Date.now() / 1000) }
  : a
  );
  if (!options?.silent) {
- toasts.show(accept ? 'Agreement accepted — downloading files...' : 'Agreement rejected', accept ? 'success' : 'info');
+ toasts.show(accept ?'Agreement accepted — downloading files...' :'Agreement rejected', accept ?'success' :'info');
  } else if (options.reason) {
- toasts.show(options.reason, 'success');
+ toasts.show(options.reason,'success');
  }
  if (accept && updated) {
  hostingService.fulfillAgreement(updated).catch((err: any) => {
- toasts.show(`Failed to start file download: ${err.message || err}`, 'error');
+ toasts.show(`Failed to start file download: ${err.message || err}`,'error');
  });
  }
  } catch (err: any) {
- toasts.show(`Failed: ${err.message || err}`, 'error');
+ toasts.show(`Failed: ${err.message || err}`,'error');
  }
  }
 
@@ -546,19 +546,19 @@
  if (!myPeerId) return;
  try {
  const result = await hostingService.requestCancellation(agreementId, myPeerId);
- if (result === 'cancelled') {
+ if (result ==='cancelled') {
  myAgreements = myAgreements.map((a) =>
- a.agreementId === agreementId ? { ...a, status: 'cancelled' } : a
+ a.agreementId === agreementId ? { ...a, status:'cancelled' } : a
  );
- toasts.show('Proposal withdrawn', 'info');
+ toasts.show('Proposal withdrawn','info');
  } else {
  myAgreements = myAgreements.map((a) =>
  a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId ?? undefined } : a
  );
- toasts.show('Cancellation requested — waiting for other party', 'info');
+ toasts.show('Cancellation requested — waiting for other party','info');
  }
  } catch (err: any) {
- toasts.show(`Failed to request cancellation: ${err.message || err}`, 'error');
+ toasts.show(`Failed to request cancellation: ${err.message || err}`,'error');
  }
  }
 
@@ -574,17 +574,17 @@
  try { await cleanupDriveSharedFiles(agreementId); } catch { /* best-effort */ }
  }
  myAgreements = myAgreements.map((a) =>
- a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
+ a.agreementId === agreementId ? { ...a, status:'cancelled', cancelRequestedBy: undefined } : a
  );
- toasts.show('Agreement cancelled', 'info');
+ toasts.show('Agreement cancelled','info');
  } else {
  myAgreements = myAgreements.map((a) =>
  a.agreementId === agreementId ? { ...a, cancelRequestedBy: undefined } : a
  );
- toasts.show('Cancellation denied', 'info');
+ toasts.show('Cancellation denied','info');
  }
  } catch (err: any) {
- toasts.show(`Failed: ${err.message || err}`, 'error');
+ toasts.show(`Failed: ${err.message || err}`,'error');
  }
  }
 
@@ -596,11 +596,11 @@
  try {
  const { invoke } = await import('@tauri-apps/api/core');
  const allItems = await invoke<{ id: string; name: string; itemType: string; merkleRoot?: string }[]>(
- 'drive_list_all_items', { owner: wallet.address },
+'drive_list_all_items', { owner: wallet.address },
  );
  const hashSet = new Set(agreement.fileHashes);
  for (const item of allItems) {
- if (item.itemType === 'file' && (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot)))) {
+ if (item.itemType ==='file' && (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot)))) {
  await invoke('drive_delete_item', { owner: wallet.address, itemId: item.id });
  }
  }
@@ -627,7 +627,7 @@
 
  async function maybeAutoAcceptAgreement(agreement: HostingAgreement) {
  if (!myPeerId || !$settings.hostingConfig.autoAcceptByElo) return;
- if (agreement.hostPeerId !== myPeerId || agreement.status !== 'proposed') return;
+ if (agreement.hostPeerId !== myPeerId || agreement.status !=='proposed') return;
  if (autoAcceptInFlight[agreement.agreementId]) return;
  autoAcceptInFlight = { ...autoAcceptInFlight, [agreement.agreementId]: true };
  try {
@@ -648,7 +648,7 @@
 
  async function maybeAutoAcceptIncomingProposals() {
  if (!myPeerId || !$settings.hostingConfig.autoAcceptByElo) return;
- const proposals = myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status === 'proposed');
+ const proposals = myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status ==='proposed');
  for (const proposal of proposals) {
  await maybeAutoAcceptAgreement(proposal);
  }
@@ -683,13 +683,13 @@
  const { getCurrentWindow } = await import('@tauri-apps/api/window');
  const appWindow = getCurrentWindow();
  unlistenDragDrop_fn = await appWindow.onDragDropEvent((event) => {
- if (activeTab !== 'sites') return;
- if (event.payload.type === 'drop') {
+ if (activeTab !=='sites') return;
+ if (event.payload.type ==='drop') {
  const paths = event.payload.paths;
  if (paths && paths.length > 0) addFilesFromPaths(paths);
- } else if (event.payload.type === 'enter') {
+ } else if (event.payload.type ==='enter') {
  isDragOver = true;
- } else if (event.payload.type === 'leave') {
+ } else if (event.payload.type ==='leave') {
  isDragOver = false;
  }
  });
@@ -721,7 +721,7 @@
 
  // Listen for incoming proposals
  unlistenProposal = await listen<{ fromPeer: string; agreementJson: string }>(
- 'hosting_proposal_received',
+'hosting_proposal_received',
  (event) => {
  try {
  const agreement: HostingAgreement = JSON.parse(event.payload.agreementJson);
@@ -733,7 +733,7 @@
  );
  } else {
  myAgreements = [...myAgreements, agreement];
- toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`, 'info');
+ toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`,'info');
  }
  void maybeAutoAcceptAgreement(agreement);
  } catch { /* ignore malformed */ }
@@ -742,37 +742,37 @@
 
  // Listen for responses
  unlistenResponse = await listen<{ agreementId: string; status: string }>(
- 'hosting_response_received',
+'hosting_response_received',
  (event) => {
  const { agreementId, status } = event.payload;
  myAgreements = myAgreements.map((a): HostingAgreement =>
  a.agreementId === agreementId ? { ...a, status: status as HostingAgreement['status'] } : a
  );
- if (status === 'accepted') toasts.show('Agreement accepted by host!', 'success');
- else if (status === 'rejected') toasts.show('Agreement rejected by host', 'info');
- else if (status === 'active') toasts.show('Host is now seeding your files!', 'success');
+ if (status ==='accepted') toasts.show('Agreement accepted by host!','success');
+ else if (status ==='rejected') toasts.show('Agreement rejected by host','info');
+ else if (status ==='active') toasts.show('Host is now seeding your files!','success');
  },
  );
 
  // Listen for download completions
  unlistenDownloadComplete = await listen<{ fileHash: string; fileName: string; filePath: string; fileSize: number }>(
- 'file-download-complete',
+'file-download-complete',
  async (event) => {
  const { fileHash, fileName } = event.payload;
  const agreement = myAgreements.find(
- (a) => a.hostPeerId === myPeerId && (a.status === 'accepted' || a.status === 'active') && a.fileHashes.includes(fileHash)
+ (a) => a.hostPeerId === myPeerId && (a.status ==='accepted' || a.status ==='active') && a.fileHashes.includes(fileHash)
  );
  if (!agreement) return;
- toasts.show(`Now seeding ${fileName} for hosting agreement`, 'success');
+ toasts.show(`Now seeding ${fileName} for hosting agreement`,'success');
  myAgreements = myAgreements.map((a) =>
- a.agreementId === agreement.agreementId ? { ...a, status: 'active' } : a
+ a.agreementId === agreement.agreementId ? { ...a, status:'active' } : a
  );
  },
  );
 
  // Listen for cancellation requests
  unlistenCancelRequest = await listen<{ agreementId: string; fromPeer: string; autoCancelled: boolean }>(
- 'hosting_cancel_request_received',
+'hosting_cancel_request_received',
  async (event) => {
  const { agreementId, fromPeer, autoCancelled } = event.payload;
  if (autoCancelled) {
@@ -782,21 +782,21 @@
  try { await cleanupDriveSharedFiles(agreementId); } catch { /* best-effort */ }
  }
  myAgreements = myAgreements.map((a) =>
- a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
+ a.agreementId === agreementId ? { ...a, status:'cancelled', cancelRequestedBy: undefined } : a
  );
- toasts.show(`Agreement cancelled with ${fromPeer.slice(0, 8)}...`, 'info');
+ toasts.show(`Agreement cancelled with ${fromPeer.slice(0, 8)}...`,'info');
  } else {
  myAgreements = myAgreements.map((a) =>
  a.agreementId === agreementId ? { ...a, cancelRequestedBy: fromPeer } : a
  );
- toasts.show(`Cancellation requested by ${fromPeer.slice(0, 8)}...`, 'info');
+ toasts.show(`Cancellation requested by ${fromPeer.slice(0, 8)}...`,'info');
  }
  },
  );
 
  // Listen for cancellation responses
  unlistenCancelResponse = await listen<{ agreementId: string; approved: boolean }>(
- 'hosting_cancel_response_received',
+'hosting_cancel_response_received',
  async (event) => {
  const { agreementId, approved } = event.payload;
  if (approved) {
@@ -806,14 +806,14 @@
  try { await cleanupDriveSharedFiles(agreementId); } catch { /* best-effort */ }
  }
  myAgreements = myAgreements.map((a) =>
- a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
+ a.agreementId === agreementId ? { ...a, status:'cancelled', cancelRequestedBy: undefined } : a
  );
- toasts.show('Cancellation approved — agreement cancelled', 'info');
+ toasts.show('Cancellation approved — agreement cancelled','info');
  } else {
  myAgreements = myAgreements.map((a) =>
  a.agreementId === agreementId ? { ...a, cancelRequestedBy: undefined } : a
  );
- toasts.show('Cancellation denied by other party', 'info');
+ toasts.show('Cancellation denied by other party','info');
  }
  },
  );
@@ -844,8 +844,8 @@
  <!-- Header -->
  <div class="flex items-start justify-between gap-4">
  <div>
- <h1 class="text-2xl font-bold text-gray-900">Hosts</h1>
- <p class="text-sm text-[var(--text-tertiary)] mt-1">
+ <h1 class="text-2xl font-bold text-white/90">Hosts</h1>
+ <p class="text-sm text-white/40 mt-1">
  Host websites and files, find hosting providers, and manage agreements
  </p>
  </div>
@@ -854,13 +854,13 @@
  {#if sites.length > 0}
  <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-950/20 text-xs font-medium text-primary-700">
  <Server class="w-3.5 h-3.5" />
- {sites.length} site{sites.length !== 1 ? 's' : ''}
+ {sites.length} site{sites.length !== 1 ?'s' :''}
  </div>
  {/if}
- {#if activeAgreements.filter(a => a.status === 'active').length > 0}
+ {#if activeAgreements.filter(a => a.status ==='active').length > 0}
  <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-xs font-medium text-emerald-700">
  <FileText class="w-3.5 h-3.5" />
- {activeAgreements.filter(a => a.status === 'active').length} active
+ {activeAgreements.filter(a => a.status ==='active').length} active
  </div>
  {/if}
  </div>
@@ -874,43 +874,43 @@
  {isStartingServer}
  onStartServer={startServer}
  onStopServer={stopServer}
- onPortChange={(p) => port = p}
+ onPortChange={(p: number) => port = p}
  />
 
  <!-- Tab bar -->
- <div class="flex gap-1 bg-[var(--surface-1)] border border-[var(--border)] rounded-xl p-1" role="tablist" aria-label="Hosting sections">
+ <div class="flex gap-1 bg-white/[0.05] border border-white/[0.06] rounded-xl p-1" role="tablist" aria-label="Hosting sections">
  <button
- onclick={() => activeTab = 'sites'}
+ onclick={() => activeTab ='sites'}
  role="tab"
- aria-selected={activeTab === 'sites'}
+ aria-selected={activeTab ==='sites'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
- {activeTab === 'sites'
- ? ' bg-[var(--surface-1)] text-gray-900 ring-1 ring-white/20'
- : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] dark:hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ {activeTab ==='sites'
+ ?' bg-white/[0.05] text-white/90'
+ :'text-white/40 hover:text-white/50 hover:bg-white/[0.05]'}"
  >
  <Server class="w-4 h-4" />
  <span class="hidden sm:inline">My Sites</span>
  </button>
  <button
- onclick={() => activeTab = 'marketplace'}
+ onclick={() => activeTab ='marketplace'}
  role="tab"
- aria-selected={activeTab === 'marketplace'}
+ aria-selected={activeTab ==='marketplace'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
- {activeTab === 'marketplace'
- ? ' bg-[var(--surface-1)] text-gray-900 ring-1 ring-white/20'
- : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] dark:hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ {activeTab ==='marketplace'
+ ?' bg-white/[0.05] text-white/90'
+ :'text-white/40 hover:text-white/50 hover:bg-white/[0.05]'}"
  >
  <Users class="w-4 h-4" />
  <span class="hidden sm:inline">Marketplace</span>
  </button>
  <button
- onclick={() => activeTab = 'agreements'}
+ onclick={() => activeTab ='agreements'}
  role="tab"
- aria-selected={activeTab === 'agreements'}
+ aria-selected={activeTab ==='agreements'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
- {activeTab === 'agreements'
- ? ' bg-[var(--surface-1)] text-gray-900 ring-1 ring-white/20'
- : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] dark:hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]'}"
+ {activeTab ==='agreements'
+ ?' bg-white/[0.05] text-white/90'
+ :'text-white/40 hover:text-white/50 hover:bg-white/[0.05]'}"
  >
  <Shield class="w-4 h-4" />
  <span class="hidden sm:inline">Agreements</span>
@@ -924,7 +924,7 @@
 
  <!-- Tab content -->
  <div role="tabpanel" id="tabpanel-{activeTab}" aria-labelledby="tab-{activeTab}" class="space-y-5">
- {#if activeTab === 'sites'}
+ {#if activeTab ==='sites'}
  <HostingSiteCreator
  {newSiteName}
  {selectedFiles}
@@ -947,11 +947,11 @@
  onOpenSite={openSite}
  onDeleteSite={deleteSite}
  />
- {:else if activeTab === 'marketplace'}
+ {:else if activeTab ==='marketplace'}
  {#if marketplaceError}
  <div class="text-center py-20">
- <AlertCircle class="w-12 h-12 mx-auto text-[var(--text-secondary)] mb-3" />
- <p class="text-[var(--text-tertiary)]">{marketplaceError}</p>
+ <AlertCircle class="w-12 h-12 mx-auto text-white/50 mb-3" />
+ <p class="text-white/40">{marketplaceError}</p>
  </div>
  {:else}
  <HostingMarketplace
@@ -967,7 +967,7 @@
  onUnpublish={unpublishHosting}
  />
  {/if}
- {:else if activeTab === 'agreements'}
+ {:else if activeTab ==='agreements'}
  <HostingAgreements
  {myAgreements}
  {loadingAgreements}
@@ -1016,28 +1016,28 @@
 {#if deleteConfirm}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 z-50 flex items-center justify-center bg-[var(--surface-0)]/70"
+ class="fixed inset-0 z-50 flex items-center justify-center bg-white/[0.03]/70"
  onclick={() => deleteConfirm = null}
- onkeydown={(e) => { if (e.key === 'Escape') deleteConfirm = null; }}
+ onkeydown={(e) => { if (e.key ==='Escape') deleteConfirm = null; }}
  >
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-xl shadow-black/10 p-6 max-w-sm w-full mx-4"
+ class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/10 p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
- <h3 class="text-lg font-semibold text-gray-900 mb-2">Delete Site</h3>
- <p class="text-sm text-[var(--text-secondary)] mb-1">
- Are you sure you want to delete <strong class="text-gray-900">"{deleteConfirm.name}"</strong>?
+ <h3 class="text-lg font-semibold text-white/90 mb-2">Delete Site</h3>
+ <p class="text-sm text-white/50 mb-1">
+ Are you sure you want to delete <strong class="text-white/90">"{deleteConfirm.name}"</strong>?
  </p>
  <p class="text-sm text-amber-600 mb-4">This cannot be undone.</p>
  <div class="flex justify-end gap-3">
  <button
  onclick={() => deleteConfirm = null}
- class="px-4 py-2 text-sm font-medium rounded-lg text-[var(--text-secondary)] bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg text-white/50 bg-white/[0.05] hover:bg-white/[0.05] transition"
  >Cancel</button>
  <button
  onclick={confirmDeleteSite}
- class="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/70 border border-red-400/30 text-white hover:bg-red-500/80 transition"
+ class="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/[0.1]0/70 border border-red-400/30 text-white hover:bg-red-500/[0.15]0/80 transition"
  >Delete</button>
  </div>
  </div>

@@ -2,15 +2,15 @@
  import {
  Shield, Send, HardDrive, FileText, Clock, Coins,
  Check, X, Loader2, ChevronDown, ChevronUp, AlertCircle
- } from 'lucide-svelte';
+ } from'lucide-svelte';
  import {
  formatPeerId,
  formatWeiAsChi,
  formatDuration,
  timeRemaining,
  statusColor,
- } from '$lib/utils/hostingPageUtils';
- import type { HostingAgreement } from '$lib/types/hosting';
+ } from'$lib/utils/hostingPageUtils';
+ import type { HostingAgreement } from'$lib/types/hosting';
 
  interface HostedFile {
  fileHash: string;
@@ -48,7 +48,7 @@
 
 <!-- Incoming Proposals -->
 {#if !loadingAgreements && incomingProposals.length > 0}
- <div class="rounded-xl bg-violet-600/10 border border-violet-400/20 ring-1 ring-blue-400/10 p-5">
+ <div class="rounded-xl bg-violet-600/10 border border-violet-400/20 p-5">
  <div class="flex items-center gap-3 mb-4">
  <div class="relative flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600/15">
  <Send class="w-4.5 h-4.5 text-blue-600" />
@@ -57,26 +57,26 @@
  </span>
  </div>
  <div>
- <h2 class="font-semibold text-base text-gray-900">Incoming Proposals</h2>
- <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
- {incomingProposals.length} pending request{incomingProposals.length !== 1 ? 's' : ''} to host files
+ <h2 class="font-semibold text-base text-white/90">Incoming Proposals</h2>
+ <p class="text-xs text-white/40 mt-0.5">
+ {incomingProposals.length} pending request{incomingProposals.length !== 1 ?'s' :''} to host files
  </p>
  </div>
  </div>
 
  <div class="space-y-2.5">
  {#each incomingProposals as proposal (proposal.agreementId)}
- <div class="flex items-center justify-between gap-3 p-4 rounded-xl bg-[var(--surface-1)] border border-violet-400/20">
+ <div class="flex items-center justify-between gap-3 p-4 rounded-xl bg-white/[0.05] border border-violet-400/20">
  <div class="min-w-0">
  <div class="flex items-center gap-2 flex-wrap">
- <span class="text-sm font-semibold text-gray-900 font-mono">
+ <span class="text-sm font-semibold text-white/90 font-mono">
  {formatPeerId(proposal.clientPeerId)}
  </span>
- <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">
- {proposal.fileHashes.length} file{proposal.fileHashes.length !== 1 ? 's' : ''}
+ <span class="text-xs px-2 py-0.5 rounded-full bg-blue-500/[0.15] text-blue-400 font-medium">
+ {proposal.fileHashes.length} file{proposal.fileHashes.length !== 1 ?'s' :''}
  </span>
  </div>
- <div class="flex items-center gap-3 text-xs text-[var(--text-tertiary)] mt-1.5">
+ <div class="flex items-center gap-3 text-xs text-white/40 mt-1.5">
  <span class="flex items-center gap-1">
  <Clock class="w-3 h-3" />
  {formatDuration(proposal.durationSecs)}
@@ -90,16 +90,16 @@
  <div class="flex items-center gap-2 flex-shrink-0">
  <button
  onclick={() => onRespondToAgreement(proposal.agreementId, true)}
- class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-green-500/70 border border-green-400/30 hover:bg-green-500/80 dark:hover:bg-green-600/70 text-white rounded-lg transition-colors
- focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:ring-offset-2 "
+ class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-green-500/70 border border-green-400/30 hover:bg-green-500/80 text-white rounded-lg transition-colors
+ focus:outline-none "
  >
  <Check class="w-3.5 h-3.5" />
  Accept
  </button>
  <button
  onclick={() => onRespondToAgreement(proposal.agreementId, false)}
- class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-red-50 hover:bg-red-100 text-red-700 dark:hover:bg-red-900/40 rounded-lg transition-colors
- focus:outline-none focus:ring-2 focus:ring-red-400/30"
+ class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-red-500/[0.1] hover:bg-red-100 text-red-700 rounded-lg transition-colors
+ focus:outline-none "
  >
  <X class="w-3.5 h-3.5" />
  Reject
@@ -112,11 +112,11 @@
 {/if}
 
 <!-- My Agreements -->
-<div class="rounded-xl bg-[var(--surface-1)] shadow-black/5 border border-[var(--border)] ring-1 ring-white/10 overflow-hidden">
+<div class="rounded-xl bg-white/[0.05] shadow-black/5 border border-white/[0.06] overflow-hidden">
  <button
  onclick={() => showAgreements = !showAgreements}
- class="flex items-center justify-between w-full p-5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition-colors
- focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary-400/30"
+ class="flex items-center justify-between w-full p-5 hover:bg-white/[0.05] transition-colors
+ focus:outline-none "
  aria-expanded={showAgreements}
  >
  <div class="flex items-center gap-3">
@@ -124,43 +124,43 @@
  <Shield class="w-4.5 h-4.5 text-emerald-600" />
  </div>
  <div class="text-left">
- <h2 class="font-semibold text-base text-gray-900">My Agreements</h2>
- <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
+ <h2 class="font-semibold text-base text-white/90">My Agreements</h2>
+ <p class="text-xs text-white/40 mt-0.5">
  {#if loadingAgreements}
  Loading...
  {:else}
- {activeAgreements.length} agreement{activeAgreements.length !== 1 ? 's' : ''}
+ {activeAgreements.length} agreement{activeAgreements.length !== 1 ?'s' :''}
  {/if}
  </p>
  </div>
  </div>
  <div class="flex items-center gap-2">
- {#if activeAgreements.filter(a => a.status === 'active').length > 0}
+ {#if activeAgreements.filter(a => a.status ==='active').length > 0}
  <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 uppercase tracking-wide">
- {activeAgreements.filter(a => a.status === 'active').length} active
+ {activeAgreements.filter(a => a.status ==='active').length} active
  </span>
  {/if}
  {#if showAgreements}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </div>
  </button>
 
  {#if showAgreements}
- <div class="border-t border-[var(--border)] p-5 pt-4">
+ <div class="border-t border-white/[0.06] p-5 pt-4">
  {#if loadingAgreements}
  <div class="flex flex-col items-center justify-center py-12">
- <Loader2 class="w-6 h-6 text-[var(--text-secondary)] animate-spin mb-3" />
- <span class="text-sm text-[var(--text-secondary)]">Loading agreements...</span>
+ <Loader2 class="w-6 h-6 text-white/50 animate-spin mb-3" />
+ <span class="text-sm text-white/50">Loading agreements...</span>
  </div>
  {:else if activeAgreements.length === 0}
- <div class="flex flex-col items-center justify-center py-12 text-[var(--text-secondary)]">
- <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-[var(--surface-1)] mb-3">
+ <div class="flex flex-col items-center justify-center py-12 text-white/50">
+ <div class="flex h-14 w-14 items-center justify-center rounded-xl bg-white/[0.05] mb-3">
  <Shield class="w-7 h-7 opacity-40" />
  </div>
- <p class="text-sm font-medium text-[var(--text-tertiary)]">No agreements yet</p>
+ <p class="text-sm font-medium text-white/40">No agreements yet</p>
  <p class="text-xs mt-1">Propose an agreement in the Marketplace tab</p>
  </div>
  {:else}
@@ -170,36 +170,36 @@
  {@const hasCancelRequest = !!agreement.cancelRequestedBy}
  <div class="p-4 rounded-xl border transition-all
  {hasCancelRequest && agreement.cancelRequestedBy !== myPeerId
- ? 'border-orange-400/20 bg-orange-500/10 dark:bg-orange-500/5'
- : 'border-[var(--border)] bg-[var(--surface-1)] hover:border-[var(--border)] dark:hover:border-[var(--border)]'}">
+ ?'border-orange-400/20 bg-orange-500/10'
+ :'border-white/[0.06] bg-white/[0.05] hover:border-white/[0.06]'}">
  <div class="flex items-start justify-between gap-3">
  <div class="min-w-0">
  <div class="flex items-center gap-2 flex-wrap">
- <span class="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">
- {isClient ? 'Host' : 'Client'}
+ <span class="text-xs font-medium text-white/50 uppercase tracking-wide">
+ {isClient ?'Host' :'Client'}
  </span>
- <span class="text-sm font-semibold text-gray-900 font-mono">
+ <span class="text-sm font-semibold text-white/90 font-mono">
  {formatPeerId(isClient ? agreement.hostPeerId : agreement.clientPeerId)}
  </span>
  <span class="text-[11px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide {statusColor(agreement.status)}">
  {agreement.status}
  </span>
  </div>
- <div class="flex items-center gap-3 text-xs text-[var(--text-tertiary)] mt-2">
+ <div class="flex items-center gap-3 text-xs text-white/40 mt-2">
  <span class="flex items-center gap-1">
- <FileText class="w-3 h-3 text-[var(--text-secondary)]" />
- {agreement.fileHashes.length} file{agreement.fileHashes.length !== 1 ? 's' : ''}
+ <FileText class="w-3 h-3 text-white/50" />
+ {agreement.fileHashes.length} file{agreement.fileHashes.length !== 1 ?'s' :''}
  </span>
  <span class="flex items-center gap-1">
- <Clock class="w-3 h-3 text-[var(--text-secondary)]" />
- {#if agreement.status === 'active'}
+ <Clock class="w-3 h-3 text-white/50" />
+ {#if agreement.status ==='active'}
  {timeRemaining(agreement.expiresAt)} left
  {:else}
  {formatDuration(agreement.durationSecs)}
  {/if}
  </span>
  <span class="flex items-center gap-1">
- <Coins class="w-3 h-3 text-[var(--text-secondary)]" />
+ <Coins class="w-3 h-3 text-white/50" />
  {formatWeiAsChi(agreement.totalCostWei)}
  </span>
  </div>
@@ -215,16 +215,16 @@
  </span>
  <button
  onclick={() => onRespondToCancellation(agreement.agreementId, true)}
- class="flex items-center gap-1 text-xs font-medium px-3 py-1.5 bg-red-500/70 border border-red-400/30 hover:bg-red-500/80 dark:hover:bg-red-600/70 text-white rounded-lg transition-colors
- focus:outline-none focus:ring-2 focus:ring-red-500/50"
+ class="flex items-center gap-1 text-xs font-medium px-3 py-1.5 bg-red-500/[0.1]0/70 border border-red-400/30 hover:bg-red-500/[0.15]0/80 text-white rounded-lg transition-colors
+ focus:outline-none "
  >
  <Check class="w-3 h-3" />
  Approve
  </button>
  <button
  onclick={() => onRespondToCancellation(agreement.agreementId, false)}
- class="text-xs font-medium px-3 py-1.5 text-[var(--text-secondary)] border border-[var(--border)] rounded-lg
- hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+ class="text-xs font-medium px-3 py-1.5 text-white/50 border border-white/[0.06] rounded-lg
+ hover:bg-white/[0.05] transition-colors focus:outline-none "
  >
  Deny
  </button>
@@ -234,19 +234,19 @@
  <Loader2 class="w-3 h-3 animate-spin" />
  Cancellation pending...
  </span>
- {:else if agreement.status === 'proposed' && isClient}
+ {:else if agreement.status ==='proposed' && isClient}
  <button
  onclick={() => onRequestCancellation(agreement.agreementId)}
- class="text-xs font-medium px-3 py-1.5 text-red-600 border border-red-200 rounded-lg
- hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus:ring-2 focus:ring-red-400/30"
+ class="text-xs font-medium px-3 py-1.5 text-red-400 border border-red-400/20 rounded-lg
+ hover:bg-red-500/[0.15] transition-colors focus:outline-none "
  >
  Withdraw
  </button>
- {:else if agreement.status === 'accepted' || agreement.status === 'active'}
+ {:else if agreement.status ==='accepted' || agreement.status ==='active'}
  <button
  onclick={() => onRequestCancellation(agreement.agreementId)}
- class="text-xs font-medium px-3 py-1.5 text-red-600 border border-red-200 rounded-lg
- hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus:ring-2 focus:ring-red-400/30"
+ class="text-xs font-medium px-3 py-1.5 text-red-400 border border-red-400/20 rounded-lg
+ hover:bg-red-500/[0.15] transition-colors focus:outline-none "
  >
  Request Cancellation
  </button>
@@ -263,40 +263,40 @@
 
 <!-- Files I'm Hosting -->
 {#if !loadingAgreements && hostedFiles.length > 0}
- <div class="rounded-xl bg-[var(--surface-1)] p-5 shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="rounded-xl bg-white/[0.05] p-5 shadow-black/5 border border-white/[0.06]">
  <div class="flex items-center gap-3 mb-4">
  <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-green-500/15">
- <HardDrive class="w-4.5 h-4.5 text-green-600" />
+ <HardDrive class="w-4.5 h-4.5 text-green-400" />
  </div>
  <div>
- <h2 class="font-semibold text-base text-gray-900">Files I'm Hosting</h2>
- <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
- {hostedFiles.length} file{hostedFiles.length !== 1 ? 's' : ''} being seeded for other peers
+ <h2 class="font-semibold text-base text-white/90">Files I'm Hosting</h2>
+ <p class="text-xs text-white/40 mt-0.5">
+ {hostedFiles.length} file{hostedFiles.length !== 1 ?'s' :''} being seeded for other peers
  </p>
  </div>
  </div>
 
- <div class="space-y-2 rounded-xl border border-[var(--border)] divide-y divide-white/10 overflow-hidden">
+ <div class="space-y-2 rounded-xl border border-white/[0.06] divide-y divide-white/10 overflow-hidden">
  {#each hostedFiles as file (file.fileHash + file.agreementId)}
- <div class="flex items-center justify-between p-3.5 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] transition-colors">
+ <div class="flex items-center justify-between p-3.5 hover:bg-white/[0.05] transition-colors">
  <div class="flex items-center gap-3 min-w-0">
  <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-green-500/10 flex-shrink-0">
  <FileText class="w-4 h-4 text-green-500" />
  </div>
  <div class="min-w-0">
- <p class="text-sm font-mono text-[var(--text-secondary)] truncate">
+ <p class="text-sm font-mono text-white/50 truncate">
  {file.fileHash}
  </p>
- <p class="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+ <p class="text-[11px] text-white/40 mt-0.5">
  For {formatPeerId(file.clientPeerId)}
  {#if file.expiresAt}
- <span class="text-[var(--text-secondary)] mx-1">|</span>
+ <span class="text-white/50 mx-1">|</span>
  {timeRemaining(file.expiresAt)} remaining
  {/if}
  </p>
  </div>
  </div>
- <span class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-full bg-green-100 text-green-700 flex-shrink-0 uppercase tracking-wide">
+ <span class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-full bg-green-500/[0.15] text-green-400 flex-shrink-0 uppercase tracking-wide">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
  Seeding
  </span>

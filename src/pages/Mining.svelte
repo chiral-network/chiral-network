@@ -1,9 +1,9 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
- import { invoke } from '@tauri-apps/api/core';
- import { goto } from '@mateothegreat/svelte5-router';
- import { walletAccount } from '$lib/stores';
- import { toasts } from '$lib/toastStore';
+ import { onMount, onDestroy } from'svelte';
+ import { invoke } from'@tauri-apps/api/core';
+ import { goto } from'@mateothegreat/svelte5-router';
+ import { walletAccount } from'$lib/stores';
+ import { toasts } from'$lib/toastStore';
  import {
  Pickaxe,
  Square,
@@ -21,8 +21,8 @@
  ChevronDown,
  ChevronUp,
  Monitor
- } from 'lucide-svelte';
- import { logger } from '$lib/logger';
+ } from'lucide-svelte';
+ import { logger } from'$lib/logger';
  const log = logger('Mining');
 
  interface GethStatus {
@@ -75,7 +75,7 @@
  difficulty: number;
  }
 
- type MiningMode = 'cpu' | 'gpu';
+ type MiningMode ='cpu' |'gpu';
  const MIN_UTILIZATION_PERCENT = 10;
  const MAX_UTILIZATION_PERCENT = 100;
 
@@ -84,21 +84,21 @@
  return Math.max(MIN_UTILIZATION_PERCENT, Math.min(MAX_UTILIZATION_PERCENT, Math.round(value)));
  }
 
- const hardwareThreads = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
- const savedThreads = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-threads') : null;
+ const hardwareThreads = typeof navigator !=='undefined' ? navigator.hardwareConcurrency || 4 : 4;
+ const savedThreads = typeof window !=='undefined' ? localStorage.getItem('chiral-mining-threads') : null;
  const savedCpuUtilizationRaw =
- typeof window !== 'undefined' ? localStorage.getItem('chiral-cpu-utilization-percent') : null;
+ typeof window !=='undefined' ? localStorage.getItem('chiral-cpu-utilization-percent') : null;
  const savedGpuUtilizationRaw =
- typeof window !== 'undefined' ? localStorage.getItem('chiral-gpu-utilization-percent') : null;
- const savedMode = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-mode') : null;
+ typeof window !=='undefined' ? localStorage.getItem('chiral-gpu-utilization-percent') : null;
+ const savedMode = typeof window !=='undefined' ? localStorage.getItem('chiral-mining-mode') : null;
  const savedGpuDevicesRaw =
- typeof window !== 'undefined' ? localStorage.getItem('chiral-gpu-devices') : null;
+ typeof window !=='undefined' ? localStorage.getItem('chiral-gpu-devices') : null;
  let initialGpuDevices: string[] = [];
  if (savedGpuDevicesRaw) {
  try {
  const parsed = JSON.parse(savedGpuDevicesRaw);
  if (Array.isArray(parsed)) {
- initialGpuDevices = parsed.filter((v): v is string => typeof v === 'string');
+ initialGpuDevices = parsed.filter((v): v is string => typeof v ==='string');
  }
  } catch {
  initialGpuDevices = [];
@@ -109,7 +109,7 @@
  let miningStatus = $state<MiningStatus | null>(null);
  let gpuCapabilities = $state<GpuMiningCapabilities | null>(null);
  let gpuMiningStatus = $state<GpuMiningStatus | null>(null);
- let miningMode = $state<MiningMode>(savedMode === 'gpu' ? 'gpu' : 'cpu');
+ let miningMode = $state<MiningMode>(savedMode ==='gpu' ?'gpu' :'cpu');
  let selectedGpuDevices = $state<string[]>(initialGpuDevices);
 
  let minedBlocks = $state<MinedBlock[]>([]);
@@ -144,11 +144,11 @@
  let elapsedInterval: ReturnType<typeof setInterval> | null = null;
 
  let activeMiningBackend = $derived(
- gpuMiningStatus?.running ? 'gpu' : miningStatus?.mining ? 'cpu' : 'none'
+ gpuMiningStatus?.running ?'gpu' : miningStatus?.mining ?'cpu' :'none'
  );
- let isAnyMining = $derived(activeMiningBackend !== 'none');
+ let isAnyMining = $derived(activeMiningBackend !=='none');
  let displayHashRate = $derived(
- activeMiningBackend === 'gpu' ? gpuMiningStatus?.hashRate || 0 : miningStatus?.hashRate || 0
+ activeMiningBackend ==='gpu' ? gpuMiningStatus?.hashRate || 0 : miningStatus?.hashRate || 0
  );
  let activeGpuCount = $derived(gpuMiningStatus?.activeDevices?.length || 0);
  let activeGpuUtilization = $derived(
@@ -156,48 +156,48 @@
  );
 
  $effect(() => {
- if (typeof window !== 'undefined') {
+ if (typeof window !=='undefined') {
  localStorage.setItem('chiral-cpu-utilization-percent', cpuUtilizationPercent.toString());
  localStorage.setItem('chiral-mining-threads', miningThreads.toString());
  }
  });
 
  $effect(() => {
- if (typeof window !== 'undefined') {
+ if (typeof window !=='undefined') {
  localStorage.setItem('chiral-mining-mode', miningMode);
  }
  });
 
  $effect(() => {
- if (typeof window !== 'undefined') {
+ if (typeof window !=='undefined') {
  localStorage.setItem('chiral-gpu-devices', JSON.stringify(selectedGpuDevices));
  }
  });
 
  $effect(() => {
- if (typeof window !== 'undefined') {
+ if (typeof window !=='undefined') {
  localStorage.setItem('chiral-gpu-utilization-percent', gpuUtilizationPercent.toString());
  }
  });
 
  $effect(() => {
  if (isAnyMining && !miningStartTime) {
- const saved = typeof window !== 'undefined' ? localStorage.getItem('chiral-mining-start') : null;
+ const saved = typeof window !=='undefined' ? localStorage.getItem('chiral-mining-start') : null;
  miningStartTime = saved ? parseInt(saved, 10) : Date.now();
- if (!saved && typeof window !== 'undefined') {
+ if (!saved && typeof window !=='undefined') {
  localStorage.setItem('chiral-mining-start', miningStartTime.toString());
  }
  elapsedInterval = setInterval(updateElapsed, 1000);
  } else if (!isAnyMining && miningStartTime) {
  miningStartTime = null;
- if (typeof window !== 'undefined') {
+ if (typeof window !=='undefined') {
  localStorage.removeItem('chiral-mining-start');
  }
  if (elapsedInterval) {
  clearInterval(elapsedInterval);
  elapsedInterval = null;
  }
- miningElapsed = '00:00:00';
+ miningElapsed ='00:00:00';
  }
  });
 
@@ -206,16 +206,16 @@
  const diff = Math.floor((Date.now() - miningStartTime) / 1000);
  const h = Math.floor(diff / 3600)
  .toString()
- .padStart(2, '0');
+ .padStart(2,'0');
  const m = Math.floor((diff % 3600) / 60)
  .toString()
- .padStart(2, '0');
- const s = (diff % 60).toString().padStart(2, '0');
+ .padStart(2,'0');
+ const s = (diff % 60).toString().padStart(2,'0');
  miningElapsed = `${h}:${m}:${s}`;
  }
 
  function isTauri(): boolean {
- return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+ return typeof window !=='undefined' &&'__TAURI_INTERNALS__' in window;
  }
 
  onMount(async () => {
@@ -315,11 +315,11 @@
  await invoke('set_miner_address', { address: $walletAccount.address });
  }
 
- if (miningMode === 'gpu') {
+ if (miningMode ==='gpu') {
  if (!gpuCapabilities?.binaryPath) {
  throw new Error(
  gpuCapabilities?.lastError ||
- 'GPU miner is still being prepared. Wait a moment and refresh.'
+'GPU miner is still being prepared. Wait a moment and refresh.'
  );
  }
  await invoke('start_gpu_mining', {
@@ -328,22 +328,22 @@
  });
  toasts.show(
  `GPU mining started${
- selectedGpuDevices.length > 0 ? ` (${selectedGpuDevices.length} device(s))` : ''
+ selectedGpuDevices.length > 0 ? ` (${selectedGpuDevices.length} device(s))` :''
  } at ${gpuUtilizationPercent}% utilization target!`,
- 'success'
+'success'
  );
  } else {
  await invoke('start_mining', { threads: miningThreads });
  toasts.show(
  `CPU mining started with ${miningThreads} thread(s) (${cpuUtilizationPercent}% target)!`,
- 'success'
+'success'
  );
  }
 
  await Promise.all([loadStatus(), loadGpuCapabilities()]);
  } catch (error) {
  log.error('Failed to start mining:', error);
- toasts.show(`Failed to start mining: ${error}`, 'error');
+ toasts.show(`Failed to start mining: ${error}`,'error');
  } finally {
  isStartingMining = false;
  }
@@ -353,16 +353,16 @@
  if (!isTauri()) return;
 
  try {
- if (activeMiningBackend === 'gpu') {
+ if (activeMiningBackend ==='gpu') {
  await invoke('stop_gpu_mining');
  } else {
  await invoke('stop_mining');
  }
- toasts.show('Mining stopped', 'info');
+ toasts.show('Mining stopped','info');
  await Promise.all([loadStatus(), loadGpuCapabilities()]);
  } catch (error) {
  log.error('Failed to stop mining:', error);
- toasts.show(`Failed to stop mining: ${error}`, 'error');
+ toasts.show(`Failed to stop mining: ${error}`,'error');
  }
  }
 
@@ -394,7 +394,7 @@
  let totalHistoryReward = $derived(minedBlocks.reduce((sum, b) => sum + b.rewardChi, 0));
 
  function formatTimestamp(ts: number): string {
- if (ts === 0) return 'Unknown';
+ if (ts === 0) return'Unknown';
  return new Date(ts * 1000).toLocaleString();
  }
 
@@ -412,32 +412,32 @@
  <div class="flex items-center justify-between">
  <div>
  <h1 class="text-2xl font-bold">Mining</h1>
- <p class="text-[var(--text-secondary)] mt-1">Mine CHI tokens on the Chiral Network</p>
+ <p class="text-white/50 mt-1">Mine CHI tokens on the Chiral Network</p>
  </div>
  <button
  onclick={refreshAll}
  disabled={isLoading}
- class="p-2 hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded-lg transition-colors disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-gray-400/30"
+ class="p-2 hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50 focus:outline-none "
  title="Refresh status"
  >
- <RefreshCw class="w-5 h-5 {isLoading ? 'animate-spin' : ''}" />
+ <RefreshCw class="w-5 h-5 {isLoading ?'animate-spin' :''}" />
  </button>
  </div>
 
  {#if isLoading}
  <div class="flex items-center justify-center py-12">
- <Loader2 class="w-8 h-8 animate-spin text-[var(--text-secondary)]" />
+ <Loader2 class="w-8 h-8 animate-spin text-white/50" />
  </div>
  {:else if !gethStatus?.installed || !gethStatus?.localRunning}
  <!-- Geth Not Running Locally - Direct to Network Page -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10 p-6">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-yellow-100 rounded-lg">
- <AlertTriangle class="w-6 h-6 text-yellow-600" />
+ <AlertTriangle class="w-6 h-6 text-yellow-400" />
  </div>
  <div>
  <h2 class="font-semibold">Local Blockchain Node Required</h2>
- <p class="text-sm text-[var(--text-tertiary)]">
+ <p class="text-sm text-white/40">
  {#if !gethStatus?.installed}
  Geth is not installed
  {:else}
@@ -446,7 +446,7 @@
  </p>
  </div>
  </div>
- <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+ <div class="bg-yellow-500/[0.1] border border-yellow-200 rounded-lg p-4 mb-4">
  <p class="text-sm text-yellow-800">
  {#if !gethStatus?.installed}
  You need to download and start a local Geth node before you can mine CHI tokens.
@@ -454,13 +454,13 @@
  Mining requires a local Geth node. Start the node from the Network page to begin mining.
  {/if}
  </p>
- <p class="text-sm text-yellow-700 mt-2">
+ <p class="text-sm text-yellow-400 mt-2">
  Go to the <strong>Network</strong> page to start your local blockchain node.
  </p>
  </div>
  <button
  onclick={() => goto('/network')}
- class="w-full px-4 py-3 bg-violet-500/80 border border-primary-400/30 text-white rounded-lg hover:bg-violet-500/90 dark:hover:bg-violet-600/80 transition-colors flex items-center justify-center gap-2"
+ class="w-full px-4 py-3 bg-violet-500/80 border border-primary-400/30 text-white rounded-lg hover:bg-violet-500/90 transition-colors flex items-center justify-center gap-2"
  >
  <Globe class="w-5 h-5" />
  Go to Network Page
@@ -468,26 +468,26 @@
  </div>
  {:else}
  <!-- Mining Control Card -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10 p-6">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 {isAnyMining ? 'bg-yellow-100 dark:bg-yellow-900/30' : 'bg-[var(--surface-1)] dark:bg-[var(--surface-1)]'} rounded-lg">
- <Pickaxe class="w-6 h-6 {isAnyMining ? 'text-yellow-600 dark:text-yellow-400' : 'text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}" />
+ <div class="p-2 {isAnyMining ?'bg-yellow-100' :'bg-white/[0.05]'} rounded-lg">
+ <Pickaxe class="w-6 h-6 {isAnyMining ?'text-yellow-400' :'text-white/50'}" />
  </div>
  <div>
  <h2 class="font-semibold">Mining</h2>
- <p class="text-sm text-[var(--text-tertiary)]">Earn CHI by mining blocks with CPU or GPU</p>
+ <p class="text-sm text-white/40">Earn CHI by mining blocks with CPU or GPU</p>
  </div>
  </div>
  <div class="flex items-center gap-2">
  {#if isAnyMining}
- <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-sm">
- <span class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></span>
+ <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-400 rounded-full text-sm">
+ <span class="w-2 h-2 bg-yellow-500/[0.1]0 rounded-full animate-pulse"></span>
  Mining ({activeMiningBackend.toUpperCase()})
  </span>
  {:else}
- <span class="flex items-center gap-2 px-3 py-1 bg-[var(--surface-1)] text-[var(--text-secondary)] rounded-full text-sm">
- <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
+ <span class="flex items-center gap-2 px-3 py-1 bg-white/[0.05] text-white/50 rounded-full text-sm">
+ <span class="w-2 h-2 bg-white/[0.12] rounded-full"></span>
  Idle
  </span>
  {/if}
@@ -496,61 +496,61 @@
 
  <!-- Mining Stats Grid -->
  <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Zap class="w-4 h-4 text-yellow-500" />
- <span class="text-sm text-[var(--text-secondary)]">Hash Rate</span>
+ <span class="text-sm text-white/50">Hash Rate</span>
  </div>
  <p class="text-2xl font-bold tabular-nums">
- {isAnyMining ? formatHashRate(displayHashRate) : '0 H/s'}
+ {isAnyMining ? formatHashRate(displayHashRate) :'0 H/s'}
  </p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Blocks class="w-4 h-4 text-red-500" />
- <span class="text-sm text-[var(--text-secondary)]">Block Height</span>
+ <span class="text-sm text-white/50">Block Height</span>
  </div>
  <p class="text-2xl font-bold tabular-nums">
- {gethStatus?.currentBlock?.toLocaleString() ?? '0'}
+ {gethStatus?.currentBlock?.toLocaleString() ??'0'}
  </p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Coins class="w-4 h-4 text-amber-500" />
- <span class="text-sm text-[var(--text-secondary)]">Total Mined</span>
+ <span class="text-sm text-white/50">Total Mined</span>
  </div>
  <p class="text-2xl font-bold tabular-nums">
  {(miningStatus?.totalMinedChi ?? 0).toFixed(4)} CHI
  </p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  <Clock class="w-4 h-4 text-purple-500" />
- <span class="text-sm text-[var(--text-secondary)]">Session Time</span>
+ <span class="text-sm text-white/50">Session Time</span>
  </div>
  <p class="text-2xl font-bold tabular-nums">
- {isAnyMining ? miningElapsed : '--:--:--'}
+ {isAnyMining ? miningElapsed :'--:--:--'}
  </p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-4">
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
- {#if activeMiningBackend === 'gpu'}
+ {#if activeMiningBackend ==='gpu'}
  <Monitor class="w-4 h-4 text-violet-400" />
- <span class="text-sm text-[var(--text-secondary)]">GPUs Active</span>
+ <span class="text-sm text-white/50">GPUs Active</span>
  {:else}
  <Cpu class="w-4 h-4 text-green-500" />
- <span class="text-sm text-[var(--text-secondary)]">Threads Active</span>
+ <span class="text-sm text-white/50">Threads Active</span>
  {/if}
  </div>
  <p class="text-2xl font-bold tabular-nums">
- {#if activeMiningBackend === 'gpu'}
- {isAnyMining ? `${activeGpuCount}` : '0'}
+ {#if activeMiningBackend ==='gpu'}
+ {isAnyMining ? `${activeGpuCount}` :'0'}
  {:else}
  {isAnyMining ? `${miningThreads} / ${maxThreads}` : `0 / ${maxThreads}`}
  {/if}
  </p>
- <p class="text-xs text-[var(--text-tertiary)] mt-1">
- {#if activeMiningBackend === 'gpu'}
+ <p class="text-xs text-white/40 mt-1">
+ {#if activeMiningBackend ==='gpu'}
  Target {activeGpuUtilization}%
  {:else}
  Target {cpuUtilizationPercent}%
@@ -560,43 +560,43 @@
  </div>
 
  <!-- Miner Address -->
- <div class="mb-4 p-3 bg-[var(--surface-1)] rounded-lg">
+ <div class="mb-4 p-3 bg-white/[0.05] rounded-lg">
  <div class="flex items-center gap-2 mb-1">
  <TrendingUp class="w-4 h-4 text-green-500" />
- <span class="text-sm text-[var(--text-secondary)]">Miner Address</span>
+ <span class="text-sm text-white/50">Miner Address</span>
  </div>
  <p class="text-sm font-mono truncate">
- {miningStatus?.minerAddress || $walletAccount?.address || 'Not set'}
+ {miningStatus?.minerAddress || $walletAccount?.address ||'Not set'}
  </p>
  </div>
 
  <!-- Mining Backend Mode -->
  <div class="mb-4">
- <div class="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+ <div class="block text-sm font-medium text-white/50 mb-2">
  Mining Backend
  </div>
  <div class="grid grid-cols-2 gap-2">
  <button
- onclick={() => (miningMode = 'cpu')}
+ onclick={() => (miningMode ='cpu')}
  disabled={isAnyMining}
- class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'cpu' ? 'bg-violet-900/20 border-primary-300 text-primary-700 dark:text-violet-300' : 'bg-[var(--surface-1)] border-[var(--border)] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}"
+ class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='cpu' ?'bg-violet-900/20 border-primary-300 text-primary-700' :'bg-white/[0.05] border-white/[0.06] text-white/50'}"
  >
  CPU Miner
  </button>
  <button
- onclick={() => (miningMode = 'gpu')}
+ onclick={() => (miningMode ='gpu')}
  disabled={isAnyMining}
- class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'gpu' ? 'bg-violet-900/20 border-primary-300 text-primary-700 dark:text-violet-300' : 'bg-[var(--surface-1)] border-[var(--border)] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'}"
+ class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='gpu' ?'bg-violet-900/20 border-primary-300 text-primary-700' :'bg-white/[0.05] border-white/[0.06] text-white/50'}"
  >
  GPU Miner
  </button>
  </div>
  </div>
 
- {#if miningMode === 'cpu'}
+ {#if miningMode ==='cpu'}
  <!-- CPU Utilization Control -->
  <div class="mb-4">
- <label for="cpu-utilization" class="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+ <label for="cpu-utilization" class="block text-sm font-medium text-white/50 mb-2">
  CPU Utilization Target ({cpuUtilizationPercent}%)
  </label>
  <input
@@ -607,20 +607,20 @@
  step="1"
  bind:value={cpuUtilizationPercent}
  disabled={isAnyMining}
- class="w-full h-2 bg-[var(--surface-1)] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+ class="w-full h-2 bg-white/[0.05] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
  />
- <div class="flex justify-between text-xs text-[var(--text-tertiary)] mt-1">
+ <div class="flex justify-between text-xs text-white/40 mt-1">
  <span>{MIN_UTILIZATION_PERCENT}%</span>
  <span>{MAX_UTILIZATION_PERCENT}%</span>
  </div>
- <p class="text-xs text-[var(--text-tertiary)] mt-2">
+ <p class="text-xs text-white/40 mt-2">
  Effective CPU threads: <span class="font-medium">{miningThreads}</span> of {maxThreads}
  </p>
  </div>
  {:else}
  <!-- GPU Utilization Control -->
  <div class="mb-4">
- <label for="gpu-utilization" class="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+ <label for="gpu-utilization" class="block text-sm font-medium text-white/50 mb-2">
  GPU Utilization Target ({gpuUtilizationPercent}%)
  </label>
  <input
@@ -631,9 +631,9 @@
  step="1"
  bind:value={gpuUtilizationPercent}
  disabled={isAnyMining}
- class="w-full h-2 bg-[var(--surface-1)] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+ class="w-full h-2 bg-white/[0.05] rounded-lg appearance-none cursor-pointer disabled:opacity-50"
  />
- <div class="flex justify-between text-xs text-[var(--text-tertiary)] mt-1">
+ <div class="flex justify-between text-xs text-white/40 mt-1">
  <span>{MIN_UTILIZATION_PERCENT}%</span>
  <span>{MAX_UTILIZATION_PERCENT}%</span>
  </div>
@@ -642,12 +642,12 @@
  <!-- GPU Control -->
  <div class="mb-4">
  {#if !gpuCapabilities?.binaryPath}
- <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
+ <div class="rounded-lg border border-amber-200 bg-amber-500/[0.1] p-3">
  {#if gpuCapabilities?.lastError}
  <p class="text-sm text-amber-800">
  GPU miner is unavailable: {gpuCapabilities.lastError}
  </p>
- <p class="text-xs text-amber-700 mt-1">
+ <p class="text-xs text-amber-400 mt-1">
  You can still set `CHIRAL_GPU_MINER_PATH` manually and refresh.
  </p>
  {:else}
@@ -658,34 +658,34 @@
  </div>
  {:else}
  {#if gpuCapabilities?.lastError}
- <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+ <div class="mb-3 rounded-lg border border-amber-200 bg-amber-500/[0.1] p-3">
  <p class="text-sm text-amber-800">
  GPU probe warning: {gpuCapabilities.lastError}
  </p>
- <p class="text-xs text-amber-700 mt-1">
+ <p class="text-xs text-amber-400 mt-1">
  You can still start GPU mining and the app will retry with backend fallbacks automatically.
  </p>
  </div>
  {/if}
- <div class="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+ <div class="block text-sm font-medium text-white/50 mb-2">
  GPU Devices ({selectedGpuDevices.length} selected)
  </div>
  {#if gpuCapabilities.devices.length === 0}
- <div class="rounded-lg border border-[var(--border)] bg-[var(--surface-1)] p-3 text-sm text-[var(--text-secondary)]">
+ <div class="rounded-lg border border-white/[0.06] bg-white/[0.05] p-3 text-sm text-white/50">
  No devices were reported by the miner binary. You can still try starting GPU mining with auto-detection.
  </div>
  {:else}
- <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-[var(--border)] p-3 bg-[var(--surface-1)]">
+ <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-white/[0.06] p-3 bg-white/[0.05]">
  {#each gpuCapabilities.devices as device (device.id)}
- <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+ <label class="flex items-center gap-2 text-sm text-white/50">
  <input
  type="checkbox"
  checked={selectedGpuDevices.includes(device.id)}
  onchange={() => toggleGpuDevice(device.id)}
  disabled={isAnyMining}
- class="rounded border-[var(--border)] bg-[var(--surface-1)]"
+ class="rounded border-white/[0.06] bg-white/[0.05]"
  />
- <span class="font-mono text-xs text-[var(--text-tertiary)]">[{device.id}]</span>
+ <span class="font-mono text-xs text-white/40">[{device.id}]</span>
  <span>{device.name}</span>
  </label>
  {/each}
@@ -696,7 +696,7 @@
  {/if}
 
  {#if gpuMiningStatus?.lastError}
- <div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3">
+ <div class="mb-4 rounded-lg border border-red-400/20 bg-red-500/[0.1] p-3">
  <p class="text-sm text-red-700">{gpuMiningStatus.lastError}</p>
  </div>
  {/if}
@@ -706,7 +706,7 @@
  {#if isAnyMining}
  <button
  onclick={handleStopMining}
- class="flex-1 px-4 py-3 bg-red-500/70 border border-red-400/30 text-white rounded-lg hover:bg-red-500/80 dark:hover:bg-red-600/70 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500/30"
+ class="flex-1 px-4 py-3 bg-red-500/[0.1]0/70 border border-red-400/30 text-white rounded-lg hover:bg-red-500/[0.15]0/80 transition-colors flex items-center justify-center gap-2 focus:outline-none "
  >
  <Square class="w-5 h-5" />
  Stop Mining
@@ -714,15 +714,15 @@
  {:else}
  <button
  onclick={handleStartMining}
- disabled={isStartingMining || (miningMode === 'gpu' && !gpuCapabilities?.binaryPath)}
- class="flex-1 px-4 py-3 bg-yellow-500/70 border border-yellow-400/30 text-white rounded-lg hover:bg-yellow-500/80 dark:hover:bg-yellow-600/70 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
+ disabled={isStartingMining || (miningMode ==='gpu' && !gpuCapabilities?.binaryPath)}
+ class="flex-1 px-4 py-3 bg-yellow-500/[0.1]0/70 border border-yellow-400/30 text-white rounded-lg hover:bg-yellow-500/[0.1]0/80 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none "
  >
  {#if isStartingMining}
  <Loader2 class="w-5 h-5 animate-spin" />
  Starting...
  {:else}
  <Pickaxe class="w-5 h-5" />
- {#if miningMode === 'gpu'}
+ {#if miningMode ==='gpu'}
  Start GPU Mining
  {:else}
  Start CPU Mining
@@ -734,7 +734,7 @@
  </div>
 
  <!-- Mining History -->
- <div class=" bg-[var(--surface-1)] rounded-xl shadow-black/5 border border-[var(--border)] ring-1 ring-white/10">
+ <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06]">
  <button
  onclick={() => showHistory = !showHistory}
  class="w-full flex items-center justify-between p-6 text-left"
@@ -745,8 +745,8 @@
  </div>
  <div>
  <h2 class="font-semibold">Mining History</h2>
- <p class="text-sm text-[var(--text-tertiary)]">
- {minedBlocks.length} block{minedBlocks.length !== 1 ? 's' : ''} mined
+ <p class="text-sm text-white/40">
+ {minedBlocks.length} block{minedBlocks.length !== 1 ?'s' :''} mined
  {#if totalHistoryReward > 0}
  — {totalHistoryReward.toFixed(2)} CHI earned
  {/if}
@@ -754,9 +754,9 @@
  </div>
  </div>
  {#if showHistory}
- <ChevronUp class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronUp class="w-5 h-5 text-white/50" />
  {:else}
- <ChevronDown class="w-5 h-5 text-[var(--text-secondary)]" />
+ <ChevronDown class="w-5 h-5 text-white/50" />
  {/if}
  </button>
 
@@ -766,7 +766,7 @@
  <button
  onclick={loadMinedBlocks}
  disabled={isLoadingHistory}
- class="text-xs px-3 py-1.5 bg-[var(--surface-1)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
+ class="text-xs px-3 py-1.5 bg-white/[0.05] hover:bg-white/[0.05] rounded transition-colors flex items-center gap-1 disabled:opacity-50"
  >
  {#if isLoadingHistory}
  <Loader2 class="w-3 h-3 animate-spin" />
@@ -778,28 +778,28 @@
  </div>
  {#if isLoadingHistory && minedBlocks.length === 0}
  <div class="flex items-center justify-center py-8">
- <Loader2 class="w-6 h-6 animate-spin text-[var(--text-secondary)]" />
- <span class="ml-2 text-sm text-[var(--text-tertiary)]">Scanning blockchain...</span>
+ <Loader2 class="w-6 h-6 animate-spin text-white/50" />
+ <span class="ml-2 text-sm text-white/40">Scanning blockchain...</span>
  </div>
  {:else if minedBlocks.length === 0}
  <div class="text-center py-8">
- <Pickaxe class="w-10 h-10 text-[var(--text-secondary)] mx-auto mb-3" />
- <p class="text-sm text-[var(--text-tertiary)]">No blocks mined yet.</p>
- <p class="text-xs text-[var(--text-secondary)] mt-1">Start mining to earn CHI block rewards.</p>
+ <Pickaxe class="w-10 h-10 text-white/50 mx-auto mb-3" />
+ <p class="text-sm text-white/40">No blocks mined yet.</p>
+ <p class="text-xs text-white/50 mt-1">Start mining to earn CHI block rewards.</p>
  </div>
  {:else}
  <!-- Summary Stats -->
  <div class="grid grid-cols-3 gap-3 mb-4">
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Blocks Mined</p>
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-3">
+ <p class="text-xs text-white/40">Blocks Mined</p>
  <p class="text-lg font-bold">{minedBlocks.length}</p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Total Earned</p>
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-3">
+ <p class="text-xs text-white/40">Total Earned</p>
  <p class="text-lg font-bold text-emerald-600">{totalHistoryReward.toFixed(2)} CHI</p>
  </div>
- <div class=" bg-[var(--surface-1)] border border-[var(--border)] rounded-lg p-3">
- <p class="text-xs text-[var(--text-tertiary)]">Reward per Block</p>
+ <div class="bg-white/[0.05] border border-white/[0.06] rounded-lg p-3">
+ <p class="text-xs text-white/40">Reward per Block</p>
  <p class="text-lg font-bold">{minedBlocks[0]?.rewardChi ?? 0} CHI</p>
  </div>
  </div>
@@ -808,26 +808,26 @@
  <div class="overflow-x-auto">
  <table class="w-full text-sm">
  <thead>
- <tr class="border-b border-[var(--border)]">
- <th class="text-left py-2 px-3 text-xs font-medium text-[var(--text-tertiary)]">Block #</th>
- <th class="text-left py-2 px-3 text-xs font-medium text-[var(--text-tertiary)]">Time</th>
- <th class="text-right py-2 px-3 text-xs font-medium text-[var(--text-tertiary)]">Reward</th>
- <th class="text-right py-2 px-3 text-xs font-medium text-[var(--text-tertiary)]">Difficulty</th>
+ <tr class="border-b border-white/[0.06]">
+ <th class="text-left py-2 px-3 text-xs font-medium text-white/40">Block #</th>
+ <th class="text-left py-2 px-3 text-xs font-medium text-white/40">Time</th>
+ <th class="text-right py-2 px-3 text-xs font-medium text-white/40">Reward</th>
+ <th class="text-right py-2 px-3 text-xs font-medium text-white/40">Difficulty</th>
  </tr>
  </thead>
  <tbody>
  {#each minedBlocks as block (block.blockNumber)}
- <tr class="border-b border-[var(--border)] hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]/50 transition-colors">
+ <tr class="border-b border-white/[0.06] hover:bg-white/[0.05]/50 transition-colors">
  <td class="py-2 px-3 font-mono text-xs tabular-nums">
  #{block.blockNumber.toLocaleString()}
  </td>
- <td class="py-2 px-3 text-xs text-[var(--text-secondary)]">
+ <td class="py-2 px-3 text-xs text-white/50">
  {formatTimestamp(block.timestamp)}
  </td>
  <td class="py-2 px-3 text-right text-xs font-medium tabular-nums text-emerald-600">
  +{block.rewardChi} CHI
  </td>
- <td class="py-2 px-3 text-right text-xs tabular-nums text-[var(--text-tertiary)] font-mono">
+ <td class="py-2 px-3 text-right text-xs tabular-nums text-white/40 font-mono">
  {block.difficulty.toLocaleString()}
  </td>
  </tr>

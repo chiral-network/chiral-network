@@ -1,6 +1,6 @@
 <script lang="ts">
- import { onMount, onDestroy } from 'svelte';
- import { Send, X, Check, History, User, FileIcon, Upload, Coins } from 'lucide-svelte';
+ import { onMount, onDestroy } from'svelte';
+ import { Send, X, Check, History, User, FileIcon, Upload, Coins } from'lucide-svelte';
  import {
  userAlias,
  nearbyPeers,
@@ -24,13 +24,13 @@
  formatPriceWei,
  type NearbyPeer,
  type FileTransfer
- } from '$lib/chiralDropStore';
- import { aliasFromPeerId } from '$lib/aliasService';
- import { peers, walletAccount } from '$lib/stores';
- import { get } from 'svelte/store';
- import { toasts } from '$lib/toastStore';
- import { dhtService } from '$lib/dhtService';
- import { logger } from '$lib/logger';
+ } from'$lib/chiralDropStore';
+ import { aliasFromPeerId } from'$lib/aliasService';
+ import { peers, walletAccount } from'$lib/stores';
+ import { get } from'svelte/store';
+ import { toasts } from'$lib/toastStore';
+ import { dhtService } from'$lib/dhtService';
+ import { logger } from'$lib/logger';
  const log = logger('ChiralDrop');
 
  // Check if running in Tauri environment (reactive)
@@ -38,7 +38,7 @@
  
  // Check Tauri availability
  function checkTauriAvailability(): boolean {
- return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+ return typeof window !=='undefined' && ('__TAURI__' in window ||'__TAURI_INTERNALS__' in window);
  }
 
  // Bootstrap peer IDs (to filter from peer map)
@@ -62,7 +62,7 @@
  let unlistenDownloadComplete: (() => void) | null = null;
  let unlistenDownloadFailed: (() => void) | null = null;
 
- const SPLIT_RATIO_STORAGE_KEY = 'chiraldrop_map_ratio';
+ const SPLIT_RATIO_STORAGE_KEY ='chiraldrop_map_ratio';
  const MIN_MAP_PANE_RATIO = 45;
  const MAX_MAP_PANE_RATIO = 80;
 
@@ -71,12 +71,12 @@
  }
 
  function updateWideLayoutState() {
- if (typeof window === 'undefined') return;
+ if (typeof window ==='undefined') return;
  isWideLayout = window.innerWidth >= 1280;
  if (!isWideLayout) {
  isResizingSplit = false;
- document.body.style.cursor = '';
- document.body.style.userSelect = '';
+ document.body.style.cursor ='';
+ document.body.style.userSelect ='';
  }
  }
 
@@ -91,20 +91,20 @@
  function stopSplitResize() {
  if (!isResizingSplit) return;
  isResizingSplit = false;
- document.body.style.cursor = '';
- document.body.style.userSelect = '';
+ document.body.style.cursor ='';
+ document.body.style.userSelect ='';
  }
 
  function startSplitResize(event: PointerEvent) {
  if (!isWideLayout) return;
  event.preventDefault();
  isResizingSplit = true;
- document.body.style.cursor = 'col-resize';
- document.body.style.userSelect = 'none';
+ document.body.style.cursor ='col-resize';
+ document.body.style.userSelect ='none';
  }
 
  onMount(async () => {
- if (typeof window !== 'undefined') {
+ if (typeof window !=='undefined') {
  const storedRatio = Number(localStorage.getItem(SPLIT_RATIO_STORAGE_KEY));
  if (Number.isFinite(storedRatio)) {
  mapPaneRatio = clampMapPaneRatio(storedRatio);
@@ -162,23 +162,23 @@
  fileSize,
  fromPeerId,
  fromAlias,
- toPeerId: $localPeerId || '',
+ toPeerId: $localPeerId ||'',
  toAlias,
- status: 'pending',
- direction: 'incoming',
+ status:'pending',
+ direction:'incoming',
  timestamp: Date.now()
  });
 
- toasts.show(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
+ toasts.show(`${fromAlias.displayName} wants to send you a file: ${fileName}`,'info');
  });
 
  // Listen for file transfer completion (outgoing)
  unlistenFileComplete = await listen<any>('file-transfer-complete', (event) => {
  const { transferId, status } = event.payload;
- if (status === 'completed') {
- updateTransferStatus(transferId, 'completed');
- } else if (status === 'declined') {
- updateTransferStatus(transferId, 'declined');
+ if (status ==='completed') {
+ updateTransferStatus(transferId,'completed');
+ } else if (status ==='declined') {
+ updateTransferStatus(transferId,'declined');
  }
  });
 
@@ -186,8 +186,8 @@
  unlistenFileReceivedComplete = await listen<any>('file-received', (event) => {
  const { transferId, fileName, fromPeerId, filePath } = event.payload;
  const fromAlias = aliasFromPeerId(fromPeerId);
- toasts.show(`File "${fileName}" saved to ${filePath}`, 'success', 8000);
- updateTransferStatus(transferId, 'completed');
+ toasts.show(`File"${fileName}" saved to ${filePath}`,'success', 8000);
+ updateTransferStatus(transferId,'completed');
  });
 
  // Listen for connection-established events (catches non-mDNS peers too)
@@ -208,10 +208,10 @@
  fileSize: fileSize || 0,
  fromPeerId,
  fromAlias,
- toPeerId: $localPeerId || '',
+ toPeerId: $localPeerId ||'',
  toAlias,
- status: 'pending',
- direction: 'incoming',
+ status:'pending',
+ direction:'incoming',
  timestamp: Date.now(),
  priceWei,
  senderWallet,
@@ -219,24 +219,24 @@
  });
 
  const priceDisplay = formatPriceWei(priceWei);
- toasts.show(`${fromAlias.displayName} wants to send you "${fileName}" for ${priceDisplay}`, 'info');
+ toasts.show(`${fromAlias.displayName} wants to send you"${fileName}" for ${priceDisplay}`,'info');
  });
 
  // Listen for payment sent (buyer side) — record in both histories
  unlistenPaymentSent = await listen<any>('chiraldrop-payment-sent', async (event) => {
  const { requestId, fileHash, fileName, txHash, priceWei, toWallet, balanceBefore, balanceAfter } = event.payload;
- log.info('Payment sent for ChiralDrop file:', fileName, 'tx:', txHash);
+ log.info('Payment sent for ChiralDrop file:', fileName,'tx:', txHash);
 
  // Update ChiralDrop transfer history with payment tx hash and balance
- updateTransferByFileHash(fileHash, 'accepted', txHash, balanceBefore, balanceAfter);
+ updateTransferByFileHash(fileHash,'accepted', txHash, balanceBefore, balanceAfter);
 
  // Record in Account transaction history
  try {
  const { invoke } = await import('@tauri-apps/api/core');
  await invoke('record_transaction_meta', {
  txHash,
- txType: 'file_payment',
- description: `📁 Paid for "${fileName}" (${formatPriceWei(priceWei)})`,
+ txType:'file_payment',
+ description: `📁 Paid for"${fileName}" (${formatPriceWei(priceWei)})`,
  recipientLabel: `Seeder (${toWallet.slice(0, 10)}...)`,
  balanceBefore,
  balanceAfter,
@@ -249,14 +249,14 @@
  // Listen for payment received (seller side) — record in Account history
  unlistenPaymentReceived = await listen<any>('chiraldrop-payment-received', async (event) => {
  const { fileHash, txHash, priceWei, fromWallet } = event.payload;
- log.info('Payment received for file:', fileHash, 'tx:', txHash);
+ log.info('Payment received for file:', fileHash,'tx:', txHash);
 
  // Record in Account transaction history (seller doesn't have balance snapshot from buyer's tx)
  try {
  const { invoke } = await import('@tauri-apps/api/core');
  await invoke('record_transaction_meta', {
  txHash,
- txType: 'file_sale',
+ txType:'file_sale',
  description: `💰 Received payment (${formatPriceWei(priceWei)}) for shared file`,
  recipientLabel: `Buyer (${fromWallet.slice(0, 10)}...)`,
  balanceBefore: null,
@@ -270,14 +270,14 @@
  // Listen for download complete — update ChiralDrop transfer for paid downloads
  unlistenDownloadComplete = await listen<any>('file-download-complete', (event) => {
  const { fileHash, fileName } = event.payload;
- updateTransferByFileHash(fileHash, 'completed');
+ updateTransferByFileHash(fileHash,'completed');
  log.info('Paid download complete:', fileName);
  });
 
  // Listen for download failed — update ChiralDrop transfer for paid downloads
  unlistenDownloadFailed = await listen<any>('file-download-failed', (event) => {
  const { fileHash, error } = event.payload;
- updateTransferByFileHash(fileHash, 'failed');
+ updateTransferByFileHash(fileHash,'failed');
  log.warn('Paid download failed:', fileHash, error);
  });
  } catch (error) {
@@ -341,7 +341,7 @@
 
  $effect(() => {
  const ratio = mapPaneRatio;
- if (typeof window !== 'undefined') {
+ if (typeof window !=='undefined') {
  localStorage.setItem(SPLIT_RATIO_STORAGE_KEY, String(ratio));
  }
  });
@@ -377,7 +377,7 @@
 
  const tauriAvailable = checkTauriAvailability();
  if (!tauriAvailable) {
- toasts.show('File transfer requires the desktop app', 'error');
+ toasts.show('File transfer requires the desktop app','error');
  return;
  }
 
@@ -394,7 +394,7 @@
  await sendFile(filePath, fileName, $selectedPeer);
  } catch (error) {
  log.error('Failed to open file dialog:', error);
- toasts.show(`Failed to open file dialog: ${error}`, 'error');
+ toasts.show(`Failed to open file dialog: ${error}`,'error');
  }
  }
 
@@ -402,12 +402,12 @@
  const transferId = generateTransferId();
  const fromAlias = $userAlias;
  const toAlias = peer.alias;
- const price = String(sendPrice ?? '').trim();
- const isPaid = price !== '' && parseFloat(price) > 0;
+ const price = String(sendPrice ??'').trim();
+ const isPaid = price !=='' && parseFloat(price) > 0;
 
  // Validate wallet for paid transfers
  if (isPaid && !$walletAccount) {
- toasts.show('Connect your wallet to set a price on files', 'error');
+ toasts.show('Connect your wallet to set a price on files','error');
  return;
  }
 
@@ -416,12 +416,12 @@
  id: transferId,
  fileName,
  fileSize: 0,
- fromPeerId: $localPeerId || '',
+ fromPeerId: $localPeerId ||'',
  fromAlias,
  toPeerId: peer.peerId,
  toAlias,
- status: 'pending',
- direction: 'outgoing',
+ status:'pending',
+ direction:'outgoing',
  timestamp: Date.now()
  });
 
@@ -435,8 +435,8 @@
 
  // Convert CHI to wei
  const priceParts = price.split('.');
- const whole = BigInt(priceParts[0] || '0');
- const fracStr = (priceParts[1] || '').padEnd(18, '0').slice(0, 18);
+ const whole = BigInt(priceParts[0] ||'0');
+ const fracStr = (priceParts[1] ||'').padEnd(18,'0').slice(0, 18);
  const frac = BigInt(fracStr);
  const priceWei = (whole * BigInt(1e18) + frac).toString();
 
@@ -461,8 +461,8 @@
  fileHash
  });
 
- updateTransferStatus(transferId, 'completed');
- toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHI)`, 'success');
+ updateTransferStatus(transferId,'completed');
+ toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHI)`,'success');
  } else {
  // Free transfer: read file from disk and send directly
  await invoke('send_file_by_path', {
@@ -471,46 +471,46 @@
  transferId
  });
 
- updateTransferStatus(transferId, 'completed');
- toasts.show(`File sent to ${toAlias.displayName}`, 'success');
+ updateTransferStatus(transferId,'completed');
+ toasts.show(`File sent to ${toAlias.displayName}`,'success');
  }
  } catch (error) {
  log.error('Failed to send file:', error);
- updateTransferStatus(transferId, 'failed');
- toasts.show(`Failed to send file: ${error}`, 'error');
+ updateTransferStatus(transferId,'failed');
+ toasts.show(`Failed to send file: ${error}`,'error');
  }
 
- sendPrice = '';
+ sendPrice ='';
  selectPeer(null);
  }
 
  async function handleAccept(transfer: FileTransfer) {
  const tauriAvailable = checkTauriAvailability();
  if (!tauriAvailable) {
- toasts.show('File transfer requires the desktop app', 'error');
+ toasts.show('File transfer requires the desktop app','error');
  return;
  }
 
  try {
  const { invoke } = await import('@tauri-apps/api/core');
 
- const isPaid = transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0;
+ const isPaid = transfer.priceWei && transfer.priceWei !=='0' && BigInt(transfer.priceWei) > 0;
 
  if (isPaid) {
  // Paid transfer: download via chunked protocol with payment handshake
  if (!$walletAccount) {
- toasts.show('Connect your wallet to accept paid file transfers', 'error');
+ toasts.show('Connect your wallet to accept paid file transfers','error');
  return;
  }
 
  acceptTransfer(transfer.id);
- toasts.show(`Starting paid download of "${transfer.fileName}" (${formatPriceWei(transfer.priceWei!)})...`, 'info');
+ toasts.show(`Starting paid download of"${transfer.fileName}" (${formatPriceWei(transfer.priceWei!)})...`,'info');
 
  await invoke('start_download', {
  fileHash: transfer.fileHash,
  fileName: transfer.fileName,
  seeders: [transfer.fromPeerId],
- speedTier: 'standard',
+ speedTier:'standard',
  fileSize: transfer.fileSize,
  walletAddress: $walletAccount.address,
  privateKey: $walletAccount.privateKey,
@@ -521,11 +521,11 @@
  // Free transfer: accept via direct file transfer (existing behavior)
  await invoke<string>('accept_file_transfer', { transferId: transfer.id });
  acceptTransfer(transfer.id);
- toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`, 'info');
+ toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`,'info');
  }
  } catch (error) {
  log.error('Failed to accept transfer:', error);
- toasts.show(`Failed to accept transfer: ${error}`, 'error');
+ toasts.show(`Failed to accept transfer: ${error}`,'error');
  }
  }
 
@@ -540,7 +540,7 @@
  const { invoke } = await import('@tauri-apps/api/core');
  await invoke('decline_file_transfer', { transferId: transfer.id });
  declineTransfer(transfer.id);
- toasts.show(`Declined file from ${transfer.fromAlias.displayName}`, 'info');
+ toasts.show(`Declined file from ${transfer.fromAlias.displayName}`,'info');
  } catch (error) {
  log.error('Failed to decline transfer:', error);
  }
@@ -553,12 +553,12 @@
 
  function getStatusColor(status: FileTransfer['status']): string {
  switch (status) {
- case 'completed': return 'text-green-600';
- case 'failed': return 'text-red-600';
- case 'declined': return 'text-[var(--text-tertiary)]';
- case 'pending': return 'text-yellow-600';
- case 'accepted': return 'text-blue-600';
- default: return 'text-[var(--text-secondary)]';
+ case'completed': return'text-green-400';
+ case'failed': return'text-red-400';
+ case'declined': return'text-white/40';
+ case'pending': return'text-yellow-400';
+ case'accepted': return'text-blue-600';
+ default: return'text-white/50';
  }
  }
 </script>
@@ -569,8 +569,8 @@
  <!-- Header -->
  <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
  <div class="space-y-1">
- <h1 class="text-2xl font-bold tracking-tight text-gray-900">ChiralDrop</h1>
- <p class="text-sm sm:text-base text-[var(--text-secondary)]">
+ <h1 class="text-2xl font-bold tracking-tight text-white/90">ChiralDrop</h1>
+ <p class="text-sm sm:text-base text-white/50">
  Your alias:
  <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
  </p>
@@ -580,16 +580,16 @@
  {$nearbyPeers.length} peers online
  </div>
  {#if $incomingPendingTransfers.length > 0}
- <div class="inline-flex items-center rounded-full border border-amber-200/70 bg-amber-50/80 px-3 py-1 text-xs font-medium text-amber-700">
- {$incomingPendingTransfers.length} pending request{$incomingPendingTransfers.length === 1 ? '' : 's'}
+ <div class="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-500/[0.1]0/[0.1] px-3 py-1 text-xs font-medium text-amber-400">
+ {$incomingPendingTransfers.length} pending request{$incomingPendingTransfers.length === 1 ?'' :'s'}
  </div>
  {/if}
  <button
  onclick={() => showHistory = !showHistory}
- class="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] px-4 py-2 text-sm font-medium text-[var(--text-secondary)] shadow-black/5 transition hover:bg-[var(--surface-1)] focus:outline-none focus:ring-2 focus:ring-violet-500/30 dark:hover:bg-[var(--surface-1)]"
+ class="inline-flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2 text-sm font-medium text-white/50 shadow-black/5 transition hover:bg-white/[0.05] focus:outline-none "
  >
  <History class="h-4 w-4" />
- <span>{showHistory ? 'Hide History' : 'Show History'}</span>
+ <span>{showHistory ?'Hide History' :'Show History'}</span>
  </button>
  </div>
  </div>
@@ -600,18 +600,18 @@
  >
  <!-- Peer Map -->
  <div
- class="relative overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-1)] shadow-black/5 min-h-[22rem] xl:min-h-0"
- style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` : ''}
+ class="relative overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.05] shadow-black/5 min-h-[22rem] xl:min-h-0"
+ style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` :''}
  >
- <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-primary-50/70 to-cyan-50/60"></div>
+ <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-primary-50/70 to-blue-50/60"></div>
  <div class="absolute -left-20 -top-24 h-72 w-72 rounded-full bg-violet-500/15 blur-3xl"></div>
  <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-violet-400/30 blur-3xl"></div>
  <div class="network-dot-grid absolute inset-0 opacity-45"></div>
 
- <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-[var(--surface-1)] border border-[var(--border)] px-3 py-1 text-xs font-semibold text-slate-700">
+ <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/[0.05] border border-white/[0.06] px-3 py-1 text-xs font-semibold text-slate-700">
  Live Peer Mesh
  </div>
- <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-[var(--surface-1)] border border-[var(--border)] px-3 py-1 text-xs text-slate-600">
+ <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/[0.05] border border-white/[0.06] px-3 py-1 text-xs text-slate-600">
  {$nearbyPeers.length} discovered
  </div>
 
@@ -624,12 +624,12 @@
  </div>
  <span class="absolute -inset-4 rounded-full bg-primary-400/25 blur-xl"></span>
  <div
- class="relative h-16 w-16 rounded-full border-4 border-white ring-4 ring-primary-200/60 flex items-center justify-center"
+ class="relative h-16 w-16 rounded-full border-4 border-white flex items-center justify-center"
  style="background-color: {$userAlias.colorHex}"
  >
  <User class="h-8 w-8 text-white" />
  </div>
- <span class="mt-2 rounded-full bg-[var(--surface-1)] border border-[var(--border)] px-3 py-1 text-xs font-semibold text-[var(--text-secondary)]">
+ <span class="mt-2 rounded-full bg-white/[0.05] border border-white/[0.06] px-3 py-1 text-xs font-semibold text-white/50">
  You
  </span>
  </div>
@@ -638,18 +638,18 @@
  {#each $nearbyPeers as peer (peer.peerId)}
  <button
  onclick={() => handlePeerClick(peer)}
- class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2"
+ class="peer-node group absolute z-20 focus:outline-none "
  style="left: {peer.position.x}%; top: {peer.position.y}%; transform: translate(-50%, -50%);"
  >
  <span class="peer-glow absolute inset-0 rounded-full bg-primary-400/20 blur-md"></span>
  <div class="relative z-10 flex flex-col items-center">
  <div
- class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-md transition-transform duration-200 group-hover:scale-110 {$selectedPeer?.peerId === peer.peerId ? 'ring-4 ring-primary-300/60 dark:ring-primary-900/70' : ''}"
+ class="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white shadow-md transition-transform duration-200 group-hover:scale-110 {$selectedPeer?.peerId === peer.peerId ?'border-2 border-white/50' :''}"
  style="background-color: {peer.alias.colorHex}"
  >
  <User class="h-6 w-6 text-white" />
  </div>
- <span class="mt-1 whitespace-nowrap rounded-full bg-[var(--surface-1)] border border-[var(--border)] px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
+ <span class="mt-1 whitespace-nowrap rounded-full bg-white/[0.05] border border-white/[0.06] px-2 py-0.5 text-xs font-medium text-white/50">
  {peer.alias.displayName}
  </span>
  </div>
@@ -659,11 +659,12 @@
  <!-- Empty state -->
  {#if $nearbyPeers.length === 0}
  <div class="absolute inset-0 flex items-center justify-center p-6">
- <div class="max-w-sm rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-6 text-center <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--surface-1)] border border-[var(--border)] text-[var(--text-tertiary)]">
+ <div class="max-w-sm rounded-xl border border-white/[0.06] bg-white/[0.05] p-6 text-center">
+ <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.05] border border-white/[0.06] text-white/40">
  <User class="h-6 w-6" />
  </div>
- <p class="text-lg font-semibold text-gray-800">No nearby users found</p>
- <p class="mt-1 text-sm text-[var(--text-tertiary)]">Connect to the network to discover peers</p>
+ <p class="text-lg font-semibold text-white/20">No nearby users found</p>
+ <p class="mt-1 text-sm text-white/40">Connect to the network to discover peers</p>
  </div>
  </div>
  {/if}
@@ -676,19 +677,19 @@
  aria-label="Resize map and side panel"
  title="Drag to resize panels"
  >
- <span class="h-full w-px bg-gray-300"></span>
- <span class="absolute h-20 w-1.5 rounded-full bg-gray-300/80 transition group-hover:bg-primary-400 dark:group-hover:bg-violet-500"></span>
+ <span class="h-full w-px bg-white/[0.15]"></span>
+ <span class="absolute h-20 w-1.5 rounded-full bg-white/[0.15]/80 transition group-hover:bg-primary-400"></span>
  </button>
 
  <!-- Side Panel -->
  <div class="flex min-h-0 flex-col gap-4 xl:flex-1">
  <!-- Incoming Transfer Requests -->
  {#if $incomingPendingTransfers.length > 0}
- <div class="rounded-xl border border-amber-400/20 bg-[var(--surface-1)] p-4">
- <h3 class="mb-3 font-semibold text-gray-900">Incoming Transfers</h3>
+ <div class="rounded-xl border border-amber-400/20 bg-white/[0.05] p-4">
+ <h3 class="mb-3 font-semibold text-white/90">Incoming Transfers</h3>
  <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
  {#each $incomingPendingTransfers as transfer (transfer.id)}
- <div class="rounded-xl border border-amber-100 bg-amber-50/60 p-3">
+ <div class="rounded-xl border border-amber-100 bg-amber-500/[0.1]/60 p-3">
  <div class="flex items-start gap-3">
  <div
  class="h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0"
@@ -697,12 +698,12 @@
  <User class="h-4 w-4 text-white" />
  </div>
  <div class="min-w-0 flex-1">
- <p class="truncate text-sm font-medium text-gray-900">{transfer.fileName}</p>
- <p class="text-xs text-[var(--text-secondary)]">
+ <p class="truncate text-sm font-medium text-white/90">{transfer.fileName}</p>
+ <p class="text-xs text-white/50">
  From {transfer.fromAlias.displayName} - {formatFileSize(transfer.fileSize)}
  </p>
- {#if transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0}
- <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
+ {#if transfer.priceWei && transfer.priceWei !=='0' && BigInt(transfer.priceWei) > 0}
+ <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-400">
  <Coins class="h-3 w-3" />
  {formatPriceWei(transfer.priceWei)}
  </span>
@@ -712,18 +713,18 @@
  <div class="mt-3 flex gap-2">
  <button
  onclick={() => handleAccept(transfer)}
- class="flex-1 rounded-lg bg-emerald-500/70 border border-emerald-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-500/80 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+ class="flex-1 rounded-lg bg-emerald-500/70 border border-emerald-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-500/80 focus:outline-none "
  >
  <span class="inline-flex items-center justify-center gap-1">
  <Check class="h-4 w-4" />
- {transfer.priceWei && transfer.priceWei !== '0' && BigInt(transfer.priceWei) > 0
+ {transfer.priceWei && transfer.priceWei !=='0' && BigInt(transfer.priceWei) > 0
  ? `Pay & Accept`
- : 'Accept'}
+ :'Accept'}
  </span>
  </button>
  <button
  onclick={() => handleDecline(transfer)}
- class="flex-1 rounded-lg bg-rose-500/70 border border-rose-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-500/80 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+ class="flex-1 rounded-lg bg-rose-500/70 border border-rose-400/30 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-500/80 focus:outline-none "
  >
  <span class="inline-flex items-center justify-center gap-1">
  <X class="h-4 w-4" />
@@ -739,17 +740,17 @@
 
  <!-- Selected Peer Panel -->
  {#if $selectedPeer}
- <div class="rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-4 shadow-black/5">
+ <div class="rounded-xl border border-white/[0.06] bg-white/[0.05] p-4 shadow-black/5">
  <div class="mb-4 flex items-center justify-between">
- <h3 class="font-semibold text-gray-900">Send to Peer</h3>
+ <h3 class="font-semibold text-white/90">Send to Peer</h3>
  <button
  onclick={() => selectPeer(null)}
- class="rounded-lg p-1 transition hover:bg-[var(--surface-1)] dark:hover:bg-[var(--surface-1)]"
+ class="rounded-lg p-1 transition hover:bg-white/[0.05]"
  >
- <X class="h-4 w-4 text-[var(--text-tertiary)]" />
+ <X class="h-4 w-4 text-white/40" />
  </button>
  </div>
- <div class="mb-4 flex items-center gap-3 rounded-xl bg-[var(--surface-1)] p-3">
+ <div class="mb-4 flex items-center gap-3 rounded-xl bg-white/[0.05] p-3">
  <div
  class="h-12 w-12 rounded-full flex items-center justify-center"
  style="background-color: {$selectedPeer.alias.colorHex}"
@@ -757,12 +758,12 @@
  <User class="h-6 w-6 text-white" />
  </div>
  <div class="min-w-0">
- <p class="truncate font-medium text-gray-900">{$selectedPeer.alias.displayName}</p>
- <p class="truncate text-xs text-[var(--text-tertiary)]">{$selectedPeer.peerId}</p>
+ <p class="truncate font-medium text-white/90">{$selectedPeer.alias.displayName}</p>
+ <p class="truncate text-xs text-white/40">{$selectedPeer.peerId}</p>
  </div>
  </div>
  <div class="mb-3">
- <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-[var(--text-tertiary)]">
+ <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-white/40">
  Price (CHI) — leave empty for free
  </label>
  <div class="flex items-center gap-2">
@@ -774,7 +775,7 @@
  min="0"
  placeholder="0 (free)"
  bind:value={sendPrice}
- class="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface-1)] px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-primary-400 focus:ring-2 focus:ring-primary-200 dark:focus:border-violet-500 dark:focus:ring-primary-900/50"
+ class="flex-1 rounded-lg border border-white/[0.06] bg-white/[0.05] px-3 py-2 text-sm text-white/90 outline-none transition focus:border-primary-400 "
  />
  </div>
  {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -783,56 +784,56 @@
  </div>
  <button
  onclick={handleSendClick}
- class="w-full rounded-xl bg-violet-500/80 border border-primary-400/30 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500/90 focus:outline-none focus:ring-2 focus:ring-violet-500/30"
+ class="w-full rounded-xl bg-violet-500/80 border border-primary-400/30 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500/90 focus:outline-none "
  >
  <span class="inline-flex items-center justify-center gap-2">
  <Send class="h-4 w-4" />
- {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHI` : 'Select File to Send'}
+ {sendPrice && parseFloat(sendPrice) > 0 ? `Send for ${sendPrice} CHI` :'Select File to Send'}
  </span>
  </button>
  </div>
  {:else}
- <div class="rounded-xl border border-dashed border-[var(--border)] bg-[var(--surface-1)] p-5 text-center shadow-black/5">
- <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--surface-1)]">
- <Upload class="h-6 w-6 text-[var(--text-secondary)]" />
+ <div class="rounded-xl border border-dashed border-white/[0.06] bg-white/[0.05] p-5 text-center shadow-black/5">
+ <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.05]">
+ <Upload class="h-6 w-6 text-white/50" />
  </div>
- <p class="text-sm text-[var(--text-secondary)]">Select a nearby user to start a transfer</p>
+ <p class="text-sm text-white/50">Select a nearby user to start a transfer</p>
  </div>
  {/if}
 
  <!-- Transaction History -->
  {#if showHistory}
- <div class="flex min-h-0 flex-1 flex-col rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-4 shadow-black/5">
- <h3 class="mb-3 font-semibold text-gray-900">Transaction History</h3>
+ <div class="flex min-h-0 flex-1 flex-col rounded-xl border border-white/[0.06] bg-white/[0.05] p-4 shadow-black/5">
+ <h3 class="mb-3 font-semibold text-white/90">Transaction History</h3>
  <div class="flex-1 space-y-2 overflow-y-auto pr-1">
  {#if $transferHistory.length === 0}
- <p class="py-4 text-center text-sm text-[var(--text-tertiary)]">No transfers yet</p>
+ <p class="py-4 text-center text-sm text-white/40">No transfers yet</p>
  {:else}
  {#each $transferHistory as transfer (transfer.id)}
- <div class="rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-3">
+ <div class="rounded-xl border border-white/[0.06] bg-white/[0.05] p-3">
  <div class="flex items-start gap-2.5">
- <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--text-secondary)]" />
+ <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-white/50" />
  <div class="min-w-0 flex-1">
- <p class="truncate text-sm font-medium text-gray-900">{transfer.fileName}</p>
- <p class="text-xs text-[var(--text-tertiary)]">
- {transfer.direction === 'incoming' ? 'From' : 'To'} {transfer.direction === 'incoming' ? transfer.fromAlias.displayName : transfer.toAlias.displayName}
+ <p class="truncate text-sm font-medium text-white/90">{transfer.fileName}</p>
+ <p class="text-xs text-white/40">
+ {transfer.direction ==='incoming' ?'From' :'To'} {transfer.direction ==='incoming' ? transfer.fromAlias.displayName : transfer.toAlias.displayName}
  </p>
  <div class="mt-1 flex items-center gap-2">
  <span class="text-xs capitalize {getStatusColor(transfer.status)}">{transfer.status}</span>
- <span class="text-xs text-[var(--text-secondary)]">{formatFileSize(transfer.fileSize)}</span>
- {#if transfer.priceWei && transfer.priceWei !== '0'}
+ <span class="text-xs text-white/50">{formatFileSize(transfer.fileSize)}</span>
+ {#if transfer.priceWei && transfer.priceWei !=='0'}
  <span class="text-xs text-amber-600">{formatPriceWei(transfer.priceWei)}</span>
  {/if}
  </div>
  {#if transfer.paymentTxHash}
- <p class="mt-1 truncate font-mono text-xs text-[var(--text-secondary)]" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
+ <p class="mt-1 truncate font-mono text-xs text-white/50" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
  {/if}
  {#if transfer.balanceBefore && transfer.balanceAfter}
- <p class="mt-1 text-xs text-[var(--text-tertiary)]">
+ <p class="mt-1 text-xs text-white/40">
  {transfer.balanceBefore} → {transfer.balanceAfter} CHI
  </p>
  {/if}
- <p class="mt-1 text-xs text-[var(--text-secondary)]">{formatTimestamp(transfer.timestamp)}</p>
+ <p class="mt-1 text-xs text-white/50">{formatTimestamp(transfer.timestamp)}</p>
  </div>
  </div>
  </div>
