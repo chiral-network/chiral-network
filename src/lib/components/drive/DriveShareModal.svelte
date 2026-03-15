@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Copy, Check, X, Link, Globe, Trash2, Loader2, Eye, EyeOff, Coins } from 'lucide-svelte';
+  import { Copy, Check, X, Link, Globe, Trash2, Loader2, Eye, EyeOff } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import type { ShareLink } from '$lib/services/driveApiService';
   import { toasts } from '$lib/toastStore';
@@ -14,7 +14,6 @@
     onClose: () => void;
   } = $props();
 
-  let sharePriceChi = $state('0.001');
   let isPublic = $state(true);
   let creating = $state(false);
   let copied = $state<string | null>(null);
@@ -22,24 +21,11 @@
   const existingShares = $derived(driveStore.getSharesForItem(item.id, manifest));
   const currentItem = $derived(manifest.items.find(i => i.id === item.id));
   const isItemPublic = $derived(currentItem?.isPublic ?? true);
+  const itemPrice = $derived(currentItem?.priceChi ?? item.priceChi);
+  const hasPrice = $derived(itemPrice && parseFloat(itemPrice) > 0);
 
   let justCreatedUrl = $state<string | null>(null);
   let toggling = $state(false);
-
-  $effect(() => {
-    const price = currentItem?.priceChi ?? item.priceChi;
-    const candidate = normalizePriceInput(price);
-    sharePriceChi = isValidPrice(candidate) ? candidate : '0.001';
-  });
-
-  function normalizePriceInput(value: unknown): string {
-    return `${value ?? ''}`.trim();
-  }
-
-  function isValidPrice(value: unknown): boolean {
-    const parsed = Number(normalizePriceInput(value));
-    return Number.isFinite(parsed) && parsed > 0;
-  }
 
   async function toggleVisibility() {
     toggling = true;
@@ -52,11 +38,7 @@
   }
 
   async function createLink() {
-    const price = normalizePriceInput(sharePriceChi);
-    if (!isValidPrice(price)) {
-      toasts.show('Enter a share price greater than 0 CHI', 'error');
-      return;
-    }
+    const price = hasPrice ? itemPrice! : '0.001';
 
     creating = true;
     try {
@@ -66,9 +48,9 @@
         justCreatedUrl = url;
         try {
           await navigator.clipboard.writeText(url);
-          toasts.show('Paid share link created & copied!', 'success');
+          toasts.show('Share link created & copied!', 'success');
         } catch {
-          toasts.show('Paid share link created. Copy it below.', 'success');
+          toasts.show('Share link created. Copy it below.', 'success');
         }
       }
     } finally {
@@ -135,7 +117,11 @@
 
     <div class="space-y-3 mb-6">
       <p class="text-sm text-gray-600 dark:text-gray-400">
-        Create a paid share link. Recipients must log into a browser wallet and pay before previewing or downloading.
+        {#if hasPrice}
+          Create a share link at <strong class="text-emerald-600 dark:text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
+        {:else}
+          Create a free share link. To set a price, use "Edit Price" from the context menu first.
+        {/if}
       </p>
 
       <div class="flex items-center gap-3">
@@ -144,18 +130,6 @@
           <Globe class="w-4 h-4 text-gray-500" />
           <span class="text-sm text-gray-700 dark:text-gray-300">Public</span>
         </label>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <Coins class="w-4 h-4 text-emerald-500 shrink-0" />
-        <input
-          type="number"
-          min="0.000000000000000001"
-          step="0.0001"
-          placeholder="Price in CHI"
-          bind:value={sharePriceChi}
-          class="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
       </div>
 
       <button
@@ -168,7 +142,7 @@
           Creating...
         {:else}
           <Link class="w-4 h-4" />
-          Create Paid Link
+          Create Share Link
         {/if}
       </button>
 
