@@ -61,6 +61,9 @@
   let publishingStates = $state<Record<string, boolean>>({});
   let isDragOver = $state(false);
 
+  // Delete confirmation
+  let deleteConfirm = $state<{ id: string; name: string } | null>(null);
+
   // Drive picker for site creation
   let showDrivePickerForSite = $state(false);
   let drivePickerFiles = $state<{ id: string; name: string; size: number }[]>([]);
@@ -263,14 +266,19 @@
     }
   }
 
-  async function deleteSite(siteId: string, siteName: string) {
-    if (!isTauri) return;
-    if (!confirm(`Delete "${siteName}"? This cannot be undone.`)) return;
+  function deleteSite(siteId: string, siteName: string) {
+    deleteConfirm = { id: siteId, name: siteName };
+  }
+
+  async function confirmDeleteSite() {
+    if (!deleteConfirm || !isTauri) return;
+    const { id, name } = deleteConfirm;
+    deleteConfirm = null;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('delete_hosted_site', { siteId });
-      sites = sites.filter(s => s.id !== siteId);
-      toasts.show(`Site "${siteName}" deleted`, 'info');
+      await invoke('delete_hosted_site', { siteId: id });
+      sites = sites.filter(s => s.id !== id);
+      toasts.show(`Site "${name}" deleted`, 'info');
     } catch (err: any) {
       toasts.show(`Failed to delete site: ${err}`, 'error');
     }
@@ -996,4 +1004,36 @@
     onSelect={addDriveFilesToSite}
     onClose={() => showDrivePickerForSite = false}
   />
+{/if}
+
+<!-- Delete site confirmation -->
+{#if deleteConfirm}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    onclick={() => deleteConfirm = null}
+    onkeydown={(e) => { if (e.key === 'Escape') deleteConfirm = null; }}
+  >
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete Site</h3>
+      <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+        Are you sure you want to delete <strong class="text-gray-900 dark:text-white">"{deleteConfirm.name}"</strong>?
+      </p>
+      <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This cannot be undone.</p>
+      <div class="flex justify-end gap-3">
+        <button
+          onclick={() => deleteConfirm = null}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+        >Cancel</button>
+        <button
+          onclick={confirmDeleteSite}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition"
+        >Delete</button>
+      </div>
+    </div>
+  </div>
 {/if}
