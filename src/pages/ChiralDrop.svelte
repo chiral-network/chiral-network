@@ -606,10 +606,10 @@
  <div class="absolute inset-0 bg-[var(--surface-0)]"></div>
  <div class="network-dot-grid absolute inset-0 opacity-45"></div>
 
- <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-[var(--surface-0)] px-3 py-1 text-xs font-semibold text-slate-700 
+ <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-[var(--surface-0)] px-3 py-1 text-xs font-semibold text-slate-700">
  Live Peer Mesh
  </div>
- <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-[var(--surface-0)] px-3 py-1 text-xs text-slate-600 
+ <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-[var(--surface-0)] px-3 py-1 text-xs text-slate-600">
  {$nearbyPeers.length} discovered
  </div>
 
@@ -636,7 +636,7 @@
  {#each $nearbyPeers as peer (peer.peerId)}
  <button
  onclick={() => handlePeerClick(peer)}
- class="peer-node group absolute z-20 focus:outline-none focus:"
+ class="peer-node group absolute z-20 focus:outline-none"
  style="left: {peer.position.x}%; top: {peer.position.y}%; transform: translate(-50%, -50%);"
  >
  <span class="peer-glow absolute inset-0 rounded-full bg-violet-500/15 blur-md"></span>
@@ -657,7 +657,7 @@
  <!-- Empty state -->
  {#if $nearbyPeers.length === 0}
  <div class="absolute inset-0 flex items-center justify-center p-6">
- <div class="max-w-sm rounded-xl border border-[var(--border)] bg-[#13111C]/75 p-6 text-center 
+ <div class="max-w-sm rounded-xl border border-[var(--border)] bg-[#13111C]/75 p-6 text-center">
  <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500">
  <User class="h-6 w-6" />
  </div>
@@ -711,7 +711,7 @@
  <div class="mt-3 flex gap-2">
  <button
  onclick={() => handleAccept(transfer)}
- class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 focus:outline-none focus:"
+ class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 focus:outline-none"
  >
  <span class="inline-flex items-center justify-center gap-1">
  <Check class="h-4 w-4" />
@@ -722,7 +722,7 @@
  </button>
  <button
  onclick={() => handleDecline(transfer)}
- class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600 focus:outline-none focus:"
+ class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600 focus:outline-none"
  >
  <span class="inline-flex items-center justify-center gap-1">
  <X class="h-4 w-4" />

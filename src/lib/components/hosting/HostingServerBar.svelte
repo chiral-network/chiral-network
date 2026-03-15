@@ -30,7 +30,7 @@
 <div class="rounded-xl border p-4 transition-colors
  {serverRunning
  ?'border-green-200/70 bg-green-50/50'
- :'border-[var(--border)]/60 bg-[var(--surface-0)] 
+ :'border-[var(--border)] bg-[var(--surface-0)]'}">
  
  <div class="flex items-center justify-between gap-4 flex-wrap">
  <div class="flex items-center gap-3">

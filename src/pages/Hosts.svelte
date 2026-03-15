@@ -874,7 +874,7 @@
  {isStartingServer}
  onStartServer={startServer}
  onStopServer={stopServer}
- onPortChange={(p) => port = p}
+ onPortChange={(p: number) => port = p}
  />
 
  <!-- Tab bar -->
