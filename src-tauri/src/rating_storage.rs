@@ -31,7 +31,7 @@ pub struct ReputationEvent {
     pub outcome: TransferOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
-    /// Optional downloader rating 1-5 for this transfer.
+    /// Deprecated: rating fields are no longer used in Elo calculation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating_score: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,7 +53,6 @@ pub struct ReputationSnapshot {
     pub completed_count: usize,
     pub failed_count: usize,
     pub transaction_count: usize,
-    pub rating_count: usize,
     pub total_earned_wei: String,
 }
 
@@ -157,7 +156,6 @@ pub fn compute_reputation_for_wallet(
     let mut elo = BASE_ELO;
     let mut completed = 0usize;
     let mut failed = 0usize;
-    let mut rating_count = 0usize;
     let mut total_earned_wei: u128 = 0;
 
     for event in &scoped {
@@ -181,15 +179,7 @@ pub fn compute_reputation_for_wallet(
             }
         };
 
-        let rating_signal = match event.rating_score {
-            Some(score) => {
-                rating_count += 1;
-                ((score as f64) - 1.0) / 4.0
-            }
-            None => outcome,
-        };
-
-        let actual = 0.8 * outcome + 0.2 * rating_signal;
+        let actual = outcome;
         let expected = 1.0 / (1.0 + 10f64.powf((BASE_ELO - elo) / 12.0));
         let k = 4.0 * w_time * w_amount;
         elo = clamp_elo(elo + k * (actual - expected));
@@ -201,7 +191,6 @@ pub fn compute_reputation_for_wallet(
         completed_count: completed,
         failed_count: failed,
         transaction_count: scoped.len(),
-        rating_count,
         total_earned_wei: total_earned_wei.to_string(),
     }
 }
@@ -264,7 +253,6 @@ mod tests {
         let snap = compute_reputation_for_wallet(&events, "0xA", now);
         assert!(snap.elo > 50.0);
         assert_eq!(snap.completed_count, 1);
-        assert_eq!(snap.rating_count, 1);
     }
 
     #[test]
@@ -430,29 +418,6 @@ mod tests {
         assert_eq!(snap.failed_count, 1);
     }
 
-    // --- rating score 1 vs 5 ---
-
-    #[test]
-    fn test_rating_1_increases_elo_less_than_rating_5() {
-        let now = 1_700_000_000;
-        let events_low = vec![mk_event(
-            "t-1", "0xA", "0xB",
-            TransferOutcome::Completed,
-            "1000000000000000000", Some(1),
-            now - 86_400,
-        )];
-        let events_high = vec![mk_event(
-            "t-1", "0xA", "0xB",
-            TransferOutcome::Completed,
-            "1000000000000000000", Some(5),
-            now - 86_400,
-        )];
-        let snap_low = compute_reputation_for_wallet(&events_low, "0xA", now);
-        let snap_high = compute_reputation_for_wallet(&events_high, "0xA", now);
-        assert!(snap_high.elo > snap_low.elo,
-            "rating 5 elo ({}) should exceed rating 1 elo ({})", snap_high.elo, snap_low.elo);
-    }
-
     // --- ReputationSnapshot serialization roundtrip ---
 
     #[test]
@@ -463,7 +428,6 @@ mod tests {
             completed_count: 10,
             failed_count: 2,
             transaction_count: 12,
-            rating_count: 8,
             total_earned_wei: "5000000000000000000".to_string(),
         };
         let json = serde_json::to_string(&snap).expect("serialize");
@@ -473,7 +437,6 @@ mod tests {
         assert_eq!(deser.completed_count, snap.completed_count);
         assert_eq!(deser.failed_count, snap.failed_count);
         assert_eq!(deser.transaction_count, snap.transaction_count);
-        assert_eq!(deser.rating_count, snap.rating_count);
         assert_eq!(deser.total_earned_wei, snap.total_earned_wei);
     }
 

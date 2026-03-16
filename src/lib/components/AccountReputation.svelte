@@ -3,13 +3,11 @@
   import {
     ShieldCheck,
     User,
-    MessageSquare,
     Loader2,
     ChevronLeft,
     ChevronRight,
     CheckCircle2,
     XCircle,
-    Star,
     RefreshCw,
   } from 'lucide-svelte';
   import { walletAccount } from '$lib/stores';
@@ -21,7 +19,6 @@
   let baseElo = $state(50);
   let completedCount = $state(0);
   let failedCount = $state(0);
-  let ratingCount = $state(0);
   let totalEarnedWei = $state('0');
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -76,7 +73,6 @@
       baseElo = resp.baseElo;
       completedCount = resp.completedCount;
       failedCount = resp.failedCount;
-      ratingCount = resp.ratingCount;
       totalEarnedWei = resp.totalEarnedWei;
       currentPage = 0;
     } catch (err: unknown) {
@@ -146,10 +142,6 @@
           <p class="font-semibold text-red-600 dark:text-red-400">{failedCount}</p>
         </div>
         <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Ratings</p>
-          <p class="font-semibold text-gray-900 dark:text-white">{ratingCount}</p>
-        </div>
-        <div class="rounded-lg bg-white dark:bg-gray-800 px-3 py-2 border border-gray-200 dark:border-gray-600">
           <p class="text-xs text-gray-500 dark:text-gray-400">Earned (180d)</p>
           <p class="font-semibold text-gray-900 dark:text-white">{formatWeiAsChi(totalEarnedWei)} CHI</p>
         </div>
@@ -162,7 +154,7 @@
       <ShieldCheck class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
       <p class="text-gray-500 dark:text-gray-400">No reputation events yet</p>
       <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">
-        Complete downloads and ratings will contribute to your Elo
+        Completed and failed transfers will contribute to your Elo
       </p>
     </div>
   {:else}
@@ -192,23 +184,6 @@
                     +{formatWeiAsChi(event.amountWei)} CHI
                   </span>
                 </div>
-
-                {#if event.ratingScore}
-                  <div class="flex items-center gap-1 mt-1.5">
-                    {#each [1, 2, 3, 4, 5] as star}
-                      <Star
-                        class="w-3.5 h-3.5 {event.ratingScore >= star ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300 dark:text-gray-600'}"
-                      />
-                    {/each}
-                  </div>
-                {/if}
-
-                {#if event.ratingComment}
-                  <div class="flex items-start gap-1.5 mt-1.5">
-                    <MessageSquare class="w-3.5 h-3.5 text-gray-400 mt-0.5 flex-shrink-0" />
-                    <p class="text-sm text-gray-600 dark:text-gray-300">{event.ratingComment}</p>
-                  </div>
-                {/if}
 
                 <p class="text-xs text-gray-400 dark:text-gray-500 mt-1.5 font-mono">
                   File: {formatAddr(event.fileHash)}
