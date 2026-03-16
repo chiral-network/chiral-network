@@ -2540,7 +2540,6 @@ async fn handle_reputation(cmd: ReputationCommand) -> Result<(), String> {
             println!("transactions={}", snapshot.transaction_count);
             println!("completed={}", snapshot.completed_count);
             println!("failed={}", snapshot.failed_count);
-            println!("ratings={}", snapshot.rating_count);
             println!("earned_wei={}", snapshot.total_earned_wei);
             println!("recent_events={}", recent_events);
             Ok(())
@@ -2552,13 +2551,12 @@ async fn handle_reputation(cmd: ReputationCommand) -> Result<(), String> {
             for wallet in wallets {
                 let s = compute_reputation_for_wallet(&manifest.events, &wallet, now);
                 println!(
-                    "{} elo={:.1} tx={} completed={} failed={} ratings={} earned_wei={}",
+                    "{} elo={:.1} tx={} completed={} failed={} earned_wei={}",
                     wallet,
                     s.elo,
                     s.transaction_count,
                     s.completed_count,
                     s.failed_count,
-                    s.rating_count,
                     s.total_earned_wei
                 );
             }

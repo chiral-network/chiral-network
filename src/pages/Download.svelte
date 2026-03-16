@@ -31,7 +31,6 @@
   import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
-  import RateSeederModal from '$lib/components/RateSeederModal.svelte';
   import { walletService } from '$lib/services/walletService';
   import { ratingApi, setRatingOwner, type BatchReputationEntry } from '$lib/services/ratingApiService';
   import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
@@ -268,7 +267,6 @@
   const REPUTATION_CACHE_TTL_MS = 60_000;
   const reputationCache = new Map<string, { rating: BatchReputationEntry; expiresAt: number }>();
   const pendingReputationFetches = new Map<string, Promise<Record<string, BatchReputationEntry>>>();
-  let showRatingModal = $state<{ transferId: string; seederWallet: string; fileHash: string; fileName: string } | null>(null);
   let transferReputationContexts = $state<Record<string, TransferReputationContext>>({});
 
   // Seeder selection (for multi-seeder downloads)
@@ -430,7 +428,7 @@
   async function handleTorrentFile() {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
-      toasts.show('Torrent file upload requires the desktop app', 'error');
+      toasts.show('Torrent upload requires the desktop app', 'warning');
       return;
     }
 
@@ -447,7 +445,7 @@
 
         // Check if it's a .torrent file
         if (!selectedPath.toLowerCase().endsWith('.torrent')) {
-          toasts.show('Please select a .torrent file', 'error');
+          toasts.show('Select a .torrent file', 'warning');
           return;
         }
 
@@ -474,27 +472,27 @@
           };
 
           if (searchResult.seeders.length > 0) {
-            toasts.show(`Loaded torrent: ${result.name} (${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''})`, 'success');
+            toasts.detail('Torrent loaded', `${result.name} — ${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found`, 'success');
           } else {
-            toasts.show(`Loaded torrent: ${result.name} - searching for seeders...`, 'info');
+            toasts.detail('Torrent loaded', `${result.name} — searching for seeders…`, 'info');
           }
         }
       }
     } catch (error) {
       log.error('Failed to parse torrent file:', error);
-      toasts.show(`Failed to parse torrent file: ${error}`, 'error');
+      toasts.detail('Invalid torrent file', String(error), 'error');
     }
   }
 
   // Search for file
   async function searchFile() {
     if (!searchQuery.trim()) {
-      toasts.show('Please enter a search query', 'error');
+      toasts.show('Enter a search query', 'warning');
       return;
     }
 
     if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
+      toasts.show('Connect to the network first', 'warning');
       return;
     }
 
@@ -546,9 +544,9 @@
             fetchSeederRatings(result.seeders);
           }
           if (result.seeders.length > 0) {
-            toasts.show(`Found ${result.seeders.length} potential seeder${result.seeders.length !== 1 ? 's' : ''} for: ${result.fileName}`, 'success');
+            toasts.detail('File found', `${result.fileName} — ${result.seeders.length} seeder${result.seeders.length !== 1 ? 's' : ''} available`, 'success');
           } else {
-            toasts.show(`Found: ${result.fileName} - no seeders currently available`, 'warning');
+            toasts.detail('File found', `${result.fileName} — no seeders online`, 'warning');
           }
         } else {
           // For magnet links, create a result even if not in DHT but show warning
@@ -562,7 +560,7 @@
               priceWei: '0',
               walletAddress: '',
             };
-            toasts.show(`Magnet link parsed but file not found in DHT. The seeder may be offline.`, 'warning');
+            toasts.detail('File not in DHT', 'The seeder may be offline or hasn\'t published this file yet', 'warning');
           } else {
             searchError = 'File not found in DHT. The seeder may be offline or the hash may be incorrect.';
           }
@@ -753,7 +751,7 @@
   async function startDownload(result: SearchResult, skipBlacklistCheck = false, skipCostConfirm = false) {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
-      toasts.show('Download requires the desktop app', 'error');
+      toasts.show('Downloads require the desktop app', 'warning');
       return;
     }
 
@@ -765,7 +763,7 @@
 
     // Check if we have any seeders
     if (result.seeders.length === 0) {
-      toasts.show('No seeders available. The file owner may be offline or the file was not found in DHT.', 'error');
+      toasts.detail('No seeders available', 'The file owner may be offline or the file was not found in DHT', 'error');
       return;
     }
 
@@ -800,11 +798,11 @@
 
     if (totalCost > 0) {
       if (!$walletAccount) {
-        toasts.show('Please log in with your wallet to download paid files', 'error');
+        toasts.show('Log in with your wallet to download paid files', 'warning');
         return;
       }
       if (parseFloat(walletBalance) < totalCost) {
-        toasts.show(`Insufficient balance. Need ${totalCost.toFixed(6)} CHI, have ${walletBalance} CHI`, 'error');
+        toasts.detail('Insufficient balance', `Need ${totalCost.toFixed(6)} CHI — you have ${walletBalance} CHI`, 'error');
         return;
       }
       // Show confirmation modal before spending CHI
@@ -888,12 +886,12 @@
 
       log.info('Download request sent:', response);
       if (tierCost > 0) {
-        toasts.show(`Speed tier payment processed! Requesting file from seeder...`, 'success');
+        toasts.detail('Download started', 'Speed tier payment processed — requesting file from seeder', 'success');
         refreshWalletBalance();
       } else if (seederPriceChi > 0) {
-        toasts.show(`Requesting file from seeder (payment will be sent automatically)...`, 'info');
+        toasts.detail('Download started', 'Payment will be sent automatically when transfer begins', 'info');
       } else {
-        toasts.show(`Requesting file from seeder...`, 'info');
+        toasts.show('Download started', 'info');
       }
 
       // Update download with request ID
@@ -930,7 +928,7 @@
         d.id === newDownload.id ? { ...d, status: 'failed' as const } : d
       );
       saveDownloadHistory();
-      toasts.show(`Download failed: ${formatInvokeError(error)}`, 'error');
+      toasts.detail('Download failed', formatInvokeError(error), 'error');
     } finally {
       isProcessingPayment = false;
     }
@@ -959,7 +957,7 @@
       addToDownloadHistory(download);
       downloads = downloads.filter(d => d.id !== downloadId);
       saveDownloadHistory();
-      toasts.show(`Cancelled: ${download.name}`, 'info');
+      // Silent — download removed from active list
     }
   }
 
@@ -978,7 +976,7 @@
     const count = downloadHistory.length;
     downloadHistory = [];
     saveDownloadHistory();
-    toasts.show(`Cleared ${count} item${count !== 1 ? 's' : ''} from history`, 'info');
+    // Silent — history list cleared in UI
   }
 
   // Get active downloads (not completed/failed/cancelled)
@@ -1026,7 +1024,7 @@
         });
         saveDownloadHistory();
 
-        toasts.show(`Downloaded: ${fileName}`, 'success');
+        toasts.show(`${fileName} downloaded`, 'success');
 
         const context = getTransferContext(requestId, fileHash);
         void (async () => {
@@ -1034,15 +1032,6 @@
             await reportTransferOutcome(context, 'completed');
           }
 
-          // Show rating modal for this completed transfer.
-          if ($walletAccount?.address && context && context.seederWallet) {
-            showRatingModal = {
-              transferId: context.transferId,
-              seederWallet: context.seederWallet,
-              fileHash,
-              fileName,
-            };
-          }
         })();
       });
 
@@ -1072,7 +1061,7 @@
           void reportTransferOutcome(context, 'failed');
         }
 
-        toasts.show(`Download failed: ${error}`, 'error');
+        toasts.detail('Download failed', error, 'error');
       });
 
       // Listen for download progress (rate-limited writes)
@@ -1245,7 +1234,7 @@
       await invoke('open_file', { path: filePath });
     } catch (error) {
       log.error('Failed to open file:', error);
-      toasts.show(`Failed to open file: ${error}`, 'error');
+      toasts.detail('Could not open file', String(error), 'error');
     }
   }
 
@@ -1256,19 +1245,19 @@
       await invoke('show_in_folder', { path: filePath });
     } catch (error) {
       log.error('Failed to show in folder:', error);
-      toasts.show(`Failed to show in folder: ${error}`, 'error');
+      toasts.detail('Could not open folder', String(error), 'error');
     }
   }
 
   async function handlePreviewFile(filePath: string, fileName: string) {
     if (!isTauri) {
-      toasts.show('In-app preview requires the desktop app', 'error');
+      toasts.show('Preview requires the desktop app', 'warning');
       return;
     }
 
     const previewType = getPreviewType(fileName || filePath);
     if (previewType === 'unsupported') {
-      toasts.show('Preview is not supported for this file type', 'warning');
+      toasts.show('Unsupported file type for preview', 'warning');
       return;
     }
 
@@ -1281,7 +1270,7 @@
       isViewerOpen = true;
     } catch (error) {
       log.error('Failed to preview file:', error);
-      toasts.show(`Failed to preview file: ${error}`, 'error');
+      toasts.detail('Preview failed', String(error), 'error');
     }
   }
 
@@ -2105,12 +2094,3 @@
   </div>
 {/if}
 
-{#if showRatingModal}
-  <RateSeederModal
-    transferId={showRatingModal.transferId}
-    seederWallet={showRatingModal.seederWallet}
-    fileHash={showRatingModal.fileHash}
-    fileName={showRatingModal.fileName}
-    onclose={() => { showRatingModal = null; }}
-  />
-{/if}
