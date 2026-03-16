@@ -511,13 +511,13 @@
 <div class="max-w-6xl mx-auto p-4 sm:p-6">
   <div class="flex items-center justify-between mb-6">
     <div>
-      <h1 class="text-2xl font-bold text-gray-100">Network</h1>
-      <p class="text-gray-400 mt-1">Manage blockchain and P2P network connections</p>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Network</h1>
+      <p class="text-gray-500 dark:text-gray-400 mt-1">Manage blockchain and P2P network connections</p>
     </div>
     <button
       onclick={loadGethStatus}
       disabled={isLoadingGeth}
-      class="p-2 hover:bg-white/[0.03] rounded-lg transition-colors disabled:opacity-50 text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+      class="p-2 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-lg transition-colors disabled:opacity-50 text-gray-600 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-cyan-500"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoadingGeth ? 'animate-spin' : ''}" />
@@ -527,37 +527,37 @@
   {#if error}
     <div class="bg-red-500/10 border-l-4 border-red-400 p-4 mb-6 rounded-r-lg">
       <div class="flex items-center gap-2">
-        <AlertTriangle class="w-5 h-5 text-red-400" />
-        <p class="text-sm text-red-400">{error}</p>
+        <AlertTriangle class="w-5 h-5 text-red-600 dark:text-red-400" />
+        <p class="text-sm text-red-600 dark:text-red-400">{error}</p>
       </div>
     </div>
   {/if}
 
   <!-- Blockchain Node Section -->
-  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-200 dark:border-gray-800/60 p-6 mb-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
-        <div class="p-2 {gethStatus?.running ? 'bg-emerald-500/10' : 'bg-gray-800'} rounded-lg">
-          <Server class="w-6 h-6 {gethStatus?.running ? 'text-emerald-400' : 'text-gray-400'}" />
+        <div class="p-2 {gethStatus?.running ? 'bg-emerald-500/10' : 'bg-gray-100 dark:bg-gray-800'} rounded-lg">
+          <Server class="w-6 h-6 {gethStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'}" />
         </div>
         <div>
-          <h2 class="font-semibold text-gray-100">Blockchain Node (Geth)</h2>
+          <h2 class="font-semibold text-gray-900 dark:text-gray-100">Blockchain Node (Geth)</h2>
           <p class="text-sm text-gray-500">Chiral Network blockchain connection</p>
         </div>
       </div>
       <div class="flex items-center gap-2">
         {#if gethStatus?.running}
-          <span class="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-400 rounded-full text-sm">
+          <span class="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-full text-sm">
             <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
             Running
           </span>
         {:else if gethStatus?.installed}
-          <span class="flex items-center gap-2 px-3 py-1 bg-gray-800 text-gray-300 rounded-full text-sm">
+          <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full text-sm">
             <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
             Stopped
           </span>
         {:else}
-          <span class="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-400 rounded-full text-sm">
+          <span class="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 rounded-full text-sm">
             <AlertTriangle class="w-4 h-4" />
             Not Installed
           </span>
@@ -569,10 +569,10 @@
       <!-- Download Geth Section -->
       <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 mb-4">
         <div class="flex items-start gap-3">
-          <AlertTriangle class="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+          <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
           <div>
-            <p class="font-medium text-yellow-300">Geth Not Installed</p>
-            <p class="text-sm text-yellow-400 mt-1">
+            <p class="font-medium text-yellow-700 dark:text-yellow-300">Geth Not Installed</p>
+            <p class="text-sm text-yellow-600 dark:text-yellow-400 mt-1">
               Download Core-Geth to connect to the Chiral Network blockchain.
               This is required for wallet balance, transactions, and mining.
             </p>
@@ -582,11 +582,11 @@
 
       {#if isDownloading && downloadProgress}
         <div class="space-y-2">
-          <div class="flex justify-between text-sm text-gray-300">
+          <div class="flex justify-between text-sm text-gray-600 dark:text-gray-300">
             <span>{downloadProgress.status}</span>
             <span>{downloadProgress.percentage.toFixed(1)}%</span>
           </div>
-          <div class="w-full bg-gray-700 rounded-full h-2">
+          <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
             <div
               class="bg-cyan-500 h-2 rounded-full transition-all"
               style="width: {downloadProgress.percentage}%"
@@ -611,21 +611,21 @@
     {:else}
       <!-- Geth Stats -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <p class="text-xs text-gray-500">Block Height</p>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <p class="text-xs text-gray-500">Blockchain Peers</p>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{gethStatus?.peerCount || 0}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{gethStatus?.peerCount || 0}</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <p class="text-xs text-gray-500">Chain ID</p>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{gethStatus?.chainId || 'N/A'}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{gethStatus?.chainId || 'N/A'}</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <p class="text-xs text-gray-500">Sync Status</p>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
         </div>
       </div>
 
@@ -658,7 +658,7 @@
 
       <!-- Connecting Info -->
       {#if showGethConnectingMsg}
-        <div class="mt-4 p-3 bg-cyan-500/[0.06] border border-primary-200 rounded-lg">
+        <div class="mt-4 p-3 bg-cyan-50 dark:bg-cyan-500/[0.06] border border-primary-200 rounded-lg">
           <p class="text-sm text-primary-800">
             <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
             This may take a moment. Peer count will update automatically.
@@ -667,16 +667,16 @@
       {/if}
 
       <!-- Bootstrap Health Check -->
-      <div class="mt-4 border-t border-gray-800/50 pt-4">
+      <div class="mt-4 border-t border-gray-200 dark:border-gray-800/50 pt-4">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center gap-2">
             <Activity class="w-4 h-4 text-gray-500" />
-            <span class="text-sm font-medium text-gray-300">Bootstrap Health Check</span>
+            <span class="text-sm font-medium text-gray-600 dark:text-gray-300">Bootstrap Health Check</span>
           </div>
           <button
             onclick={checkBootstrapHealth}
             disabled={isCheckingBootstrap}
-            class="text-xs px-2 py-1 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+            class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-600 dark:text-gray-300"
           >
             {#if isCheckingBootstrap}
               <Loader2 class="w-3 h-3 animate-spin" />
@@ -689,19 +689,19 @@
 
         {#if bootstrapHealth}
           <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
-            <div class="bg-gray-800 rounded-lg p-2.5">
+            <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-2.5">
               <p class="text-xs text-gray-500">Status</p>
-              <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-emerald-400' : 'text-red-400'}">
+              <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}">
                 {bootstrapHealth.isHealthy ? 'Healthy' : 'Degraded'}
               </p>
             </div>
-            <div class="bg-gray-800 rounded-lg p-2.5">
+            <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-2.5">
               <p class="text-xs text-gray-500">Healthy Nodes</p>
-              <p class="text-sm font-bold tabular-nums text-gray-100">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
+              <p class="text-sm font-bold tabular-nums text-gray-900 dark:text-gray-100">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
             </div>
-            <div class="bg-gray-800 rounded-lg p-2.5">
+            <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-2.5">
               <p class="text-xs text-gray-500">Last Checked</p>
-              <p class="text-sm font-bold tabular-nums text-gray-100">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
+              <p class="text-sm font-bold tabular-nums text-gray-900 dark:text-gray-100">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
             </div>
           </div>
 
@@ -712,30 +712,30 @@
           >
             <span class="text-xs text-gray-500">Node Details</span>
             {#if showBootstrapDetails}
-              <ChevronUp class="w-4 h-4 text-gray-400" />
+              <ChevronUp class="w-4 h-4 text-gray-500 dark:text-gray-400" />
             {:else}
-              <ChevronDown class="w-4 h-4 text-gray-400" />
+              <ChevronDown class="w-4 h-4 text-gray-500 dark:text-gray-400" />
             {/if}
           </button>
 
           {#if showBootstrapDetails}
             <div class="space-y-2">
               {#each bootstrapHealth.nodes as node}
-                <div class="flex items-center justify-between p-2.5 bg-gray-800 rounded-lg text-xs">
+                <div class="flex items-center justify-between p-2.5 bg-gray-100 dark:bg-gray-800 rounded-lg text-xs">
                   <div class="flex items-center gap-2">
                     <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-emerald-500' : 'bg-red-500/100'} shrink-0"></div>
                     <div>
-                      <span class="font-medium text-gray-100 text-sm">{node.name}</span>
+                      <span class="font-medium text-gray-900 dark:text-gray-100 text-sm">{node.name}</span>
                       <span class="text-gray-500 ml-1">({node.region})</span>
                     </div>
                   </div>
                   <div class="text-right shrink-0">
                     {#if node.reachable && node.latencyMs}
-                      <span class="tabular-nums text-emerald-400">{node.latencyMs}ms</span>
+                      <span class="tabular-nums text-emerald-600 dark:text-emerald-400">{node.latencyMs}ms</span>
                     {:else if node.error}
                       <span class="text-red-500">{node.error}</span>
                     {:else}
-                      <span class="{node.reachable ? 'text-emerald-400' : 'text-red-400'}">
+                      <span class="{node.reachable ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}">
                         {node.reachable ? 'Reachable' : 'Unreachable'}
                       </span>
                     {/if}
@@ -745,7 +745,7 @@
 
               {#if !bootstrapHealth.isHealthy}
                 <div class="p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-                  <p class="text-xs text-red-400">
+                  <p class="text-xs text-red-600 dark:text-red-400">
                     <strong>Warning:</strong> Not enough bootstrap nodes are reachable.
                     Peer discovery may be limited.
                   </p>
@@ -763,20 +763,20 @@
   </div>
 
   <!-- P2P Network (DHT) Section -->
-  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-200 dark:border-gray-800/60 p-6 mb-6">
     <!-- Header with status and controls -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
-        <div class="p-2 {$networkConnected ? 'bg-emerald-500/10' : 'bg-gray-800'} rounded-lg">
-          <Globe class="w-6 h-6 {$networkConnected ? 'text-emerald-400' : 'text-gray-400'}" />
+        <div class="p-2 {$networkConnected ? 'bg-emerald-500/10' : 'bg-gray-100 dark:bg-gray-800'} rounded-lg">
+          <Globe class="w-6 h-6 {$networkConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'}" />
         </div>
         <div>
-          <h2 class="font-semibold text-gray-100">P2P Network (DHT)</h2>
+          <h2 class="font-semibold text-gray-900 dark:text-gray-100">P2P Network (DHT)</h2>
           <p class="text-sm text-gray-500">Kademlia DHT file sharing and peer discovery</p>
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <span class="flex items-center gap-2 px-3 py-1 {$networkConnected ? 'bg-emerald-500/10 text-emerald-400' : 'bg-gray-800 text-gray-300'} rounded-full text-sm">
+        <span class="flex items-center gap-2 px-3 py-1 {$networkConnected ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'} rounded-full text-sm">
           <span class="w-2 h-2 rounded-full {$networkConnected ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}"></span>
           {$networkConnected ? 'Connected' : 'Disconnected'}
         </span>
@@ -785,29 +785,29 @@
 
     <!-- Stats Grid -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      <div class="bg-gray-800 rounded-lg p-3">
+      <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
         <p class="text-xs text-gray-500">DHT Peers</p>
-        <p class="text-lg font-bold tabular-nums text-gray-100">{$networkStats.connectedPeers}</p>
+        <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{$networkStats.connectedPeers}</p>
       </div>
-      <div class="bg-gray-800 rounded-lg p-3">
+      <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
         <p class="text-xs text-gray-500">Discovered Peers</p>
-        <p class="text-lg font-bold tabular-nums text-gray-100">{$networkStats.totalPeers}</p>
+        <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{$networkStats.totalPeers}</p>
       </div>
-      <div class="bg-gray-800 rounded-lg p-3">
+      <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
         <p class="text-xs text-gray-500">Blockchain Peers</p>
-        <p class="text-lg font-bold tabular-nums text-gray-100">{gethStatus?.peerCount || 0}</p>
+        <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{gethStatus?.peerCount || 0}</p>
       </div>
-      <div class="bg-gray-800 rounded-lg p-3">
+      <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
         <p class="text-xs text-gray-500">Block Height</p>
-        <p class="text-lg font-bold tabular-nums text-gray-100">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+        <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
       </div>
     </div>
 
     <!-- Peer ID -->
     {#if localPeerId}
-      <div class="mb-4 p-3 bg-gray-800 rounded-lg">
+      <div class="mb-4 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
         <div class="text-xs text-gray-500 mb-1">Your Peer ID</div>
-        <div class="font-mono text-xs break-all text-gray-300">{localPeerId}</div>
+        <div class="font-mono text-xs break-all text-gray-600 dark:text-gray-300">{localPeerId}</div>
       </div>
     {/if}
 
@@ -839,16 +839,16 @@
     </div>
 
     <!-- Health Check -->
-    <div class="border-t border-gray-800/50 pt-4">
+    <div class="border-t border-gray-200 dark:border-gray-800/50 pt-4">
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
           <HeartPulse class="w-4 h-4 text-gray-500" />
-          <span class="text-sm font-medium text-gray-300">Health Check</span>
+          <span class="text-sm font-medium text-gray-600 dark:text-gray-300">Health Check</span>
         </div>
         <button
           onclick={checkDhtHealth}
           disabled={isCheckingDhtHealth}
-          class="text-xs px-2 py-1 bg-gray-800 hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-300"
+          class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded transition-colors flex items-center gap-1 disabled:opacity-50 text-gray-600 dark:text-gray-300"
         >
           {#if isCheckingDhtHealth}
             <Loader2 class="w-3 h-3 animate-spin" />
@@ -861,23 +861,23 @@
 
       {#if dhtHealth}
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-          <div class="bg-gray-800 rounded-lg p-2.5">
+          <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-2.5">
             <p class="text-xs text-gray-500">Status</p>
-            <p class="text-sm font-bold {dhtHealth.running ? 'text-emerald-400' : 'text-red-400'}">
+            <p class="text-sm font-bold {dhtHealth.running ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}">
               {dhtHealth.running ? 'Running' : 'Stopped'}
             </p>
           </div>
-          <div class="bg-gray-800 rounded-lg p-2.5">
+          <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-2.5">
             <p class="text-xs text-gray-500">Connected Peers</p>
-            <p class="text-sm font-bold tabular-nums text-gray-100">{dhtHealth.connectedPeerCount}</p>
+            <p class="text-sm font-bold tabular-nums text-gray-900 dark:text-gray-100">{dhtHealth.connectedPeerCount}</p>
           </div>
-          <div class="bg-gray-800 rounded-lg p-2.5">
+          <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-2.5">
             <p class="text-xs text-gray-500">Kademlia Peers</p>
-            <p class="text-sm font-bold tabular-nums text-gray-100">{dhtHealth.kademliaPeers}</p>
+            <p class="text-sm font-bold tabular-nums text-gray-900 dark:text-gray-100">{dhtHealth.kademliaPeers}</p>
           </div>
-          <div class="bg-gray-800 rounded-lg p-2.5">
+          <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-2.5">
             <p class="text-xs text-gray-500">Shared Files</p>
-            <p class="text-sm font-bold tabular-nums text-gray-100">{dhtHealth.sharedFiles}</p>
+            <p class="text-sm font-bold tabular-nums text-gray-900 dark:text-gray-100">{dhtHealth.sharedFiles}</p>
           </div>
         </div>
 
@@ -888,31 +888,31 @@
         >
           <span class="text-xs text-gray-500">Advanced Details</span>
           {#if showDhtHealthDetails}
-            <ChevronUp class="w-4 h-4 text-gray-400" />
+            <ChevronUp class="w-4 h-4 text-gray-500 dark:text-gray-400" />
           {:else}
-            <ChevronDown class="w-4 h-4 text-gray-400" />
+            <ChevronDown class="w-4 h-4 text-gray-500 dark:text-gray-400" />
           {/if}
         </button>
 
         {#if showDhtHealthDetails}
           <div class="space-y-2">
             {#if dhtHealth.peerId}
-              <div class="p-2.5 bg-gray-800 rounded-lg">
+              <div class="p-2.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
                 <p class="text-xs text-gray-500 mb-1">Peer ID</p>
-                <p class="font-mono text-xs break-all text-gray-300">{dhtHealth.peerId}</p>
+                <p class="font-mono text-xs break-all text-gray-600 dark:text-gray-300">{dhtHealth.peerId}</p>
               </div>
             {/if}
 
             {#if dhtHealth.listeningAddresses.length > 0}
-              <div class="p-2.5 bg-gray-800 rounded-lg">
+              <div class="p-2.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
                 <p class="text-xs text-gray-500 mb-2">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
                 <div class="space-y-1.5">
                   {#each dhtHealth.listeningAddresses as addr}
                     <div class="flex items-start gap-2 text-xs">
-                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-500/10 text-purple-400' : addrType(addr) === 'IPv4' ? 'bg-blue-500/10 text-cyan-300' : 'bg-gray-800 text-gray-300'}">
+                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' : addrType(addr) === 'IPv4' ? 'bg-blue-500/10 text-cyan-700 dark:text-cyan-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'}">
                         {addrType(addr)}
                       </span>
-                      <span class="font-mono break-all text-gray-300">{extractIpPort(addr)}</span>
+                      <span class="font-mono break-all text-gray-600 dark:text-gray-300">{extractIpPort(addr)}</span>
                     </div>
                   {/each}
                 </div>
@@ -920,17 +920,17 @@
             {/if}
 
             {#if dhtHealth.bootstrapNodes.length > 0}
-              <div class="p-2.5 bg-gray-800 rounded-lg">
+              <div class="p-2.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
                 <p class="text-xs text-gray-500 mb-2">DHT Bootstrap Nodes</p>
                 <div class="space-y-1.5">
                   {#each dhtHealth.bootstrapNodes as node}
                     <div class="flex items-start gap-2 text-xs">
                       <div class="w-2 h-2 rounded-full mt-1 {node.reachable ? 'bg-emerald-500' : 'bg-red-500/100'} shrink-0"></div>
-                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) === 'IPv6' ? 'bg-purple-500/10 text-purple-400' : addrType(node.address) === 'IPv4' ? 'bg-blue-500/10 text-cyan-300' : 'bg-gray-800 text-gray-300'}">
+                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) === 'IPv6' ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400' : addrType(node.address) === 'IPv4' ? 'bg-blue-500/10 text-cyan-700 dark:text-cyan-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300'}">
                         {addrType(node.address)}
                       </span>
-                      <span class="font-mono break-all text-gray-300">{extractIpPort(node.address)}</span>
-                      <span class="{node.reachable ? 'text-emerald-400' : 'text-red-400'} shrink-0">
+                      <span class="font-mono break-all text-gray-600 dark:text-gray-300">{extractIpPort(node.address)}</span>
+                      <span class="{node.reachable ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'} shrink-0">
                         {node.reachable ? 'Reachable' : 'Unreachable'}
                       </span>
                     </div>
@@ -940,11 +940,11 @@
             {/if}
 
             {#if dhtHealth.protocols.length > 0}
-              <div class="p-2.5 bg-gray-800 rounded-lg">
+              <div class="p-2.5 bg-gray-100 dark:bg-gray-800 rounded-lg">
                 <p class="text-xs text-gray-500 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
                 <div class="flex flex-wrap gap-1.5">
                   {#each dhtHealth.protocols as protocol}
-                    <span class="px-2 py-0.5 bg-cyan-500/[0.06] text-cyan-300 text-xs rounded-full font-mono">
+                    <span class="px-2 py-0.5 bg-cyan-50 dark:bg-cyan-500/[0.06] text-cyan-700 dark:text-cyan-300 text-xs rounded-full font-mono">
                       {protocol}
                     </span>
                   {/each}
@@ -961,54 +961,54 @@
     </div>
 
     <!-- Traffic Statistics -->
-    <div class="border-t border-gray-800/50 pt-4 mt-4">
+    <div class="border-t border-gray-200 dark:border-gray-800/50 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
         <Activity class="w-4 h-4 text-gray-500" />
-        <span class="text-sm font-medium text-gray-300">Traffic Statistics</span>
+        <span class="text-sm font-medium text-gray-600 dark:text-gray-300">Traffic Statistics</span>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-1">
             <ArrowDownToLine class="w-3.5 h-3.5 text-green-500" />
             <p class="text-xs text-gray-500">Download Speed</p>
           </div>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{formatSpeed(trafficStats.downloadSpeed)}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{formatSpeed(trafficStats.downloadSpeed)}</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-1">
-            <ArrowUpFromLine class="w-3.5 h-3.5 text-cyan-400" />
+            <ArrowUpFromLine class="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
             <p class="text-xs text-gray-500">Upload Speed</p>
           </div>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{formatSpeed(trafficStats.uploadSpeed)}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{formatSpeed(trafficStats.uploadSpeed)}</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-1">
             <Download class="w-3.5 h-3.5 text-green-500" />
             <p class="text-xs text-gray-500">Total Downloaded</p>
           </div>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{formatBytes(trafficStats.totalDownloaded)}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{formatBytes(trafficStats.totalDownloaded)}</p>
         </div>
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-1">
-            <Upload class="w-3.5 h-3.5 text-cyan-400" />
+            <Upload class="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
             <p class="text-xs text-gray-500">Total Uploaded</p>
           </div>
-          <p class="text-lg font-bold tabular-nums text-gray-100">{formatBytes(trafficStats.totalUploaded)}</p>
+          <p class="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{formatBytes(trafficStats.totalUploaded)}</p>
         </div>
       </div>
     </div>
 
     <!-- NAT Traversal / Relay Status -->
-    <div class="border-t border-gray-800/50 pt-4 mt-4">
+    <div class="border-t border-gray-200 dark:border-gray-800/50 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
         <Globe class="w-4 h-4 text-gray-500" />
-        <span class="text-sm font-medium text-gray-300">NAT Traversal</span>
+        <span class="text-sm font-medium text-gray-600 dark:text-gray-300">NAT Traversal</span>
         {#if relayReservations.some(r => r.active)}
-          <span class="px-2 py-0.5 text-xs rounded-full bg-emerald-500/10 text-emerald-400 font-medium">
+          <span class="px-2 py-0.5 text-xs rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium">
             Relay Active
           </span>
         {:else if $networkConnected}
-          <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-500/10 text-yellow-400 font-medium">
+          <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 font-medium">
             Connecting to Relays
           </span>
         {/if}
@@ -1017,12 +1017,12 @@
       {#if relayReservations.length > 0}
         <div class="space-y-1.5 mb-3">
           {#each relayReservations as relay}
-            <div class="flex items-center justify-between p-2 bg-gray-800 rounded-lg text-xs">
+            <div class="flex items-center justify-between p-2 bg-gray-100 dark:bg-gray-800 rounded-lg text-xs">
               <div class="flex items-center gap-2">
                 <div class="w-2 h-2 rounded-full {relay.active ? 'bg-emerald-500' : 'bg-red-500/100'} shrink-0"></div>
-                <span class="font-mono text-gray-300">{relay.relayPeerId.slice(0, 16)}...</span>
+                <span class="font-mono text-gray-600 dark:text-gray-300">{relay.relayPeerId.slice(0, 16)}...</span>
               </div>
-              <span class="{relay.active ? 'text-emerald-400' : 'text-red-400'}">
+              <span class="{relay.active ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}">
                 {relay.active ? 'Reserved' : 'Failed'}
               </span>
             </div>
@@ -1040,7 +1040,7 @@
           <p class="text-xs text-gray-500 mb-1.5">Hole-Punch Events (DCUtR)</p>
           <div class="space-y-1">
             {#each holePunchEvents.slice(0, 5) as event}
-              <div class="flex items-center justify-between p-1.5 text-xs {event.success ? 'text-emerald-400' : 'text-red-400'}">
+              <div class="flex items-center justify-between p-1.5 text-xs {event.success ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}">
                 <span class="font-mono">{event.remotePeerId.slice(0, 16)}...</span>
                 <span>{event.success ? 'Direct connection established' : `Failed: ${event.error || 'unknown'}`}</span>
               </div>
@@ -1051,11 +1051,11 @@
     </div>
 
     <!-- Connected Peers -->
-    <div class="border-t border-gray-800/50 pt-4 mt-4">
+    <div class="border-t border-gray-200 dark:border-gray-800/50 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
         <Radio class="w-4 h-4 text-gray-500" />
-        <span class="text-sm font-medium text-gray-300">Connected Peers</span>
-        <span class="px-2 py-0.5 text-xs rounded-full bg-gray-800 text-gray-400">
+        <span class="text-sm font-medium text-gray-600 dark:text-gray-300">Connected Peers</span>
+        <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
           {filteredPeers.length}
         </span>
       </div>
@@ -1068,10 +1068,10 @@
       {:else}
         <div class="space-y-2">
           {#each filteredPeers as peer}
-            <div class="p-3 bg-gray-800 rounded-lg hover:bg-white/[0.03] transition-colors">
+            <div class="p-3 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.03] transition-colors">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
-                  <div class="font-mono text-sm break-all text-gray-200">{peer.id}</div>
+                  <div class="font-mono text-sm break-all text-gray-700 dark:text-gray-200">{peer.id}</div>
                   {#if peer.address}
                     <div class="text-xs text-gray-500 mt-1">Address: {peer.address}</div>
                   {/if}
@@ -1093,17 +1093,17 @@
   </div>
 
   <!-- Blacklist Section -->
-  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-800/60 p-6 mt-6">
+  <div class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  border border-gray-200 dark:border-gray-800/60 p-6 mt-6">
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-red-500/10 rounded-lg">
-        <ShieldBan class="w-5 h-5 text-red-400" />
+        <ShieldBan class="w-5 h-5 text-red-600 dark:text-red-400" />
       </div>
       <div>
-        <h2 class="font-semibold text-gray-100">Blacklist</h2>
+        <h2 class="font-semibold text-gray-900 dark:text-gray-100">Blacklist</h2>
         <p class="text-sm text-gray-500">Block addresses from file transfers</p>
       </div>
       {#if $blacklist.length > 0}
-        <span class="px-2 py-0.5 text-xs rounded-full bg-red-500/10 text-red-400 font-medium">
+        <span class="px-2 py-0.5 text-xs rounded-full bg-red-500/10 text-red-600 dark:text-red-400 font-medium">
           {$blacklist.length}
         </span>
       {/if}
@@ -1115,14 +1115,14 @@
         type="text"
         bind:value={blacklistAddress}
         placeholder="Wallet or peer address"
-        class="flex-1 px-3 py-2 text-sm border border-gray-800/60 rounded-lg bg-gray-950 text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
+        class="flex-1 px-3 py-2 text-sm border border-gray-200 dark:border-gray-800/60 rounded-lg bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
         onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
       />
       <input
         type="text"
         bind:value={blacklistReason}
         placeholder="Reason (optional)"
-        class="w-48 px-3 py-2 text-sm border border-gray-800/60 rounded-lg bg-gray-950 text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
+        class="w-48 px-3 py-2 text-sm border border-gray-200 dark:border-gray-800/60 rounded-lg bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40"
         onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
       />
       <button
@@ -1144,9 +1144,9 @@
     {:else}
       <div class="space-y-2 max-h-64 overflow-y-auto">
         {#each $blacklist as entry}
-          <div class="flex items-center justify-between gap-3 p-3 bg-gray-800 rounded-lg group">
+          <div class="flex items-center justify-between gap-3 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg group">
             <div class="flex-1 min-w-0">
-              <div class="font-mono text-sm text-gray-200 truncate" title={entry.address}>
+              <div class="font-mono text-sm text-gray-700 dark:text-gray-200 truncate" title={entry.address}>
                 {truncateAddress(entry.address)}
               </div>
               <div class="flex items-center gap-2 mt-0.5">
@@ -1157,7 +1157,7 @@
             </div>
             <button
               onclick={() => removeFromBlacklist(entry.address)}
-              class="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+              class="p-1.5 text-gray-500 dark:text-gray-400 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
               title="Remove from blacklist"
             >
               <Trash2 class="w-4 h-4" />

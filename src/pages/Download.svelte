@@ -141,15 +141,15 @@
   function getFileColor(fileName: string) {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
 
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-cyan-400';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) return 'text-cyan-600 dark:text-cyan-400';
     if (['mp4', 'avi', 'mkv', 'mov', 'wmv', 'webm', 'flv', 'm4v'].includes(ext)) return 'text-purple-500';
     if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'].includes(ext)) return 'text-green-500';
     if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext)) return 'text-orange-500';
     if (['js', 'ts', 'html', 'css', 'py', 'java', 'cpp', 'c', 'php', 'rb', 'go', 'rs'].includes(ext)) return 'text-red-500';
-    if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return 'text-gray-400';
+    if (['txt', 'md', 'pdf', 'doc', 'docx', 'rtf'].includes(ext)) return 'text-gray-500 dark:text-gray-400';
     if (['xls', 'xlsx', 'csv', 'ods'].includes(ext)) return 'text-emerald-500';
 
-    return 'text-gray-400';
+    return 'text-gray-500 dark:text-gray-400';
   }
 
   function getFileExtension(fileNameOrPath: string): string {
@@ -1229,12 +1229,12 @@
   function getStatusBadgeColor(status: string): string {
     switch (status) {
       case 'completed': return 'bg-emerald-500/10 text-green-800';
-      case 'downloading': return 'bg-blue-500/10 text-blue-400';
-      case 'paused': return 'bg-yellow-100 text-yellow-400';
-      case 'failed': return 'bg-red-500/10 text-red-400';
-      case 'cancelled': return 'bg-gray-800 text-gray-200 text-gray-400';
-      case 'queued': return 'bg-gray-800 text-gray-200 text-gray-400';
-      default: return 'bg-gray-800 text-gray-200 text-gray-400';
+      case 'downloading': return 'bg-blue-500/10 text-blue-600 dark:text-blue-400';
+      case 'paused': return 'bg-yellow-100 text-yellow-600 dark:text-yellow-400';
+      case 'failed': return 'bg-red-500/10 text-red-600 dark:text-red-400';
+      case 'cancelled': return 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 text-gray-500 dark:text-gray-400';
+      case 'queued': return 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 text-gray-500 dark:text-gray-400';
+      default: return 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 text-gray-500 dark:text-gray-400';
     }
   }
 
@@ -1304,9 +1304,9 @@
 
   function getTierBadgeColor(tier?: SpeedTier): string {
     switch (tier) {
-      case 'ultra': return 'bg-purple-500/10 text-purple-400';
-      case 'premium': return 'bg-amber-500/10 text-amber-400';
-      default: return 'bg-blue-500/10 text-cyan-400';
+      case 'ultra': return 'bg-purple-500/10 text-purple-600 dark:text-purple-400';
+      case 'premium': return 'bg-amber-500/10 text-amber-600 dark:text-amber-400';
+      default: return 'bg-blue-500/10 text-cyan-600 dark:text-cyan-400';
     }
   }
 
@@ -1325,18 +1325,18 @@
 
 <div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
   <div>
-    <h1 class="text-2xl font-bold text-gray-100">Download</h1>
-    <p class="text-gray-400 mt-2">Search and download files from the Chiral Network</p>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Download</h1>
+    <p class="text-gray-500 dark:text-gray-400 mt-2">Search and download files from the Chiral Network</p>
   </div>
 
   <!-- Network Status Warning -->
   {#if !$networkConnected}
     <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4">
       <div class="flex items-start gap-3">
-        <div class="text-yellow-400 mt-0.5">!</div>
+        <div class="text-yellow-600 dark:text-yellow-400 mt-0.5">!</div>
         <div>
-          <p class="text-sm font-semibold text-yellow-300">Network Not Connected</p>
-          <p class="text-sm text-yellow-400">
+          <p class="text-sm font-semibold text-yellow-700 dark:text-yellow-300">Network Not Connected</p>
+          <p class="text-sm text-yellow-600 dark:text-yellow-400">
             Please connect to the DHT network from the Network page before downloading files.
           </p>
         </div>
@@ -1345,31 +1345,31 @@
   {/if}
 
   <!-- Add New Download Section -->
-  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40 border border-gray-800/60 p-6">
+  <div class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40 border border-gray-200 dark:border-gray-800/60 p-6">
     <div class="flex items-center gap-2 mb-4">
-      <Plus class="w-5 h-5 text-gray-400" />
-      <h2 class="text-lg font-semibold text-gray-100">Add New Download</h2>
+      <Plus class="w-5 h-5 text-gray-500 dark:text-gray-400" />
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Add New Download</h2>
     </div>
 
     <!-- Search Mode Tabs -->
     <div class="flex gap-2 mb-4">
       <button
         onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-cyan-500/40 bg-cyan-500/[0.06] text-cyan-300' : 'border-cyan-500/25 text-gray-300 hover:bg-white/[0.02]'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-cyan-500/40 bg-cyan-50 dark:bg-cyan-500/[0.06] text-cyan-700 dark:text-cyan-300' : 'border-cyan-500/25 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
       >
         <Search class="w-4 h-4" />
         Merkle Hash
       </button>
       <button
         onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 text-purple-400' : 'border-cyan-500/25 text-gray-300 hover:bg-white/[0.02]'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 text-purple-600 dark:text-purple-400' : 'border-cyan-500/25 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
       >
         <Link class="w-4 h-4" />
         Magnet Link
       </button>
       <button
         onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-emerald-500/10 text-emerald-400' : 'border-cyan-500/25 text-gray-300 hover:bg-white/[0.02]'}"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'border-cyan-500/25 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
       >
         <FileUp class="w-4 h-4" />
         .torrent File
@@ -1379,8 +1379,8 @@
     <!-- Search Input -->
     {#if searchMode === 'torrent'}
       <div class="text-center py-8 border-2 border-dashed border-cyan-500/25 rounded-lg">
-        <FileUp class="w-12 h-12 mx-auto text-gray-400 mb-3" />
-        <p class="text-gray-400 mb-4">Upload a .torrent file to start downloading</p>
+        <FileUp class="w-12 h-12 mx-auto text-gray-500 dark:text-gray-400 mb-3" />
+        <p class="text-gray-500 dark:text-gray-400 mb-4">Upload a .torrent file to start downloading</p>
         <button
           onclick={handleTorrentFile}
           disabled={!$networkConnected}
@@ -1397,7 +1397,7 @@
               type="text"
               bind:value={searchQuery}
               placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-gray-800/60 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40 font-mono text-sm text-gray-200"
+              class="w-full px-4 py-3 border border-gray-200 dark:border-gray-800/60 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500/40 font-mono text-sm text-gray-700 dark:text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1432,20 +1432,20 @@
     <!-- Search Result -->
     {#if searchResult}
       {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
-      <div class="mt-6 bg-gray-800 rounded-lg p-4 border border-gray-800/60">
+      <div class="mt-6 bg-gray-100 dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-800/60">
         <!-- File info row -->
         <div class="flex items-start gap-4">
-          <div class="flex items-center justify-center w-14 h-14 bg-gray-950 rounded-lg border border-gray-800/60 flex-shrink-0">
+          <div class="flex items-center justify-center w-14 h-14 bg-white dark:bg-gray-950 rounded-lg border border-gray-200 dark:border-gray-800/60 flex-shrink-0">
             <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
           </div>
 
           <div class="flex-1 min-w-0">
-            <h3 class="text-lg font-semibold truncate text-gray-100">{searchResult.fileName}</h3>
-            <div class="flex items-center gap-4 text-sm text-gray-400 mt-1">
+            <h3 class="text-lg font-semibold truncate text-gray-900 dark:text-gray-100">{searchResult.fileName}</h3>
+            <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400 mt-1">
               {#if searchResult.fileSize > 0}
                 <span class="tabular-nums">{formatFileSize(searchResult.fileSize)}</span>
               {/if}
-              <span class="tabular-nums {searchResult.seeders.length > 0 ? 'text-emerald-400' : 'text-amber-400'}">
+              <span class="tabular-nums {searchResult.seeders.length > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
               </span>
               {#if searchResult.seeders.length > 0}
@@ -1470,8 +1470,8 @@
 
         <!-- Seeder Selection (when multiple seeders available) -->
         {#if searchResult.seeders.length > 1}
-          <div class="mt-4 pt-4 border-t border-gray-800/50">
-            <p class="text-sm font-medium text-gray-300 mb-3">Select Seeder</p>
+          <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800/50">
+            <p class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-3">Select Seeder</p>
             <div class="space-y-2 max-h-48 overflow-y-auto">
               {#each searchResult.seeders as seeder, i}
                 {@const seederElo = getSeederElo(seeder)}
@@ -1479,8 +1479,8 @@
                   onclick={() => selectedSeederIndex = i}
                   class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
                     {selectedSeederIndex === i
-                      ? 'border-cyan-500/40 bg-cyan-500/[0.06]'
-                      : 'border-gray-800/50 hover:border-gray-400'
+                      ? 'border-cyan-500/40 bg-cyan-50 dark:bg-cyan-500/[0.06]'
+                      : 'border-gray-200 dark:border-gray-800/50 hover:border-gray-400'
                     }"
                 >
                   <div class="flex items-center gap-2 min-w-0">
@@ -1492,7 +1492,7 @@
                       Elo {seederElo.toFixed(1)}
                     </span>
                   </div>
-                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-500/10 text-amber-400 flex-shrink-0 tabular-nums">
+                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 flex-shrink-0 tabular-nums">
                     {formatPriceWei(seeder.priceWei || '0')}
                   </span>
                 </button>
@@ -1502,22 +1502,22 @@
         {:else if searchResult.seeders.length === 1}
           {@const seeder = searchResult.seeders[0]}
           {@const seederElo = getSeederElo(seeder)}
-          <div class="mt-3 flex items-center gap-2 text-sm text-gray-400">
+          <div class="mt-3 flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
             <span class="font-mono text-xs truncate" title={seeder.peerId}>
               Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
             </span>
             <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 tabular-nums">
               Elo {seederElo.toFixed(1)}
             </span>
-            <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-500/10 text-amber-400 tabular-nums">
+            <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 tabular-nums">
               {formatPriceWei(seeder.priceWei || '0')}
             </span>
           </div>
         {/if}
 
         <!-- Speed Tier Selector -->
-        <div class="mt-4 pt-4 border-t border-gray-800/50">
-          <p class="text-sm font-medium text-gray-300 mb-3">Select Download Speed</p>
+        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800/50">
+          <p class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-3">Select Download Speed</p>
           <div class="grid grid-cols-3 gap-3">
             {#each TIERS as tier}
               {@const fileSizeKnown = searchResult.fileSize > 0}
@@ -1533,18 +1533,18 @@
                 disabled={isDisabled}
                 class="relative p-3 rounded-lg border-2 text-left transition-all
                   {isSelected
-                    ? 'border-cyan-500/40 bg-cyan-500/[0.06] ring-1 ring-cyan-500'
+                    ? 'border-cyan-500/40 bg-cyan-50 dark:bg-cyan-500/[0.06] ring-1 ring-cyan-500'
                     : isDisabled
-                      ? 'border-gray-800/50 opacity-50 cursor-not-allowed'
-                      : 'border-gray-800/50 hover:border-gray-400 cursor-pointer'
+                      ? 'border-gray-200 dark:border-gray-800/50 opacity-50 cursor-not-allowed'
+                      : 'border-gray-200 dark:border-gray-800/50 hover:border-gray-400 cursor-pointer'
                   }"
               >
                 <div class="flex items-center gap-2 mb-1">
-                  <TierIcon class="w-4 h-4 {isSelected ? 'text-cyan-400' : 'text-gray-500'}" />
-                  <span class="text-sm font-semibold {isSelected ? 'text-cyan-300' : 'text-gray-100'}">{tier.name}</span>
+                  <TierIcon class="w-4 h-4 {isSelected ? 'text-cyan-600 dark:text-cyan-400' : 'text-gray-500'}" />
+                  <span class="text-sm font-semibold {isSelected ? 'text-cyan-700 dark:text-cyan-300' : 'text-gray-900 dark:text-gray-100'}">{tier.name}</span>
                 </div>
                 <p class="text-xs text-gray-500">{tier.speedLabel}</p>
-                <p class="text-xs font-medium mt-1 text-amber-400">
+                <p class="text-xs font-medium mt-1 text-amber-600 dark:text-amber-400">
                   {#if fileSizeKnown}
                     {formatCost(cost)}
                   {:else}
@@ -1568,19 +1568,19 @@
             {@const tierCostVal = searchResult.fileSize > 0 ? calculateCost(selectedTier, searchResult.fileSize) : 0}
             {@const hasCost = seederPrice || tierCostVal > 0}
             <div class="mt-4 flex items-center justify-between">
-              <div class="text-sm text-gray-400">
+              <div class="text-sm text-gray-500 dark:text-gray-400">
                 Cost:
                 {#if seederPrice}
-                  <span class="font-medium text-amber-400">{seederPrice}</span> (file)
+                  <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span> (file)
                 {/if}
                 {#if seederPrice && tierCostVal > 0}
                   <span class="mx-1">+</span>
                 {/if}
                 {#if tierCostVal > 0}
-                  <span class="font-medium text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
+                  <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
                 {/if}
                 {#if $walletAccount}
-                  <span class="text-gray-400 mx-1">•</span>
+                  <span class="text-gray-500 dark:text-gray-400 mx-1">•</span>
                   Balance: <span class="font-medium tabular-nums">{parseFloat(walletBalance).toFixed(4)} CHI</span>
                 {/if}
               </div>
@@ -1608,28 +1608,28 @@
       <div class="mt-6 bg-red-500/10 rounded-lg p-4 border border-red-500/20">
         <div class="flex items-center gap-3">
           <AlertCircle class="w-5 h-5 text-red-500" />
-          <p class="text-sm text-red-400">{searchError}</p>
+          <p class="text-sm text-red-600 dark:text-red-400">{searchError}</p>
         </div>
       </div>
     {/if}
   </div>
 
   <!-- Downloads -->
-  <div class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40 border border-gray-800/60">
+  <div class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40 border border-gray-200 dark:border-gray-800/60">
     <!-- Tabs -->
-    <div class="flex items-center justify-between border-b border-gray-800/50 px-4">
+    <div class="flex items-center justify-between border-b border-gray-200 dark:border-gray-800/50 px-4">
       <div class="flex">
         <button
           onclick={() => downloadsTab = 'active'}
           class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
             {downloadsTab === 'active'
-              ? 'border-cyan-500/40 text-cyan-400'
-              : 'border-transparent text-gray-500 hover:text-gray-300'}"
+              ? 'border-cyan-500/40 text-cyan-600 dark:text-cyan-400'
+              : 'border-transparent text-gray-500 hover:text-gray-600 dark:text-gray-300'}"
         >
           <Download class="w-4 h-4" />
           Active
           {#if getActiveDownloads().length > 0}
-            <span class="px-1.5 py-0.5 text-xs font-semibold bg-primary-100 text-cyan-300 rounded-full">
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-primary-100 text-cyan-700 dark:text-cyan-300 rounded-full">
               {getActiveDownloads().length}
             </span>
           {/if}
@@ -1638,13 +1638,13 @@
           onclick={() => downloadsTab = 'history'}
           class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
             {downloadsTab === 'history'
-              ? 'border-cyan-500/40 text-cyan-400'
-              : 'border-transparent text-gray-500 hover:text-gray-300'}"
+              ? 'border-cyan-500/40 text-cyan-600 dark:text-cyan-400'
+              : 'border-transparent text-gray-500 hover:text-gray-600 dark:text-gray-300'}"
         >
           <History class="w-4 h-4" />
           History
           {#if downloadHistory.length > 0}
-            <span class="px-1.5 py-0.5 text-xs font-semibold bg-gray-800 text-gray-400 text-gray-400 rounded-full">
+            <span class="px-1.5 py-0.5 text-xs font-semibold bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 text-gray-500 dark:text-gray-400 rounded-full">
               {downloadHistory.length}
             </span>
           {/if}
@@ -1654,7 +1654,7 @@
       {#if downloadsTab === 'history' && downloadHistory.length > 0}
         <button
           onclick={clearDownloadHistory}
-          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
+          class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
         >
           <Trash2 class="w-3.5 h-3.5" />
           Clear
@@ -1666,7 +1666,7 @@
     {#if downloadsTab === 'active'}
       {#if downloads.length === 0}
         <div class="text-center py-16 px-6">
-          <Download class="w-12 h-12 mx-auto text-gray-300 mb-3" />
+          <Download class="w-12 h-12 mx-auto text-gray-600 dark:text-gray-300 mb-3" />
           <p class="text-gray-500">No active downloads</p>
           <p class="text-sm text-gray-500 mt-1">Search for a file above to start downloading</p>
         </div>
@@ -1677,17 +1677,17 @@
             {@const TierIcon = getTierIcon(download.speedTier || 'standard')}
             {@const isActive = download.status === 'downloading' || download.status === 'paused'}
             {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
-            <div class="p-4 hover:bg-white/[0.02] transition-colors">
+            <div class="p-4 hover:bg-gray-100 dark:hover:bg-white/[0.02] transition-colors">
               <!-- Top row: icon, name, badges, actions -->
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
-                  {download.status === 'completed' ? 'bg-emerald-500/10' : 'bg-gray-800'}">
+                  {download.status === 'completed' ? 'bg-emerald-500/10' : 'bg-gray-100 dark:bg-gray-800'}">
                   <DownloadIcon class="w-5 h-5 {download.status === 'completed' ? 'text-green-500' : getFileColor(download.name)}" />
                 </div>
 
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
-                    <p class="text-sm font-semibold truncate text-gray-100">{download.name}</p>
+                    <p class="text-sm font-semibold truncate text-gray-900 dark:text-gray-100">{download.name}</p>
                     <span class="px-2 py-0.5 text-xs font-medium rounded-full capitalize {getStatusBadgeColor(download.status)}">
                       {download.status}
                     </span>
@@ -1705,7 +1705,7 @@
                       </span>
                     {/if}
                     {#if isActive}
-                      <span class="text-cyan-400 font-medium tabular-nums">{download.speed}</span>
+                      <span class="text-cyan-600 dark:text-cyan-400 font-medium tabular-nums">{download.speed}</span>
                       <span class="tabular-nums">{download.eta}</span>
                     {/if}
                     {#if download.status === 'completed' && download.startedAt && download.completedAt}
@@ -1729,7 +1729,7 @@
                   {#if download.status === 'downloading' || download.status === 'paused'}
                     <button
                       onclick={() => togglePause(download.id)}
-                      class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
+                      class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors"
                       title={download.status === 'downloading' ? 'Pause' : 'Resume'}
                     >
                       {#if download.status === 'downloading'}
@@ -1743,7 +1743,7 @@
                       class="p-1.5 hover:bg-red-500/10 rounded-lg transition-colors"
                       title="Cancel"
                     >
-                      <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                      <X class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-red-500" />
                     </button>
                   {:else if download.status === 'queued'}
                     <button
@@ -1751,7 +1751,7 @@
                       class="p-1.5 hover:bg-red-500/10 rounded-lg transition-colors"
                       title="Cancel"
                     >
-                      <X class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                      <X class="w-4 h-4 text-gray-500 dark:text-gray-400 hover:text-red-500" />
                     </button>
                   {:else if isFinished}
                     {#if download.status === 'completed' && download.filePath}
@@ -1766,14 +1766,14 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(download.filePath!)}
-                        class="p-1.5 hover:bg-white/[0.03] rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-lg transition-colors"
                         title="Open file"
                       >
-                        <ExternalLink class="w-4 h-4 text-cyan-400" />
+                        <ExternalLink class="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(download.filePath!)}
-                        class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors"
                         title="Show in folder"
                       >
                         <FolderOpen class="w-4 h-4 text-gray-500" />
@@ -1781,7 +1781,7 @@
                     {/if}
                     <button
                       onclick={() => moveToHistory(download.id)}
-                      class="px-2.5 py-1 text-xs text-gray-500 hover:bg-white/[0.04] rounded-lg transition-colors"
+                      class="px-2.5 py-1 text-xs text-gray-500 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors"
                       title="Dismiss"
                     >
                       Dismiss
@@ -1794,13 +1794,13 @@
               {#if isActive}
                 <div class="mt-3 ml-13">
                   <div class="flex items-center gap-3">
-                    <div class="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+                    <div class="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                       <div
                         class="h-full rounded-full transition-all duration-300 {download.status === 'paused' ? 'bg-yellow-500' : 'bg-cyan-500'}"
                         style="width: {download.progress}%"
                       ></div>
                     </div>
-                    <span class="text-xs font-medium text-gray-400 w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
+                    <span class="text-xs font-medium text-gray-500 dark:text-gray-400 w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
                   </div>
                 </div>
               {/if}
@@ -1825,7 +1825,7 @@
     {:else}
       {#if downloadHistory.length === 0}
         <div class="text-center py-16 px-6">
-          <History class="w-12 h-12 mx-auto text-gray-300 mb-3" />
+          <History class="w-12 h-12 mx-auto text-gray-600 dark:text-gray-300 mb-3" />
           <p class="text-gray-500">No download history</p>
           <p class="text-sm text-gray-500 mt-1">Completed and finished downloads will appear here</p>
         </div>
@@ -1834,22 +1834,22 @@
           {#each downloadHistory as entry (entry.id)}
             {@const EntryIcon = getFileIcon(entry.fileName)}
             {@const EntryTierIcon = getTierIcon(entry.speedTier || 'standard')}
-            <div class="p-4 hover:bg-white/[0.02] transition-colors">
+            <div class="p-4 hover:bg-gray-100 dark:hover:bg-white/[0.02] transition-colors">
               <div class="flex items-start gap-3">
                 <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
                   {entry.status === 'completed' ? 'bg-emerald-500/10' :
                    entry.status === 'failed' ? 'bg-red-500/10' :
-                   'bg-gray-800'}">
+                   'bg-gray-100 dark:bg-gray-800'}">
                   <EntryIcon class="w-5 h-5 {
                     entry.status === 'completed' ? 'text-green-500' :
-                    entry.status === 'failed' ? 'text-red-400' :
+                    entry.status === 'failed' ? 'text-red-600 dark:text-red-400' :
                     getFileColor(entry.fileName)
                   }" />
                 </div>
 
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2 flex-wrap">
-                    <p class="text-sm font-semibold truncate text-gray-100">{entry.fileName}</p>
+                    <p class="text-sm font-semibold truncate text-gray-900 dark:text-gray-100">{entry.fileName}</p>
                     <span class="px-2 py-0.5 text-xs font-medium rounded-full capitalize {getStatusBadgeColor(entry.status)}">
                       {entry.status}
                     </span>
@@ -1902,14 +1902,14 @@
                       {/if}
                       <button
                         onclick={() => handleOpenFile(entry.filePath!)}
-                        class="p-1.5 hover:bg-white/[0.03] rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-lg transition-colors"
                         title="Open file"
                       >
-                        <ExternalLink class="w-4 h-4 text-cyan-400" />
+                        <ExternalLink class="w-4 h-4 text-cyan-600 dark:text-cyan-400" />
                       </button>
                       <button
                         onclick={() => handleShowInFolder(entry.filePath!)}
-                        class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
+                        class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors"
                         title="Show in folder"
                       >
                         <FolderOpen class="w-4 h-4 text-gray-500" />
@@ -1917,10 +1917,10 @@
                     {/if}
                     <button
                       onclick={() => { searchQuery = entry.hash; searchMode = 'hash'; searchFile(); }}
-                      class="p-1.5 hover:bg-white/[0.04] rounded-lg transition-colors"
+                      class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded-lg transition-colors"
                       title="Download again"
                     >
-                      <Download class="w-4 h-4 text-gray-400" />
+                      <Download class="w-4 h-4 text-gray-500 dark:text-gray-400" />
                     </button>
                   </div>
                 {/if}
@@ -1942,29 +1942,29 @@
     onclick={(e) => e.target === e.currentTarget && closeViewer()}
     onkeydown={(e) => e.key === 'Escape' && closeViewer()}
   >
-    <div class="w-full max-w-5xl max-h-[90vh] bg-gray-950 rounded-xl border border-gray-800/60  flex flex-col">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800/50">
+    <div class="w-full max-w-5xl max-h-[90vh] bg-white dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800/60  flex flex-col">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800/50">
         <div class="min-w-0">
-          <p class="text-sm font-semibold truncate text-gray-100">{viewerName}</p>
+          <p class="text-sm font-semibold truncate text-gray-900 dark:text-gray-100">{viewerName}</p>
           <p class="text-xs text-gray-500 capitalize">{viewerType} preview</p>
         </div>
         <button
           onclick={closeViewer}
-          class="p-1.5 rounded-lg hover:bg-white/[0.03] transition-colors"
+          class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.03] transition-colors"
           title="Close preview"
         >
-          <X class="w-5 h-5 text-gray-500 text-gray-300" />
+          <X class="w-5 h-5 text-gray-500 text-gray-600 dark:text-gray-300" />
         </button>
       </div>
 
-      <div class="flex-1 p-4 overflow-auto bg-gray-800">
+      <div class="flex-1 p-4 overflow-auto bg-gray-100 dark:bg-gray-800">
         {#if viewerError}
           <div class="h-full flex items-center justify-center">
-            <p class="text-sm text-red-400">{viewerError}</p>
+            <p class="text-sm text-red-600 dark:text-red-400">{viewerError}</p>
           </div>
         {:else if viewerType === 'video'}
           <video
-            class="w-full h-full max-h-[75vh] rounded-lg bg-black"
+            class="w-full h-full max-h-[75vh] rounded-lg bg-gray-50 dark:bg-black"
             controls
             src={viewerSource}
             onerror={() => viewerError = 'Video preview failed to load'}
@@ -1989,13 +1989,13 @@
           />
         {:else if viewerType === 'pdf'}
           <iframe
-            class="w-full h-[75vh] rounded-lg border border-gray-800/60 bg-gray-900"
+            class="w-full h-[75vh] rounded-lg border border-gray-200 dark:border-gray-800/60 bg-gray-50 dark:bg-gray-900"
             src={viewerSource}
             title={viewerName}
           ></iframe>
         {:else}
           <div class="h-full flex items-center justify-center">
-            <p class="text-sm text-gray-400">Preview is not supported for this file type.</p>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Preview is not supported for this file type.</p>
           </div>
         {/if}
       </div>
@@ -2025,28 +2025,28 @@
     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') pendingDownload = null; }}
     onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
   >
-    <div class="bg-gray-950 rounded-xl  border border-gray-800/60 p-6 max-w-md w-full mx-4">
+    <div class="bg-white dark:bg-gray-950 rounded-xl  border border-gray-200 dark:border-gray-800/60 p-6 max-w-md w-full mx-4">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2.5 bg-amber-500/10 rounded-lg">
-          <AlertTriangle class="w-6 h-6 text-amber-400" />
+          <AlertTriangle class="w-6 h-6 text-amber-600 dark:text-amber-400" />
         </div>
-        <h3 class="text-lg font-semibold text-gray-100">Confirm Download</h3>
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Confirm Download</h3>
       </div>
 
       <div class="space-y-3 mb-5">
-        <div class="bg-gray-800 rounded-lg p-3">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
           <p class="text-sm text-gray-500">File</p>
-          <p class="font-medium text-gray-100 truncate">{pendingDownload.result.fileName}</p>
+          <p class="font-medium text-gray-900 dark:text-gray-100 truncate">{pendingDownload.result.fileName}</p>
           {#if pendingDownload.result.fileSize > 0}
-            <p class="text-xs text-gray-400 mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
           {/if}
         </div>
 
         {#if selectedPendingSeeder}
-          <div class="bg-gray-800 rounded-lg p-3">
+          <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3">
             <p class="text-sm text-gray-500">Selected Seeder</p>
             <div class="flex items-center justify-between gap-2 mt-1 min-w-0">
-              <span class="font-mono text-xs text-gray-300 truncate" title={selectedPendingSeeder.peerId}>
+              <span class="font-mono text-xs text-gray-600 dark:text-gray-300 truncate" title={selectedPendingSeeder.peerId}>
                 {selectedPendingSeeder.peerId.slice(0, 8)}...{selectedPendingSeeder.peerId.slice(-6)}
               </span>
               <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800">
@@ -2056,23 +2056,23 @@
           </div>
         {/if}
 
-        <div class="bg-gray-800 rounded-lg p-3 space-y-2">
+        <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-3 space-y-2">
           <p class="text-sm text-gray-500">Cost Breakdown</p>
           {#if pendingDownload.seederPriceChi > 0}
             <div class="flex justify-between text-sm">
-              <span class="text-gray-300">File price</span>
-              <span class="font-medium text-amber-400">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
+              <span class="text-gray-600 dark:text-gray-300">File price</span>
+              <span class="font-medium text-amber-600 dark:text-amber-400">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
             </div>
           {/if}
           {#if pendingDownload.tierCost > 0}
             <div class="flex justify-between text-sm">
-              <span class="text-gray-300">Speed tier ({selectedTier})</span>
-              <span class="font-medium text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
+              <span class="text-gray-600 dark:text-gray-300">Speed tier ({selectedTier})</span>
+              <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
             </div>
           {/if}
-          <div class="flex justify-between text-sm pt-2 border-t border-gray-800/50">
-            <span class="font-semibold text-gray-100">Total</span>
-            <span class="font-semibold text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
+          <div class="flex justify-between text-sm pt-2 border-t border-gray-200 dark:border-gray-800/50">
+            <span class="font-semibold text-gray-900 dark:text-gray-100">Total</span>
+            <span class="font-semibold text-amber-600 dark:text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
           </div>
         </div>
 
@@ -2085,7 +2085,7 @@
       <div class="flex gap-3">
         <button
           onclick={() => { pendingDownload = null; }}
-          class="flex-1 px-4 py-2.5 border border-gray-800/60 rounded-lg hover:bg-white/[0.02] transition-colors text-gray-300 font-medium"
+          class="flex-1 px-4 py-2.5 border border-gray-200 dark:border-gray-800/60 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.02] transition-colors text-gray-600 dark:text-gray-300 font-medium"
         >
           Cancel
         </button>

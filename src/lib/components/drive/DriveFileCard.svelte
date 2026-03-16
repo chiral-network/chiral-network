@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="group relative bg-gray-950 border border-gray-800/60 rounded-xl p-4 hover: hover:border-cyan-500/30 transition cursor-pointer select-none"
+  class="group relative bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800/60 rounded-xl p-4 hover: hover:border-cyan-500/30 transition cursor-pointer select-none"
   ondblclick={() => onOpen(item)}
   oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -44,21 +44,21 @@
     {/if}
     {#if item.shared}
       {#if item.isPublic}
-        <Link class="w-3.5 h-3.5 text-cyan-400" />
+        <Link class="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
       {:else}
         <EyeOff class="w-3.5 h-3.5 text-orange-500" />
       {/if}
     {/if}
     <button
       onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
-      class="p-1 hover:bg-white/[0.03] rounded"
+      class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded"
     >
       <MoreVertical class="w-4 h-4 text-gray-500" />
     </button>
   </div>
 
   <!-- Icon -->
-  <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type === 'folder' ? 'bg-yellow-500/10' : 'bg-gray-800'}">
+  <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type === 'folder' ? 'bg-yellow-500/10' : 'bg-gray-100 dark:bg-gray-800'}">
     {#if item.type === 'folder'}
       <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
     {:else}
@@ -69,7 +69,7 @@
 
   <!-- Name & metadata -->
   <div class="text-center">
-    <p class="text-sm font-medium text-gray-100 truncate" title={item.name}>
+    <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate" title={item.name}>
       {item.name}
     </p>
     {#if item.type === 'file' && item.size}
@@ -77,14 +77,14 @@
     {/if}
     {#if getPriceLabel(item)}
       {@const priceLabel = getPriceLabel(item)}
-      <p class="text-[11px] text-amber-400 font-medium mt-0.5">{priceLabel}</p>
+      <p class="text-[11px] text-amber-600 dark:text-amber-400 font-medium mt-0.5">{priceLabel}</p>
     {/if}
     {#if item.seeding && $networkConnected}
       <div class="flex items-center justify-center gap-1 mt-1">
         <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-        <span class="text-[10px] text-emerald-400 font-medium">Seeding</span>
+        <span class="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Seeding</span>
         {#if item.protocol}
-          <span class="text-[10px] text-gray-400">({item.protocol})</span>
+          <span class="text-[10px] text-gray-500 dark:text-gray-400">({item.protocol})</span>
         {/if}
       </div>
     {/if}

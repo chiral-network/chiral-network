@@ -46,10 +46,10 @@
 </script>
 
 <!-- Mobile top bar -->
-<div class="md:hidden sticky top-0 z-50 flex items-center justify-between h-14 px-3 bg-black border-b border-gray-800/50">
+<div class="md:hidden sticky top-0 z-50 flex items-center justify-between h-14 px-3 bg-gray-50 dark:bg-black border-b border-gray-200 dark:border-gray-800/50">
   <div class="flex items-center gap-2">
     <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg" />
-    <span class="text-lg font-bold text-cyan-400">Chiral</span>
+    <span class="text-lg font-bold text-cyan-600 dark:text-cyan-400">Chiral</span>
   </div>
   <div class="flex items-center gap-2">
     <div class="flex items-center gap-1.5 px-2 py-1 rounded-full
@@ -60,7 +60,7 @@
     </div>
     <button
       onclick={() => mobileOpen = !mobileOpen}
-      class="p-1.5 text-gray-400 hover:text-gray-200 hover:bg-white/[0.03] rounded-lg transition"
+      class="p-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-lg transition"
     >
       {#if mobileOpen}
         <X class="w-5 h-5" />
@@ -74,24 +74,24 @@
 <!-- Mobile overlay -->
 {#if mobileOpen}
   <div class="md:hidden fixed inset-0 z-40 bg-black/60" onclick={() => mobileOpen = false}></div>
-  <div class="md:hidden fixed top-14 left-0 right-0 z-50 bg-gray-950 border-b border-gray-800/50 max-h-[calc(100vh-3.5rem)] overflow-y-auto">
+  <div class="md:hidden fixed top-14 left-0 right-0 z-50 bg-white dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800/50 max-h-[calc(100vh-3.5rem)] overflow-y-auto">
     <div class="px-3 py-2 space-y-0.5">
       {#each navItems as item}
         <button
           onclick={() => navigate(item.path)}
           class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm
             {currentPage === item.path
-              ? 'bg-cyan-500/[0.06] text-cyan-400 border-l-2 border-cyan-400'
-              : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
+              ? 'bg-cyan-50 dark:bg-cyan-500/[0.06] text-cyan-600 dark:text-cyan-400 border-l-2 border-cyan-400'
+              : 'text-gray-500 hover:text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
         >
           <svelte:component this={item.icon} class="w-4 h-4" />
           <span class="font-medium">{item.label}</span>
         </button>
       {/each}
-      <hr class="border-gray-800/50" />
+      <hr class="border-gray-200 dark:border-gray-800/50" />
       <button
         onclick={handleLogout}
-        class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-500 hover:bg-red-500/10 hover:text-red-400 rounded-lg transition text-sm"
+        class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-500 hover:bg-red-500/10 hover:text-red-600 dark:text-red-400 rounded-lg transition text-sm"
       >
         <LogOut class="w-4 h-4" />
         <span class="font-medium">Logout</span>
@@ -102,22 +102,22 @@
 
 <!-- Desktop sidebar -->
 <aside
-  class="hidden md:flex fixed top-0 left-0 z-40 h-screen flex-col bg-black border-r border-gray-800/50 transition-[width] duration-200
+  class="hidden md:flex fixed top-0 left-0 z-40 h-screen flex-col bg-gray-50 dark:bg-black border-r border-gray-200 dark:border-gray-800/50 transition-[width] duration-200
     {collapsed ? 'w-16' : 'w-48'}"
 >
   <!-- Logo + collapse toggle -->
-  <div class="flex items-center h-14 px-3 border-b border-gray-800/50 shrink-0 overflow-hidden
+  <div class="flex items-center h-14 px-3 border-b border-gray-200 dark:border-gray-800/50 shrink-0 overflow-hidden
     {collapsed ? 'justify-center' : 'justify-between'}">
     <div class="flex items-center gap-2 overflow-hidden">
       <img src="/logo.png" alt="Chiral Network" class="w-7 h-7 rounded-lg shrink-0" />
       {#if !collapsed}
-        <span class="text-sm font-bold text-cyan-400 whitespace-nowrap">Chiral Network</span>
+        <span class="text-sm font-bold text-cyan-600 dark:text-cyan-400 whitespace-nowrap">Chiral Network</span>
       {/if}
     </div>
     {#if !collapsed}
       <button
         onclick={toggleCollapse}
-        class="p-1 text-gray-600 hover:text-gray-300 hover:bg-white/[0.03] rounded-md transition shrink-0"
+        class="p-1 text-gray-600 hover:text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-md transition shrink-0"
         title="Collapse sidebar"
       >
         <ChevronLeft class="w-4 h-4" />
@@ -126,14 +126,14 @@
   </div>
 
   <!-- Network status -->
-  <div class="flex items-center gap-3 px-3 py-2 border-b border-gray-800/50 shrink-0
+  <div class="flex items-center gap-3 px-3 py-2 border-b border-gray-200 dark:border-gray-800/50 shrink-0
     {collapsed ? 'justify-center' : ''}">
     <div class="w-2 h-2 rounded-full shrink-0 {$networkConnected ? 'bg-emerald-400' : 'bg-red-400'}"></div>
     {#if !collapsed}
       <span class="text-xs font-medium whitespace-nowrap
         {$networkConnected
-          ? 'text-emerald-400'
-          : 'text-red-400'}">
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : 'text-red-600 dark:text-red-400'}">
         {$networkConnected ? 'Connected' : 'Offline'}
       </span>
     {/if}
@@ -147,8 +147,8 @@
         class="flex items-center gap-3 w-full py-2.5 rounded-lg transition text-sm
           {collapsed ? 'justify-center px-0' : 'px-3'}
           {currentPage === item.path
-            ? 'bg-cyan-500/[0.06] text-cyan-400 border-l-2 border-cyan-400'
-            : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
+            ? 'bg-cyan-50 dark:bg-cyan-500/[0.06] text-cyan-600 dark:text-cyan-400 border-l-2 border-cyan-400'
+            : 'text-gray-500 hover:text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
         title={collapsed ? item.label : ''}
       >
         <svelte:component this={item.icon} class="w-4 h-4 shrink-0" />
@@ -160,12 +160,12 @@
   </nav>
 
   <!-- Bottom section -->
-  <div class="px-2 pb-3 space-y-1 border-t border-gray-800/50 pt-3 shrink-0">
+  <div class="px-2 pb-3 space-y-1 border-t border-gray-200 dark:border-gray-800/50 pt-3 shrink-0">
     <!-- Expand toggle (only when collapsed) -->
     {#if collapsed}
       <button
         onclick={toggleCollapse}
-        class="flex items-center justify-center w-full py-2 text-gray-600 hover:text-gray-300 hover:bg-white/[0.03] rounded-lg transition text-sm"
+        class="flex items-center justify-center w-full py-2 text-gray-600 hover:text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-lg transition text-sm"
         title="Expand sidebar"
       >
         <ChevronRight class="w-4 h-4 shrink-0" />
@@ -175,7 +175,7 @@
     <!-- Logout -->
     <button
       onclick={handleLogout}
-      class="flex items-center gap-3 w-full py-2 text-gray-500 hover:bg-red-500/10 hover:text-red-400 rounded-lg transition text-sm
+      class="flex items-center gap-3 w-full py-2 text-gray-500 hover:bg-red-500/10 hover:text-red-600 dark:text-red-400 rounded-lg transition text-sm
         {collapsed ? 'justify-center px-0' : 'px-3'}"
       title={collapsed ? 'Logout' : ''}
     >

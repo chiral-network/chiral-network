@@ -30,14 +30,14 @@
 <div class="rounded-2xl border p-4 transition-colors
   {serverRunning
     ? 'border-emerald-500/30 bg-emerald-500/10'
-    : 'border-gray-800/50 bg-gray-900'}
+    : 'border-gray-200 dark:border-gray-800/50 bg-gray-50 dark:bg-gray-900'}
    backblur">
   <div class="flex items-center justify-between gap-4 flex-wrap">
     <div class="flex items-center gap-3">
       <!-- Status indicator -->
       <div class="relative flex h-10 w-10 items-center justify-center rounded-xl
-        {serverRunning ? 'bg-emerald-500/10' : 'bg-gray-800'}">
-        <Server class="h-5 w-5 {serverRunning ? 'text-emerald-400' : 'text-gray-500'}" />
+        {serverRunning ? 'bg-emerald-500/10' : 'bg-gray-100 dark:bg-gray-800'}">
+        <Server class="h-5 w-5 {serverRunning ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500'}" />
         {#if serverRunning}
           <span class="absolute -top-0.5 -right-0.5 flex h-3 w-3">
             <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
@@ -46,7 +46,7 @@
         {/if}
       </div>
       <div>
-        <h2 class="text-sm font-semibold text-gray-100 flex items-center gap-2">
+        <h2 class="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
           Local HTTP Server
           {#if serverRunning}
             <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-green-400 uppercase tracking-wide">
@@ -55,7 +55,7 @@
           {/if}
         </h2>
         {#if serverRunning}
-          <p class="text-xs text-emerald-400 mt-0.5">
+          <p class="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
             Serving at <a href={localUrl()} target="_blank" rel="noopener noreferrer" class="font-mono underline decoration-green-400 hover:decoration-green-500 transition-colors">{localUrl()}</a>
           </p>
         {:else}
@@ -75,9 +75,9 @@
             oninput={(e) => onPortChange(Number(e.currentTarget.value))}
             min="1024"
             max="65535"
-            class="w-20 rounded-lg border border-gray-800/60 bg-gray-950 px-2.5 py-1.5 text-sm text-gray-100 text-center tabular-nums
+            class="w-20 rounded-lg border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-950 px-2.5 py-1.5 text-sm text-gray-900 dark:text-gray-100 text-center tabular-nums
               focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30
-              text-gray-100"
+              text-gray-900 dark:text-gray-100"
           />
         </div>
       {/if}

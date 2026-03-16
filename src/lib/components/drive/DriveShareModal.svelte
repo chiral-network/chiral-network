@@ -82,33 +82,33 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={onClose}>
   <div
-    class="bg-gray-950 rounded-xl  w-full max-w-lg mx-4 p-6"
+    class="bg-white dark:bg-gray-950 rounded-xl  w-full max-w-lg mx-4 p-6"
     onclick={(e) => e.stopPropagation()}
   >
     <div class="flex items-center justify-between mb-4">
-      <h3 class="text-lg font-semibold text-gray-100">Share "{item.name}"</h3>
-      <button onclick={onClose} class="p-1 hover:bg-white/[0.03] rounded-lg transition">
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100">Share "{item.name}"</h3>
+      <button onclick={onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-lg transition">
         <X class="w-5 h-5 text-gray-500" />
       </button>
     </div>
 
     {#if existingShares.length > 0}
-      <div class="flex items-center justify-between p-3 bg-gray-800 rounded-lg mb-4">
+      <div class="flex items-center justify-between p-3 bg-gray-100 dark:bg-gray-800 rounded-lg mb-4">
         <div class="flex items-center gap-2">
           {#if isItemPublic}
             <Eye class="w-4 h-4 text-green-500" />
-            <span class="text-sm text-gray-300">Public — share links are active</span>
+            <span class="text-sm text-gray-600 dark:text-gray-300">Public — share links are active</span>
           {:else}
             <EyeOff class="w-4 h-4 text-orange-500" />
-            <span class="text-sm text-gray-300">Private — share links are blocked</span>
+            <span class="text-sm text-gray-600 dark:text-gray-300">Private — share links are blocked</span>
           {/if}
         </div>
         <button
           onclick={toggleVisibility}
           disabled={toggling}
           class="px-3 py-1.5 text-sm font-medium rounded-lg transition disabled:opacity-50 {isItemPublic
-            ? 'bg-orange-500/10 text-orange-400 hover:bg-orange-500/15'
-            : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/15'}"
+            ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400 hover:bg-orange-500/15'
+            : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/15'}"
         >
           {isItemPublic ? 'Make Private' : 'Make Public'}
         </button>
@@ -116,9 +116,9 @@
     {/if}
 
     <div class="space-y-3 mb-6">
-      <p class="text-sm text-gray-400">
+      <p class="text-sm text-gray-500 dark:text-gray-400">
         {#if hasPrice}
-          Share at <strong class="text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
+          Share at <strong class="text-emerald-600 dark:text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
         {:else}
           Share for free. Use "Edit Price" from the right-click menu to set a price.
         {/if}
@@ -140,7 +140,7 @@
 
       {#if !isItemPublic}
         <div class="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
-          <p class="text-xs text-yellow-400">
+          <p class="text-xs text-yellow-600 dark:text-yellow-400">
             This file is currently private. Share links won't work until you make it public.
           </p>
         </div>
@@ -162,26 +162,26 @@
             class="p-1.5 hover:bg-emerald-500/10 rounded transition shrink-0"
             title="Copy link"
           >
-            <Copy class="w-4 h-4 text-emerald-400" />
+            <Copy class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           </button>
         </div>
       {/if}
     </div>
 
     {#if existingShares.length > 0}
-      <div class="border-t border-gray-800/50 pt-4">
-        <h4 class="text-sm font-medium text-gray-300 mb-3">
+      <div class="border-t border-gray-200 dark:border-gray-800/50 pt-4">
+        <h4 class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-3">
           Active Links ({existingShares.length})
         </h4>
         <div class="space-y-2 max-h-48 overflow-y-auto">
           {#each existingShares as share (share.id)}
-            <div class="flex items-center gap-2 p-2 bg-gray-800 rounded-lg">
+            <div class="flex items-center gap-2 p-2 bg-gray-100 dark:bg-gray-800 rounded-lg">
               <div class="flex-1 min-w-0">
-                <code class="text-xs text-gray-400 font-mono truncate block">
+                <code class="text-xs text-gray-500 dark:text-gray-400 font-mono truncate block">
                   {driveStore.getShareUrl(share.id)}
                 </code>
                 <div class="flex flex-wrap items-center gap-2 mt-0.5">
-                  <span class="text-xs text-gray-400">
+                  <span class="text-xs text-gray-500 dark:text-gray-400">
                     Created {formatDate(share.createdAt)}
                   </span>
                   {#if share.isPublic}
@@ -193,14 +193,14 @@
                   <span class="text-xs text-gray-500 break-all">
                     to {share.recipientWallet}
                   </span>
-                  <span class="text-xs text-gray-400">
+                  <span class="text-xs text-gray-500 dark:text-gray-400">
                     {share.downloadCount} download{share.downloadCount !== 1 ? 's' : ''}
                   </span>
                 </div>
               </div>
               <button
                 onclick={() => copyUrl(share)}
-                class="p-1.5 hover:bg-white/[0.04] rounded transition"
+                class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.04] rounded transition"
                 title="Copy link"
               >
                 {#if copied === share.id}
@@ -222,11 +222,11 @@
       </div>
     {/if}
 
-    <div class="mt-4 p-3 bg-cyan-500/[0.06] rounded-lg">
-      <p class="text-xs text-cyan-300">
+    <div class="mt-4 p-3 bg-cyan-50 dark:bg-cyan-500/[0.06] rounded-lg">
+      <p class="text-xs text-cyan-700 dark:text-cyan-300">
         <strong>File:</strong> {item.name}
         {#if item.size}
-          <span class="ml-2 text-cyan-400">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
+          <span class="ml-2 text-cyan-600 dark:text-cyan-400">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
         {/if}
       </p>
     </div>

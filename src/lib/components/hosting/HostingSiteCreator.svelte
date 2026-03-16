@@ -36,10 +36,10 @@
   let totalSize = $derived(selectedFiles.reduce((s, f) => s + f.size, 0));
 </script>
 
-<div class="rounded-2xl border border-gray-800/60 bg-gray-950 p-5  backblur-sm">
-  <h2 class="mb-4 text-base font-semibold text-gray-100 flex items-center gap-2">
-    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-500/[0.06]">
-      <Plus class="h-3.5 w-3.5 text-cyan-400" />
+<div class="rounded-2xl border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-950 p-5  backblur-sm">
+  <h2 class="mb-4 text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-50 dark:bg-cyan-500/[0.06]">
+      <Plus class="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
     </div>
     Create New Site
   </h2>
@@ -47,16 +47,16 @@
   <div class="space-y-4">
     <!-- Site Name -->
     <div>
-      <label for="site-name" class="mb-1.5 block text-xs font-medium text-gray-400 uppercase tracking-wide">Site Name</label>
+      <label for="site-name" class="mb-1.5 block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Site Name</label>
       <input
         id="site-name"
         type="text"
         value={newSiteName}
         oninput={(e) => onNameChange(e.currentTarget.value)}
         placeholder="e.g. My Portfolio"
-        class="w-full rounded-xl border border-gray-800/60 bg-gray-800 px-4 py-2.5 text-sm text-gray-100 placeholder-gray-400 transition-all
-          focus:border-cyan-500 focus:bg-gray-950 focus:outline-none focus:ring-2 focus:ring-cyan-500/20
-          text-gray-100"
+        class="w-full rounded-xl border border-gray-200 dark:border-gray-800/60 bg-gray-100 dark:bg-gray-800 px-4 py-2.5 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 transition-all
+          focus:border-cyan-500 focus:bg-white dark:bg-gray-950 focus:outline-none focus:ring-2 focus:ring-cyan-500/20
+          text-gray-900 dark:text-gray-100"
       />
     </div>
 
@@ -64,8 +64,8 @@
     <div class="flex gap-2">
       <button
         onclick={onSelectFromDrive}
-        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-cyan-400 border border-primary-200
-          rounded-lg hover:bg-white/[0.03] transition-colors
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-cyan-600 dark:text-cyan-400 border border-primary-200
+          rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.03] transition-colors
           focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
       >
         <HardDrive class="w-3.5 h-3.5" />
@@ -73,8 +73,8 @@
       </button>
       <button
         onclick={onSelectFiles}
-        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-400 border border-gray-800/60
-          rounded-lg hover:bg-white/[0.02] transition-colors
+        class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-800/60
+          rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.02] transition-colors
           focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
       >
         <FolderOpen class="w-3.5 h-3.5" />
@@ -90,13 +90,13 @@
       onkeydown={(e) => e.key === 'Enter' && onSelectFiles()}
       class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 px-4 transition-all
         {isDragOver
-          ? 'border-cyan-500/40 bg-cyan-500/[0.06] scale-[1.01]'
-          : 'border-gray-800/50 bg-gray-800 hover:border-gray-800/50 hover:bg-white/[0.02]'}"
+          ? 'border-cyan-500/40 bg-cyan-50 dark:bg-cyan-500/[0.06] scale-[1.01]'
+          : 'border-gray-200 dark:border-gray-800/50 bg-gray-100 dark:bg-gray-800 hover:border-gray-200 dark:border-gray-800/50 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
     >
       <div class="flex h-12 w-12 items-center justify-center rounded-full bg-gray-800/60">
         <FolderOpen class="h-6 w-6 text-gray-500" />
       </div>
-      <p class="text-sm font-medium text-gray-400">
+      <p class="text-sm font-medium text-gray-500 dark:text-gray-400">
         {isDragOver ? 'Release to add files' : 'Drop files here'}
       </p>
       <p class="text-xs text-gray-500">
@@ -108,23 +108,23 @@
     {#if selectedFiles.length > 0}
       <div class="space-y-2">
         <div class="flex items-center justify-between">
-          <p class="text-xs font-medium text-gray-400 uppercase tracking-wide">
+          <p class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} selected
           </p>
-          <p class="text-xs text-gray-400 tabular-nums">{formatFileSize(totalSize)}</p>
+          <p class="text-xs text-gray-500 dark:text-gray-400 tabular-nums">{formatFileSize(totalSize)}</p>
         </div>
-        <div class="max-h-40 overflow-y-auto rounded-xl border border-gray-800/40 divide-y divide-cyan-500/10">
+        <div class="max-h-40 overflow-y-auto rounded-xl border border-gray-200 dark:border-gray-800/40 divide-y divide-cyan-500/10">
           {#each selectedFiles as file, i (file.path)}
-            <div class="flex items-center justify-between px-3 py-2 hover:bg-white/[0.02] transition-colors group">
+            <div class="flex items-center justify-between px-3 py-2 hover:bg-gray-100 dark:hover:bg-white/[0.02] transition-colors group">
               <div class="flex items-center gap-2.5 min-w-0">
-                <FileIcon class="h-4 w-4 flex-shrink-0 text-gray-400" />
-                <span class="truncate text-sm text-gray-300">{file.name}</span>
-                <span class="text-xs text-gray-400 tabular-nums flex-shrink-0">{formatFileSize(file.size)}</span>
+                <FileIcon class="h-4 w-4 flex-shrink-0 text-gray-500 dark:text-gray-400" />
+                <span class="truncate text-sm text-gray-600 dark:text-gray-300">{file.name}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400 tabular-nums flex-shrink-0">{formatFileSize(file.size)}</span>
               </div>
               <button
                 onclick={(e: MouseEvent) => { e.stopPropagation(); onRemoveFile(i); }}
                 aria-label="Remove {file.name}"
-                class="ml-2 flex-shrink-0 rounded-md p-1 text-gray-300 transition-colors
+                class="ml-2 flex-shrink-0 rounded-md p-1 text-gray-600 dark:text-gray-300 transition-colors
                   hover:bg-red-500/10 hover:text-red-500
                   opacity-0 group-hover:opacity-100 focus:opacity-100"
               >

@@ -581,7 +581,7 @@
 >
   <!-- Header -->
   <div>
-    <h1 class="text-2xl font-bold text-gray-100">My Drive</h1>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">My Drive</h1>
     <p class="text-muted-foreground mt-2">
       Cloud storage with shareable links
       {#if manifest.items.length > 0}
@@ -621,16 +621,16 @@
         placeholder="Folder name"
         bind:value={newFolderName}
         onkeydown={(e) => { if (e.key === 'Enter') confirmNewFolder(); if (e.key === 'Escape') cancelNewFolder(); }}
-        class="px-3 py-1.5 bg-gray-800 border border-gray-800/60 rounded-lg text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40 w-64"
+        class="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-800/60 rounded-lg text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40 w-64"
       />
       <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-cyan-500 text-black font-medium text-sm rounded-lg hover:bg-cyan-400 transition">Create</button>
-      <button onclick={cancelNewFolder} class="px-3 py-1.5 text-gray-400 text-sm hover:bg-white/[0.03] rounded-lg transition">Cancel</button>
+      <button onclick={cancelNewFolder} class="px-3 py-1.5 text-gray-500 dark:text-gray-400 text-sm hover:bg-gray-100 dark:hover:bg-white/[0.03] rounded-lg transition">Cancel</button>
     </div>
   {/if}
 
   <!-- Upload progress -->
   {#if uploading}
-    <div class="flex items-center gap-2 text-sm text-cyan-400">
+    <div class="flex items-center gap-2 text-sm text-cyan-600 dark:text-cyan-400">
       <Loader2 class="w-4 h-4 animate-spin" />
       Uploading files to server...
     </div>
@@ -638,24 +638,24 @@
 
   <!-- Drag overlay -->
   {#if isDragging}
-    <div class="border-2 border-dashed border-cyan-500/40 bg-cyan-500/[0.06] rounded-xl p-12 text-center">
-      <Upload class="w-10 h-10 mx-auto text-cyan-400 mb-2" />
-      <p class="text-cyan-400 font-medium">Drop files here to upload</p>
+    <div class="border-2 border-dashed border-cyan-500/40 bg-cyan-50 dark:bg-cyan-500/[0.06] rounded-xl p-12 text-center">
+      <Upload class="w-10 h-10 mx-auto text-cyan-600 dark:text-cyan-400 mb-2" />
+      <p class="text-cyan-600 dark:text-cyan-400 font-medium">Drop files here to upload</p>
     </div>
   {/if}
 
   <!-- Loading -->
   {#if loading}
     <div class="flex items-center justify-center py-16">
-      <Loader2 class="w-8 h-8 animate-spin text-cyan-400" />
+      <Loader2 class="w-8 h-8 animate-spin text-cyan-600 dark:text-cyan-400" />
     </div>
   {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
     <!-- Empty state -->
     <div class="flex flex-col items-center justify-center py-16 text-center">
-      <div class="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mb-4">
-        <HardDrive class="w-8 h-8 text-gray-400" />
+      <div class="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
+        <HardDrive class="w-8 h-8 text-gray-500 dark:text-gray-400" />
       </div>
-      <h3 class="text-lg font-medium text-gray-100 mb-1">
+      <h3 class="text-lg font-medium text-gray-900 dark:text-gray-100 mb-1">
         {searchQuery ? 'No files found' : 'This folder is empty'}
       </h3>
       <p class="text-sm text-gray-500 mb-6">
@@ -672,7 +672,7 @@
           </button>
           <button
             onclick={handleNewFolder}
-            class="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-white/[0.04] text-gray-300 rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+            class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-white/[0.04] text-gray-600 dark:text-gray-300 rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
           >
             <FolderPlus class="w-4 h-4" />
             New Folder
@@ -684,14 +684,14 @@
     <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
       {#each currentItems as item (item.id)}
         {#if renamingId === item.id}
-          <div class="bg-gray-950 border border-cyan-500/40 rounded-xl p-4">
+          <div class="bg-white dark:bg-gray-950 border border-cyan-500/40 rounded-xl p-4">
             <input
               id="rename-input"
               type="text"
               bind:value={renameValue}
               onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
               onblur={confirmRename}
-              class="w-full px-2 py-1 text-sm bg-gray-800 border border-gray-800/60 rounded text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+              class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-800/60 rounded text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
             />
           </div>
         {:else}
@@ -704,10 +704,10 @@
       {/each}
     </div>
   {:else}
-    <div class="bg-gray-950 rounded-xl border border-gray-800/60 overflow-hidden">
+    <div class="bg-white dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800/60 overflow-hidden">
       <table class="w-full">
         <thead>
-          <tr class="border-b border-gray-800/50 text-left">
+          <tr class="border-b border-gray-200 dark:border-gray-800/50 text-left">
             <th class="py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Name</th>
             <th class="py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wide w-24">Size</th>
             <th class="py-2.5 px-3 text-xs font-medium text-gray-500 uppercase tracking-wide w-32">Modified</th>
@@ -717,7 +717,7 @@
         <tbody>
           {#each currentItems as item (item.id)}
             {#if renamingId === item.id}
-              <tr class="border-b border-gray-800/40">
+              <tr class="border-b border-gray-200 dark:border-gray-800/40">
                 <td colspan="4" class="py-2 px-3">
                   <input
                     id="rename-input"
@@ -725,7 +725,7 @@
                     bind:value={renameValue}
                     onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
                     onblur={confirmRename}
-                    class="w-full px-2 py-1 text-sm bg-gray-800 border border-gray-800/60 rounded text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+                    class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-800/60 rounded text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
                   />
                 </td>
               </tr>
@@ -781,24 +781,24 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  p-6 max-w-sm w-full mx-4"
+      class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
-      <h3 class="text-lg font-semibold text-gray-100 mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
-      <p class="text-sm text-gray-400 mb-4">
-        {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-100">"{seedModalItem.name}"</strong> on the network.
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+        {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900 dark:text-gray-100">"{seedModalItem.name}"</strong> on the network.
       </p>
 
       <div class="space-y-4">
         <!-- Protocol picker -->
         <div>
           <label class="block text-xs font-medium text-gray-500 mb-1.5">Protocol</label>
-          <div class="flex rounded-lg overflow-hidden border border-gray-800/60">
+          <div class="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-800/60">
             <button
               onclick={() => seedProtocol = 'WebRTC'}
               class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'WebRTC'
                 ? 'bg-cyan-500 text-black font-medium'
-                : 'bg-gray-800 text-gray-300 hover:bg-white/[0.03]'}"
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.03]'}"
             >
               WebRTC
             </button>
@@ -806,7 +806,7 @@
               onclick={() => seedProtocol = 'BitTorrent'}
               class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'BitTorrent'
                 ? 'bg-green-600 text-white'
-                : 'bg-gray-800 text-gray-300 hover:bg-white/[0.03]'}"
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.03]'}"
             >
               BitTorrent
             </button>
@@ -822,7 +822,7 @@
             min="0"
             placeholder="Free"
             bind:value={seedPrice}
-            class="w-full px-3 py-1.5 text-sm bg-gray-800 border border-gray-800/60 rounded-lg text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+            class="w-full px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-800/60 rounded-lg text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
           />
         </div>
       </div>
@@ -830,7 +830,7 @@
       <div class="flex justify-end gap-3 mt-5">
         <button
           onclick={() => seedModalItem = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-300 bg-gray-800 hover:bg-white/[0.04] transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-white/[0.04] transition"
         >Cancel</button>
         <button
           onclick={confirmSeed}
@@ -861,22 +861,22 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  p-6 max-w-sm w-full mx-4"
+      class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
-      <h3 class="text-lg font-semibold text-gray-100 mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>
-      <p class="text-sm text-gray-400 mb-1">
-        Are you sure you want to delete <strong class="text-gray-100">"{deleteConfirmItem.name}"</strong>?
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-1">
+        Are you sure you want to delete <strong class="text-gray-900 dark:text-gray-100">"{deleteConfirmItem.name}"</strong>?
       </p>
       {#if deleteConfirmItem.type === 'folder'}
-        <p class="text-sm text-amber-400 mb-4">This will delete all contents inside the folder.</p>
+        <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This will delete all contents inside the folder.</p>
       {:else}
         <p class="text-sm text-gray-500 mb-4">This will remove it from your Drive.</p>
       {/if}
       <div class="flex justify-end gap-3">
         <button
           onclick={() => deleteConfirmItem = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-300 bg-gray-800 hover:bg-white/[0.04] transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-white/[0.04] transition"
         >Cancel</button>
         <button
           onclick={confirmDelete}

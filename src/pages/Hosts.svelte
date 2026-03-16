@@ -844,7 +844,7 @@
   <!-- Header -->
   <div class="flex items-start justify-between gap-4">
     <div>
-      <h1 class="text-2xl font-bold text-gray-100">Hosts</h1>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Hosts</h1>
       <p class="text-sm text-gray-500 mt-1">
         Host websites and files, find hosting providers, and manage agreements
       </p>
@@ -852,13 +852,13 @@
     <!-- Quick stats -->
     <div class="hidden sm:flex items-center gap-3">
       {#if sites.length > 0}
-        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/[0.06] text-xs font-medium text-cyan-300">
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-50 dark:bg-cyan-500/[0.06] text-xs font-medium text-cyan-700 dark:text-cyan-300">
           <Server class="w-3.5 h-3.5" />
           {sites.length} site{sites.length !== 1 ? 's' : ''}
         </div>
       {/if}
       {#if activeAgreements.filter(a => a.status === 'active').length > 0}
-        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-xs font-medium text-emerald-400">
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-xs font-medium text-emerald-600 dark:text-emerald-400">
           <FileText class="w-3.5 h-3.5" />
           {activeAgreements.filter(a => a.status === 'active').length} active
         </div>
@@ -878,15 +878,15 @@
   />
 
   <!-- Tab bar -->
-  <div class="flex gap-1 bg-gray-800 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
+  <div class="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
     <button
       onclick={() => activeTab = 'sites'}
       role="tab"
       aria-selected={activeTab === 'sites'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'sites'
-          ? 'bg-gray-950 text-gray-100  ring-1 ring-gray-800/60'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
+          ? 'bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100  ring-1 ring-gray-200 dark:ring-gray-800/60'
+          : 'text-gray-500 hover:text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
     >
       <Server class="w-4 h-4" />
       <span class="hidden sm:inline">My Sites</span>
@@ -897,8 +897,8 @@
       aria-selected={activeTab === 'marketplace'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'marketplace'
-          ? 'bg-gray-950 text-gray-100  ring-1 ring-gray-800/60'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
+          ? 'bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100  ring-1 ring-gray-200 dark:ring-gray-800/60'
+          : 'text-gray-500 hover:text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
     >
       <Users class="w-4 h-4" />
       <span class="hidden sm:inline">Marketplace</span>
@@ -909,8 +909,8 @@
       aria-selected={activeTab === 'agreements'}
       class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
         {activeTab === 'agreements'
-          ? 'bg-gray-950 text-gray-100  ring-1 ring-gray-800/60'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-white/[0.02]'}"
+          ? 'bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100  ring-1 ring-gray-200 dark:ring-gray-800/60'
+          : 'text-gray-500 hover:text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.02]'}"
     >
       <Shield class="w-4 h-4" />
       <span class="hidden sm:inline">Agreements</span>
@@ -950,7 +950,7 @@
   {:else if activeTab === 'marketplace'}
     {#if marketplaceError}
       <div class="text-center py-20">
-        <AlertCircle class="w-12 h-12 mx-auto text-gray-300 mb-3" />
+        <AlertCircle class="w-12 h-12 mx-auto text-gray-600 dark:text-gray-300 mb-3" />
         <p class="text-gray-500">{marketplaceError}</p>
       </div>
     {:else}
@@ -1022,18 +1022,18 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  p-6 max-w-sm w-full mx-4"
+      class="bg-white dark:bg-gray-950 rounded-xl border-t-2 border-t-cyan-500/40  p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
-      <h3 class="text-lg font-semibold text-gray-100 mb-2">Delete Site</h3>
-      <p class="text-sm text-gray-400 mb-1">
-        Are you sure you want to delete <strong class="text-gray-100">"{deleteConfirm.name}"</strong>?
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Delete Site</h3>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-1">
+        Are you sure you want to delete <strong class="text-gray-900 dark:text-gray-100">"{deleteConfirm.name}"</strong>?
       </p>
-      <p class="text-sm text-amber-400 mb-4">This cannot be undone.</p>
+      <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This cannot be undone.</p>
       <div class="flex justify-end gap-3">
         <button
           onclick={() => deleteConfirm = null}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-300 bg-gray-800 hover:bg-white/[0.04] transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-white/[0.04] transition"
         >Cancel</button>
         <button
           onclick={confirmDeleteSite}

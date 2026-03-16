@@ -19,11 +19,15 @@
   }
 
   html {
+    color-scheme: light dark;
+  }
+
+  html.dark {
     color-scheme: dark;
   }
 
   body {
-    @apply bg-black text-gray-100;
+    @apply bg-gray-50 dark:bg-black text-gray-900 dark:text-gray-100;
   }
 
   /* Custom scrollbar */
@@ -37,17 +41,29 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.15);
     border-radius: 3px;
   }
 
   ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.25);
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .dark ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.2);
   }
 
   /* Firefox scrollbar */
   * {
     scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+  }
+
+  .dark * {
     scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
   }
 }
@@ -59,6 +75,10 @@
 
   /* --- Refined neon utilities (selective use only) --- */
   .neon-border {
+    border: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  :is(.dark .neon-border) {
     border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
@@ -75,6 +95,11 @@
   }
 
   .neon-text {
+    @apply text-cyan-600;
+  }
+
+  :is(.dark .neon-text) {
+    @apply text-cyan-400;
     text-shadow: 0 0 8px rgba(6, 182, 212, 0.3);
   }
 
@@ -85,25 +110,25 @@
 
   /* --- Cyber panel: HUD-style card --- */
   .cyber-panel {
-    @apply bg-gray-950 border border-gray-800/60 rounded-xl;
+    @apply bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800/60 rounded-xl;
     border-top: 2px solid rgba(6, 182, 212, 0.4);
   }
 
   .cyber-panel-pink {
-    @apply bg-gray-950 border border-gray-800/60 rounded-xl;
+    @apply bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800/60 rounded-xl;
     border-top: 2px solid rgba(236, 72, 153, 0.5);
   }
 
   /* --- Data display: monospace values --- */
   .cyber-data {
-    @apply font-mono text-gray-100 tabular-nums;
+    @apply font-mono text-gray-900 dark:text-gray-100 tabular-nums;
   }
 
   /* --- Micro-label: tiny uppercase tracking --- */
   .cyber-label {
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.15em;
-    @apply text-gray-500;
+    letter-spacing: 0.2em;
+    @apply text-gray-400 dark:text-gray-600;
   }
 }

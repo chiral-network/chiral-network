@@ -25,22 +25,22 @@
 <svelte:head><title>Chiral Network</title></svelte:head>
 
 {#if mode === 'select'}
-  <div class="flex items-center justify-center min-h-screen bg-black p-6">
+  <div class="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-black p-6">
     <div class="max-w-md w-full">
       <!-- Logo and title -->
       <div class="text-center mb-10">
         <div class="inline-flex items-center justify-center w-20 h-20 mb-6">
           <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-" />
         </div>
-        <h1 class="text-4xl font-bold text-gray-100 mb-3">
+        <h1 class="text-4xl font-bold text-gray-900 dark:text-gray-100 mb-3">
           Chiral Network
         </h1>
         <p class="text-lg text-gray-500">Decentralized File Sharing Network</p>
       </div>
 
       <!-- Card -->
-      <div class="bg-gray-950 border border-gray-800/60 rounded-2xl p-8 ">
-        <h2 class="text-2xl font-semibold text-gray-100 mb-6">Get Started</h2>
+      <div class="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800/60 rounded-2xl p-8 ">
+        <h2 class="text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Get Started</h2>
 
         <button
           onclick={handleCreateWallet}
@@ -57,9 +57,9 @@
 
         <button
           onclick={handleUseExisting}
-          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-800/60 bg-gray-800 hover:bg-white/[0.03] text-gray-100 rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+          class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200 dark:border-gray-800/60 bg-gray-100 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-white/[0.03] text-gray-900 dark:text-gray-100 rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
         >
-          <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-700 rounded-lg">
+          <div class="flex-shrink-0 mt-0.5 p-2 bg-gray-200 dark:bg-gray-700 rounded-lg">
             <KeyRound class="w-5 h-5" />
           </div>
           <div class="text-left">
@@ -71,11 +71,11 @@
     </div>
   </div>
 {:else if mode === 'create'}
-  <div class="min-h-screen bg-black py-12">
+  <div class="min-h-screen bg-gray-50 dark:bg-black py-12">
     <WalletCreation onBack={handleBack} onComplete={handleComplete} />
   </div>
 {:else if mode === 'login'}
-  <div class="min-h-screen bg-black py-12">
+  <div class="min-h-screen bg-gray-50 dark:bg-black py-12">
     <WalletLogin onBack={handleBack} onComplete={handleComplete} />
   </div>
 {/if}

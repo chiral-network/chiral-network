@@ -99,29 +99,29 @@
   }
 
   function eloColor(score: number): string {
-    if (score >= 80) return 'text-emerald-400';
-    if (score >= 60) return 'text-cyan-400';
-    if (score >= 40) return 'text-yellow-400';
+    if (score >= 80) return 'text-emerald-600 dark:text-emerald-400';
+    if (score >= 60) return 'text-cyan-600 dark:text-cyan-400';
+    if (score >= 40) return 'text-yellow-600 dark:text-yellow-400';
     return 'text-red-500';
   }
 
   function eloBg(score: number): string {
     if (score >= 80) return 'bg-emerald-500/10 text-emerald-800';
-    if (score >= 60) return 'bg-blue-500/10 text-blue-400';
-    if (score >= 40) return 'bg-yellow-100 text-yellow-400';
-    return 'bg-red-500/10 text-red-400';
+    if (score >= 60) return 'bg-blue-500/10 text-blue-600 dark:text-blue-400';
+    if (score >= 40) return 'bg-yellow-100 text-yellow-600 dark:text-yellow-400';
+    return 'bg-red-500/10 text-red-600 dark:text-red-400';
   }
 </script>
 
 <!-- Host Marketplace Settings -->
-<div class="rounded-2xl border border-gray-800/60 bg-gray-950  backblur-sm overflow-hidden">
+<div class="rounded-2xl border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-950  backblur-sm overflow-hidden">
   <div class="flex items-center justify-between gap-4 p-5 pb-4">
     <div class="flex items-center gap-3">
-      <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-800">
+      <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 dark:bg-gray-800">
         <Settings2 class="h-4.5 w-4.5 text-gray-500" />
       </div>
       <div>
-        <h2 class="font-semibold text-base text-gray-100">Host Settings</h2>
+        <h2 class="font-semibold text-base text-gray-900 dark:text-gray-100">Host Settings</h2>
         <p class="text-xs text-gray-500 mt-0.5">
           Configure your hosting offer for the network
         </p>
@@ -136,17 +136,17 @@
       aria-label="Toggle hosting"
     >
       <span
-        class="absolute top-0.5 left-0.5 w-6 h-6 bg-gray-950 rounded-full  transition-transform
+        class="absolute top-0.5 left-0.5 w-6 h-6 bg-white dark:bg-gray-950 rounded-full  transition-transform
           {$settings.hostingConfig.enabled ? 'translate-x-5' : 'translate-x-0'}"
       ></span>
     </button>
   </div>
 
   {#if $settings.hostingConfig.enabled}
-    <div class="border-t border-gray-800/40 px-5 py-4">
+    <div class="border-t border-gray-200 dark:border-gray-800/40 px-5 py-4">
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
         <div>
-          <label for="host-max-storage-gb" class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
+          <label for="host-max-storage-gb" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
             Max Storage
           </label>
           <div class="flex items-center gap-2">
@@ -158,7 +158,7 @@
               step="1"
               value={Math.round($settings.hostingConfig.maxStorageBytes / (1024 * 1024 * 1024))}
               oninput={(e) => updateMaxStorageGb(Number(e.currentTarget.value))}
-              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
+              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-gray-200 dark:border-gray-800/60 rounded-lg text-gray-900 dark:text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
             <span class="text-xs text-gray-500 font-medium">GB</span>
@@ -166,7 +166,7 @@
         </div>
 
         <div>
-          <label for="host-price-chi" class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
+          <label for="host-price-chi" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
             Price
           </label>
           <div class="flex items-center gap-2">
@@ -178,7 +178,7 @@
               step="0.000001"
               value={weiToChiNumber($settings.hostingConfig.pricePerMbPerDayWei, 0.001)}
               oninput={(e) => updatePriceChi(Number(e.currentTarget.value))}
-              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
+              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-gray-200 dark:border-gray-800/60 rounded-lg text-gray-900 dark:text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
             <span class="text-xs text-gray-500 font-medium">CHI/MB/day</span>
@@ -186,7 +186,7 @@
         </div>
 
         <div>
-          <label for="host-deposit-chi" class="block text-xs font-medium text-gray-400 mb-1.5 uppercase tracking-wide">
+          <label for="host-deposit-chi" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wide">
             Min Deposit
           </label>
           <div class="flex items-center gap-2">
@@ -198,7 +198,7 @@
               step="0.000001"
               value={weiToChiNumber($settings.hostingConfig.minDepositWei, 0.1)}
               oninput={(e) => updateDepositChi(Number(e.currentTarget.value))}
-              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
+              class="w-32 px-3 py-2 text-sm bg-gray-800/60 border border-gray-200 dark:border-gray-800/60 rounded-lg text-gray-900 dark:text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
             />
             <span class="text-xs text-gray-500 font-medium">CHI</span>
@@ -207,7 +207,7 @@
 
         <div>
           <div class="flex items-center justify-between mb-1.5">
-            <label for="host-auto-accept-elo" class="block text-xs font-medium text-gray-400 uppercase tracking-wide">
+            <label for="host-auto-accept-elo" class="block text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
               Auto-Accept
             </label>
             <button
@@ -219,7 +219,7 @@
               aria-label="Toggle auto accept"
             >
               <span
-                class="absolute top-0.5 left-0.5 w-4 h-4 bg-gray-950 rounded-full  transition-transform
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white dark:bg-gray-950 rounded-full  transition-transform
                   {$settings.hostingConfig.autoAcceptByElo ? 'translate-x-4' : 'translate-x-0'}"
               ></span>
             </button>
@@ -234,7 +234,7 @@
               value={$settings.hostingConfig.minAutoAcceptElo}
               oninput={(e) => updateAutoAcceptMinElo(Number(e.currentTarget.value))}
               disabled={!$settings.hostingConfig.autoAcceptByElo}
-              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-gray-800/60 rounded-lg text-gray-100 tabular-nums
+              class="w-24 px-3 py-2 text-sm bg-gray-800/60 border border-gray-200 dark:border-gray-800/60 rounded-lg text-gray-900 dark:text-gray-100 tabular-nums
                 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20
                 disabled:opacity-40 disabled:cursor-not-allowed"
             />
@@ -246,7 +246,7 @@
         </div>
       </div>
 
-      <div class="mt-5 flex items-center gap-3 pt-4 border-t border-gray-800/40">
+      <div class="mt-5 flex items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-800/40">
         <button
           onclick={onPublish}
           disabled={hostingPublishing}
@@ -262,8 +262,8 @@
         <button
           onclick={onUnpublish}
           disabled={hostingPublishing}
-          class="px-4 py-2 text-sm font-medium text-gray-400 border border-gray-800/60 rounded-lg
-            hover:bg-white/[0.02] transition-colors
+          class="px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-800/60 rounded-lg
+            hover:bg-gray-100 dark:hover:bg-white/[0.02] transition-colors
             focus:outline-none focus:ring-2 focus:ring-cyan-500/30
             disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -275,14 +275,14 @@
 </div>
 
 <!-- Available Hosts -->
-<div class="rounded-2xl border border-gray-800/60 bg-gray-950 p-5  backblur-sm">
+<div class="rounded-2xl border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-950 p-5  backblur-sm">
   <div class="flex items-center justify-between mb-4">
     <div class="flex items-center gap-3">
       <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-purple-500/10">
-        <Users class="w-4.5 h-4.5 text-purple-400" />
+        <Users class="w-4.5 h-4.5 text-purple-600 dark:text-purple-400" />
       </div>
       <div>
-        <h2 class="font-semibold text-base text-gray-100">Available Hosts</h2>
+        <h2 class="font-semibold text-base text-gray-900 dark:text-gray-100">Available Hosts</h2>
         <p class="text-xs text-gray-500 mt-0.5">
           {#if loadingHosts}
             Searching the network...
@@ -298,7 +298,7 @@
         value={sortBy}
         onchange={(e) => onSortChange(e.currentTarget.value as 'reputation' | 'price' | 'storage')}
         aria-label="Sort hosts by"
-        class="text-xs bg-gray-800/60 border border-gray-800/60 rounded-lg px-2.5 py-1.5 text-gray-300
+        class="text-xs bg-gray-800/60 border border-gray-200 dark:border-gray-800/60 rounded-lg px-2.5 py-1.5 text-gray-600 dark:text-gray-300
           focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
       >
         <option value="reputation">Reputation</option>
@@ -308,7 +308,7 @@
       <button
         onclick={onRefreshHosts}
         disabled={loadingHosts}
-        class="p-2 text-gray-400 hover:text-gray-400 rounded-lg hover:bg-white/[0.03] transition-colors
+        class="p-2 text-gray-500 dark:text-gray-400 hover:text-gray-500 dark:text-gray-400 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.03] transition-colors
           focus:outline-none focus:ring-2 focus:ring-cyan-500/30 disabled:opacity-50"
         title="Refresh host list"
         aria-label="Refresh host list"
@@ -320,12 +320,12 @@
 
   {#if loadingHosts}
     <div class="flex flex-col items-center justify-center py-16">
-      <Loader2 class="w-6 h-6 text-gray-400 animate-spin mb-3" />
-      <span class="text-sm text-gray-400">Discovering hosts on the network...</span>
+      <Loader2 class="w-6 h-6 text-gray-500 dark:text-gray-400 animate-spin mb-3" />
+      <span class="text-sm text-gray-500 dark:text-gray-400">Discovering hosts on the network...</span>
     </div>
   {:else if sortedHostList.length === 0}
     <div class="flex flex-col items-center justify-center py-16 text-gray-500">
-      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-800 mb-4">
+      <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-100 dark:bg-gray-800 mb-4">
         <Users class="w-8 h-8 opacity-40" />
       </div>
       <p class="text-sm font-medium text-gray-500">No hosts available</p>
@@ -336,8 +336,8 @@
   {:else}
     <div class="space-y-3">
       {#each sortedHostList as host (host.advertisement.peerId)}
-        <div class="group p-4 rounded-xl border border-gray-800/40 bg-gray-800
-          hover:border-gray-800/50 hover: transition-all">
+        <div class="group p-4 rounded-xl border border-gray-200 dark:border-gray-800/40 bg-gray-100 dark:bg-gray-800
+          hover:border-gray-200 dark:border-gray-800/50 hover: transition-all">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0 flex-1">
               <!-- Header row -->
@@ -348,7 +348,7 @@
                   {/if}
                   <span class="relative inline-flex h-2.5 w-2.5 rounded-full {host.isOnline ? 'bg-emerald-500' : 'bg-gray-400'}"></span>
                 </span>
-                <span class="text-sm font-semibold text-gray-100 font-mono">
+                <span class="text-sm font-semibold text-gray-900 dark:text-gray-100 font-mono">
                   {formatPeerId(host.advertisement.peerId)}
                 </span>
                 <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums {eloBg(host.reputationScore)}">
@@ -359,20 +359,20 @@
               <!-- Stats row -->
               <div class="flex items-center gap-4 mt-2.5 flex-wrap">
                 <span class="flex items-center gap-1.5 text-xs text-gray-500">
-                  <HardDrive class="w-3.5 h-3.5 text-gray-400" />
-                  <span class="font-medium text-gray-300">{formatBytes(host.availableStorageBytes)}</span>
+                  <HardDrive class="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
+                  <span class="font-medium text-gray-600 dark:text-gray-300">{formatBytes(host.availableStorageBytes)}</span>
                 </span>
                 <span class="flex items-center gap-1.5 text-xs text-gray-500">
-                  <Coins class="w-3.5 h-3.5 text-gray-400" />
-                  <span class="font-medium text-gray-300">{formatWeiAsChi(host.advertisement.pricePerMbPerDayWei)}</span>
-                  <span class="text-gray-400">/MB/day</span>
+                  <Coins class="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
+                  <span class="font-medium text-gray-600 dark:text-gray-300">{formatWeiAsChi(host.advertisement.pricePerMbPerDayWei)}</span>
+                  <span class="text-gray-500 dark:text-gray-400">/MB/day</span>
                 </span>
                 <span class="flex items-center gap-1.5 text-xs text-gray-500">
-                  <Shield class="w-3.5 h-3.5 text-gray-400" />
+                  <Shield class="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
                   <span>Deposit: {formatWeiAsChi(host.advertisement.minDepositWei)}</span>
                 </span>
                 <span class="flex items-center gap-1.5 text-xs text-gray-500">
-                  <Clock class="w-3.5 h-3.5 text-gray-400" />
+                  <Clock class="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
                   <span class="tabular-nums">{host.advertisement.uptimePercent.toFixed(0)}%</span> uptime
                 </span>
               </div>
