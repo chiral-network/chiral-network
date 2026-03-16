@@ -17,34 +17,132 @@
     --color-primary-950: 23 37 84;
   }
 
-  html { color-scheme: dark; }
+  html.dark { color-scheme: dark; }
+  html:not(.dark) { color-scheme: light; }
 
-  body { @apply bg-[#13111C] text-white/90 antialiased; }
+  body {
+    @apply bg-gray-100 text-gray-900 antialiased;
+  }
+  .dark body {
+    @apply bg-[#13111C] text-white/90;
+  }
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
-  * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.08) transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.12); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.2); }
+  .dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); }
+  .dark ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
+  * { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.12) transparent; }
+  .dark * { scrollbar-color: rgba(255, 255, 255, 0.08) transparent; }
 }
 
 @layer components {
-  .glass { @apply backdrop-blur-2xl bg-white/[0.07] border border-white/[0.08]; }
-  .glass-card { @apply backdrop-blur-2xl bg-white/[0.07] border border-white/[0.08] rounded-2xl shadow-xl shadow-black/[0.08]; }
-  .glass-panel { @apply backdrop-blur-xl bg-white/[0.05] border border-white/[0.06] rounded-xl; }
-  .glass-button { @apply bg-white/[0.08] hover:bg-white/[0.14] border border-white/[0.08] rounded-xl transition-all; }
-  .glass-button-primary { @apply bg-blue-500/90 hover:bg-blue-400/90 text-white rounded-xl shadow-lg shadow-blue-500/20 transition-all; }
-  .glass-input { @apply bg-white/[0.06] border border-white/[0.08] rounded-xl shadow-inner shadow-black/[0.06] text-white placeholder:text-white/30 focus:outline-none focus:border-blue-400/40; }
-  .glass-sidebar { @apply backdrop-blur-3xl bg-white/[0.08] border-r border-white/[0.06]; }
-  .glass-navbar { @apply backdrop-blur-3xl bg-white/[0.06] border-b border-white/[0.06]; }
-  .glass-modal { @apply backdrop-blur-3xl bg-white/[0.09] border border-white/[0.08] rounded-3xl shadow-2xl shadow-black/20; }
-  .glass-toast { @apply backdrop-blur-3xl bg-white/[0.1] border border-white/[0.06] rounded-2xl shadow-xl; }
-  .glass-stat { @apply backdrop-blur-lg bg-white/[0.04] border border-white/[0.06] rounded-2xl; }
-  .glass-pill-active { @apply bg-white/[0.12] rounded-lg; }
-  .glass-divider { @apply border-white/[0.06]; }
-  .glass-context-menu { @apply backdrop-blur-3xl bg-white/[0.12] border border-white/[0.08] rounded-2xl shadow-2xl shadow-black/20; }
+  /* Glass utilities — light mode: frosted white panels; dark mode: translucent overlays */
+  .glass {
+    @apply backdrop-blur-2xl bg-white/70 border border-gray-200/60 shadow-sm;
+  }
+  .dark .glass {
+    @apply bg-white/[0.07] border-white/[0.08] shadow-none;
+  }
+
+  .glass-card {
+    @apply backdrop-blur-2xl bg-white/70 border border-gray-200/60 rounded-2xl shadow-sm;
+  }
+  .dark .glass-card {
+    @apply bg-white/[0.07] border-white/[0.08] shadow-xl shadow-black/[0.08];
+  }
+
+  .glass-panel {
+    @apply backdrop-blur-xl bg-white/60 border border-gray-200/50 rounded-xl shadow-sm;
+  }
+  .dark .glass-panel {
+    @apply bg-white/[0.05] border-white/[0.06] shadow-none;
+  }
+
+  .glass-button {
+    @apply bg-gray-100/80 hover:bg-gray-200/80 border border-gray-200/60 rounded-xl transition-all;
+  }
+  .dark .glass-button {
+    @apply bg-white/[0.08] hover:bg-white/[0.14] border-white/[0.08];
+  }
+
+  .glass-button-primary {
+    @apply bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg shadow-blue-500/20 transition-all;
+  }
+  .dark .glass-button-primary {
+    @apply bg-blue-500/90 hover:bg-blue-400/90 shadow-blue-500/20;
+  }
+
+  .glass-input {
+    @apply bg-white border border-gray-300 rounded-xl text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-blue-500/40 shadow-sm;
+  }
+  .dark .glass-input {
+    @apply bg-white/[0.06] border-white/[0.08] shadow-inner shadow-black/[0.06] text-white placeholder:text-white/30 focus:border-blue-400/40;
+  }
+
+  .glass-sidebar {
+    @apply backdrop-blur-3xl bg-white/70 border-r border-gray-200/60 shadow-sm;
+  }
+  .dark .glass-sidebar {
+    @apply bg-white/[0.08] border-white/[0.06] shadow-none;
+  }
+
+  .glass-navbar {
+    @apply backdrop-blur-3xl bg-white/70 border-b border-gray-200/60 shadow-sm;
+  }
+  .dark .glass-navbar {
+    @apply bg-white/[0.06] border-white/[0.06] shadow-none;
+  }
+
+  .glass-modal {
+    @apply backdrop-blur-3xl bg-white/80 border border-gray-200/60 rounded-3xl shadow-2xl;
+  }
+  .dark .glass-modal {
+    @apply bg-white/[0.09] border-white/[0.08] shadow-2xl shadow-black/20;
+  }
+
+  .glass-toast {
+    @apply backdrop-blur-3xl bg-white/80 border border-gray-200/60 rounded-2xl shadow-xl;
+  }
+  .dark .glass-toast {
+    @apply bg-white/[0.1] border-white/[0.06];
+  }
+
+  .glass-stat {
+    @apply backdrop-blur-lg bg-gray-50/80 border border-gray-200/50 rounded-2xl shadow-sm;
+  }
+  .dark .glass-stat {
+    @apply bg-white/[0.04] border-white/[0.06] shadow-none;
+  }
+
+  .glass-pill-active {
+    @apply bg-gray-200/60 rounded-lg;
+  }
+  .dark .glass-pill-active {
+    @apply bg-white/[0.12];
+  }
+
+  .glass-divider {
+    @apply border-gray-200/60;
+  }
+  .dark .glass-divider {
+    @apply border-white/[0.06];
+  }
+
+  .glass-context-menu {
+    @apply backdrop-blur-3xl bg-white/80 border border-gray-200/60 rounded-2xl shadow-2xl;
+  }
+  .dark .glass-context-menu {
+    @apply bg-white/[0.12] border-white/[0.08] shadow-2xl shadow-black/20;
+  }
 }
 
 @layer utilities {
-  .text-muted-foreground { @apply text-white/50; }
+  .text-muted-foreground {
+    @apply text-gray-500;
+  }
+  .dark .text-muted-foreground {
+    @apply text-white/50;
+  }
 }

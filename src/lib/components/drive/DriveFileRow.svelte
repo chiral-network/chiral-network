@@ -37,7 +37,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <tr
- class="group hover:bg-white/[0.05] transition cursor-pointer select-none border-b border-white/[0.06]"
+ class="group hover:bg-gray-100 dark:hover:bg-white/[0.05] transition cursor-pointer select-none border-b border-gray-200/60 dark:border-white/[0.06]"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -49,43 +49,43 @@
  {@const Icon = getFileIcon(item.name)}
  <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)} shrink-0" />
  {/if}
- <span class="text-sm font-medium text-white/90 truncate">{item.name}</span>
+ <span class="text-sm font-medium text-gray-900 dark:text-white/90 truncate">{item.name}</span>
  {#if item.starred}
  <Star class="w-3.5 h-3.5 text-yellow-500 fill-yellow-500 shrink-0" />
  {/if}
  {#if item.shared}
  {#if item.isPublic}
- <Link class="w-3.5 h-3.5 text-violet-400 shrink-0" />
+ <Link class="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 shrink-0" />
  {:else}
  <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
  {/if}
  {/if}
  {#if item.seeding && $networkConnected}
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-500/[0.15] text-green-800 shrink-0">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 dark:bg-green-500/[0.15] text-green-800 shrink-0">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
  Seeding{#if item.protocol} ({item.protocol}){/if}
  </span>
  {/if}
  {#if getPriceLabel(item)}
  {@const priceLabel = getPriceLabel(item)}
- <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-800 shrink-0">
+ <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 shrink-0">
  {priceLabel}
  </span>
  {/if}
  </div>
  </td>
- <td class="py-2.5 px-3 text-sm text-white/40">
+ <td class="py-2.5 px-3 text-sm text-gray-400 dark:text-white/40">
  {item.type ==='folder' ?'—' : formatSize(item.size)}
  </td>
- <td class="py-2.5 px-3 text-sm text-white/40">
+ <td class="py-2.5 px-3 text-sm text-gray-400 dark:text-white/40">
  {formatDate(item.modifiedAt)}
  </td>
  <td class="py-2.5 px-3 text-right">
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-white/[0.05] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+ class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded opacity-0 group-hover:opacity-100 transition-opacity"
  >
- <MoreVertical class="w-4 h-4 text-white/40" />
+ <MoreVertical class="w-4 h-4 text-gray-400 dark:text-white/40" />
  </button>
  </td>
 </tr>

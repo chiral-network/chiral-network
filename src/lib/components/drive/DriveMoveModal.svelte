@@ -43,26 +43,26 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="fixed inset-0 z-50 flex items-center justify-center bg-white/[0.03]/70" onclick={onClose}>
+<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/20 dark:bg-black/50" onclick={onClose}>
  <div
- class="bg-white/[0.05] rounded-xl w-full max-w-sm mx-4 p-6"
+ class="bg-white/70 dark:bg-white/[0.05] rounded-xl w-full max-w-sm mx-4 p-6"
  onclick={(e) => e.stopPropagation()}
  >
  <div class="flex items-center justify-between mb-4">
- <h3 class="text-lg font-semibold text-white/90">Move"{item.name}"</h3>
- <button onclick={onClose} class="p-1 hover:bg-white/[0.05] rounded-lg transition">
- <X class="w-5 h-5 text-white/40" />
+ <h3 class="text-lg font-semibold text-gray-900 dark:text-white/90">Move"{item.name}"</h3>
+ <button onclick={onClose} class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition">
+ <X class="w-5 h-5 text-gray-400 dark:text-white/40" />
  </button>
  </div>
 
- <div class="max-h-64 overflow-y-auto border border-white/[0.06] rounded-lg">
+ <div class="max-h-64 overflow-y-auto border border-gray-200/60 dark:border-white/[0.06] rounded-lg">
  <!-- Root -->
  <button
  onclick={() => selectedFolderId = null}
  class="flex items-center gap-2 w-full px-3 py-2.5 text-sm transition
  {selectedFolderId === null
- ?'bg-blue-50 text-blue-400'
- :'text-white/50 hover:bg-white/[0.05]'}"
+ ?'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+ :'text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05]'}"
  >
  <Folder class="w-4 h-4 text-yellow-500 fill-yellow-500 opacity-80" />
  <span class="font-medium">My Drive</span>
@@ -74,8 +74,8 @@
  onclick={() => selectedFolderId = folder.id}
  class="flex items-center gap-2 w-full px-3 py-2 text-sm transition
  {selectedFolderId === folder.id
- ?'bg-blue-50 text-blue-400'
- :'text-white/50 hover:bg-white/[0.05]'}"
+ ?'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+ :'text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05]'}"
  style="padding-left: {12 + depth * 20}px"
  >
  <Folder class="w-4 h-4 text-yellow-500 fill-yellow-500 opacity-80 shrink-0" />
@@ -91,7 +91,7 @@
  <div class="flex justify-end gap-2 mt-4">
  <button
  onclick={onClose}
- class="px-4 py-2 text-sm font-medium text-white/50 hover:bg-white/[0.05] rounded-lg transition"
+ class="px-4 py-2 text-sm font-medium text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition"
  >
  Cancel
  </button>

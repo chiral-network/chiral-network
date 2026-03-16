@@ -67,8 +67,8 @@
 
  function getProtocolColor(protocol?: string): string {
  return protocol ==='BitTorrent'
- ?'bg-green-500/[0.15] text-green-800'
- :'bg-blue-500/[0.15] text-blue-800';
+ ?'bg-green-100 dark:bg-green-500/[0.15] text-green-800'
+ :'bg-blue-100 dark:bg-blue-500/[0.15] text-blue-800';
  }
 
  function normalizePriceChi(value: string | number | null | undefined): string {
@@ -133,17 +133,17 @@
 
 <div class="space-y-4">
  <!-- Protocol selector + Price input + Add files button -->
- <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl p-4">
+ <div class="bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl p-4">
  <div class="flex flex-wrap items-end gap-4">
  <!-- Protocol toggle -->
  <div>
- <label class="block text-xs font-medium text-white/40 mb-1.5">Protocol</label>
- <div class="flex rounded-lg overflow-hidden border border-white/[0.06]">
+ <label class="block text-xs font-medium text-gray-400 dark:text-white/40 mb-1.5">Protocol</label>
+ <div class="flex rounded-lg overflow-hidden border border-gray-200/60 dark:border-white/[0.06]">
  <button
  onclick={() => selectedProtocol ='WebRTC'}
  class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol ==='WebRTC'
  ?'bg-violet-600 text-white'
- :' bg-white/[0.05] text-white/50 hover:bg-white/[0.05]'}"
+ :' bg-white/70 dark:bg-white/[0.05] text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05]'}"
  >
  WebRTC
  </button>
@@ -151,7 +151,7 @@
  onclick={() => selectedProtocol ='BitTorrent'}
  class="px-3 py-1.5 text-sm font-medium transition {selectedProtocol ==='BitTorrent'
  ?' bg-green-500/70 border border-green-400/30 text-white'
- :' bg-white/[0.05] text-white/50 hover:bg-white/[0.05]'}"
+ :' bg-white/70 dark:bg-white/[0.05] text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05]'}"
  >
  BitTorrent
  </button>
@@ -160,14 +160,14 @@
 
  <!-- Price input -->
  <div>
- <label class="block text-xs font-medium text-white/40 mb-1.5">Price (CHI)</label>
+ <label class="block text-xs font-medium text-gray-400 dark:text-white/40 mb-1.5">Price (CHI)</label>
  <input
  type="number"
  step="0.001"
  min="0"
  placeholder="Free"
  bind:value={filePrice}
- class="w-28 px-3 py-1.5 text-sm bg-white/[0.05] border border-white/[0.06] rounded-lg text-white/90 placeholder:text-white/40 focus:outline-none"
+ class="w-28 px-3 py-1.5 text-sm bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-lg text-gray-900 dark:text-white/90 placeholder:text-gray-400 dark:text-white/40 focus:outline-none"
  />
  </div>
 
@@ -175,7 +175,7 @@
  <button
  onclick={handleAddFiles}
  disabled={!$networkConnected}
- class="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-blue-700 disabled:bg-white/[0.12] text-white rounded-lg transition text-sm font-medium"
+ class="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-blue-700 disabled:bg-gray-200 dark:bg-white/[0.12] text-white rounded-lg transition text-sm font-medium"
  >
  <Plus class="w-4 h-4" />
  Add Files to Seed
@@ -183,7 +183,7 @@
  </div>
 
  {#if normalizePriceChi(filePrice) && !$walletAccount}
- <p class="mt-2 text-xs text-amber-600">
+ <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
  Connect your wallet on the Account page to receive payments.
  </p>
  {/if}
@@ -191,7 +191,7 @@
 
  <!-- Seeding files list -->
  {#if seedingItems.length === 0}
- <div class="text-center py-12 text-white/40">
+ <div class="text-center py-12 text-gray-400 dark:text-white/40">
  <Globe class="w-12 h-12 mx-auto mb-3 opacity-40" />
  <p class="text-sm font-medium">No files being seeded</p>
  <p class="text-xs mt-1">Add files above or right-click any file in"All Files" and choose"Seed to Network"</p>
@@ -200,38 +200,38 @@
  <div class="space-y-2">
  {#each seedingItems as item (item.id)}
  {@const Icon = getFileIcon(item.name)}
- <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl p-4">
+ <div class="bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl p-4">
  <div class="flex items-start gap-3">
  <!-- File icon -->
- <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-white/[0.05] flex items-center justify-center">
+ <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-white/70 dark:bg-white/[0.05] flex items-center justify-center">
  <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)}" />
  </div>
 
  <!-- File info -->
  <div class="flex-1 min-w-0">
  <div class="flex items-center gap-2 flex-wrap">
- <span class="text-sm font-medium text-white/90 truncate">{item.name}</span>
+ <span class="text-sm font-medium text-gray-900 dark:text-white/90 truncate">{item.name}</span>
  <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(item.protocol)}">
  {item.protocol ||'WebRTC'}
  </span>
  {#if item.priceChi && item.priceChi !=='0'}
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200">
  {item.priceChi} CHI
  </span>
  {:else}
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-500/[0.15] text-green-800">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-green-100 dark:bg-green-500/[0.15] text-green-800">
  Free
  </span>
  {/if}
  </div>
 
- <div class="flex items-center gap-3 mt-1 text-xs text-white/40">
+ <div class="flex items-center gap-3 mt-1 text-xs text-gray-400 dark:text-white/40">
  <span>{formatFileSize(item.size)}</span>
  <span>{formatDate(item.modifiedAt)}</span>
  </div>
 
  <div class="mt-2 flex flex-wrap items-center gap-2">
- <span class="text-xs text-white/40">Price (CHI)</span>
+ <span class="text-xs text-gray-400 dark:text-white/40">Price (CHI)</span>
  <input
  type="number"
  step="0.001"
@@ -239,7 +239,7 @@
  placeholder="Free"
  value={getPriceDraft(item)}
  oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
- class="w-24 px-2 py-1 text-xs bg-white/[0.05] border border-white/[0.06] rounded text-white/90 placeholder:text-white/40 focus:outline-none"
+ class="w-24 px-2 py-1 text-xs bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded text-gray-900 dark:text-white/90 placeholder:text-gray-400 dark:text-white/40 focus:outline-none"
  />
  <button
  onclick={() => handleUpdatePrice(item)}
@@ -247,7 +247,7 @@
  class="px-2.5 py-1 text-xs font-medium rounded transition
  {isPriceDirty(item)
  ?'bg-violet-600 text-white hover:bg-blue-700'
- :'bg-white/[0.05] text-white/40 cursor-not-allowed'}"
+ :'bg-white/70 dark:bg-white/[0.05] text-gray-400 dark:text-white/40 cursor-not-allowed'}"
  >
  Update Price
  </button>
@@ -256,15 +256,15 @@
  <!-- Merkle hash -->
  {#if item.merkleRoot}
  <div class="flex items-center gap-2 mt-2">
- <span class="text-xs text-white/40 font-mono truncate">
+ <span class="text-xs text-gray-400 dark:text-white/40 font-mono truncate">
  {item.merkleRoot}
  </span>
  <button
  onclick={() => copyToClipboard(item.merkleRoot!,'Hash')}
- class="flex-shrink-0 p-1 hover:bg-white/[0.05] rounded"
+ class="flex-shrink-0 p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded"
  title="Copy hash"
  >
- <Copy class="w-3.5 h-3.5 text-white/50" />
+ <Copy class="w-3.5 h-3.5 text-gray-500 dark:text-white/50" />
  </button>
  </div>
  {/if}
@@ -274,10 +274,10 @@
  <div class="flex items-center gap-1 flex-shrink-0">
  <button
  onclick={() => expandedFileId = expandedFileId === item.id ? null : item.id}
- class="p-1.5 hover:bg-white/[0.05] rounded-lg transition"
+ class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition"
  title="Share options"
  >
- <Link class="w-4 h-4 text-white/40" />
+ <Link class="w-4 h-4 text-gray-400 dark:text-white/40" />
  </button>
  <button
  onclick={() => handleStopSeeding(item)}
@@ -291,38 +291,38 @@
 
  <!-- Expanded share options -->
  {#if expandedFileId === item.id && item.merkleRoot}
- <div class="mt-3 pt-3 border-t border-white/[0.06] space-y-2">
+ <div class="mt-3 pt-3 border-t border-gray-200/60 dark:border-white/[0.06] space-y-2">
  <!-- Magnet link -->
  <div class="flex items-center gap-2">
- <span class="text-xs text-white/40 w-16 flex-shrink-0">Magnet</span>
+ <span class="text-xs text-gray-400 dark:text-white/40 w-16 flex-shrink-0">Magnet</span>
  <input
  type="text"
  readonly
  value={generateMagnetLink(item)}
- class="flex-1 text-xs font-mono bg-white/[0.05] border border-white/[0.06] rounded px-2 py-1 text-white/50"
+ class="flex-1 text-xs font-mono bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded px-2 py-1 text-gray-500 dark:text-white/50"
  />
  <button
  onclick={() => copyToClipboard(generateMagnetLink(item),'Magnet link')}
- class="flex-shrink-0 p-1 hover:bg-white/[0.05] rounded"
+ class="flex-shrink-0 p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded"
  >
- <Copy class="w-3.5 h-3.5 text-white/50" />
+ <Copy class="w-3.5 h-3.5 text-gray-500 dark:text-white/50" />
  </button>
  </div>
 
  <!-- Hash -->
  <div class="flex items-center gap-2">
- <span class="text-xs text-white/40 w-16 flex-shrink-0">Hash</span>
+ <span class="text-xs text-gray-400 dark:text-white/40 w-16 flex-shrink-0">Hash</span>
  <input
  type="text"
  readonly
  value={item.merkleRoot}
- class="flex-1 text-xs font-mono bg-white/[0.05] border border-white/[0.06] rounded px-2 py-1 text-white/50"
+ class="flex-1 text-xs font-mono bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded px-2 py-1 text-gray-500 dark:text-white/50"
  />
  <button
  onclick={() => copyToClipboard(item.merkleRoot!,'Hash')}
- class="flex-shrink-0 p-1 hover:bg-white/[0.05] rounded"
+ class="flex-shrink-0 p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded"
  >
- <Copy class="w-3.5 h-3.5 text-white/50" />
+ <Copy class="w-3.5 h-3.5 text-gray-500 dark:text-white/50" />
  </button>
  </div>
 

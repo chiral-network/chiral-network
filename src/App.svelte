@@ -483,7 +483,7 @@
 
 {#if $isAuthenticated}
  {#if $settings.navStyle ==='sidebar'}
- <div class="min-h-screen bg-white/[0.06] transition-colors">
+ <div class="min-h-screen bg-gray-50 dark:bg-white/[0.06] transition-colors">
  <Sidebar currentPage={currentPath} bind:collapsed={sidebarCollapsed} />
  <div class="transition-[margin] duration-200 hidden md:block {sidebarCollapsed ?'md:ml-16' :'md:ml-48'}">
  <Router routes={authenticatedRoutes} />
@@ -493,13 +493,13 @@
  </div>
  </div>
  {:else}
- <div class="min-h-screen bg-white/[0.06] transition-colors">
+ <div class="min-h-screen bg-gray-50 dark:bg-white/[0.06] transition-colors">
  <Navbar currentPage={currentPath} />
  <Router routes={authenticatedRoutes} />
  </div>
  {/if}
 {:else}
- <div class="bg-[#13111C] min-h-screen transition-colors">
+ <div class="bg-gray-100 dark:bg-[#13111C] min-h-screen transition-colors">
  <Router routes={unauthenticatedRoutes} />
  </div>
 {/if}

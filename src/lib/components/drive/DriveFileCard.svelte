@@ -33,7 +33,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
- class="group relative bg-white/[0.05] border border-white/[0.06] rounded-xl p-4 hover:shadow-lg hover:shadow-black/5 hover:border-white/[0.06] transition cursor-pointer select-none"
+ class="group relative bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl p-4 hover:shadow-lg hover:shadow-gray-200/50 dark:shadow-black/5 hover:border-gray-200/60 dark:border-white/[0.06] transition cursor-pointer select-none"
  ondblclick={() => onOpen(item)}
  oncontextmenu={(e) => { e.preventDefault(); onContextMenu(item, e); }}
 >
@@ -44,21 +44,21 @@
  {/if}
  {#if item.shared}
  {#if item.isPublic}
- <Link class="w-3.5 h-3.5 text-violet-400" />
+ <Link class="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
  {:else}
  <EyeOff class="w-3.5 h-3.5 text-orange-500" />
  {/if}
  {/if}
  <button
  onclick={(e) => { e.stopPropagation(); onContextMenu(item, e); }}
- class="p-1 hover:bg-white/[0.05] rounded"
+ class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded"
  >
- <MoreVertical class="w-4 h-4 text-white/40" />
+ <MoreVertical class="w-4 h-4 text-gray-400 dark:text-white/40" />
  </button>
  </div>
 
  <!-- Icon -->
- <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-500/10' :'bg-white/[0.05]'}">
+ <div class="flex items-center justify-center w-12 h-12 mx-auto mb-3 rounded-lg {item.type ==='folder' ?'bg-yellow-500/10' :'bg-white/70 dark:bg-white/[0.05]'}">
  {#if item.type ==='folder'}
  <Folder class="w-7 h-7 {getFolderColor()} fill-current opacity-80" />
  {:else}
@@ -69,22 +69,22 @@
 
  <!-- Name & metadata -->
  <div class="text-center">
- <p class="text-sm font-medium text-white/90 truncate" title={item.name}>
+ <p class="text-sm font-medium text-gray-900 dark:text-white/90 truncate" title={item.name}>
  {item.name}
  </p>
  {#if item.type ==='file' && item.size}
- <p class="text-xs text-white/40 mt-0.5">{formatSize(item.size)}</p>
+ <p class="text-xs text-gray-400 dark:text-white/40 mt-0.5">{formatSize(item.size)}</p>
  {/if}
  {#if getPriceLabel(item)}
  {@const priceLabel = getPriceLabel(item)}
- <p class="text-[11px] text-amber-400 font-medium mt-0.5">{priceLabel}</p>
+ <p class="text-[11px] text-amber-600 dark:text-amber-400 dark:text-amber-400 font-medium mt-0.5">{priceLabel}</p>
  {/if}
  {#if item.seeding && $networkConnected}
  <div class="flex items-center justify-center gap-1 mt-1">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
- <span class="text-[10px] text-green-400 font-medium">Seeding</span>
+ <span class="text-[10px] text-green-600 dark:text-green-400 font-medium">Seeding</span>
  {#if item.protocol}
- <span class="text-[10px] text-white/50">({item.protocol})</span>
+ <span class="text-[10px] text-gray-500 dark:text-white/50">({item.protocol})</span>
  {/if}
  </div>
  {/if}

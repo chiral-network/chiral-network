@@ -553,12 +553,12 @@
 
  function getStatusColor(status: FileTransfer['status']): string {
  switch (status) {
- case'completed': return'text-green-400';
- case'failed': return'text-red-400';
- case'declined': return'text-white/40';
- case'pending': return'text-yellow-400';
+ case'completed': return'text-green-600 dark:text-green-400';
+ case'failed': return'text-red-600 dark:text-red-400';
+ case'declined': return'text-gray-400 dark:text-white/40';
+ case'pending': return'text-yellow-600 dark:text-yellow-400 dark:text-yellow-400';
  case'accepted': return'text-blue-600';
- default: return'text-white/50';
+ default: return'text-gray-500 dark:text-white/50';
  }
  }
 </script>
@@ -569,24 +569,24 @@
  <!-- Header -->
  <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
  <div class="space-y-1">
- <h1 class="text-2xl font-bold tracking-tight text-white/90">ChiralDrop</h1>
- <p class="text-sm sm:text-base text-white/50">
+ <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white/90">ChiralDrop</h1>
+ <p class="text-sm sm:text-base text-gray-500 dark:text-white/50">
  Your alias:
  <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
  </p>
  </div>
  <div class="flex flex-wrap items-center gap-2 sm:gap-3">
- <div class="inline-flex items-center rounded-full border border-primary-200/70 bg-violet-950/20/80 px-3 py-1 text-xs font-medium text-primary-700">
+ <div class="inline-flex items-center rounded-full border border-primary-200/70 bg-violet-100 dark:bg-violet-950/20/80 px-3 py-1 text-xs font-medium text-primary-700 dark:text-primary-300">
  {$nearbyPeers.length} peers online
  </div>
  {#if $incomingPendingTransfers.length > 0}
- <div class="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-500/[0.1]0/[0.1]0/[0.1] px-3 py-1 text-xs font-medium text-amber-400">
+ <div class="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-500/[0.1]0/[0.1]0/[0.1] px-3 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 dark:text-amber-400">
  {$incomingPendingTransfers.length} pending request{$incomingPendingTransfers.length === 1 ?'' :'s'}
  </div>
  {/if}
  <button
  onclick={() => showHistory = !showHistory}
- class="inline-flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2 text-sm font-medium text-white/50 shadow-black/5 transition hover:bg-white/[0.05] focus:outline-none"
+ class="inline-flex items-center gap-2 rounded-xl border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] px-4 py-2 text-sm font-medium text-gray-500 dark:text-white/50 shadow-gray-200/50 dark:shadow-black/5 transition hover:bg-gray-100 dark:hover:bg-white/[0.05] focus:outline-none"
  >
  <History class="h-4 w-4" />
  <span>{showHistory ?'Hide History' :'Show History'}</span>
@@ -600,7 +600,7 @@
  >
  <!-- Peer Map -->
  <div
- class="relative overflow-hidden rounded-xl border border-white/[0.06] bg-white/[0.05] shadow-black/5 min-h-[22rem] xl:min-h-0"
+ class="relative overflow-hidden rounded-xl border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] shadow-gray-200/50 dark:shadow-black/5 min-h-[22rem] xl:min-h-0"
  style={isWideLayout ? `flex: 0 0 ${mapPaneRatio}%;` :''}
  >
  <div class="absolute inset-0 bg-gradient-to-br from-slate-50 via-primary-50/70 to-blue-50/60"></div>
@@ -608,10 +608,10 @@
  <div class="absolute -right-20 -bottom-20 h-72 w-72 rounded-full bg-violet-400/30 blur-3xl"></div>
  <div class="network-dot-grid absolute inset-0 opacity-45"></div>
 
- <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/[0.05] border border-white/[0.06] px-3 py-1 text-xs font-semibold text-slate-700">
+ <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300">
  Live Peer Mesh
  </div>
- <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/[0.05] border border-white/[0.06] px-3 py-1 text-xs text-slate-600">
+ <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] px-3 py-1 text-xs text-slate-600 dark:text-slate-500 dark:text-slate-400">
  {$nearbyPeers.length} discovered
  </div>
 
@@ -629,7 +629,7 @@
  >
  <User class="h-8 w-8 text-white" />
  </div>
- <span class="mt-2 rounded-full bg-white/[0.05] border border-white/[0.06] px-3 py-1 text-xs font-semibold text-white/50">
+ <span class="mt-2 rounded-full bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] px-3 py-1 text-xs font-semibold text-gray-500 dark:text-white/50">
  You
  </span>
  </div>
@@ -649,7 +649,7 @@
  >
  <User class="h-6 w-6 text-white" />
  </div>
- <span class="mt-1 whitespace-nowrap rounded-full bg-white/[0.05] border border-white/[0.06] px-2 py-0.5 text-xs font-medium text-white/50">
+ <span class="mt-1 whitespace-nowrap rounded-full bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] px-2 py-0.5 text-xs font-medium text-gray-500 dark:text-white/50">
  {peer.alias.displayName}
  </span>
  </div>
@@ -659,12 +659,12 @@
  <!-- Empty state -->
  {#if $nearbyPeers.length === 0}
  <div class="absolute inset-0 flex items-center justify-center p-6">
- <div class="max-w-sm rounded-xl border border-white/[0.06] bg-white/[0.05] p-6 text-center">
- <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.05] border border-white/[0.06] text-white/40">
+ <div class="max-w-sm rounded-xl border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] p-6 text-center">
+ <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] text-gray-400 dark:text-white/40">
  <User class="h-6 w-6" />
  </div>
- <p class="text-lg font-semibold text-white/20">No nearby users found</p>
- <p class="mt-1 text-sm text-white/40">Connect to the network to discover peers</p>
+ <p class="text-lg font-semibold text-gray-300 dark:text-white/20">No nearby users found</p>
+ <p class="mt-1 text-sm text-gray-400 dark:text-white/40">Connect to the network to discover peers</p>
  </div>
  </div>
  {/if}
@@ -677,16 +677,16 @@
  aria-label="Resize map and side panel"
  title="Drag to resize panels"
  >
- <span class="h-full w-px bg-white/[0.15]"></span>
- <span class="absolute h-20 w-1.5 rounded-full bg-white/[0.15]/80 transition group-hover:bg-primary-400"></span>
+ <span class="h-full w-px bg-white/80 dark:bg-white/[0.15]"></span>
+ <span class="absolute h-20 w-1.5 rounded-full bg-white/80 dark:bg-white/[0.15]/80 transition group-hover:bg-primary-400"></span>
  </button>
 
  <!-- Side Panel -->
  <div class="flex min-h-0 flex-col gap-4 xl:flex-1">
  <!-- Incoming Transfer Requests -->
  {#if $incomingPendingTransfers.length > 0}
- <div class="rounded-xl border border-amber-400/20 bg-white/[0.05] p-4">
- <h3 class="mb-3 font-semibold text-white/90">Incoming Transfers</h3>
+ <div class="rounded-xl border border-amber-400/20 bg-white/70 dark:bg-white/[0.05] p-4">
+ <h3 class="mb-3 font-semibold text-gray-900 dark:text-white/90">Incoming Transfers</h3>
  <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
  {#each $incomingPendingTransfers as transfer (transfer.id)}
  <div class="rounded-xl border border-amber-100 bg-amber-500/[0.1]0/[0.1]/60 p-3">
@@ -698,12 +698,12 @@
  <User class="h-4 w-4 text-white" />
  </div>
  <div class="min-w-0 flex-1">
- <p class="truncate text-sm font-medium text-white/90">{transfer.fileName}</p>
- <p class="text-xs text-white/50">
+ <p class="truncate text-sm font-medium text-gray-900 dark:text-white/90">{transfer.fileName}</p>
+ <p class="text-xs text-gray-500 dark:text-white/50">
  From {transfer.fromAlias.displayName} - {formatFileSize(transfer.fileSize)}
  </p>
  {#if transfer.priceWei && transfer.priceWei !=='0' && BigInt(transfer.priceWei) > 0}
- <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-400">
+ <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/20 px-2 py-0.5 text-xs text-amber-600 dark:text-amber-400 dark:text-amber-400">
  <Coins class="h-3 w-3" />
  {formatPriceWei(transfer.priceWei)}
  </span>
@@ -740,17 +740,17 @@
 
  <!-- Selected Peer Panel -->
  {#if $selectedPeer}
- <div class="rounded-xl border border-white/[0.06] bg-white/[0.05] p-4 shadow-black/5">
+ <div class="rounded-xl border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] p-4 shadow-gray-200/50 dark:shadow-black/5">
  <div class="mb-4 flex items-center justify-between">
- <h3 class="font-semibold text-white/90">Send to Peer</h3>
+ <h3 class="font-semibold text-gray-900 dark:text-white/90">Send to Peer</h3>
  <button
  onclick={() => selectPeer(null)}
- class="rounded-lg p-1 transition hover:bg-white/[0.05]"
+ class="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-white/[0.05]"
  >
- <X class="h-4 w-4 text-white/40" />
+ <X class="h-4 w-4 text-gray-400 dark:text-white/40" />
  </button>
  </div>
- <div class="mb-4 flex items-center gap-3 rounded-xl bg-white/[0.05] p-3">
+ <div class="mb-4 flex items-center gap-3 rounded-xl bg-white/70 dark:bg-white/[0.05] p-3">
  <div
  class="h-12 w-12 rounded-full flex items-center justify-center"
  style="background-color: {$selectedPeer.alias.colorHex}"
@@ -758,12 +758,12 @@
  <User class="h-6 w-6 text-white" />
  </div>
  <div class="min-w-0">
- <p class="truncate font-medium text-white/90">{$selectedPeer.alias.displayName}</p>
- <p class="truncate text-xs text-white/40">{$selectedPeer.peerId}</p>
+ <p class="truncate font-medium text-gray-900 dark:text-white/90">{$selectedPeer.alias.displayName}</p>
+ <p class="truncate text-xs text-gray-400 dark:text-white/40">{$selectedPeer.peerId}</p>
  </div>
  </div>
  <div class="mb-3">
- <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-white/40">
+ <label for="chiraldrop-price" class="mb-1 block text-xs font-medium text-gray-400 dark:text-white/40">
  Price (CHI) — leave empty for free
  </label>
  <div class="flex items-center gap-2">
@@ -775,7 +775,7 @@
  min="0"
  placeholder="0 (free)"
  bind:value={sendPrice}
- class="flex-1 rounded-lg border border-white/[0.06] bg-white/[0.05] px-3 py-2 text-sm text-white/90 outline-none transition focus:border-primary-400"
+ class="flex-1 rounded-lg border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] px-3 py-2 text-sm text-gray-900 dark:text-white/90 outline-none transition focus:border-primary-400"
  />
  </div>
  {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -793,47 +793,47 @@
  </button>
  </div>
  {:else}
- <div class="rounded-xl border border-dashed border-white/[0.06] bg-white/[0.05] p-5 text-center shadow-black/5">
- <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/[0.05]">
- <Upload class="h-6 w-6 text-white/50" />
+ <div class="rounded-xl border border-dashed border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] p-5 text-center shadow-gray-200/50 dark:shadow-black/5">
+ <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/70 dark:bg-white/[0.05]">
+ <Upload class="h-6 w-6 text-gray-500 dark:text-white/50" />
  </div>
- <p class="text-sm text-white/50">Select a nearby user to start a transfer</p>
+ <p class="text-sm text-gray-500 dark:text-white/50">Select a nearby user to start a transfer</p>
  </div>
  {/if}
 
  <!-- Transaction History -->
  {#if showHistory}
- <div class="flex min-h-0 flex-1 flex-col rounded-xl border border-white/[0.06] bg-white/[0.05] p-4 shadow-black/5">
- <h3 class="mb-3 font-semibold text-white/90">Transaction History</h3>
+ <div class="flex min-h-0 flex-1 flex-col rounded-xl border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] p-4 shadow-gray-200/50 dark:shadow-black/5">
+ <h3 class="mb-3 font-semibold text-gray-900 dark:text-white/90">Transaction History</h3>
  <div class="flex-1 space-y-2 overflow-y-auto pr-1">
  {#if $transferHistory.length === 0}
- <p class="py-4 text-center text-sm text-white/40">No transfers yet</p>
+ <p class="py-4 text-center text-sm text-gray-400 dark:text-white/40">No transfers yet</p>
  {:else}
  {#each $transferHistory as transfer (transfer.id)}
- <div class="rounded-xl border border-white/[0.06] bg-white/[0.05] p-3">
+ <div class="rounded-xl border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] p-3">
  <div class="flex items-start gap-2.5">
- <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-white/50" />
+ <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-500 dark:text-white/50" />
  <div class="min-w-0 flex-1">
- <p class="truncate text-sm font-medium text-white/90">{transfer.fileName}</p>
- <p class="text-xs text-white/40">
+ <p class="truncate text-sm font-medium text-gray-900 dark:text-white/90">{transfer.fileName}</p>
+ <p class="text-xs text-gray-400 dark:text-white/40">
  {transfer.direction ==='incoming' ?'From' :'To'} {transfer.direction ==='incoming' ? transfer.fromAlias.displayName : transfer.toAlias.displayName}
  </p>
  <div class="mt-1 flex items-center gap-2">
  <span class="text-xs capitalize {getStatusColor(transfer.status)}">{transfer.status}</span>
- <span class="text-xs text-white/50">{formatFileSize(transfer.fileSize)}</span>
+ <span class="text-xs text-gray-500 dark:text-white/50">{formatFileSize(transfer.fileSize)}</span>
  {#if transfer.priceWei && transfer.priceWei !=='0'}
- <span class="text-xs text-amber-600">{formatPriceWei(transfer.priceWei)}</span>
+ <span class="text-xs text-amber-600 dark:text-amber-400">{formatPriceWei(transfer.priceWei)}</span>
  {/if}
  </div>
  {#if transfer.paymentTxHash}
- <p class="mt-1 truncate font-mono text-xs text-white/50" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
+ <p class="mt-1 truncate font-mono text-xs text-gray-500 dark:text-white/50" title={transfer.paymentTxHash}>Tx: {transfer.paymentTxHash.slice(0, 18)}...</p>
  {/if}
  {#if transfer.balanceBefore && transfer.balanceAfter}
- <p class="mt-1 text-xs text-white/40">
+ <p class="mt-1 text-xs text-gray-400 dark:text-white/40">
  {transfer.balanceBefore} → {transfer.balanceAfter} CHI
  </p>
  {/if}
- <p class="mt-1 text-xs text-white/50">{formatTimestamp(transfer.timestamp)}</p>
+ <p class="mt-1 text-xs text-gray-500 dark:text-white/50">{formatTimestamp(transfer.timestamp)}</p>
  </div>
  </div>
  </div>

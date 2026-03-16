@@ -32,39 +32,39 @@
  <div class="inline-flex items-center justify-center w-20 h-20 mb-6">
  <img src="/logo.png" alt="Chiral Network" class="w-20 h-20 drop-shadow-lg" />
  </div>
- <h1 class="text-4xl font-bold text-white/90 mb-3">
+ <h1 class="text-4xl font-bold text-gray-900 dark:text-white/90 mb-3">
  Chiral Network
  </h1>
- <p class="text-lg text-white/40">Decentralized File Sharing Network</p>
+ <p class="text-lg text-gray-400 dark:text-white/40">Decentralized File Sharing Network</p>
  </div>
 
  <!-- Card -->
- <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl p-8 shadow-black/5">
- <h2 class="text-2xl font-semibold text-white/90 mb-6">Get Started</h2>
+ <div class="bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl p-8 shadow-gray-200/50 dark:shadow-black/5">
+ <h2 class="text-2xl font-semibold text-gray-900 dark:text-white/90 mb-6">Get Started</h2>
 
  <button
  onclick={handleCreateWallet}
- class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-violet-500/80 border border-primary-400/30 hover:bg-violet-500/90 text-white rounded-xl transition-all shadow-black/5 focus:outline-none"
+ class="w-full flex items-start gap-4 px-5 py-4 mb-4 bg-violet-500/80 border border-primary-400/30 hover:bg-violet-500/90 text-white rounded-xl transition-all shadow-gray-200/50 dark:shadow-black/5 focus:outline-none"
  >
- <div class="flex-shrink-0 mt-0.5 p-2 bg-white/[0.05] rounded-lg">
+ <div class="flex-shrink-0 mt-0.5 p-2 bg-white/70 dark:bg-white/[0.05] rounded-lg">
  <Plus class="w-5 h-5" />
  </div>
  <div class="text-left">
  <span class="block font-semibold text-base">Create New Wallet</span>
- <span class="block text-sm text-white/50 mt-0.5">Generate a new wallet with a secure recovery phrase</span>
+ <span class="block text-sm text-gray-500 dark:text-white/50 mt-0.5">Generate a new wallet with a secure recovery phrase</span>
  </div>
  </button>
 
  <button
  onclick={handleUseExisting}
- class="w-full flex items-start gap-4 px-5 py-4 border border-white/[0.06] bg-white/[0.05] hover:bg-white/[0.05] text-white/90 rounded-xl transition-all focus:outline-none"
+ class="w-full flex items-start gap-4 px-5 py-4 border border-gray-200/60 dark:border-white/[0.06] bg-white/70 dark:bg-white/[0.05] hover:bg-gray-100 dark:hover:bg-white/[0.05] text-gray-900 dark:text-white/90 rounded-xl transition-all focus:outline-none"
  >
- <div class="flex-shrink-0 mt-0.5 p-2 bg-white/[0.05] rounded-lg">
+ <div class="flex-shrink-0 mt-0.5 p-2 bg-white/70 dark:bg-white/[0.05] rounded-lg">
  <KeyRound class="w-5 h-5" />
  </div>
  <div class="text-left">
  <span class="block font-semibold text-base">Import Existing Wallet</span>
- <span class="block text-sm text-white/40 mt-0.5">Use your private key or recovery phrase</span>
+ <span class="block text-sm text-gray-400 dark:text-white/40 mt-0.5">Use your private key or recovery phrase</span>
  </div>
  </button>
  </div>

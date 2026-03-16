@@ -129,30 +129,30 @@
 
 <div class="max-w-2xl mx-auto p-6">
  {#if step ==='generate'}
- <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/5 p-8">
+ <div class="bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl shadow-gray-200/50 dark:shadow-black/5 p-8">
  <div class="flex items-center mb-6">
- <button on:click={onBack} class="mr-4 p-2 hover:bg-white/[0.05] rounded-lg transition text-white/50">
+ <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition text-gray-500 dark:text-white/50">
  <ArrowLeft class="w-5 h-5" />
  </button>
  <h2 class="text-2xl font-bold">Create New Wallet</h2>
  </div>
 
  <div class="mb-6">
- <p class="text-white/50 mb-4">
+ <p class="text-gray-500 dark:text-white/50 mb-4">
  Write down these 12 words in order and keep them safe. You'll need them to recover your wallet.
  </p>
 
  <div class="bg-yellow-500/10 border border-yellow-400/20 rounded-lg p-4 mb-4">
- <p class="text-sm text-yellow-800">
+ <p class="text-sm text-yellow-800 dark:text-yellow-200">
  <strong>Warning:</strong> Never share your recovery phrase with anyone. Anyone with these words can access your wallet.
  </p>
  </div>
 
- <div class="grid grid-cols-3 gap-3 bg-white/[0.05] border border-white/[0.06] rounded-lg p-6 mb-4">
+ <div class="grid grid-cols-3 gap-3 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-lg p-6 mb-4">
  {#each mnemonicWords as word, index}
- <div class="bg-white/[0.05] p-3 rounded-lg border border-white/[0.06]">
- <span class="text-xs text-white/40">{index + 1}.</span>
- <span class="ml-2 font-mono text-white/90">{word}</span>
+ <div class="bg-white/70 dark:bg-white/[0.05] p-3 rounded-lg border border-gray-200/60 dark:border-white/[0.06]">
+ <span class="text-xs text-gray-400 dark:text-white/40">{index + 1}.</span>
+ <span class="ml-2 font-mono text-gray-900 dark:text-white/90">{word}</span>
  </div>
  {/each}
  </div>
@@ -160,11 +160,11 @@
  <div class="flex gap-3">
  <button
  on:click={copyToClipboard}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white/[0.05] border border-white/[0.06] hover:bg-white/[0.05] rounded-lg transition text-white/50"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition text-gray-500 dark:text-white/50"
  >
  {#if copied}
- <Check class="w-4 h-4 text-green-400" />
- <span class="text-green-400">Copied!</span>
+ <Check class="w-4 h-4 text-green-600 dark:text-green-400" />
+ <span class="text-green-600 dark:text-green-400">Copied!</span>
  {:else}
  <Copy class="w-4 h-4" />
  <span>Copy</span>
@@ -173,7 +173,7 @@
 
  <button
  on:click={generateNewMnemonic}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white/[0.05] border border-white/[0.06] hover:bg-white/[0.05] rounded-lg transition text-white/50"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition text-gray-500 dark:text-white/50"
  >
  <RefreshCw class="w-4 h-4" />
  <span>Regenerate</span>
@@ -181,7 +181,7 @@
 
  <button
  on:click={downloadAsText}
- class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white/[0.05] border border-white/[0.06] hover:bg-white/[0.05] rounded-lg transition text-white/50"
+ class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition text-gray-500 dark:text-white/50"
  >
  <Download class="w-4 h-4" />
  <span>Download</span>
@@ -192,7 +192,7 @@
  <div class="flex gap-3">
  <button
  on:click={onBack}
- class="flex-1 px-6 py-3 border border-white/[0.06] rounded-lg hover:bg-white/[0.05] transition text-white/50"
+ class="flex-1 px-6 py-3 border border-gray-200/60 dark:border-white/[0.06] rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition text-gray-500 dark:text-white/50"
  >
  Cancel
  </button>
@@ -205,23 +205,23 @@
  </div>
  </div>
  {:else if step ==='verify'}
- <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/5 p-8">
+ <div class="bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl shadow-gray-200/50 dark:shadow-black/5 p-8">
  <h2 class="text-2xl font-bold mb-6">Verify Recovery Phrase</h2>
 
- <p class="text-white/50 mb-6">
+ <p class="text-gray-500 dark:text-white/50 mb-6">
  To ensure you've saved your recovery phrase, please enter the following words:
  </p>
 
  {#each verificationIndices as index, i}
  <div class="mb-4">
- <label for="word-{index}" class="block text-sm font-medium text-white/50 mb-2">
+ <label for="word-{index}" class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-2">
  Word #{index + 1}
  </label>
  <input
  id="word-{index}"
  type="text"
  bind:value={userInputs[i]}
- class="w-full px-4 py-2 bg-white/[0.05] border border-white/[0.06] rounded-lg focus:border-white/[0.06] text-white/90 placeholder:text-white/40 outline-none"
+ class="w-full px-4 py-2 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-lg focus:border-gray-200/60 dark:border-white/[0.06] text-gray-900 dark:text-white/90 placeholder:text-gray-400 dark:text-white/40 outline-none"
  placeholder="Enter word {index + 1}"
  />
  </div>
@@ -229,14 +229,14 @@
 
  {#if verificationError}
  <div class="bg-red-500/[0.1]0/10 border border-red-400/20 rounded-lg p-4 mb-4">
- <p class="text-sm text-red-700">{verificationError}</p>
+ <p class="text-sm text-red-700 dark:text-red-300">{verificationError}</p>
  </div>
  {/if}
 
  <div class="flex gap-3">
  <button
  on:click={() => step ='generate'}
- class="flex-1 px-6 py-3 border border-white/[0.06] rounded-lg hover:bg-white/[0.05] transition text-white/50"
+ class="flex-1 px-6 py-3 border border-gray-200/60 dark:border-white/[0.06] rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition text-gray-500 dark:text-white/50"
  >
  Back
  </button>
@@ -249,13 +249,13 @@
  </div>
  </div>
  {:else}
- <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/5 p-8">
+ <div class="bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl shadow-gray-200/50 dark:shadow-black/5 p-8">
  <div class="flex items-center gap-2 mb-3">
  <Mail class="w-5 h-5 text-violet-500" />
  <h2 class="text-2xl font-bold">One-Time Email Backup</h2>
  </div>
 
- <p class="text-white/50 mb-3">
+ <p class="text-gray-500 dark:text-white/50 mb-3">
  Enter your email to receive a one-time copy of your recovery phrase and wallet credentials.
  </p>
 
@@ -266,14 +266,14 @@
  </div>
 
  <div class="mb-4">
- <label for="backup-email" class="block text-sm font-medium text-white/50 mb-2">
+ <label for="backup-email" class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-2">
  Backup Email Address
  </label>
  <input
  id="backup-email"
  type="email"
  bind:value={emailInput}
- class="w-full px-4 py-2 bg-white/[0.05] border border-white/[0.06] rounded-lg focus:border-white/[0.06] text-white/90 placeholder:text-white/40 outline-none"
+ class="w-full px-4 py-2 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-lg focus:border-gray-200/60 dark:border-white/[0.06] text-gray-900 dark:text-white/90 placeholder:text-gray-400 dark:text-white/40 outline-none"
  placeholder="you@example.com"
  autocomplete="email"
  />
@@ -281,14 +281,14 @@
 
  {#if emailError}
  <div class="bg-red-500/[0.1]0/10 border border-red-400/20 rounded-lg p-4 mb-4">
- <p class="text-sm text-red-700">{emailError}</p>
+ <p class="text-sm text-red-700 dark:text-red-300">{emailError}</p>
  </div>
  {/if}
 
  <div class="flex gap-3">
  <button
  on:click={() => step ='verify'}
- class="flex-1 px-6 py-3 border border-white/[0.06] rounded-lg hover:bg-white/[0.05] transition text-white/50"
+ class="flex-1 px-6 py-3 border border-gray-200/60 dark:border-white/[0.06] rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition text-gray-500 dark:text-white/50"
  disabled={sendingEmail}
  >
  Back

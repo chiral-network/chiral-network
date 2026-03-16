@@ -395,19 +395,19 @@
  function getTxTypeStyle(tx: Transaction): { bgColor: string; iconColor: string } {
  switch (tx.txType) {
  case'speed_tier_payment':
- return { bgColor:'bg-amber-100', iconColor:'text-amber-600' };
+ return { bgColor:'bg-amber-100 dark:bg-amber-900/20', iconColor:'text-amber-600 dark:text-amber-400' };
  case'file_payment':
- return { bgColor:'bg-purple-500/[0.15]', iconColor:'text-purple-600' };
+ return { bgColor:'bg-purple-100 dark:bg-purple-500/[0.15]', iconColor:'text-purple-600 dark:text-purple-400' };
  case'file_sale':
- return { bgColor:'bg-emerald-100', iconColor:'text-emerald-600' };
+ return { bgColor:'bg-emerald-100 dark:bg-emerald-900/20', iconColor:'text-emerald-600' };
  case'receive':
- return { bgColor:'bg-green-500/[0.15]', iconColor:'text-green-400' };
+ return { bgColor:'bg-green-100 dark:bg-green-500/[0.15]', iconColor:'text-green-600 dark:text-green-400' };
  case'send':
- return { bgColor:'bg-red-100', iconColor:'text-red-400' };
+ return { bgColor:'bg-red-100 dark:bg-red-900/20', iconColor:'text-red-600 dark:text-red-400' };
  default:
  return isIncoming(tx)
- ? { bgColor:'bg-green-500/[0.15]', iconColor:'text-green-400' }
- : { bgColor:'bg-red-100', iconColor:'text-red-400' };
+ ? { bgColor:'bg-green-100 dark:bg-green-500/[0.15]', iconColor:'text-green-600 dark:text-green-400' }
+ : { bgColor:'bg-red-100 dark:bg-red-900/20', iconColor:'text-red-600 dark:text-red-400' };
  }
  }
 
@@ -431,11 +431,11 @@
  <div class="flex items-center justify-between">
  <div>
  <h1 class="text-2xl font-bold">Account</h1>
- <p class="text-white/50 mt-1">Manage your wallet and account settings</p>
+ <p class="text-gray-500 dark:text-white/50 mt-1">Manage your wallet and account settings</p>
  </div>
  <button
  onclick={() => showLogoutModal = true}
- class="flex items-center gap-2 px-4 py-2 text-red-400 hover:bg-red-500/[0.1]0/10 rounded-lg transition-colors focus:outline-none"
+ class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 hover:bg-red-500/[0.1]0/10 rounded-lg transition-colors focus:outline-none"
  >
  <LogOut class="w-5 h-5" />
  Logout
@@ -445,11 +445,11 @@
  {#if $walletAccount}
  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
  <!-- Wallet Overview Card -->
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] overflow-hidden">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] overflow-hidden">
  <div class="bg-violet-500/80 p-6 text-white">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-3 bg-white/[0.05] rounded-full">
+ <div class="p-3 bg-white/70 dark:bg-white/[0.05] rounded-full">
  <Wallet class="w-8 h-8" />
  </div>
  <div>
@@ -457,13 +457,13 @@
  <p class="text-primary-100 text-sm">Your decentralized identity</p>
  </div>
  </div>
- <span class="px-3 py-1 bg-white/[0.05] rounded-full text-sm">
+ <span class="px-3 py-1 bg-white/70 dark:bg-white/[0.05] rounded-full text-sm">
  {$networkConnected ?'Connected' :'Disconnected'}
  </span>
  </div>
 
  <!-- Balance Display -->
- <div class="bg-white/[0.05] rounded-xl p-4 mt-4">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl p-4 mt-4">
  <div class="flex items-center justify-between">
  <div>
  <p class="text-primary-100 text-sm mb-1">Balance</p>
@@ -482,7 +482,7 @@
  <button
  onclick={loadBalance}
  disabled={isLoadingBalance}
- class="p-2 hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50"
+ class="p-2 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50"
  title="Refresh balance"
  >
  <RefreshCw class="w-5 h-5 {isLoadingBalance ?'animate-spin' :''}" />
@@ -499,24 +499,24 @@
  <!-- Wallet Address Section -->
  <div>
  <div class="flex items-center justify-between mb-2">
- <span class="text-sm font-medium text-white/50">Wallet Address</span>
+ <span class="text-sm font-medium text-gray-500 dark:text-white/50">Wallet Address</span>
  </div>
  <div class="flex items-center gap-2">
  <input
  type="text"
  readonly
  value={$walletAccount.address}
- class="flex-1 px-4 py-3 bg-white/[0.05] border border-white/[0.06] rounded-lg font-mono text-sm"
+ class="flex-1 px-4 py-3 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-lg font-mono text-sm"
  />
  <button
  onclick={() => copyToClipboard($walletAccount!.address,'address')}
- class="p-3 hover:bg-white/[0.05] rounded-lg transition-colors border border-white/[0.06] focus:outline-none"
+ class="p-3 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors border border-gray-200/60 dark:border-white/[0.06] focus:outline-none"
  title="Copy address"
  >
  {#if copied ==='address'}
- <Check class="w-5 h-5 text-green-400" />
+ <Check class="w-5 h-5 text-green-600 dark:text-green-400" />
  {:else}
- <Copy class="w-5 h-5 text-white/50" />
+ <Copy class="w-5 h-5 text-gray-500 dark:text-white/50" />
  {/if}
  </button>
  </div>
@@ -525,16 +525,16 @@
  <!-- Private Key Section -->
  <div>
  <div class="flex items-center justify-between mb-2">
- <span class="text-sm font-medium text-white/50 flex items-center gap-2">
+ <span class="text-sm font-medium text-gray-500 dark:text-white/50 flex items-center gap-2">
  <Key class="w-4 h-4" />
  Private Key
  </span>
  </div>
 
- <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
+ <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-3 mb-3">
  <div class="flex items-start gap-2">
- <AlertTriangle class="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
- <p class="text-sm text-yellow-800">
+ <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+ <p class="text-sm text-yellow-800 dark:text-yellow-200">
  <strong>Security Warning:</strong> Never share your private key with anyone. Anyone with your private key can access your wallet and all its contents.
  </p>
  </div>
@@ -546,29 +546,29 @@
  type={privateKeyVisible ?'text' :'password'}
  readonly
  value={$walletAccount.privateKey}
- class="w-full px-4 py-3 bg-white/[0.05] border border-white/[0.06] rounded-lg font-mono text-sm pr-12"
+ class="w-full px-4 py-3 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-lg font-mono text-sm pr-12"
  />
  <button
  onclick={() => privateKeyVisible = !privateKeyVisible}
- class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-white/[0.05] rounded transition-colors"
+ class="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded transition-colors"
  title={privateKeyVisible ?'Hide private key' :'Show private key'}
  >
  {#if privateKeyVisible}
- <EyeOff class="w-5 h-5 text-white/50" />
+ <EyeOff class="w-5 h-5 text-gray-500 dark:text-white/50" />
  {:else}
- <Eye class="w-5 h-5 text-white/50" />
+ <Eye class="w-5 h-5 text-gray-500 dark:text-white/50" />
  {/if}
  </button>
  </div>
  <button
  onclick={() => copyToClipboard($walletAccount!.privateKey,'privateKey')}
- class="p-3 hover:bg-white/[0.05] rounded-lg transition-colors border border-white/[0.06] focus:outline-none"
+ class="p-3 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors border border-gray-200/60 dark:border-white/[0.06] focus:outline-none"
  title="Copy private key"
  >
  {#if copied ==='privateKey'}
- <Check class="w-5 h-5 text-green-400" />
+ <Check class="w-5 h-5 text-green-600 dark:text-green-400" />
  {:else}
- <Copy class="w-5 h-5 text-white/50" />
+ <Copy class="w-5 h-5 text-gray-500 dark:text-white/50" />
  {/if}
  </button>
  </div>
@@ -577,14 +577,14 @@
  </div>
 
  <!-- Send CHI Card -->
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-6">
  <div class="flex items-center gap-3 mb-4">
- <div class="p-2 bg-violet-900/20 rounded-lg">
+ <div class="p-2 bg-violet-100 dark:bg-violet-900/20 rounded-lg">
  <Send class="w-6 h-6 text-violet-500" />
  </div>
  <div>
  <h3 class="font-semibold">Send CHI</h3>
- <p class="text-sm text-white/40">Transfer CHI to another address</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">Transfer CHI to another address</p>
  </div>
  </div>
 
@@ -593,7 +593,7 @@
  <!-- Recipient Address -->
  <div>
  <div class="flex items-center justify-between mb-1">
- <label for="recipient" class="block text-sm font-medium text-white/50">
+ <label for="recipient" class="block text-sm font-medium text-gray-500 dark:text-white/50">
  Recipient Address
  </label>
  {#if !showAddRecipient}
@@ -605,7 +605,7 @@
  }
  showAddRecipient = true;
  }}
- class="flex items-center gap-1 text-xs text-violet-500 hover:text-primary-700"
+ class="flex items-center gap-1 text-xs text-violet-500 hover:text-primary-700 dark:text-primary-300"
  >
  <UserPlus class="w-3.5 h-3.5" />
  Save
@@ -618,7 +618,7 @@
  type="text"
  bind:value={newRecipientLabel}
  placeholder="Label (e.g. Alice)"
- class="flex-1 px-3 py-2 border border-white/[0.06] rounded-lg text-sm focus:outline-none"
+ class="flex-1 px-3 py-2 border border-gray-200/60 dark:border-white/[0.06] rounded-lg text-sm focus:outline-none"
  onkeydown={(e) => { if (e.key ==='Enter') addRecipient(); }}
  />
  <button
@@ -630,7 +630,7 @@
  </button>
  <button
  onclick={() => { showAddRecipient = false; newRecipientLabel =''; }}
- class="p-2 text-white/50 hover:text-white/50"
+ class="p-2 text-gray-500 dark:text-white/50 hover:text-gray-500 dark:text-white/50"
  >
  <X class="w-4 h-4" />
  </button>
@@ -641,13 +641,13 @@
  type="text"
  bind:value={recipientAddress}
  placeholder="0x..."
- class="w-full px-4 py-3 border border-white/[0.06] rounded-lg font-mono text-sm focus:outline-none"
+ class="w-full px-4 py-3 border border-gray-200/60 dark:border-white/[0.06] rounded-lg font-mono text-sm focus:outline-none"
  />
  </div>
 
  <!-- Amount -->
  <div>
- <label for="amount" class="block text-sm font-medium text-white/50 mb-1">
+ <label for="amount" class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-1">
  Amount (CHI)
  </label>
  <div class="relative">
@@ -658,11 +658,11 @@
  pattern="[0-9]*\.?[0-9]*"
  bind:value={sendAmount}
  placeholder="0.00"
- class="w-full px-4 py-3 border border-white/[0.06] rounded-lg text-sm focus:outline-none"
+ class="w-full px-4 py-3 border border-gray-200/60 dark:border-white/[0.06] rounded-lg text-sm focus:outline-none"
  />
  <button
  onclick={() => sendAmount = balance}
- class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-violet-500 hover:text-primary-700 font-medium"
+ class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-violet-500 hover:text-primary-700 dark:text-primary-300 font-medium"
  >
  MAX
  </button>
@@ -680,29 +680,29 @@
 
  <!-- Saved Recipients List -->
  {#if savedRecipients.length > 0}
- <div class="border-t border-white/[0.06] pt-4">
- <span class="block text-sm font-medium text-white/50 mb-2">Saved Recipients</span>
+ <div class="border-t border-gray-200/60 dark:border-white/[0.06] pt-4">
+ <span class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-2">Saved Recipients</span>
  <div class="space-y-1 max-h-48 overflow-y-auto">
  {#each [...savedRecipients].sort((a, b) => b.lastUsed - a.lastUsed) as r (r.id)}
- <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.05] transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ?'bg-violet-950/20 border-l-2 border-violet-500' :''}"
+ <div class="group flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition-colors cursor-pointer {recipientAddress.toLowerCase() === r.address.toLowerCase() ?'bg-violet-100 dark:bg-violet-950/20 border-l-2 border-violet-500' :''}"
  role="button"
  tabindex="0"
  onclick={() => selectRecipient(r)}
  onkeydown={(e) => { if (e.key ==='Enter') selectRecipient(r); }}
  >
- <div class="w-8 h-8 rounded-full bg-violet-900/20 flex items-center justify-center flex-shrink-0">
+ <div class="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center flex-shrink-0">
  <span class="text-sm font-semibold text-violet-500">{r.label.charAt(0).toUpperCase()}</span>
  </div>
  <div class="flex-1 min-w-0">
  <p class="text-sm font-medium truncate">{r.label}</p>
- <p class="text-xs font-mono text-white/50 truncate">{r.address}</p>
+ <p class="text-xs font-mono text-gray-500 dark:text-white/50 truncate">{r.address}</p>
  </div>
  <button
  onclick={(e) => { e.stopPropagation(); deleteRecipient(r.id); }}
- class="p-1.5 rounded hover:bg-red-100 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+ class="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 dark:bg-red-900/20 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
  title="Remove recipient"
  >
- <Trash2 class="w-4 h-4 text-white/50 hover:text-red-500" />
+ <Trash2 class="w-4 h-4 text-gray-500 dark:text-white/50 hover:text-red-500" />
  </button>
  </div>
  {/each}
@@ -714,34 +714,34 @@
  <!-- Confirmation -->
  <div class="space-y-4">
  <div class="flex items-center gap-2 mb-2">
- <AlertTriangle class="w-5 h-5 text-yellow-600" />
+ <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
  <span class="font-semibold">Confirm Transaction</span>
  </div>
 
- <div class="bg-white/[0.05] rounded-lg p-4 space-y-3">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-lg p-4 space-y-3">
  <div class="flex justify-between">
- <span class="text-sm text-white/40">From</span>
+ <span class="text-sm text-gray-400 dark:text-white/40">From</span>
  <span class="text-sm font-mono">{formatAddress($walletAccount?.address ||'')}</span>
  </div>
  <div class="flex justify-between">
- <span class="text-sm text-white/40">To</span>
+ <span class="text-sm text-gray-400 dark:text-white/40">To</span>
  <span class="text-sm">
  {#if getRecipientLabel(recipientAddress)}
  <span class="font-medium">{getRecipientLabel(recipientAddress)}</span>
- <span class="font-mono text-white/50 ml-1">({formatAddress(recipientAddress)})</span>
+ <span class="font-mono text-gray-500 dark:text-white/50 ml-1">({formatAddress(recipientAddress)})</span>
  {:else}
  <span class="font-mono">{formatAddress(recipientAddress)}</span>
  {/if}
  </span>
  </div>
- <div class="flex justify-between border-t border-white/[0.06] pt-3">
- <span class="text-sm text-white/40">Amount</span>
+ <div class="flex justify-between border-t border-gray-200/60 dark:border-white/[0.06] pt-3">
+ <span class="text-sm text-gray-400 dark:text-white/40">Amount</span>
  <span class="text-lg font-bold text-violet-500">{sendAmount} CHI</span>
  </div>
  </div>
 
- <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
- <p class="text-sm text-yellow-800">
+ <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-3">
+ <p class="text-sm text-yellow-800 dark:text-yellow-200">
  <strong>Warning:</strong> This transaction cannot be reversed.
  </p>
  </div>
@@ -750,7 +750,7 @@
  <button
  onclick={() => showConfirmSend = false}
  disabled={isSending}
- class="flex-1 px-4 py-2 border border-white/[0.06] rounded-lg hover:bg-white/[0.05] transition-colors disabled:opacity-50"
+ class="flex-1 px-4 py-2 border border-gray-200/60 dark:border-white/[0.06] rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition-colors disabled:opacity-50"
  >
  Back
  </button>
@@ -774,21 +774,21 @@
  </div>
 
  <!-- Transaction History Card -->
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 bg-indigo-100 rounded-lg">
- <History class="w-6 h-6 text-indigo-600" />
+ <div class="p-2 bg-indigo-100 dark:bg-indigo-900/20 rounded-lg">
+ <History class="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
  </div>
  <div>
  <h3 class="font-semibold">Transaction History</h3>
- <p class="text-sm text-white/40">Recent transactions</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">Recent transactions</p>
  </div>
  </div>
  <button
  onclick={loadTransactionHistory}
  disabled={isLoadingHistory}
- class="p-2 hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50"
+ class="p-2 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors disabled:opacity-50"
  title="Refresh history"
  >
  <RefreshCw class="w-5 h-5 {isLoadingHistory ?'animate-spin' :''}" />
@@ -797,10 +797,10 @@
 
  {#if isLoadingHistory}
  <div class="flex items-center justify-center py-8">
- <Loader2 class="w-8 h-8 animate-spin text-white/50" />
+ <Loader2 class="w-8 h-8 animate-spin text-gray-500 dark:text-white/50" />
  </div>
  {:else if transactions.length === 0}
- <div class="text-center py-8 text-white/40">
+ <div class="text-center py-8 text-gray-400 dark:text-white/40">
  <History class="w-12 h-12 mx-auto mb-2 opacity-50" />
  <p>No transactions yet</p>
  <p class="text-sm">Your transaction history will appear here</p>
@@ -810,7 +810,7 @@
  {#each transactions as tx}
  {@const style = getTxTypeStyle(tx)}
  {@const isExpanded = expandedTxHash === tx.hash}
- <div class="bg-white/[0.05] rounded-lg hover:bg-white/[0.05] transition-colors">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition-colors">
  <!-- Main row -->
  <button
  onclick={() => expandedTxHash = isExpanded ? null : tx.hash}
@@ -834,44 +834,44 @@
  </span>
  <span class="text-xs px-2 py-0.5 rounded-full {
  tx.txType ==='speed_tier_payment'
- ?'bg-amber-100 text-amber-800'
+ ?'bg-amber-100 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200'
  : tx.txType ==='file_payment'
- ?'bg-purple-500/[0.15] text-purple-800'
+ ?'bg-purple-100 dark:bg-purple-500/[0.15] text-purple-800 dark:text-purple-200'
  : tx.txType ==='file_sale'
- ?'bg-emerald-100 text-emerald-800'
- :'bg-white/[0.05] border border-white/[0.06] text-white/50'
+ ?'bg-emerald-100 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-200'
+ :'bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] text-gray-500 dark:text-white/50'
  }">
  {getTxTypeLabel(tx)}
  </span>
- <span class="text-xs px-2 py-0.5 bg-white/[0.05] border border-white/[0.06] text-white/50 rounded-full">{tx.status}</span>
+ <span class="text-xs px-2 py-0.5 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] text-gray-500 dark:text-white/50 rounded-full">{tx.status}</span>
  </div>
- <p class="text-sm text-white/50 mt-0.5 truncate">
+ <p class="text-sm text-gray-500 dark:text-white/50 mt-0.5 truncate">
  {tx.description || (isIncoming(tx) ? `From: ${formatAddress(tx.from)}` : `To: ${formatAddress(tx.to)}`)}
  </p>
- <div class="text-xs text-white/50 mt-0.5">
+ <div class="text-xs text-gray-500 dark:text-white/50 mt-0.5">
  {formatTimestamp(tx.timestamp)}
  </div>
  </div>
  <div class="flex items-center gap-1 flex-shrink-0">
  {#if isExpanded}
- <ChevronUp class="w-4 h-4 text-white/50" />
+ <ChevronUp class="w-4 h-4 text-gray-500 dark:text-white/50" />
  {:else}
- <ChevronDown class="w-4 h-4 text-white/50" />
+ <ChevronDown class="w-4 h-4 text-gray-500 dark:text-white/50" />
  {/if}
  </div>
  </button>
 
  <!-- Expanded details -->
  {#if isExpanded}
- <div class="px-4 pb-4 pt-1 border-t border-white/[0.06] space-y-2">
+ <div class="px-4 pb-4 pt-1 border-t border-gray-200/60 dark:border-white/[0.06] space-y-2">
  <!-- File info for download payments -->
  {#if tx.fileName}
  <div class="flex items-center gap-2 p-2 bg-amber-500/[0.1] rounded-lg">
- <FileIcon class="w-4 h-4 text-amber-600 flex-shrink-0" />
+ <FileIcon class="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
  <div class="min-w-0">
  <p class="text-sm font-medium truncate">{tx.fileName}</p>
  {#if tx.speedTier}
- <p class="text-xs text-amber-600">⚡ {tx.speedTier.charAt(0).toUpperCase() + tx.speedTier.slice(1)} tier</p>
+ <p class="text-xs text-amber-600 dark:text-amber-400">⚡ {tx.speedTier.charAt(0).toUpperCase() + tx.speedTier.slice(1)} tier</p>
  {/if}
  </div>
  </div>
@@ -880,47 +880,47 @@
  <!-- Transaction details grid -->
  <div class="grid grid-cols-2 gap-2 text-xs">
  <div>
- <span class="text-white/50">From</span>
- <p class="font-mono text-white/50 truncate">{tx.from}</p>
+ <span class="text-gray-500 dark:text-white/50">From</span>
+ <p class="font-mono text-gray-500 dark:text-white/50 truncate">{tx.from}</p>
  </div>
  <div>
- <span class="text-white/50">To {tx.recipientLabel ? `(${tx.recipientLabel})` :''}</span>
- <p class="font-mono text-white/50 truncate">{tx.to}</p>
+ <span class="text-gray-500 dark:text-white/50">To {tx.recipientLabel ? `(${tx.recipientLabel})` :''}</span>
+ <p class="font-mono text-gray-500 dark:text-white/50 truncate">{tx.to}</p>
  </div>
  <div>
- <span class="text-white/50">Block</span>
- <p class="text-white/50">#{tx.blockNumber}</p>
+ <span class="text-gray-500 dark:text-white/50">Block</span>
+ <p class="text-gray-500 dark:text-white/50">#{tx.blockNumber}</p>
  </div>
  <div>
- <span class="text-white/50">Gas Used</span>
- <p class="text-white/50">{tx.gasUsed.toLocaleString()}</p>
+ <span class="text-gray-500 dark:text-white/50">Gas Used</span>
+ <p class="text-gray-500 dark:text-white/50">{tx.gasUsed.toLocaleString()}</p>
  </div>
  {#if tx.balanceBefore && tx.balanceAfter}
  <div>
- <span class="text-white/50">Balance Before</span>
- <p class="text-white/50">{tx.balanceBefore} CHI</p>
+ <span class="text-gray-500 dark:text-white/50">Balance Before</span>
+ <p class="text-gray-500 dark:text-white/50">{tx.balanceBefore} CHI</p>
  </div>
  <div>
- <span class="text-white/50">Balance After</span>
- <p class="text-white/50">{tx.balanceAfter} CHI</p>
+ <span class="text-gray-500 dark:text-white/50">Balance After</span>
+ <p class="text-gray-500 dark:text-white/50">{tx.balanceAfter} CHI</p>
  </div>
  {/if}
  {#if tx.fileHash}
  <div class="col-span-2">
- <span class="text-white/50">File Hash</span>
- <p class="font-mono text-white/50 truncate">{tx.fileHash}</p>
+ <span class="text-gray-500 dark:text-white/50">File Hash</span>
+ <p class="font-mono text-gray-500 dark:text-white/50 truncate">{tx.fileHash}</p>
  </div>
  {/if}
  <div class="col-span-2">
- <span class="text-white/50">Transaction Hash</span>
+ <span class="text-gray-500 dark:text-white/50">Transaction Hash</span>
  <div class="flex items-center gap-2">
- <p class="font-mono text-white/50 truncate flex-1">{tx.hash}</p>
+ <p class="font-mono text-gray-500 dark:text-white/50 truncate flex-1">{tx.hash}</p>
  <button
  onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(tx.hash); toasts.show('Transaction hash copied','success'); }}
- class="p-1 hover:bg-white/[0.05] rounded transition-colors flex-shrink-0"
+ class="p-1 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded transition-colors flex-shrink-0"
  title="Copy transaction hash"
  >
- <Copy class="w-3.5 h-3.5 text-white/50" />
+ <Copy class="w-3.5 h-3.5 text-gray-500 dark:text-white/50" />
  </button>
  </div>
  </div>
@@ -934,24 +934,24 @@
  </div>
 
  <!-- My Reputation -->
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-6">
  <div class="flex items-center gap-3 mb-4">
- <div class="p-2 bg-yellow-100 rounded-lg">
- <ShieldCheck class="w-6 h-6 text-yellow-600" />
+ <div class="p-2 bg-yellow-100 dark:bg-yellow-900/30 rounded-lg">
+ <ShieldCheck class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
  </div>
  <div>
  <h3 class="font-semibold">My Reputation</h3>
- <p class="text-sm text-white/40">Elo score from recent transfers, earnings, and user ratings</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">Elo score from recent transfers, earnings, and user ratings</p>
  </div>
  </div>
  <AccountReputation />
  </div>
 
  {:else}
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-12 text-center">
- <Wallet class="w-16 h-16 mx-auto text-white/50 mb-4" />
- <h2 class="text-xl font-semibold text-white/50 mb-2">No Wallet Connected</h2>
- <p class="text-white/40 mb-6">Please create or import a wallet to view account details.</p>
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-12 text-center">
+ <Wallet class="w-16 h-16 mx-auto text-gray-500 dark:text-white/50 mb-4" />
+ <h2 class="text-xl font-semibold text-gray-500 dark:text-white/50 mb-2">No Wallet Connected</h2>
+ <p class="text-gray-400 dark:text-white/40 mb-6">Please create or import a wallet to view account details.</p>
  </div>
  {/if}
 </div>
@@ -969,24 +969,24 @@
 
 {#if showLogoutModal}
  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
- <div class="fixed inset-0 bg-white/[0.03]/70 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showLogoutModal = false} onkeydown={(e) => e.key ==='Escape' && (showLogoutModal = false)}>
+ <div class="fixed inset-0 bg-black/20 dark:bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showLogoutModal = false} onkeydown={(e) => e.key ==='Escape' && (showLogoutModal = false)}>
  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
- <div class="bg-white/[0.05] border border-white/[0.06] rounded-xl shadow-black/10 p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+ <div class="bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-xl shadow-gray-300/50 dark:shadow-black/10 p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
  <div class="flex items-center gap-3 mb-4">
- <div class="p-2 bg-red-100 rounded-lg">
- <LogOut class="w-6 h-6 text-red-400" />
+ <div class="p-2 bg-red-100 dark:bg-red-900/20 rounded-lg">
+ <LogOut class="w-6 h-6 text-red-600 dark:text-red-400" />
  </div>
  <h3 class="text-lg font-semibold">Logout</h3>
  </div>
 
- <p class="text-sm text-white/50 mb-6">
+ <p class="text-sm text-gray-500 dark:text-white/50 mb-6">
  Are you sure you want to logout? Make sure you have saved your recovery phrase or exported your wallet before logging out.
  </p>
 
  <div class="flex gap-3">
  <button
  onclick={() => showLogoutModal = false}
- class="flex-1 px-4 py-2 border border-white/[0.06] rounded-lg hover:bg-white/[0.05] transition-colors"
+ class="flex-1 px-4 py-2 border border-gray-200/60 dark:border-white/[0.06] rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition-colors"
  >
  Cancel
  </button>

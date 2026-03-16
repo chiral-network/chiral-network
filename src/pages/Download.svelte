@@ -141,15 +141,15 @@
  function getFileColor(fileName: string) {
  const ext = fileName.split('.').pop()?.toLowerCase() ||'';
 
- if (['jpg','jpeg','png','gif','webp','svg','bmp','ico'].includes(ext)) return'text-violet-400';
+ if (['jpg','jpeg','png','gif','webp','svg','bmp','ico'].includes(ext)) return'text-violet-600 dark:text-violet-400';
  if (['mp4','avi','mkv','mov','wmv','webm','flv','m4v'].includes(ext)) return'text-purple-500';
  if (['mp3','wav','flac','aac','ogg','m4a','wma'].includes(ext)) return'text-green-500';
  if (['zip','rar','7z','tar','gz','bz2','xz'].includes(ext)) return'text-orange-500';
  if (['js','ts','html','css','py','java','cpp','c','php','rb','go','rs'].includes(ext)) return'text-red-500';
- if (['txt','md','pdf','doc','docx','rtf'].includes(ext)) return'text-white/50';
+ if (['txt','md','pdf','doc','docx','rtf'].includes(ext)) return'text-gray-500 dark:text-white/50';
  if (['xls','xlsx','csv','ods'].includes(ext)) return'text-emerald-500';
 
- return'text-white/50';
+ return'text-gray-500 dark:text-white/50';
  }
 
  function getFileExtension(fileNameOrPath: string): string {
@@ -1228,13 +1228,13 @@
  // Get status badge color
  function getStatusBadgeColor(status: string): string {
  switch (status) {
- case'completed': return'bg-green-500/[0.15] text-green-800';
- case'downloading': return'bg-blue-500/[0.15] text-blue-800';
- case'paused': return'bg-yellow-100 text-yellow-800';
- case'failed': return'bg-red-100 text-red-800';
- case'cancelled': return'bg-white/[0.05] text-white/50 border border-white/[0.06]';
- case'queued': return'bg-white/[0.05] text-white/50 border border-white/[0.06]';
- default: return'bg-white/[0.05] text-white/50 border border-white/[0.06]';
+ case'completed': return'bg-green-100 dark:bg-green-500/[0.15] text-green-800';
+ case'downloading': return'bg-blue-100 dark:bg-blue-500/[0.15] text-blue-800';
+ case'paused': return'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200';
+ case'failed': return'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-200';
+ case'cancelled': return'bg-white/70 dark:bg-white/[0.05] text-gray-500 dark:text-white/50 border border-gray-200/60 dark:border-white/[0.06]';
+ case'queued': return'bg-white/70 dark:bg-white/[0.05] text-gray-500 dark:text-white/50 border border-gray-200/60 dark:border-white/[0.06]';
+ default: return'bg-white/70 dark:bg-white/[0.05] text-gray-500 dark:text-white/50 border border-gray-200/60 dark:border-white/[0.06]';
  }
  }
 
@@ -1304,9 +1304,9 @@
 
  function getTierBadgeColor(tier?: SpeedTier): string {
  switch (tier) {
- case'ultra': return'bg-purple-500/[0.15] text-purple-400';
- case'premium': return'bg-amber-100 text-amber-400';
- default: return'bg-blue-500/[0.15] text-blue-600';
+ case'ultra': return'bg-purple-100 dark:bg-purple-500/[0.15] text-purple-600 dark:text-purple-400 dark:text-purple-400';
+ case'premium': return'bg-amber-100 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 dark:text-amber-400';
+ default: return'bg-blue-100 dark:bg-blue-500/[0.15] text-blue-600';
  }
  }
 
@@ -1326,17 +1326,17 @@
 <div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
  <div>
  <h1 class="text-2xl font-bold">Download</h1>
- <p class="text-white/50 mt-2">Search and download files from the Chiral Network</p>
+ <p class="text-gray-500 dark:text-white/50 mt-2">Search and download files from the Chiral Network</p>
  </div>
 
  <!-- Network Status Warning -->
  {#if !$networkConnected}
- <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+ <div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">
  <div class="flex items-start gap-3">
- <div class="text-yellow-600 mt-0.5">!</div>
+ <div class="text-yellow-600 dark:text-yellow-400 mt-0.5">!</div>
  <div>
- <p class="text-sm font-semibold text-yellow-800">Network Not Connected</p>
- <p class="text-sm text-yellow-700">
+ <p class="text-sm font-semibold text-yellow-800 dark:text-yellow-200">Network Not Connected</p>
+ <p class="text-sm text-yellow-700 dark:text-yellow-300">
  Please connect to the DHT network from the Network page before downloading files.
  </p>
  </div>
@@ -1345,9 +1345,9 @@
  {/if}
 
  <!-- Add New Download Section -->
- <div class="bg-white/[0.05] rounded-xl border border-white/[0.06] p-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl border border-gray-200/60 dark:border-white/[0.06] p-6">
  <div class="flex items-center gap-2 mb-4">
- <Plus class="w-5 h-5 text-white/50" />
+ <Plus class="w-5 h-5 text-gray-500 dark:text-white/50" />
  <h2 class="text-lg font-semibold">Add New Download</h2>
  </div>
 
@@ -1355,21 +1355,21 @@
  <div class="flex gap-2 mb-4">
  <button
  onclick={() => { searchMode ='hash'; searchQuery =''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='hash' ?'border-violet-500 bg-violet-950/20 text-primary-700' :'border-white/[0.2] text-white/50 hover:bg-white/[0.05]'}"
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='hash' ?'border-violet-500 bg-violet-100 dark:bg-violet-950/20 text-primary-700 dark:text-primary-300' :'border-gray-300 dark:border-white/[0.2] text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05]'}"
  >
  <Search class="w-4 h-4" />
  Merkle Hash
  </button>
  <button
  onclick={() => { searchMode ='magnet'; searchQuery =''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='magnet' ?'border-purple-500 bg-purple-50 text-purple-400' :'border-white/[0.2] text-white/50 hover:bg-white/[0.05]'}"
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='magnet' ?'border-purple-500 bg-purple-50 text-purple-600 dark:text-purple-400 dark:text-purple-400' :'border-gray-300 dark:border-white/[0.2] text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05]'}"
  >
  <Link class="w-4 h-4" />
  Magnet Link
  </button>
  <button
  onclick={() => { searchMode ='torrent'; searchQuery =''; searchResult = null; searchError = null; }}
- class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='torrent' ?'border-green-500 bg-green-50 text-green-400' :'border-white/[0.2] text-white/50 hover:bg-white/[0.05]'}"
+ class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode ==='torrent' ?'border-green-500 bg-green-50 text-green-600 dark:text-green-400' :'border-gray-300 dark:border-white/[0.2] text-gray-500 dark:text-white/50 hover:bg-gray-100 dark:hover:bg-white/[0.05]'}"
  >
  <FileUp class="w-4 h-4" />
  .torrent File
@@ -1378,9 +1378,9 @@
 
  <!-- Search Input -->
  {#if searchMode ==='torrent'}
- <div class="text-center py-8 border-2 border-dashed border-white/[0.2] rounded-lg">
- <FileUp class="w-12 h-12 mx-auto text-white/50 mb-3" />
- <p class="text-white/50 mb-4">Upload a .torrent file to start downloading</p>
+ <div class="text-center py-8 border-2 border-dashed border-gray-300 dark:border-white/[0.2] rounded-lg">
+ <FileUp class="w-12 h-12 mx-auto text-gray-500 dark:text-white/50 mb-3" />
+ <p class="text-gray-500 dark:text-white/50 mb-4">Upload a .torrent file to start downloading</p>
  <button
  onclick={handleTorrentFile}
  disabled={!$networkConnected}
@@ -1397,7 +1397,7 @@
  type="text"
  bind:value={searchQuery}
  placeholder={searchMode ==='hash' ?'Enter SHA-256 hash (64 characters)' :'Paste magnet link (magnet:?xt=urn:btih:...)'}
- class="w-full px-4 py-3 border border-white/[0.06] rounded-lg focus:border-violet-500 font-mono text-sm"
+ class="w-full px-4 py-3 border border-gray-200/60 dark:border-white/[0.06] rounded-lg focus:border-violet-500 font-mono text-sm"
  onkeydown={(e) => e.key ==='Enter' && searchFile()}
  onfocus={() => showSearchHistory = true}
  onblur={() => setTimeout(() => showSearchHistory = false, 200)}
@@ -1420,7 +1420,7 @@
  </div>
  </div>
 
- <p class="text-xs text-white/40 mt-2">
+ <p class="text-xs text-gray-400 dark:text-white/40 mt-2">
  {#if searchMode ==='hash'}
  Enter a 64-character SHA-256 Merkle root hash to search for files
  {:else}
@@ -1432,36 +1432,36 @@
  <!-- Search Result -->
  {#if searchResult}
  {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
- <div class="mt-6 bg-white/[0.05] rounded-lg p-4 border border-white/[0.06]">
+ <div class="mt-6 bg-white/70 dark:bg-white/[0.05] rounded-lg p-4 border border-gray-200/60 dark:border-white/[0.06]">
  <!-- File info row -->
  <div class="flex items-start gap-4">
- <div class="flex items-center justify-center w-14 h-14 bg-white/[0.05] rounded-lg border border-white/[0.06] flex-shrink-0">
+ <div class="flex items-center justify-center w-14 h-14 bg-white/70 dark:bg-white/[0.05] rounded-lg border border-gray-200/60 dark:border-white/[0.06] flex-shrink-0">
  <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
  </div>
 
  <div class="flex-1 min-w-0">
  <h3 class="text-lg font-semibold truncate">{searchResult.fileName}</h3>
- <div class="flex items-center gap-4 text-sm text-white/50 mt-1">
+ <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-white/50 mt-1">
  {#if searchResult.fileSize > 0}
  <span class="tabular-nums">{formatFileSize(searchResult.fileSize)}</span>
  {/if}
- <span class="tabular-nums {searchResult.seeders.length > 0 ?'text-green-400' :'text-amber-600'}">
+ <span class="tabular-nums {searchResult.seeders.length > 0 ?'text-green-600 dark:text-green-400' :'text-amber-600 dark:text-amber-400'}">
  {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ?'s' :''} found` :'No seeders available'}
  </span>
  {#if searchResult.seeders.length > 0}
  {@const bestSeederElo = getBestSeederElo(searchResult.seeders)}
  {#if bestSeederElo !== null}
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-900/20 text-primary-800 tabular-nums">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-100 dark:bg-violet-900/20 text-primary-800 dark:text-primary-200 tabular-nums">
  Top Elo {bestSeederElo.toFixed(1)}
  </span>
  {/if}
  {/if}
  </div>
- <p class="text-xs text-white/40 font-mono mt-2 truncate">
+ <p class="text-xs text-gray-400 dark:text-white/40 font-mono mt-2 truncate">
  {searchResult.hash}
  </p>
  {#if searchResult.seeders.length > 0}
- <p class="text-xs text-white/50 mt-1">
+ <p class="text-xs text-gray-500 dark:text-white/50 mt-1">
  Seeder availability is verified when download starts
  </p>
  {/if}
@@ -1470,8 +1470,8 @@
 
  <!-- Seeder Selection (when multiple seeders available) -->
  {#if searchResult.seeders.length > 1}
- <div class="mt-4 pt-4 border-t border-white/[0.06]">
- <p class="text-sm font-medium text-white/50 mb-3">Select Seeder</p>
+ <div class="mt-4 pt-4 border-t border-gray-200/60 dark:border-white/[0.06]">
+ <p class="text-sm font-medium text-gray-500 dark:text-white/50 mb-3">Select Seeder</p>
  <div class="space-y-2 max-h-48 overflow-y-auto">
  {#each searchResult.seeders as seeder, i}
  {@const seederElo = getSeederElo(seeder)}
@@ -1479,8 +1479,8 @@
  onclick={() => selectedSeederIndex = i}
  class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
  {selectedSeederIndex === i
- ?'border-violet-500 bg-violet-950/20'
- :'border-white/[0.06] hover:border-white/[0.15]'
+ ?'border-violet-500 bg-violet-100 dark:bg-violet-950/20'
+ :'border-gray-200/60 dark:border-white/[0.06] hover:border-gray-300 dark:border-white/[0.15]'
  }"
  >
  <div class="flex items-center gap-2 min-w-0">
@@ -1488,11 +1488,11 @@
  <span class="font-mono text-xs truncate max-w-[180px]" title={seeder.peerId}>
  {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
  </span>
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-900/20 text-primary-800 flex-shrink-0 tabular-nums">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-100 dark:bg-violet-900/20 text-primary-800 dark:text-primary-200 flex-shrink-0 tabular-nums">
  Elo {seederElo.toFixed(1)}
  </span>
  </div>
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 flex-shrink-0 tabular-nums">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 flex-shrink-0 tabular-nums">
  {formatPriceWei(seeder.priceWei ||'0')}
  </span>
  </button>
@@ -1502,22 +1502,22 @@
  {:else if searchResult.seeders.length === 1}
  {@const seeder = searchResult.seeders[0]}
  {@const seederElo = getSeederElo(seeder)}
- <div class="mt-3 flex items-center gap-2 text-sm text-white/50">
+ <div class="mt-3 flex items-center gap-2 text-sm text-gray-500 dark:text-white/50">
  <span class="font-mono text-xs truncate" title={seeder.peerId}>
  Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
  </span>
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-900/20 text-primary-800 tabular-nums">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-100 dark:bg-violet-900/20 text-primary-800 dark:text-primary-200 tabular-nums">
  Elo {seederElo.toFixed(1)}
  </span>
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 tabular-nums">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 dark:bg-amber-900/20 text-amber-800 dark:text-amber-200 tabular-nums">
  {formatPriceWei(seeder.priceWei ||'0')}
  </span>
  </div>
  {/if}
 
  <!-- Speed Tier Selector -->
- <div class="mt-4 pt-4 border-t border-white/[0.06]">
- <p class="text-sm font-medium text-white/50 mb-3">Select Download Speed</p>
+ <div class="mt-4 pt-4 border-t border-gray-200/60 dark:border-white/[0.06]">
+ <p class="text-sm font-medium text-gray-500 dark:text-white/50 mb-3">Select Download Speed</p>
  <div class="grid grid-cols-3 gap-3">
  {#each TIERS as tier}
  {@const fileSizeKnown = searchResult.fileSize > 0}
@@ -1533,18 +1533,18 @@
  disabled={isDisabled}
  class="relative p-3 rounded-lg border-2 text-left transition-all
  {isSelected
- ?'border-violet-500 bg-violet-950/20'
+ ?'border-violet-500 bg-violet-100 dark:bg-violet-950/20'
  : isDisabled
- ?'border-white/[0.06] opacity-50 cursor-not-allowed'
- :'border-white/[0.06] hover:border-white/[0.15] cursor-pointer'
+ ?'border-gray-200/60 dark:border-white/[0.06] opacity-50 cursor-not-allowed'
+ :'border-gray-200/60 dark:border-white/[0.06] hover:border-gray-300 dark:border-white/[0.15] cursor-pointer'
  }"
  >
  <div class="flex items-center gap-2 mb-1">
- <TierIcon class="w-4 h-4 {isSelected ?'text-violet-500' :'text-white/40'}" />
- <span class="text-sm font-semibold {isSelected ?'text-primary-700' :'text-white'}">{tier.name}</span>
+ <TierIcon class="w-4 h-4 {isSelected ?'text-violet-500' :'text-gray-400 dark:text-white/40'}" />
+ <span class="text-sm font-semibold {isSelected ?'text-primary-700 dark:text-primary-300' :'text-white'}">{tier.name}</span>
  </div>
- <p class="text-xs text-white/40">{tier.speedLabel}</p>
- <p class="text-xs font-medium mt-1 text-amber-600">
+ <p class="text-xs text-gray-400 dark:text-white/40">{tier.speedLabel}</p>
+ <p class="text-xs font-medium mt-1 text-amber-600 dark:text-amber-400">
  {#if fileSizeKnown}
  {formatCost(cost)}
  {:else}
@@ -1568,19 +1568,19 @@
  {@const tierCostVal = searchResult.fileSize > 0 ? calculateCost(selectedTier, searchResult.fileSize) : 0}
  {@const hasCost = seederPrice || tierCostVal > 0}
  <div class="mt-4 flex items-center justify-between">
- <div class="text-sm text-white/50">
+ <div class="text-sm text-gray-500 dark:text-white/50">
  Cost:
  {#if seederPrice}
- <span class="font-medium text-amber-600">{seederPrice}</span> (file)
+ <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span> (file)
  {/if}
  {#if seederPrice && tierCostVal > 0}
  <span class="mx-1">+</span>
  {/if}
  {#if tierCostVal > 0}
- <span class="font-medium text-amber-600">{formatCost(tierCostVal)}</span> (speed tier)
+ <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
  {/if}
  {#if $walletAccount}
- <span class="text-white/50 mx-1">•</span>
+ <span class="text-gray-500 dark:text-white/50 mx-1">•</span>
  Balance: <span class="font-medium tabular-nums">{parseFloat(walletBalance).toFixed(4)} CHI</span>
  {/if}
  </div>
@@ -1608,28 +1608,28 @@
  <div class="mt-6 bg-red-500/[0.1] rounded-lg p-4 border border-red-400/20">
  <div class="flex items-center gap-3">
  <AlertCircle class="w-5 h-5 text-red-500" />
- <p class="text-sm text-red-700">{searchError}</p>
+ <p class="text-sm text-red-700 dark:text-red-300">{searchError}</p>
  </div>
  </div>
  {/if}
  </div>
 
  <!-- Downloads -->
- <div class="bg-white/[0.05] rounded-xl border border-white/[0.06]">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl border border-gray-200/60 dark:border-white/[0.06]">
  <!-- Tabs -->
- <div class="flex items-center justify-between border-b border-white/[0.06] px-4">
+ <div class="flex items-center justify-between border-b border-gray-200/60 dark:border-white/[0.06] px-4">
  <div class="flex">
  <button
  onclick={() => downloadsTab ='active'}
  class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
  {downloadsTab ==='active'
  ?'border-violet-500 text-violet-500'
- :'border-transparent text-white/40 hover:text-white/50'}"
+ :'border-transparent text-gray-400 dark:text-white/40 hover:text-gray-500 dark:text-white/50'}"
  >
  <Download class="w-4 h-4" />
  Active
  {#if getActiveDownloads().length > 0}
- <span class="px-1.5 py-0.5 text-xs font-semibold bg-violet-900/20 text-primary-700 rounded-full">
+ <span class="px-1.5 py-0.5 text-xs font-semibold bg-violet-100 dark:bg-violet-900/20 text-primary-700 dark:text-primary-300 rounded-full">
  {getActiveDownloads().length}
  </span>
  {/if}
@@ -1639,12 +1639,12 @@
  class="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors
  {downloadsTab ==='history'
  ?'border-violet-500 text-violet-500'
- :'border-transparent text-white/40 hover:text-white/50'}"
+ :'border-transparent text-gray-400 dark:text-white/40 hover:text-gray-500 dark:text-white/50'}"
  >
  <History class="w-4 h-4" />
  History
  {#if downloadHistory.length > 0}
- <span class="px-1.5 py-0.5 text-xs font-semibold bg-white/[0.05] text-white/50 border border-white/[0.06] rounded-full">
+ <span class="px-1.5 py-0.5 text-xs font-semibold bg-white/70 dark:bg-white/[0.05] text-gray-500 dark:text-white/50 border border-gray-200/60 dark:border-white/[0.06] rounded-full">
  {downloadHistory.length}
  </span>
  {/if}
@@ -1654,7 +1654,7 @@
  {#if downloadsTab ==='history' && downloadHistory.length > 0}
  <button
  onclick={clearDownloadHistory}
- class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/[0.1] rounded-lg transition-colors"
+ class="flex items-center gap-1 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-500/[0.1] rounded-lg transition-colors"
  >
  <Trash2 class="w-3.5 h-3.5" />
  Clear
@@ -1666,9 +1666,9 @@
  {#if downloadsTab ==='active'}
  {#if downloads.length === 0}
  <div class="text-center py-16 px-6">
- <Download class="w-12 h-12 mx-auto text-white/50 mb-3" />
- <p class="text-white/40">No active downloads</p>
- <p class="text-sm text-white/50 mt-1">Search for a file above to start downloading</p>
+ <Download class="w-12 h-12 mx-auto text-gray-500 dark:text-white/50 mb-3" />
+ <p class="text-gray-400 dark:text-white/40">No active downloads</p>
+ <p class="text-sm text-gray-500 dark:text-white/50 mt-1">Search for a file above to start downloading</p>
  </div>
  {:else}
  <div class="divide-y divide-white/[0.06]">
@@ -1677,11 +1677,11 @@
  {@const TierIcon = getTierIcon(download.speedTier ||'standard')}
  {@const isActive = download.status ==='downloading' || download.status ==='paused'}
  {@const isFinished = ['completed','failed','cancelled'].includes(download.status)}
- <div class="p-4 hover:bg-white/[0.05]/50 transition-colors">
+ <div class="p-4 hover:bg-gray-100 dark:hover:bg-white/[0.05]/50 transition-colors">
  <!-- Top row: icon, name, badges, actions -->
  <div class="flex items-start gap-3">
  <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
- {download.status ==='completed' ?'bg-green-50' :'bg-white/[0.05]'}">
+ {download.status ==='completed' ?'bg-green-50' :'bg-white/70 dark:bg-white/[0.05]'}">
  <DownloadIcon class="w-5 h-5 {download.status ==='completed' ?'text-green-500' : getFileColor(download.name)}" />
  </div>
 
@@ -1698,7 +1698,7 @@
  </div>
 
  <!-- Stats row -->
- <div class="flex items-center gap-3 mt-1.5 text-xs text-white/40">
+ <div class="flex items-center gap-3 mt-1.5 text-xs text-gray-400 dark:text-white/40">
  {#if download.size > 0}
  <span class="flex items-center gap-1 tabular-nums">
  {formatFileSize(download.size)}
@@ -1713,15 +1713,15 @@
  {/if}
  <span class="tabular-nums">{download.seeders} seeder{download.seeders !== 1 ?'s' :''}</span>
  {#if typeof download.seederElo ==='number'}
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-violet-900/20 text-primary-800 tabular-nums">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-violet-100 dark:bg-violet-900/20 text-primary-800 dark:text-primary-200 tabular-nums">
  Elo {download.seederElo.toFixed(1)}
  </span>
  {/if}
- <span class="text-white/50">Started {formatDate(download.startedAt)}</span>
+ <span class="text-gray-500 dark:text-white/50">Started {formatDate(download.startedAt)}</span>
  </div>
 
  <!-- Hash (truncated) -->
- <p class="text-xs text-white/50 font-mono mt-1 truncate">{download.hash}</p>
+ <p class="text-xs text-gray-500 dark:text-white/50 font-mono mt-1 truncate">{download.hash}</p>
  </div>
 
  <!-- Actions -->
@@ -1729,11 +1729,11 @@
  {#if download.status ==='downloading' || download.status ==='paused'}
  <button
  onclick={() => togglePause(download.id)}
- class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors"
  title={download.status ==='downloading' ?'Pause' :'Resume'}
  >
  {#if download.status ==='downloading'}
- <Pause class="w-4 h-4 text-white/40" />
+ <Pause class="w-4 h-4 text-gray-400 dark:text-white/40" />
  {:else}
  <Play class="w-4 h-4 text-green-500" />
  {/if}
@@ -1743,7 +1743,7 @@
  class="p-1.5 hover:bg-red-500/[0.1] rounded-lg transition-colors"
  title="Cancel"
  >
- <X class="w-4 h-4 text-white/50 hover:text-red-500" />
+ <X class="w-4 h-4 text-gray-500 dark:text-white/50 hover:text-red-500" />
  </button>
  {:else if download.status ==='queued'}
  <button
@@ -1751,7 +1751,7 @@
  class="p-1.5 hover:bg-red-500/[0.1] rounded-lg transition-colors"
  title="Cancel"
  >
- <X class="w-4 h-4 text-white/50 hover:text-red-500" />
+ <X class="w-4 h-4 text-gray-500 dark:text-white/50 hover:text-red-500" />
  </button>
  {:else if isFinished}
  {#if download.status ==='completed' && download.filePath}
@@ -1766,22 +1766,22 @@
  {/if}
  <button
  onclick={() => handleOpenFile(download.filePath!)}
- class="p-1.5 hover:bg-violet-950/20 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-violet-100 dark:bg-violet-950/20 rounded-lg transition-colors"
  title="Open file"
  >
  <ExternalLink class="w-4 h-4 text-primary-500" />
  </button>
  <button
  onclick={() => handleShowInFolder(download.filePath!)}
- class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Show in folder"
  >
- <FolderOpen class="w-4 h-4 text-white/40" />
+ <FolderOpen class="w-4 h-4 text-gray-400 dark:text-white/40" />
  </button>
  {/if}
  <button
  onclick={() => moveToHistory(download.id)}
- class="px-2.5 py-1 text-xs text-white/40 hover:bg-white/[0.05] rounded-lg transition-colors"
+ class="px-2.5 py-1 text-xs text-gray-400 dark:text-white/40 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Dismiss"
  >
  Dismiss
@@ -1794,13 +1794,13 @@
  {#if isActive}
  <div class="mt-3 ml-13">
  <div class="flex items-center gap-3">
- <div class="flex-1 h-2 bg-white/[0.05] rounded-full overflow-hidden">
+ <div class="flex-1 h-2 bg-white/70 dark:bg-white/[0.05] rounded-full overflow-hidden">
  <div
  class="h-full rounded-full transition-all duration-300 {download.status ==='paused' ?'bg-yellow-500' :'bg-violet-500'}"
  style="width: {download.progress}%"
  ></div>
  </div>
- <span class="text-xs font-medium text-white/50 w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
+ <span class="text-xs font-medium text-gray-500 dark:text-white/50 w-12 text-right tabular-nums">{(download.progress ?? 0).toFixed(1)}%</span>
  </div>
  </div>
  {/if}
@@ -1825,24 +1825,24 @@
  {:else}
  {#if downloadHistory.length === 0}
  <div class="text-center py-16 px-6">
- <History class="w-12 h-12 mx-auto text-white/50 mb-3" />
- <p class="text-white/40">No download history</p>
- <p class="text-sm text-white/50 mt-1">Completed and finished downloads will appear here</p>
+ <History class="w-12 h-12 mx-auto text-gray-500 dark:text-white/50 mb-3" />
+ <p class="text-gray-400 dark:text-white/40">No download history</p>
+ <p class="text-sm text-gray-500 dark:text-white/50 mt-1">Completed and finished downloads will appear here</p>
  </div>
  {:else}
  <div class="divide-y divide-white/[0.06]">
  {#each downloadHistory as entry (entry.id)}
  {@const EntryIcon = getFileIcon(entry.fileName)}
  {@const EntryTierIcon = getTierIcon(entry.speedTier ||'standard')}
- <div class="p-4 hover:bg-white/[0.05]/50 transition-colors">
+ <div class="p-4 hover:bg-gray-100 dark:hover:bg-white/[0.05]/50 transition-colors">
  <div class="flex items-start gap-3">
  <div class="flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0
  {entry.status ==='completed' ?'bg-green-50' :
  entry.status ==='failed' ?'bg-red-500/[0.1]' :
-'bg-white/[0.05]'}">
+'bg-white/70 dark:bg-white/[0.05]'}">
  <EntryIcon class="w-5 h-5 {
  entry.status ==='completed' ?'text-green-500' :
- entry.status ==='failed' ?'text-red-400' :
+ entry.status ==='failed' ?'text-red-600 dark:text-red-400' :
  getFileColor(entry.fileName)
  }" />
  </div>
@@ -1861,7 +1861,7 @@
  {/if}
  </div>
 
- <div class="flex items-center gap-3 mt-1.5 text-xs text-white/40">
+ <div class="flex items-center gap-3 mt-1.5 text-xs text-gray-400 dark:text-white/40">
  {#if entry.fileSize > 0}
  <span class="tabular-nums">{formatFileSize(entry.fileSize)}</span>
  {/if}
@@ -1872,7 +1872,7 @@
  <span class="tabular-nums">{entry.seeders} seeder{entry.seeders !== 1 ?'s' :''}</span>
  {/if}
  {#if typeof entry.seederElo ==='number'}
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-violet-900/20 text-primary-800 tabular-nums">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-violet-100 dark:bg-violet-900/20 text-primary-800 dark:text-primary-200 tabular-nums">
  Elo {entry.seederElo.toFixed(1)}
  </span>
  {/if}
@@ -1880,11 +1880,11 @@
  </div>
 
  {#if entry.balanceBefore && entry.balanceAfter}
- <p class="text-xs text-white/40 mt-1">
+ <p class="text-xs text-gray-400 dark:text-white/40 mt-1">
  Balance: {entry.balanceBefore} → {entry.balanceAfter} CHI
  </p>
  {/if}
- <p class="text-xs text-white/50 font-mono mt-1 truncate">{entry.hash}</p>
+ <p class="text-xs text-gray-500 dark:text-white/50 font-mono mt-1 truncate">{entry.hash}</p>
  </div>
 
  <!-- File actions for completed entries -->
@@ -1902,25 +1902,25 @@
  {/if}
  <button
  onclick={() => handleOpenFile(entry.filePath!)}
- class="p-1.5 hover:bg-violet-950/20 rounded-lg transition-colors"
+ class="p-1.5 hover:bg-violet-100 dark:bg-violet-950/20 rounded-lg transition-colors"
  title="Open file"
  >
  <ExternalLink class="w-4 h-4 text-primary-500" />
  </button>
  <button
  onclick={() => handleShowInFolder(entry.filePath!)}
- class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Show in folder"
  >
- <FolderOpen class="w-4 h-4 text-white/40" />
+ <FolderOpen class="w-4 h-4 text-gray-400 dark:text-white/40" />
  </button>
  {/if}
  <button
  onclick={() => { searchQuery = entry.hash; searchMode ='hash'; searchFile(); }}
- class="p-1.5 hover:bg-white/[0.05] rounded-lg transition-colors"
+ class="p-1.5 hover:bg-gray-100 dark:hover:bg-white/[0.05] rounded-lg transition-colors"
  title="Download again"
  >
- <Download class="w-4 h-4 text-white/50" />
+ <Download class="w-4 h-4 text-gray-500 dark:text-white/50" />
  </button>
  </div>
  {/if}
@@ -1935,36 +1935,36 @@
 
 {#if isViewerOpen}
  <div
- class="fixed inset-0 z-50 bg-white/[0.03]/70 flex items-center justify-center p-4"
+ class="fixed inset-0 z-50 bg-black/20 dark:bg-black/50 flex items-center justify-center p-4"
  role="dialog"
  aria-modal="true"
  tabindex="0"
  onclick={(e) => e.target === e.currentTarget && closeViewer()}
  onkeydown={(e) => e.key ==='Escape' && closeViewer()}
  >
- <div class="w-full max-w-5xl max-h-[90vh] bg-white/[0.03] rounded-xl border border-white/[0.06] flex flex-col">
- <div class="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
+ <div class="w-full max-w-5xl max-h-[90vh] bg-white/60 dark:bg-white/[0.03] rounded-xl border border-gray-200/60 dark:border-white/[0.06] flex flex-col">
+ <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200/60 dark:border-white/[0.06]">
  <div class="min-w-0">
  <p class="text-sm font-semibold truncate">{viewerName}</p>
- <p class="text-xs text-white/40 capitalize">{viewerType} preview</p>
+ <p class="text-xs text-gray-400 dark:text-white/40 capitalize">{viewerType} preview</p>
  </div>
  <button
  onclick={closeViewer}
- class="p-1.5 rounded-lg hover:bg-white/[0.05] transition-colors"
+ class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition-colors"
  title="Close preview"
  >
- <X class="w-5 h-5 text-white/40" />
+ <X class="w-5 h-5 text-gray-400 dark:text-white/40" />
  </button>
  </div>
 
  <div class="flex-1 p-4 overflow-auto bg-transparent">
  {#if viewerError}
  <div class="h-full flex items-center justify-center">
- <p class="text-sm text-red-400">{viewerError}</p>
+ <p class="text-sm text-red-600 dark:text-red-400">{viewerError}</p>
  </div>
  {:else if viewerType ==='video'}
  <video
- class="w-full h-full max-h-[75vh] rounded-lg bg-white/[0.03]"
+ class="w-full h-full max-h-[75vh] rounded-lg bg-white/60 dark:bg-white/[0.03]"
  controls
  src={viewerSource}
  onerror={() => viewerError ='Video preview failed to load'}
@@ -1989,13 +1989,13 @@
  />
  {:else if viewerType ==='pdf'}
  <iframe
- class="w-full h-[75vh] rounded-lg border border-white/[0.06] bg-white/[0.03]"
+ class="w-full h-[75vh] rounded-lg border border-gray-200/60 dark:border-white/[0.06] bg-white/60 dark:bg-white/[0.03]"
  src={viewerSource}
  title={viewerName}
  ></iframe>
  {:else}
  <div class="h-full flex items-center justify-center">
- <p class="text-sm text-white/50">Preview is not supported for this file type.</p>
+ <p class="text-sm text-gray-500 dark:text-white/50">Preview is not supported for this file type.</p>
  </div>
  {/if}
  </div>
@@ -2021,62 +2021,62 @@
  {@const selectedPendingSeeder = pendingDownload.result.seeders[selectedSeederIndex] || pendingDownload.result.seeders[0]}
  <!-- svelte-ignore a11y_no_static_element_interactions -->
  <div
- class="fixed inset-0 bg-white/[0.03]/70 flex items-center justify-center z-50"
+ class="fixed inset-0 bg-black/20 dark:bg-black/50 flex items-center justify-center z-50"
  onkeydown={(e: KeyboardEvent) => { if (e.key ==='Escape') pendingDownload = null; }}
  onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) pendingDownload = null; }}
  >
- <div class="bg-white/[0.05] rounded-xl border border-white/[0.06] p-6 max-w-md w-full mx-4">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl border border-gray-200/60 dark:border-white/[0.06] p-6 max-w-md w-full mx-4">
  <div class="flex items-center gap-3 mb-4">
- <div class="p-2.5 bg-amber-100 rounded-lg">
- <AlertTriangle class="w-6 h-6 text-amber-600" />
+ <div class="p-2.5 bg-amber-100 dark:bg-amber-900/20 rounded-lg">
+ <AlertTriangle class="w-6 h-6 text-amber-600 dark:text-amber-400" />
  </div>
  <h3 class="text-lg font-semibold">Confirm Download</h3>
  </div>
 
  <div class="space-y-3 mb-5">
- <div class="bg-white/[0.05] rounded-lg p-3">
- <p class="text-sm text-white/40">File</p>
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-lg p-3">
+ <p class="text-sm text-gray-400 dark:text-white/40">File</p>
  <p class="font-medium truncate">{pendingDownload.result.fileName}</p>
  {#if pendingDownload.result.fileSize > 0}
- <p class="text-xs text-white/50 mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
+ <p class="text-xs text-gray-500 dark:text-white/50 mt-0.5 tabular-nums">{formatFileSize(pendingDownload.result.fileSize)}</p>
  {/if}
  </div>
 
  {#if selectedPendingSeeder}
- <div class="bg-white/[0.05] rounded-lg p-3">
- <p class="text-sm text-white/40">Selected Seeder</p>
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-lg p-3">
+ <p class="text-sm text-gray-400 dark:text-white/40">Selected Seeder</p>
  <div class="flex items-center justify-between gap-2 mt-1 min-w-0">
- <span class="font-mono text-xs text-white/50 truncate" title={selectedPendingSeeder.peerId}>
+ <span class="font-mono text-xs text-gray-500 dark:text-white/50 truncate" title={selectedPendingSeeder.peerId}>
  {selectedPendingSeeder.peerId.slice(0, 8)}...{selectedPendingSeeder.peerId.slice(-6)}
  </span>
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-900/20 text-primary-800">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-violet-100 dark:bg-violet-900/20 text-primary-800 dark:text-primary-200">
  Elo {getSeederElo(selectedPendingSeeder).toFixed(1)}
  </span>
  </div>
  </div>
  {/if}
 
- <div class="bg-white/[0.05] rounded-lg p-3 space-y-2">
- <p class="text-sm text-white/40">Cost Breakdown</p>
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-lg p-3 space-y-2">
+ <p class="text-sm text-gray-400 dark:text-white/40">Cost Breakdown</p>
  {#if pendingDownload.seederPriceChi > 0}
  <div class="flex justify-between text-sm">
- <span class="text-white/50">File price</span>
- <span class="font-medium text-amber-600">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
+ <span class="text-gray-500 dark:text-white/50">File price</span>
+ <span class="font-medium text-amber-600 dark:text-amber-400">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
  </div>
  {/if}
  {#if pendingDownload.tierCost > 0}
  <div class="flex justify-between text-sm">
- <span class="text-white/50">Speed tier ({selectedTier})</span>
- <span class="font-medium text-amber-600">{formatCost(pendingDownload.tierCost)}</span>
+ <span class="text-gray-500 dark:text-white/50">Speed tier ({selectedTier})</span>
+ <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
  </div>
  {/if}
- <div class="flex justify-between text-sm pt-2 border-t border-white/[0.06]">
+ <div class="flex justify-between text-sm pt-2 border-t border-gray-200/60 dark:border-white/[0.06]">
  <span class="font-semibold">Total</span>
- <span class="font-semibold text-amber-600">{pendingDownload.totalCost.toFixed(6)} CHI</span>
+ <span class="font-semibold text-amber-600 dark:text-amber-400">{pendingDownload.totalCost.toFixed(6)} CHI</span>
  </div>
  </div>
 
- <div class="flex justify-between text-sm text-white/40 px-1">
+ <div class="flex justify-between text-sm text-gray-400 dark:text-white/40 px-1">
  <span>Your balance</span>
  <span>{parseFloat(walletBalance).toFixed(4)} CHI</span>
  </div>
@@ -2085,7 +2085,7 @@
  <div class="flex gap-3">
  <button
  onclick={() => { pendingDownload = null; }}
- class="flex-1 px-4 py-2.5 border border-white/[0.06] rounded-lg hover:bg-white/[0.05] transition-colors font-medium"
+ class="flex-1 px-4 py-2.5 border border-gray-200/60 dark:border-white/[0.06] rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05] transition-colors font-medium"
  >
  Cancel
  </button>

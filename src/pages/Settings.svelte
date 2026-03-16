@@ -133,24 +133,24 @@
 <div class="p-4 sm:p-6 max-w-6xl mx-auto">
  <div class="mb-6">
  <h1 class="text-2xl font-bold">Settings</h1>
- <p class="text-white/50 mt-1">Customize your Chiral Network experience</p>
+ <p class="text-gray-500 dark:text-white/50 mt-1">Customize your Chiral Network experience</p>
  </div>
 
  <!-- Appearance Section -->
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6 mb-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-6 mb-6">
  <div class="flex items-center gap-3 mb-6">
- <div class="p-2 bg-purple-500/[0.15] rounded-lg">
- <Palette class="w-5 h-5 text-purple-600" />
+ <div class="p-2 bg-purple-100 dark:bg-purple-500/[0.15] rounded-lg">
+ <Palette class="w-5 h-5 text-purple-600 dark:text-purple-400" />
  </div>
  <div>
  <h2 class="font-semibold text-lg">Appearance</h2>
- <p class="text-sm text-white/40">Customize how the app looks</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">Customize how the app looks</p>
  </div>
  </div>
 
  <!-- Theme Selection -->
  <div class="mb-6">
- <span class="block text-sm font-medium text-white/50 mb-3">Theme</span>
+ <span class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-3">Theme</span>
  <div class="grid grid-cols-3 gap-3">
  {#each themeOptions as option}
  {@const Icon = option.icon}
@@ -158,22 +158,22 @@
  onclick={() => setTheme(option.value)}
  class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
  {$settings.theme === option.value
- ?'border-violet-500 bg-violet-950/20'
- :'border-white/[0.06] hover:border-white/[0.2] bg-white/[0.05]'}"
+ ?'border-violet-500 bg-violet-100 dark:bg-violet-950/20'
+ :'border-gray-200/60 dark:border-white/[0.06] hover:border-gray-300 dark:border-white/[0.2] bg-white/70 dark:bg-white/[0.05]'}"
  >
  {#if $settings.theme === option.value}
  <div class="absolute top-2 right-2">
  <Check class="w-4 h-4 text-primary-500" />
  </div>
  {/if}
- <Icon class="w-6 h-6 {$settings.theme === option.value ?'text-primary-500' :'text-white/40'}" />
- <span class="text-sm font-medium {$settings.theme === option.value ?'text-primary-700' :'text-white/50'}">
+ <Icon class="w-6 h-6 {$settings.theme === option.value ?'text-primary-500' :'text-gray-400 dark:text-white/40'}" />
+ <span class="text-sm font-medium {$settings.theme === option.value ?'text-primary-700 dark:text-primary-300' :'text-gray-500 dark:text-white/50'}">
  {option.label}
  </span>
  </button>
  {/each}
  </div>
- <p class="text-xs text-white/40 mt-2">
+ <p class="text-xs text-gray-400 dark:text-white/40 mt-2">
  {#if $settings.theme ==='system'}
  Currently using {$isDarkMode ?'dark' :'light'} mode based on your system preference
  {:else}
@@ -184,7 +184,7 @@
 
  <!-- Accent Color -->
  <div class="mb-6">
- <span class="block text-sm font-medium text-white/50 mb-3">Accent Color</span>
+ <span class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-3">Accent Color</span>
  <div class="flex gap-3">
  {#each availableThemes as ct}
  <button
@@ -206,32 +206,32 @@
  </div>
 
  <!-- Compact Mode -->
- <div class="flex items-center justify-between py-4 border-t border-white/[0.06]">
+ <div class="flex items-center justify-between py-4 border-t border-gray-200/60 dark:border-white/[0.06]">
  <div class="flex items-center gap-3">
- <LayoutGrid class="w-5 h-5 text-white/40" />
+ <LayoutGrid class="w-5 h-5 text-gray-400 dark:text-white/40" />
  <div>
- <p class="font-medium text-white/90">Compact Mode</p>
- <p class="text-sm text-white/40">Use smaller spacing and font sizes</p>
+ <p class="font-medium text-gray-900 dark:text-white/90">Compact Mode</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">Use smaller spacing and font sizes</p>
  </div>
  </div>
  <button
  onclick={toggleCompactMode}
  class="relative w-12 h-6 rounded-full transition-colors
- {$settings.compactMode ?'bg-violet-500/80' :'bg-white/[0.05]'}"
+ {$settings.compactMode ?'bg-violet-500/80' :'bg-white/70 dark:bg-white/[0.05]'}"
  role="switch"
  aria-checked={$settings.compactMode}
  aria-label="Toggle compact mode"
  >
  <span
- class="absolute top-0.5 left-0.5 w-5 h-5 bg-white/[0.03] rounded-full shadow transition-transform
+ class="absolute top-0.5 left-0.5 w-5 h-5 bg-white/60 dark:bg-white/[0.03] rounded-full shadow transition-transform
  {$settings.compactMode ?'translate-x-6' :'translate-x-0'}"
  ></span>
  </button>
  </div>
 
  <!-- Navigation Style -->
- <div class="py-4 border-t border-white/[0.06]">
- <span class="block text-sm font-medium text-white/50 mb-3">Navigation Style</span>
+ <div class="py-4 border-t border-gray-200/60 dark:border-white/[0.06]">
+ <span class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-3">Navigation Style</span>
  <div class="grid grid-cols-2 gap-3">
  {#each navStyleOptions as option}
  {@const Icon = option.icon}
@@ -239,16 +239,16 @@
  onclick={() => setNavStyle(option.value)}
  class="relative flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all
  {$settings.navStyle === option.value
- ?'border-violet-500 bg-violet-950/20'
- :'border-white/[0.06] hover:border-white/[0.2] bg-white/[0.05]'}"
+ ?'border-violet-500 bg-violet-100 dark:bg-violet-950/20'
+ :'border-gray-200/60 dark:border-white/[0.06] hover:border-gray-300 dark:border-white/[0.2] bg-white/70 dark:bg-white/[0.05]'}"
  >
  {#if $settings.navStyle === option.value}
  <div class="absolute top-2 right-2">
  <Check class="w-4 h-4 text-primary-500" />
  </div>
  {/if}
- <Icon class="w-6 h-6 {$settings.navStyle === option.value ?'text-primary-500' :'text-white/40'}" />
- <span class="text-sm font-medium {$settings.navStyle === option.value ?'text-primary-700' :'text-white/50'}">
+ <Icon class="w-6 h-6 {$settings.navStyle === option.value ?'text-primary-500' :'text-gray-400 dark:text-white/40'}" />
+ <span class="text-sm font-medium {$settings.navStyle === option.value ?'text-primary-700 dark:text-primary-300' :'text-gray-500 dark:text-white/50'}">
  {option.label}
  </span>
  </button>
@@ -257,24 +257,24 @@
  </div>
 
  <!-- Preview -->
- <div class="pt-4 border-t border-white/[0.06]">
- <span class="block text-sm font-medium text-white/50 mb-3">Preview</span>
- <div class="p-4 rounded-lg bg-white/[0.3] bg-white/[0.05] border border-white/[0.06]">
+ <div class="pt-4 border-t border-gray-200/60 dark:border-white/[0.06]">
+ <span class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-3">Preview</span>
+ <div class="p-4 rounded-lg bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06]">
  <div class="flex items-center gap-3 mb-3">
  <div class="w-10 h-10 rounded-full bg-violet-500"></div>
  <div>
- <p class="font-medium text-white/90">Sample User</p>
- <p class="text-sm text-white/40">0x1234...5678</p>
+ <p class="font-medium text-gray-900 dark:text-white/90">Sample User</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">0x1234...5678</p>
  </div>
  </div>
  <div class="grid grid-cols-2 gap-3">
- <div class="p-3 rounded-lg bg-white/[0.05] border border-white/[0.06]">
- <p class="text-xs text-white/40">Balance</p>
- <p class="text-lg font-bold text-white/90 tabular-nums">100.00 CHI</p>
+ <div class="p-3 rounded-lg bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06]">
+ <p class="text-xs text-gray-400 dark:text-white/40">Balance</p>
+ <p class="text-lg font-bold text-gray-900 dark:text-white/90 tabular-nums">100.00 CHI</p>
  </div>
- <div class="p-3 rounded-lg bg-white/[0.05] border border-white/[0.06]">
- <p class="text-xs text-white/40">Peers</p>
- <p class="text-lg font-bold text-white/90">12</p>
+ <div class="p-3 rounded-lg bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06]">
+ <p class="text-xs text-gray-400 dark:text-white/40">Peers</p>
+ <p class="text-lg font-bold text-gray-900 dark:text-white/90">12</p>
  </div>
  </div>
  </div>
@@ -283,24 +283,24 @@
 
  <!-- Storage Section -->
  {#if isTauri}
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6 mb-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-6 mb-6">
  <div class="flex items-center gap-3 mb-6">
- <div class="p-2 bg-violet-900/20 rounded-lg">
+ <div class="p-2 bg-violet-100 dark:bg-violet-900/20 rounded-lg">
  <HardDrive class="w-5 h-5 text-violet-500" />
  </div>
  <div>
  <h2 class="font-semibold text-lg">Storage</h2>
- <p class="text-sm text-white/40">Configure where downloaded files are saved</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">Configure where downloaded files are saved</p>
  </div>
  </div>
 
  <!-- Download Directory -->
  <div>
- <span class="block text-sm font-medium text-white/50 mb-2">Download Directory</span>
+ <span class="block text-sm font-medium text-gray-500 dark:text-white/50 mb-2">Download Directory</span>
  <div class="flex items-center gap-3">
- <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-white/[0.05] border border-white/[0.06] rounded-lg">
- <FolderOpen class="w-4 h-4 text-white/50 flex-shrink-0" />
- <span class="text-sm text-white/50 truncate font-mono">
+ <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-white/70 dark:bg-white/[0.05] border border-gray-200/60 dark:border-white/[0.06] rounded-lg">
+ <FolderOpen class="w-4 h-4 text-gray-500 dark:text-white/50 flex-shrink-0" />
+ <span class="text-sm text-gray-500 dark:text-white/50 truncate font-mono">
  {displayDownloadDir ||'Loading...'}
  </span>
  </div>
@@ -313,14 +313,14 @@
  {#if $settings.downloadDirectory}
  <button
  onclick={resetDownloadDirectory}
- class="p-2.5 text-white/50 hover:text-red-500 transition-colors flex-shrink-0"
+ class="p-2.5 text-gray-500 dark:text-white/50 hover:text-red-500 transition-colors flex-shrink-0"
  title="Reset to system default"
  >
  <X class="w-4 h-4" />
  </button>
  {/if}
  </div>
- <p class="text-xs text-white/40 mt-2">
+ <p class="text-xs text-gray-400 dark:text-white/40 mt-2">
  {#if $settings.downloadDirectory}
  Using custom directory
  {:else}
@@ -332,14 +332,14 @@
  {/if}
 
  <!-- Notification Settings Section -->
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6 mb-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-6 mb-6">
  <div class="flex items-center gap-3 mb-4">
- <div class="p-2 bg-amber-100 rounded-lg">
- <Bell class="w-5 h-5 text-amber-600" />
+ <div class="p-2 bg-amber-100 dark:bg-amber-900/20 rounded-lg">
+ <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
  </div>
  <div>
  <h2 class="font-semibold text-lg">Notifications</h2>
- <p class="text-sm text-white/40">Toggle which toast notifications to show</p>
+ <p class="text-sm text-gray-400 dark:text-white/40">Toggle which toast notifications to show</p>
  </div>
  </div>
 
@@ -347,16 +347,16 @@
  {#each notificationOptions as option}
  <button
  onclick={() => toggleNotification(option.key)}
- class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-white/[0.05]/50 transition-colors group"
+ class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg hover:bg-gray-100 dark:hover:bg-white/[0.05]/50 transition-colors group"
  role="switch"
  aria-checked={$settings.notifications?.[option.key] ?? true}
  title={option.description}
  >
- <span class="text-sm text-white/50 text-left">{option.label}</span>
+ <span class="text-sm text-gray-500 dark:text-white/50 text-left">{option.label}</span>
  <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
- {$settings.notifications?.[option.key] ?'bg-violet-500/80' :'bg-white/[0.05]'}">
+ {$settings.notifications?.[option.key] ?'bg-violet-500/80' :'bg-white/70 dark:bg-white/[0.05]'}">
  <span
- class="absolute top-0.5 left-0.5 w-4 h-4 bg-white/[0.03] rounded-full shadow transition-transform
+ class="absolute top-0.5 left-0.5 w-4 h-4 bg-white/60 dark:bg-white/[0.03] rounded-full shadow transition-transform
  {$settings.notifications?.[option.key] ?'translate-x-4' :'translate-x-0'}"
  ></span>
  </div>
@@ -366,15 +366,15 @@
  </div>
 
  <!-- Reset Section -->
- <div class="bg-white/[0.05] rounded-xl shadow-black/5 border border-white/[0.06] p-6">
+ <div class="bg-white/70 dark:bg-white/[0.05] rounded-xl shadow-gray-200/50 dark:shadow-black/5 border border-gray-200/60 dark:border-white/[0.06] p-6">
  <div class="flex items-center justify-between">
  <div>
- <h3 class="font-semibold text-white/90">Reset Settings</h3>
- <p class="text-sm text-white/40">Restore all settings to their default values</p>
+ <h3 class="font-semibold text-gray-900 dark:text-white/90">Reset Settings</h3>
+ <p class="text-sm text-gray-400 dark:text-white/40">Restore all settings to their default values</p>
  </div>
  <button
  onclick={resetSettings}
- class="flex items-center gap-2 px-4 py-2 text-red-400 border border-red-400/20 rounded-lg hover:bg-red-500/[0.1] transition-colors focus:outline-none"
+ class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 border border-red-400/20 rounded-lg hover:bg-red-500/[0.1] transition-colors focus:outline-none"
  >
  <RotateCcw class="w-4 h-4" />
  Reset
