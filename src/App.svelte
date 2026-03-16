@@ -508,7 +508,9 @@
 {#each $toasts as toast, index (toast.id)}
   <Toast
     message={toast.message}
+    description={toast.description}
     type={toast.type}
+    duration={toast.duration}
     {index}
     onClose={() => toasts.remove(toast.id)}
   />

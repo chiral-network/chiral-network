@@ -112,7 +112,7 @@
       // Remove old history after migration
       localStorage.removeItem(UPLOAD_HISTORY_KEY);
       if (migrated > 0) {
-        toasts.show(`Migrated ${migrated} seeded file${migrated > 1 ? 's' : ''} to Drive`, 'success');
+        toasts.detail('Files migrated', `${migrated} seeded file${migrated > 1 ? 's' : ''} moved to Drive`, 'success');
       }
     } catch {
       // Migration failed — keep localStorage for next attempt
@@ -205,12 +205,12 @@
           if (result) count++;
         }
         if (count > 0) {
-          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+          toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
         } else {
-          toasts.show('Upload failed', 'error');
+          toasts.show('Upload failed — no files were saved', 'error');
         }
       } catch (e) {
-        toasts.show('Upload failed: ' + (e as Error).message, 'error');
+        toasts.detail('Upload failed', (e as Error).message, 'error');
       } finally {
         uploading = false;
       }
@@ -234,12 +234,12 @@
         }
         const total = input.files.length;
         if (count > 0) {
-          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+          toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
         } else if (total > 0) {
-          toasts.show('Upload failed — could not reach the local server', 'error');
+          toasts.show('Upload failed — local server unreachable', 'error');
         }
       } catch (e) {
-        toasts.show('Upload failed: ' + (e as Error).message, 'error');
+        toasts.detail('Upload failed', (e as Error).message, 'error');
       } finally {
         uploading = false;
       }
@@ -262,9 +262,9 @@
     if (!name) return;
     const result = await driveStore.createFolder(name, currentFolderId);
     if (result) {
-      toasts.show(`Created folder "${name}"`, 'success');
+      // Silent — folder appears in the UI immediately
     } else {
-      toasts.show('Failed to create folder — could not reach the local server', 'error');
+      toasts.show('Failed to create folder — local server unreachable', 'error');
     }
     creatingFolder = false;
     newFolderName = '';
@@ -324,9 +324,9 @@
     }
     try {
       await navigator.clipboard.writeText(url);
-      toasts.show('Link copied to clipboard', 'success');
+      toasts.show('Link copied', 'success');
     } catch {
-      toasts.show('Failed to copy link', 'error');
+      toasts.show('Could not copy to clipboard', 'error');
     }
   }
 
@@ -359,7 +359,7 @@
     deleteConfirmItem = null;
     try {
       await driveStore.deleteItem(item.id);
-      toasts.show(`Deleted "${item.name}"`, 'success');
+      // Silent — item disappears from UI
     } catch (e) {
       toasts.show(`Failed to delete "${item.name}"`, 'error');
     }
@@ -372,7 +372,7 @@
 
   async function handleMoveConfirm(itemId: string, targetFolderId: string | null) {
     await driveStore.moveItem(itemId, targetFolderId);
-    toasts.show('Item moved', 'success');
+    // Silent — item moves visually in the UI
   }
 
   // Star
@@ -384,10 +384,7 @@
   async function handleToggleVisibility(item: DriveItem) {
     await driveStore.toggleVisibility(item.id);
     const newState = !item.isPublic;
-    toasts.show(
-      newState ? `"${item.name}" is now public` : `"${item.name}" is now private`,
-      'success'
-    );
+    // Silent — visibility toggle is reflected in the UI badge
   }
 
   // Drag and drop
@@ -417,7 +414,7 @@
     // Show a hint to use the Upload button instead.
     const isTauriEnv = !!(window as any).__TAURI_INTERNALS__;
     if (isTauriEnv) {
-      toasts.show('Please use the Upload button to add files', 'info');
+      toasts.show('Use the Upload button to add files in the desktop app', 'info');
       return;
     }
 
@@ -430,10 +427,10 @@
         if (result) count++;
       }
       if (count > 0) {
-        toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+        toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
       }
     } catch (e) {
-      toasts.show('Upload failed: ' + (e as Error).message, 'error');
+      toasts.detail('Upload failed', (e as Error).message, 'error');
     } finally {
       uploading = false;
     }
@@ -443,7 +440,7 @@
 
   function handleSeedToNetwork(item: DriveItem) {
     if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
+      toasts.show('Connect to the network to start seeding', 'warning');
       return;
     }
     seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
@@ -462,7 +459,7 @@
       // No network — just save the price locally
       try {
         await driveStore.updatePrice(item.id, priceChi);
-        toasts.show(`Price set to ${priceLabel} — connect to network to start seeding`, 'info');
+        toasts.detail('Price updated', `Set to ${priceLabel} — connect to network to start seeding`, 'info');
       } catch {
         toasts.show(`Failed to update price for "${item.name}"`, 'error');
       }
@@ -484,7 +481,7 @@
 
   async function handleStopSeeding(item: DriveItem) {
     await driveStore.stopSeeding(item.id);
-    toasts.show(`Stopped seeding "${item.name}"`, 'info');
+    // Silent — seeding badge disappears from the UI
   }
 
   function handleEditPrice(item: DriveItem) {
@@ -497,9 +494,9 @@
     if (!item.merkleRoot) return;
     try {
       await navigator.clipboard.writeText(item.merkleRoot);
-      toasts.show('Hash copied to clipboard', 'success');
+      toasts.show('Hash copied', 'success');
     } catch {
-      toasts.show('Failed to copy hash', 'error');
+      toasts.show('Could not copy to clipboard', 'error');
     }
   }
 
@@ -519,9 +516,9 @@
     const link = `magnet:?xt=urn:btih:${item.merkleRoot}&dn=${encodeURIComponent(item.name)}&xl=${item.size || 0}`;
     try {
       await navigator.clipboard.writeText(link);
-      toasts.show('Magnet link copied to clipboard', 'success');
+      toasts.show('Magnet link copied', 'success');
     } catch {
-      toasts.show('Failed to copy magnet link', 'error');
+      toasts.show('Could not copy to clipboard', 'error');
     }
   }
 
@@ -543,9 +540,9 @@
               const result = await driveStore.uploadFile(path as string, currentFolderId);
               if (result) count++;
             }
-            if (count > 0) toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+            if (count > 0) toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
           } catch (e) {
-            toasts.show('Upload failed: ' + (e as Error).message, 'error');
+            toasts.detail('Upload failed', (e as Error).message, 'error');
           } finally {
             uploading = false;
           }

@@ -93,12 +93,12 @@
   function addRecipient() {
     if (!newRecipientLabel.trim() || !recipientAddress) return;
     if (!recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
-      toasts.show('Enter a valid 0x address before saving', 'error');
+      toasts.show('Enter a valid 0x address', 'warning');
       return;
     }
     // Don't add duplicates
     if (savedRecipients.some(r => r.address.toLowerCase() === recipientAddress.toLowerCase())) {
-      toasts.show('This address is already saved', 'info');
+      toasts.show('Address already saved', 'warning');
       showAddRecipient = false;
       newRecipientLabel = '';
       return;
@@ -112,7 +112,7 @@
     saveSavedRecipients();
     showAddRecipient = false;
     newRecipientLabel = '';
-    toasts.show('Recipient saved', 'success');
+    // Silent — recipient appears in the list
   }
 
   function deleteRecipient(id: string) {
@@ -260,7 +260,7 @@
 
     const amount = parseFloat(sendAmount);
     if (isNaN(amount) || amount <= 0) {
-      toasts.show('Please enter a valid amount', 'error');
+      toasts.show('Enter a valid amount', 'warning');
       return;
     }
 
@@ -270,7 +270,7 @@
     }
 
     if (!recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
-      toasts.show('Invalid recipient address', 'error');
+      toasts.show('Invalid recipient address', 'warning');
       return;
     }
 
@@ -300,7 +300,7 @@
         privateKey: $walletAccount.privateKey
       });
 
-      toasts.show(`Transaction sent! Hash: ${result.hash.slice(0, 10)}...`, 'success');
+      toasts.detail('Transaction sent', `Hash: ${result.hash.slice(0, 16)}…`, 'success');
 
       // Record metadata for enriched transaction history
       try {
@@ -333,7 +333,7 @@
       pollForConfirmation(result.hash);
     } catch (error) {
       log.error('Failed to send transaction:', error);
-      toasts.show(`Transaction failed: ${error}`, 'error');
+      toasts.detail('Transaction failed', String(error), 'error');
     } finally {
       isSending = false;
     }
@@ -344,11 +344,11 @@
     try {
       await navigator.clipboard.writeText(text);
       copied = type;
-      toasts.show(`${type === 'address' ? 'Address' : 'Private key'} copied to clipboard`, 'success');
+      toasts.show(`${type === 'address' ? 'Address' : 'Private key'} copied`, 'success');
       setTimeout(() => copied = null, 2000);
     } catch (error) {
       log.error('Failed to copy:', error);
-      toasts.show('Failed to copy to clipboard', 'error');
+      toasts.show('Could not copy to clipboard', 'error');
     }
   }
 
@@ -363,7 +363,7 @@
     walletAccount.set(null);
     isAuthenticated.set(false);
     showLogoutModal = false;
-    toasts.show('Logged out successfully', 'info');
+    // Silent — redirects to login screen
   }
 
   // Format address for display
@@ -600,7 +600,7 @@
                 <button
                   onclick={() => {
                     if (!recipientAddress || !recipientAddress.startsWith('0x') || recipientAddress.length !== 42) {
-                      toasts.show('Enter a valid address first', 'error');
+                      toasts.show('Enter a valid address', 'warning');
                       return;
                     }
                     showAddRecipient = true;
@@ -916,7 +916,7 @@
                       <div class="flex items-center gap-2">
                         <p class="font-mono text-gray-700 dark:text-gray-300 truncate flex-1">{tx.hash}</p>
                         <button
-                          onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(tx.hash); toasts.show('Transaction hash copied', 'success'); }}
+                          onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(tx.hash); toasts.show('Hash copied', 'success'); }}
                           class="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex-shrink-0"
                           title="Copy transaction hash"
                         >

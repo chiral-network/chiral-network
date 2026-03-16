@@ -169,7 +169,7 @@
             timestamp: Date.now()
           });
 
-          toasts.show(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
+          toasts.detail('Incoming file', `${fromAlias.displayName} wants to send "${fileName}"`, 'info');
         });
 
         // Listen for file transfer completion (outgoing)
@@ -186,7 +186,7 @@
         unlistenFileReceivedComplete = await listen<any>('file-received', (event) => {
           const { transferId, fileName, fromPeerId, filePath } = event.payload;
           const fromAlias = aliasFromPeerId(fromPeerId);
-          toasts.show(`File "${fileName}" saved to ${filePath}`, 'success', 8000);
+          toasts.detail('File received', `"${fileName}" saved to ${filePath}`, 'success', 8000);
           updateTransferStatus(transferId, 'completed');
         });
 
@@ -219,7 +219,7 @@
           });
 
           const priceDisplay = formatPriceWei(priceWei);
-          toasts.show(`${fromAlias.displayName} wants to send you "${fileName}" for ${priceDisplay}`, 'info');
+          toasts.detail('Paid file offer', `${fromAlias.displayName} wants to send "${fileName}" for ${priceDisplay}`, 'info');
         });
 
         // Listen for payment sent (buyer side) — record in both histories
@@ -377,7 +377,7 @@
 
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
-      toasts.show('File transfer requires the desktop app', 'error');
+      toasts.show('File transfer requires the desktop app', 'warning');
       return;
     }
 
@@ -394,7 +394,7 @@
       await sendFile(filePath, fileName, $selectedPeer);
     } catch (error) {
       log.error('Failed to open file dialog:', error);
-      toasts.show(`Failed to open file dialog: ${error}`, 'error');
+      toasts.detail('File dialog failed', String(error), 'error');
     }
   }
 
@@ -407,7 +407,7 @@
 
     // Validate wallet for paid transfers
     if (isPaid && !$walletAccount) {
-      toasts.show('Connect your wallet to set a price on files', 'error');
+      toasts.show('Connect your wallet to set a price', 'warning');
       return;
     }
 
@@ -462,7 +462,7 @@
         });
 
         updateTransferStatus(transferId, 'completed');
-        toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHI)`, 'success');
+        toasts.detail('File offer sent', `${toAlias.displayName} — ${price} CHI`, 'success');
       } else {
         // Free transfer: read file from disk and send directly
         await invoke('send_file_by_path', {
@@ -477,7 +477,7 @@
     } catch (error) {
       log.error('Failed to send file:', error);
       updateTransferStatus(transferId, 'failed');
-      toasts.show(`Failed to send file: ${error}`, 'error');
+      toasts.detail('Failed to send file', String(error), 'error');
     }
 
     sendPrice = '';
@@ -487,7 +487,7 @@
   async function handleAccept(transfer: FileTransfer) {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
-      toasts.show('File transfer requires the desktop app', 'error');
+      toasts.show('File transfer requires the desktop app', 'warning');
       return;
     }
 
@@ -499,12 +499,12 @@
       if (isPaid) {
         // Paid transfer: download via chunked protocol with payment handshake
         if (!$walletAccount) {
-          toasts.show('Connect your wallet to accept paid file transfers', 'error');
+          toasts.show('Connect your wallet to accept paid transfers', 'warning');
           return;
         }
 
         acceptTransfer(transfer.id);
-        toasts.show(`Starting paid download of "${transfer.fileName}" (${formatPriceWei(transfer.priceWei!)})...`, 'info');
+        toasts.detail('Downloading', `"${transfer.fileName}" — ${formatPriceWei(transfer.priceWei!)}`, 'info');
 
         await invoke('start_download', {
           fileHash: transfer.fileHash,
@@ -521,11 +521,11 @@
         // Free transfer: accept via direct file transfer (existing behavior)
         await invoke<string>('accept_file_transfer', { transferId: transfer.id });
         acceptTransfer(transfer.id);
-        toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`, 'info');
+        toasts.show(`Accepting file from ${transfer.fromAlias.displayName}`, 'info');
       }
     } catch (error) {
       log.error('Failed to accept transfer:', error);
-      toasts.show(`Failed to accept transfer: ${error}`, 'error');
+      toasts.detail('Transfer failed', String(error), 'error');
     }
   }
 
@@ -540,7 +540,7 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('decline_file_transfer', { transferId: transfer.id });
       declineTransfer(transfer.id);
-      toasts.show(`Declined file from ${transfer.fromAlias.displayName}`, 'info');
+      // Silent — transfer removed from pending list
     } catch (error) {
       log.error('Failed to decline transfer:', error);
     }

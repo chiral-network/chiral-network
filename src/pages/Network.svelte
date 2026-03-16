@@ -320,7 +320,7 @@
   // Download Geth
   async function handleDownloadGeth() {
     if (!isTauri()) {
-      toasts.show('Geth download requires desktop app', 'error');
+      toasts.show('Geth download requires the desktop app', 'warning');
       return;
     }
 
@@ -329,11 +329,11 @@
 
     try {
       await invoke('download_geth');
-      toasts.show('Geth downloaded successfully!', 'success');
+      toasts.show('Geth installed', 'success');
       await loadGethStatus();
     } catch (err) {
       log.error('Failed to download Geth:', err);
-      toasts.show(`Download failed: ${err}`, 'error');
+      toasts.detail('Download failed', String(err), 'error');
     } finally {
       isDownloading = false;
     }
@@ -346,11 +346,11 @@
     isStartingGeth = true;
     try {
       await invoke('start_geth', { minerAddress: $walletAccount?.address || null });
-      toasts.show('Blockchain node started!', 'success');
+      toasts.show('Blockchain node started', 'success');
       await loadGethStatus();
     } catch (err) {
       log.error('Failed to start Geth:', err);
-      toasts.show(`Failed to start node: ${err}`, 'error');
+      toasts.detail('Failed to start node', String(err), 'error');
     } finally {
       isStartingGeth = false;
     }
@@ -366,7 +366,7 @@
       await loadGethStatus();
     } catch (err) {
       log.error('Failed to stop Geth:', err);
-      toasts.show(`Failed to stop node: ${err}`, 'error');
+      toasts.detail('Failed to stop node', String(err), 'error');
     }
   }
 
@@ -421,7 +421,7 @@
       if (peerId) {
         localPeerId = peerId;
       }
-      toasts.show('Connected to P2P network!', 'success');
+      toasts.show('Connected to P2P network', 'success');
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       // If DHT is already running (e.g. stale state after logout), sync the UI
@@ -429,11 +429,11 @@
         networkConnected.set(true);
         const peerId = await dhtService.getPeerId();
         if (peerId) localPeerId = peerId;
-        toasts.show('Reconnected to P2P network', 'success');
+        toasts.show('Reconnected to P2P network', 'info');
       } else {
         error = errMsg;
         log.error('Failed to connect:', err);
-        toasts.show(`Connection failed: ${error}`, 'error');
+        toasts.detail('Connection failed', error, 'error');
       }
     } finally {
       isConnecting = false;
@@ -454,7 +454,7 @@
   async function pingPeer(peerId: string) {
     try {
       const result = await dhtService.pingPeer(peerId);
-      toasts.show('Ping sent!', 'success');
+      // Silent — ping result shown in UI
       log.info('Ping successful:', result);
     } catch (err) {
       toasts.show('Ping failed', 'error');
@@ -481,7 +481,7 @@
   function addToBlacklist() {
     const addr = blacklistAddress.trim();
     if (!addr) {
-      toasts.show('Please enter an address', 'error');
+      toasts.show('Enter an address first', 'warning');
       return;
     }
     const current = $blacklist;
@@ -492,12 +492,12 @@
     blacklist.add(addr, blacklistReason.trim() || 'No reason given');
     blacklistAddress = '';
     blacklistReason = '';
-    toasts.show('Address added to blacklist', 'success');
+    // Silent — address appears in the blacklist UI
   }
 
   function removeFromBlacklist(address: string) {
     blacklist.remove(address);
-    toasts.show('Address removed from blacklist', 'success');
+    // Silent — address removed from the blacklist UI
   }
 
   function truncateAddress(addr: string): string {

@@ -142,19 +142,19 @@ class DhtService {
 
     if (!this.pingSentUnlisten) {
       this.pingSentUnlisten = await listen<string>('ping-sent', () => {
-        toasts.show('Ping sent to peer', 'success');
+        // Silent — ping/pong are routine network operations
       });
     }
 
     if (!this.pingReceivedUnlisten) {
       this.pingReceivedUnlisten = await listen<string>('ping-received', () => {
-        toasts.show('Ping received from peer', 'info');
+        // Silent
       });
     }
 
     if (!this.pongReceivedUnlisten) {
       this.pongReceivedUnlisten = await listen<string>('pong-received', () => {
-        toasts.show('Pong received from peer', 'success');
+        // Silent
       });
     }
 
