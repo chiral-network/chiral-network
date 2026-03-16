@@ -31,7 +31,7 @@
     toggling = true;
     try {
       await driveStore.toggleVisibility(item.id);
-      toasts.show(isItemPublic ? 'File is now private' : 'File is now public', 'success');
+      // Silent — toggle state is reflected in the UI
     } finally {
       toggling = false;
     }
@@ -48,9 +48,9 @@
         justCreatedUrl = url;
         try {
           await navigator.clipboard.writeText(url);
-          toasts.show('Share link created & copied!', 'success');
+          toasts.show('Share link copied', 'success');
         } catch {
-          toasts.show('Share link created. Copy it below.', 'success');
+          toasts.show('Share link created', 'success');
         }
       }
     } finally {
@@ -71,7 +71,7 @@
 
   async function revokeLink(share: ShareLink) {
     await driveStore.revokeShareLink(share.id);
-    toasts.show('Share link revoked', 'success');
+    // Silent — link disappears from the list
   }
 
   function formatDate(ts: number): string {
@@ -154,9 +154,9 @@
             onclick={async () => {
               try {
                 await navigator.clipboard.writeText(justCreatedUrl!);
-                toasts.show('Copied!', 'success');
+                toasts.show('Link copied', 'success');
               } catch {
-                toasts.show('Failed to copy', 'error');
+                toasts.show('Could not copy to clipboard', 'error');
               }
             }}
             class="p-1.5 hover:bg-green-100 dark:hover:bg-green-800 rounded transition shrink-0"

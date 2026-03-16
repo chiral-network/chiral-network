@@ -50,10 +50,10 @@
         await invoke('set_download_directory', { path: picked });
         settings.update((s) => ({ ...s, downloadDirectory: picked }));
         displayDownloadDir = picked;
-        toasts.show('Download directory updated', 'success');
+        // Silent — directory path shown in UI
       }
     } catch (e) {
-      toasts.show(`Failed to set directory: ${e}`, 'error');
+      toasts.detail('Failed to set directory', String(e), 'error');
     }
   }
 
@@ -63,9 +63,9 @@
       await invoke('set_download_directory', { path: null });
       settings.update((s) => ({ ...s, downloadDirectory: '' }));
       displayDownloadDir = await invoke<string>('get_download_directory');
-      toasts.show('Download directory reset to system default', 'info');
+      // Silent — default path shown in UI
     } catch (e) {
-      toasts.show(`Failed to reset directory: ${e}`, 'error');
+      toasts.detail('Failed to reset directory', String(e), 'error');
     }
   }
 
@@ -78,7 +78,7 @@
 
   function setTheme(theme: ThemeMode) {
     settings.update((s) => ({ ...s, theme }));
-    toasts.show(`Theme set to ${theme}`, 'success');
+    // Silent — theme change is visually immediate
   }
 
   function setColorTheme(color: ColorTheme) {
@@ -124,7 +124,7 @@
     if (isTauri) {
       resetDownloadDirectory();
     }
-    toasts.show('Settings reset to defaults', 'info');
+    toasts.show('Settings reset to defaults', 'success');
   }
 </script>
 

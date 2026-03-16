@@ -146,10 +146,10 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const addr = await invoke<string>('start_hosting_server', { port });
       serverStatus = { running: true, address: addr };
-      toasts.show(`Hosting server started on ${addr}`, 'success');
+      toasts.detail('Server started', `Listening on ${addr}`, 'success');
       localStorage.setItem('chiral-hosting-port', String(port));
     } catch (err: any) {
-      toasts.show(`Failed to start server: ${err}`, 'error');
+      toasts.detail('Server failed to start', String(err), 'error');
     } finally {
       isStartingServer = false;
     }
@@ -161,9 +161,9 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('stop_hosting_server');
       serverStatus = { running: false, address: null };
-      toasts.show('Hosting server stopped', 'info');
+      // Silent — server status reflected in UI
     } catch (err: any) {
-      toasts.show(`Failed to stop server: ${err}`, 'error');
+      toasts.detail('Failed to stop server', String(err), 'error');
     }
   }
 
@@ -199,7 +199,7 @@
   async function openDrivePickerForSite() {
     const wallet = get(walletAccount);
     if (!wallet?.address) {
-      toasts.show('Connect your wallet first', 'error');
+      toasts.show('Connect your wallet first', 'warning');
       return;
     }
     drivePickerLoading = true;
@@ -237,7 +237,7 @@
         }
       }
     } catch (err: any) {
-      toasts.show(`Failed to resolve Drive file paths: ${err?.message || err}`, 'error');
+      toasts.detail('Failed to load files', String(err?.message || err), 'error');
     }
   }
 
@@ -260,7 +260,7 @@
       newSiteName = '';
       selectedFiles = [];
     } catch (err: any) {
-      toasts.show(`Failed to create site: ${err}`, 'error');
+      toasts.detail('Failed to create site', String(err), 'error');
     } finally {
       isCreating = false;
     }
@@ -278,16 +278,16 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('delete_hosted_site', { siteId: id });
       sites = sites.filter(s => s.id !== id);
-      toasts.show(`Site "${name}" deleted`, 'info');
+      // Silent — site removed from list
     } catch (err: any) {
-      toasts.show(`Failed to delete site: ${err}`, 'error');
+      toasts.detail('Failed to delete site', String(err), 'error');
     }
   }
 
   function copySiteUrl(site: HostedSite) {
     const url = buildHostedSiteUrl(site.id, site.relayUrl, serverStatus.address, port);
     navigator.clipboard.writeText(url);
-    toasts.show('URL copied to clipboard', 'success');
+    toasts.show('URL copied', 'success');
   }
 
   async function openSite(site: HostedSite) {
@@ -307,9 +307,9 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const relayUrl = await invoke<string>('publish_site_to_relay', { siteId, relayUrl: RELAY_GATEWAY });
       await loadSites();
-      toasts.show(`Published! URL: ${relayUrl}`, 'success');
+      toasts.detail('Site published', relayUrl, 'success');
     } catch (err: any) {
-      toasts.show(`Failed to publish: ${err}`, 'error');
+      toasts.detail('Failed to publish', String(err), 'error');
     } finally {
       publishingStates = { ...publishingStates, [siteId]: false };
     }
@@ -322,9 +322,9 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('unpublish_site_from_relay', { siteId });
       await loadSites();
-      toasts.show('Site unpublished from network', 'info');
+      // Silent — publish state reflected in UI
     } catch (err: any) {
-      toasts.show(`Failed to unpublish: ${err}`, 'error');
+      toasts.detail('Failed to unpublish', String(err), 'error');
     } finally {
       publishingStates = { ...publishingStates, [siteId]: false };
     }
@@ -382,9 +382,9 @@
     loadingHosts = true;
     try {
       hosts = await hostingService.discoverHosts();
-      toasts.show('Host list refreshed', 'success');
+      // Silent — host list updated in UI
     } catch (err: any) {
-      toasts.show(`Failed to refresh: ${err.message || err}`, 'error');
+      toasts.detail('Failed to refresh hosts', String(err.message || err), 'error');
     } finally {
       loadingHosts = false;
     }
@@ -393,13 +393,13 @@
   async function publishHosting() {
     if (hostingPublishing) return;
     const wallet = get(walletAccount);
-    if (!wallet?.address) { toasts.show('Connect your wallet first', 'error'); return; }
+    if (!wallet?.address) { toasts.show('Connect your wallet first', 'warning'); return; }
     hostingPublishing = true;
     try {
       await hostingService.publishHostAdvertisement($settings.hostingConfig, wallet.address);
-      toasts.show('Host advertisement published to network', 'success');
+      toasts.show('Hosting published to network', 'success');
     } catch (err: any) {
-      toasts.show(`Failed to publish: ${err?.message || err}`, 'error');
+      toasts.detail('Failed to publish hosting', String(err?.message || err), 'error');
     } finally {
       hostingPublishing = false;
     }
@@ -410,9 +410,9 @@
     hostingPublishing = true;
     try {
       await hostingService.unpublishHostAdvertisement();
-      toasts.show('Host advertisement removed', 'info');
+      // Silent — toggle state reflects in UI
     } catch (err: any) {
-      toasts.show(`Failed to unpublish: ${err?.message || err}`, 'error');
+      toasts.detail('Failed to unpublish', String(err?.message || err), 'error');
     } finally {
       hostingPublishing = false;
     }
@@ -429,7 +429,7 @@
       if (wallet?.address) {
         await publishHosting();
       } else {
-        toasts.show('Hosting enabled. It will auto-publish when wallet is connected.', 'info');
+        toasts.detail('Hosting enabled', 'Will auto-publish when wallet is connected', 'info');
       }
       return;
     }
@@ -439,7 +439,7 @@
   // Proposal flow
   function openProposalModal(host: HostEntry) {
     const wallet = get(walletAccount);
-    if (!wallet?.address) { toasts.show('Connect your wallet first', 'error'); return; }
+    if (!wallet?.address) { toasts.show('Connect your wallet first', 'warning'); return; }
     proposalHost = host;
     proposalFileHashes = '';
     proposalDurationDays = 7;
@@ -480,7 +480,7 @@
       }
       toasts.show(`${fileName} published to network`, 'success');
     } catch (err: any) {
-      toasts.show(`Failed to publish ${fileName}: ${err.message || err}`, 'error');
+      toasts.detail(`Failed to publish ${fileName}`, String(err.message || err), 'error');
     } finally {
       publishingDriveFile = null;
     }
@@ -490,11 +490,11 @@
     if (!proposalHost || isProposing) return;
     const wallet = get(walletAccount);
     if (!wallet?.address || !myPeerId) {
-      toasts.show('Wallet or peer ID not available', 'error');
+      toasts.show('Wallet or peer ID not available', 'warning');
       return;
     }
     const hashes = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
-    if (hashes.length === 0) { toasts.show('Enter at least one file hash', 'error'); return; }
+    if (hashes.length === 0) { toasts.show('Enter at least one file hash', 'warning'); return; }
 
     isProposing = true;
     try {
@@ -507,9 +507,9 @@
       );
       myAgreements = [...myAgreements, agreement];
       proposalHost = null;
-      toasts.show('Hosting proposal sent!', 'success');
+      toasts.show('Hosting proposal sent', 'success');
     } catch (err: any) {
-      toasts.show(`Failed to send proposal: ${err.message || err}`, 'error');
+      toasts.detail('Proposal failed', String(err.message || err), 'error');
     } finally {
       isProposing = false;
     }
@@ -528,17 +528,17 @@
           : a
       );
       if (!options?.silent) {
-        toasts.show(accept ? 'Agreement accepted — downloading files...' : 'Agreement rejected', accept ? 'success' : 'info');
+        toasts.show(accept ? 'Agreement accepted — downloading files' : 'Agreement rejected', accept ? 'success' : 'info');
       } else if (options.reason) {
         toasts.show(options.reason, 'success');
       }
       if (accept && updated) {
         hostingService.fulfillAgreement(updated).catch((err: any) => {
-          toasts.show(`Failed to start file download: ${err.message || err}`, 'error');
+          toasts.detail('File download failed', String(err.message || err), 'error');
         });
       }
     } catch (err: any) {
-      toasts.show(`Failed: ${err.message || err}`, 'error');
+      toasts.detail('Action failed', String(err.message || err), 'error');
     }
   }
 
@@ -558,7 +558,7 @@
         toasts.show('Cancellation requested — waiting for other party', 'info');
       }
     } catch (err: any) {
-      toasts.show(`Failed to request cancellation: ${err.message || err}`, 'error');
+      toasts.detail('Cancellation failed', String(err.message || err), 'error');
     }
   }
 
@@ -584,7 +584,7 @@
         toasts.show('Cancellation denied', 'info');
       }
     } catch (err: any) {
-      toasts.show(`Failed: ${err.message || err}`, 'error');
+      toasts.detail('Action failed', String(err.message || err), 'error');
     }
   }
 
@@ -733,7 +733,7 @@
               );
             } else {
               myAgreements = [...myAgreements, agreement];
-              toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`, 'info');
+              toasts.detail('New hosting proposal', `From peer ${event.payload.fromPeer.slice(0, 8)}…`, 'info');
             }
             void maybeAutoAcceptAgreement(agreement);
           } catch { /* ignore malformed */ }
@@ -748,9 +748,9 @@
           myAgreements = myAgreements.map((a): HostingAgreement =>
             a.agreementId === agreementId ? { ...a, status: status as HostingAgreement['status'] } : a
           );
-          if (status === 'accepted') toasts.show('Agreement accepted by host!', 'success');
-          else if (status === 'rejected') toasts.show('Agreement rejected by host', 'info');
-          else if (status === 'active') toasts.show('Host is now seeding your files!', 'success');
+          if (status === 'accepted') toasts.show('Agreement accepted by host', 'success');
+          else if (status === 'rejected') toasts.show('Agreement rejected by host', 'warning');
+          else if (status === 'active') toasts.show('Host is now seeding your files', 'success');
         },
       );
 
@@ -763,7 +763,7 @@
             (a) => a.hostPeerId === myPeerId && (a.status === 'accepted' || a.status === 'active') && a.fileHashes.includes(fileHash)
           );
           if (!agreement) return;
-          toasts.show(`Now seeding ${fileName} for hosting agreement`, 'success');
+          toasts.detail('Now seeding', `${fileName} for hosting agreement`, 'success');
           myAgreements = myAgreements.map((a) =>
             a.agreementId === agreement.agreementId ? { ...a, status: 'active' } : a
           );
@@ -784,12 +784,12 @@
             myAgreements = myAgreements.map((a) =>
               a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
             );
-            toasts.show(`Agreement cancelled with ${fromPeer.slice(0, 8)}...`, 'info');
+            toasts.detail('Agreement cancelled', `By peer ${fromPeer.slice(0, 8)}…`, 'info');
           } else {
             myAgreements = myAgreements.map((a) =>
               a.agreementId === agreementId ? { ...a, cancelRequestedBy: fromPeer } : a
             );
-            toasts.show(`Cancellation requested by ${fromPeer.slice(0, 8)}...`, 'info');
+            toasts.detail('Cancellation requested', `By peer ${fromPeer.slice(0, 8)}…`, 'info');
           }
         },
       );

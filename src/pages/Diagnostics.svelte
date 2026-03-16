@@ -310,7 +310,7 @@
       `[${e.timestamp.toISOString()}] [${e.level.toUpperCase()}] [${e.source}] ${e.message}`
     ).join('\n');
     navigator.clipboard.writeText(text).then(() => {
-      toasts.show('Logs copied to clipboard', 'success');
+      toasts.show('Logs copied', 'success');
     }).catch(() => {
       toasts.show('Failed to copy logs', 'error');
     });
@@ -327,7 +327,7 @@
     a.download = `chiral-diagnostics-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.log`;
     a.click();
     URL.revokeObjectURL(url);
-    toasts.show('Logs exported', 'success');
+    // Silent — file download triggered in browser
   }
 
   async function refreshAll() {
@@ -851,7 +851,7 @@
               onclick={() => {
                 if (gethLogContent) {
                   navigator.clipboard.writeText(gethLogContent).then(() => {
-                    toasts.show('Geth log copied', 'success');
+                    toasts.show('Log copied', 'success');
                   });
                 }
               }}

@@ -326,24 +326,16 @@
           deviceIds: selectedGpuDevices.length > 0 ? selectedGpuDevices : null,
           utilizationPercent: gpuUtilizationPercent
         });
-        toasts.show(
-          `GPU mining started${
-            selectedGpuDevices.length > 0 ? ` (${selectedGpuDevices.length} device(s))` : ''
-          } at ${gpuUtilizationPercent}% utilization target!`,
-          'success'
-        );
+        toasts.detail('GPU mining started', `${selectedGpuDevices.length || 'All'} device${selectedGpuDevices.length !== 1 ? 's' : ''} at ${gpuUtilizationPercent}% utilization`, 'success');
       } else {
         await invoke('start_mining', { threads: miningThreads });
-        toasts.show(
-          `CPU mining started with ${miningThreads} thread(s) (${cpuUtilizationPercent}% target)!`,
-          'success'
-        );
+        toasts.detail('CPU mining started', `${miningThreads} thread${miningThreads !== 1 ? 's' : ''} at ${cpuUtilizationPercent}% target`, 'success');
       }
 
       await Promise.all([loadStatus(), loadGpuCapabilities()]);
     } catch (error) {
       log.error('Failed to start mining:', error);
-      toasts.show(`Failed to start mining: ${error}`, 'error');
+      toasts.detail('Failed to start mining', String(error), 'error');
     } finally {
       isStartingMining = false;
     }
@@ -358,11 +350,11 @@
       } else {
         await invoke('stop_mining');
       }
-      toasts.show('Mining stopped', 'info');
+      // Silent — mining status reflected in UI
       await Promise.all([loadStatus(), loadGpuCapabilities()]);
     } catch (error) {
       log.error('Failed to stop mining:', error);
-      toasts.show(`Failed to stop mining: ${error}`, 'error');
+      toasts.detail('Failed to stop mining', String(error), 'error');
     }
   }
 
