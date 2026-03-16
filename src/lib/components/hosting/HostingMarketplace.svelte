@@ -99,17 +99,17 @@
  }
 
  function eloColor(score: number): string {
- if (score >= 80) return'text-emerald-400';
- if (score >= 60) return'text-violet-400';
- if (score >= 40) return'text-yellow-400';
+ if (score >= 80) return'text-emerald-600 dark:text-emerald-400';
+ if (score >= 60) return'text-violet-600 dark:text-violet-400';
+ if (score >= 40) return'text-yellow-600 dark:text-yellow-400';
  return'text-red-500';
  }
 
  function eloBg(score: number): string {
  if (score >= 80) return'bg-emerald-100 text-emerald-800';
- if (score >= 60) return'bg-violet-900/20 text-violet-400';
- if (score >= 40) return'bg-yellow-500/100/10 text-yellow-400';
- return'bg-red-500/10 text-red-400';
+ if (score >= 60) return'bg-violet-100 dark:bg-violet-900/20 text-violet-600 dark:text-violet-400';
+ if (score >= 40) return'bg-yellow-500/100/10 text-yellow-600 dark:text-yellow-400';
+ return'bg-red-500/10 text-red-600 dark:text-red-400';
  }
 </script>
 
@@ -121,7 +121,7 @@
  <Settings2 class="h-4.5 w-4.5 text-[var(--text-secondary)]" />
  </div>
  <div>
- <h2 class="font-semibold text-base text-white">Host Settings</h2>
+ <h2 class="font-semibold text-base text-[var(--text-primary)]">Host Settings</h2>
  <p class="text-xs text-[var(--text-secondary)] mt-0.5">
  Configure your hosting offer for the network
  </p>
@@ -158,7 +158,7 @@
  step="1"
  value={Math.round($settings.hostingConfig.maxStorageBytes / (1024 * 1024 * 1024))}
  oninput={(e) => updateMaxStorageGb(Number(e.currentTarget.value))}
- class="w-24 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-white tabular-nums
+ class="w-24 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-[var(--text-primary)] tabular-nums
  focus:border-cyan-500/30 focus:outline-none focus:"
  />
  <span class="text-xs text-[var(--text-secondary)] font-medium">GB</span>
@@ -178,7 +178,7 @@
  step="0.000001"
  value={weiToChiNumber($settings.hostingConfig.pricePerMbPerDayWei, 0.001)}
  oninput={(e) => updatePriceChi(Number(e.currentTarget.value))}
- class="w-32 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-white tabular-nums
+ class="w-32 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-[var(--text-primary)] tabular-nums
  focus:border-cyan-500/30 focus:outline-none focus:"
  />
  <span class="text-xs text-[var(--text-secondary)] font-medium">CHI/MB/day</span>
@@ -198,7 +198,7 @@
  step="0.000001"
  value={weiToChiNumber($settings.hostingConfig.minDepositWei, 0.1)}
  oninput={(e) => updateDepositChi(Number(e.currentTarget.value))}
- class="w-32 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-white tabular-nums
+ class="w-32 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-[var(--text-primary)] tabular-nums
  focus:border-cyan-500/30 focus:outline-none focus:"
  />
  <span class="text-xs text-[var(--text-secondary)] font-medium">CHI</span>
@@ -234,7 +234,7 @@
  value={$settings.hostingConfig.minAutoAcceptElo}
  oninput={(e) => updateAutoAcceptMinElo(Number(e.currentTarget.value))}
  disabled={!$settings.hostingConfig.autoAcceptByElo}
- class="w-24 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-white tabular-nums
+ class="w-24 px-3 py-2 text-sm bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-[var(--text-primary)] tabular-nums
  focus:border-cyan-500/30 focus:outline-none focus:
  disabled:opacity-40 disabled:cursor-not-allowed"
  />
@@ -279,10 +279,10 @@
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
  <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-500/10">
- <Users class="w-4.5 h-4.5 text-violet-400" />
+ <Users class="w-4.5 h-4.5 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
- <h2 class="font-semibold text-base text-white">Available Hosts</h2>
+ <h2 class="font-semibold text-base text-[var(--text-primary)]">Available Hosts</h2>
  <p class="text-xs text-[var(--text-secondary)] mt-0.5">
  {#if loadingHosts}
  Searching the network...
@@ -348,7 +348,7 @@
  {/if}
  <span class="relative inline-flex h-2.5 w-2.5 rounded-full {host.isOnline ?'bg-green-500' :'bg-[var(--surface-2)]'}"></span>
  </span>
- <span class="text-sm font-semibold text-white font-mono">
+ <span class="text-sm font-semibold text-[var(--text-primary)] font-mono">
  {formatPeerId(host.advertisement.peerId)}
  </span>
  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold tabular-nums {eloBg(host.reputationScore)}">

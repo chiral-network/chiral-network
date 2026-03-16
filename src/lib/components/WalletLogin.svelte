@@ -122,7 +122,7 @@
 
  {#if error}
  <div class="bg-red-500/10 border-l-2 border-red-400 p-4 mb-6">
- <p class="text-sm text-red-400">{error}</p>
+ <p class="text-sm text-red-600 dark:text-red-400">{error}</p>
  </div>
  {/if}
 

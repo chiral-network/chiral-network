@@ -138,7 +138,7 @@
  onclick={mi.action}
  class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition
  {mi.danger
- ?'text-red-400 hover:bg-red-900/20'
+ ?'text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/20'
  :'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}"
  >
  <svelte:component this={mi.icon} class="w-4 h-4" />

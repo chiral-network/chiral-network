@@ -25,11 +25,11 @@
  <div class="flex-shrink-0 mt-0.5 p-2 bg-violet-700/30 rounded-lg"><Plus class="w-5 h-5" /></div>
  <div class="text-left">
  <span class="block font-semibold text-base">Create New Wallet</span>
- <span class="block text-sm text-[var(--text-secondary)] mt-0.5">Generate a new wallet with a secure recovery phrase</span>
+ <span class="block text-sm text-white/70 mt-0.5">Generate a new wallet with a secure recovery phrase</span>
  </div>
  </button>
  <button onclick={handleUseExisting} class="w-full flex items-start gap-4 px-5 py-4 border border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)] text-[var(--text-primary)] rounded-xl transition-colors duration-150 focus:outline-none">
- <div class="flex-shrink-0 mt-0.5 p-2 bg-[var(--surface-3)] rounded-lg"><KeyRound class="w-5 h-5 text-violet-400" /></div>
+ <div class="flex-shrink-0 mt-0.5 p-2 bg-[var(--surface-3)] rounded-lg"><KeyRound class="w-5 h-5 text-violet-600 dark:text-violet-400" /></div>
  <div class="text-left">
  <span class="block font-semibold text-base">Import Existing Wallet</span>
  <span class="block text-sm text-[var(--text-secondary)] mt-0.5">Use your private key or recovery phrase</span>

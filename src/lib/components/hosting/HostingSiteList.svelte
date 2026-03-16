@@ -51,13 +51,13 @@
 </script>
 
 <div class="rounded-xl border border-[var(--border)]/60 bg-[var(--surface-1)] p-5">
- <h2 class="mb-4 text-base font-semibold text-white flex items-center gap-2">
+ <h2 class="mb-4 text-base font-semibold text-[var(--text-primary)] flex items-center gap-2">
  <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--surface-2)]">
  <Globe class="h-3.5 w-3.5 text-[var(--text-secondary)]" />
  </div>
  Hosted Sites
  {#if sites.length > 0}
- <span class="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-400">
+ <span class="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-600 dark:text-violet-400">
  {sites.length}
  </span>
  {/if}
@@ -80,9 +80,9 @@
  <div class="flex items-start justify-between gap-3">
  <div class="min-w-0 flex-1">
  <div class="flex items-center gap-2">
- <h3 class="font-semibold text-white">{site.name}</h3>
+ <h3 class="font-semibold text-[var(--text-primary)]">{site.name}</h3>
  {#if site.relayUrl}
- <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400 uppercase tracking-wide">
+ <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wide">
  <Check class="h-2.5 w-2.5" />
  Published
  </span>
@@ -95,7 +95,7 @@
 
  <!-- URL -->
  <p class="mt-1 font-mono text-xs truncate
- {site.relayUrl ?'text-emerald-400' :'text-violet-400'}">
+ {site.relayUrl ?'text-emerald-600 dark:text-emerald-400' :'text-violet-600 dark:text-violet-400'}">
  {site.relayUrl || siteUrl(site)}
  </p>
 
@@ -172,7 +172,7 @@
  onclick={() => onOpenSite(site)}
  title="Open in browser"
  aria-label="Open {site.name} in browser"
- class="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-violet-500/10 hover:text-violet-400
+ class="rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-violet-500/10 hover:text-violet-600 dark:hover:text-violet-400
  focus:outline-none focus:"
  >
  <ExternalLink class="h-4 w-4" />

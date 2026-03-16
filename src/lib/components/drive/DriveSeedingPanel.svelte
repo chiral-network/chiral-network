@@ -67,8 +67,8 @@
 
  function getProtocolColor(protocol?: string): string {
  return protocol ==='BitTorrent'
- ?'bg-emerald-500/10 text-emerald-400'
- :'bg-violet-900/20 text-violet-400';
+ ?'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+ :'bg-violet-100 dark:bg-violet-900/20 text-violet-600 dark:text-violet-400';
  }
 
  function normalizePriceChi(value: string | number | null | undefined): string {
@@ -167,7 +167,7 @@
  min="0"
  placeholder="Free"
  bind:value={filePrice}
- class="w-28 px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-white placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
+ class="w-28 px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
  />
  </div>
 
@@ -183,7 +183,7 @@
  </div>
 
  {#if normalizePriceChi(filePrice) && !$walletAccount}
- <p class="mt-2 text-xs text-amber-400">
+ <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
  Connect your wallet on the Account page to receive payments.
  </p>
  {/if}
@@ -210,16 +210,16 @@
  <!-- File info -->
  <div class="flex-1 min-w-0">
  <div class="flex items-center gap-2 flex-wrap">
- <span class="text-sm font-medium text-white truncate">{item.name}</span>
+ <span class="text-sm font-medium text-[var(--text-primary)] truncate">{item.name}</span>
  <span class="px-2 py-0.5 text-xs font-medium rounded {getProtocolColor(item.protocol)}">
  {item.protocol ||'WebRTC'}
  </span>
  {#if item.priceChi && item.priceChi !=='0'}
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-500/10 text-amber-400">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-500/10 text-amber-600 dark:text-amber-400">
  {item.priceChi} CHI
  </span>
  {:else}
- <span class="px-2 py-0.5 text-xs font-medium rounded bg-emerald-500/10 text-emerald-400">
+ <span class="px-2 py-0.5 text-xs font-medium rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
  Free
  </span>
  {/if}
@@ -239,7 +239,7 @@
  placeholder="Free"
  value={getPriceDraft(item)}
  oninput={(e) => setPriceDraft(item.id, (e.currentTarget as HTMLInputElement).value)}
- class="w-24 px-2 py-1 text-xs bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
+ class="w-24 px-2 py-1 text-xs bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
  />
  <button
  onclick={() => handleUpdatePrice(item)}
@@ -281,7 +281,7 @@
  </button>
  <button
  onclick={() => handleStopSeeding(item)}
- class="p-1.5 hover:bg-red-900/20 rounded-lg transition"
+ class="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/20 rounded-lg transition"
  title="Stop seeding"
  >
  <X class="w-4 h-4 text-red-500" />
@@ -329,7 +329,7 @@
  <!-- Export torrent -->
  <button
  onclick={() => handleExportTorrent(item)}
- class="flex items-center gap-1.5 text-xs text-violet-400 hover:underline"
+ class="flex items-center gap-1.5 text-xs text-violet-600 dark:text-violet-400 hover:underline"
  >
  <ExternalLink class="w-3.5 h-3.5" />
  Export .torrent file

@@ -50,14 +50,14 @@
 {#if !loadingAgreements && incomingProposals.length > 0}
  <div class="rounded-xl border-2 border-violet-800/60 bg-violet-500/10/50 p-5">
  <div class="flex items-center gap-3 mb-4">
- <div class="relative flex h-9 w-9 items-center justify-center rounded-xl bg-violet-900/20">
- <Send class="w-4.5 h-4.5 text-violet-400" />
- <span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-[9px] font-bold text-white">
+ <div class="relative flex h-9 w-9 items-center justify-center rounded-xl bg-violet-100 dark:bg-violet-900/20">
+ <Send class="w-4.5 h-4.5 text-violet-600 dark:text-violet-400" />
+ <span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-[9px] font-bold text-[var(--text-primary)]">
  {incomingProposals.length}
  </span>
  </div>
  <div>
- <h2 class="font-semibold text-base text-white">Incoming Proposals</h2>
+ <h2 class="font-semibold text-base text-[var(--text-primary)]">Incoming Proposals</h2>
  <p class="text-xs text-[var(--text-secondary)] mt-0.5">
  {incomingProposals.length} pending request{incomingProposals.length !== 1 ?'s' :''} to host files
  </p>
@@ -69,10 +69,10 @@
  <div class="flex items-center justify-between gap-3 p-4 rounded-xl bg-[var(--surface-2)] border border-indigo-100">
  <div class="min-w-0">
  <div class="flex items-center gap-2 flex-wrap">
- <span class="text-sm font-semibold text-white font-mono">
+ <span class="text-sm font-semibold text-[var(--text-primary)] font-mono">
  {formatPeerId(proposal.clientPeerId)}
  </span>
- <span class="text-xs px-2 py-0.5 rounded-full bg-violet-900/20 text-indigo-700 font-medium">
+ <span class="text-xs px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-900/20 text-indigo-700 font-medium">
  {proposal.fileHashes.length} file{proposal.fileHashes.length !== 1 ?'s' :''}
  </span>
  </div>
@@ -98,7 +98,7 @@
  </button>
  <button
  onclick={() => onRespondToAgreement(proposal.agreementId, false)}
- class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-red-500/10 hover:bg-red-900/30 text-red-400 rounded-lg transition-colors
+ class="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded-lg transition-colors
  focus:outline-none focus:"
  >
  <X class="w-3.5 h-3.5" />
@@ -120,11 +120,11 @@
  aria-expanded={showAgreements}
  >
  <div class="flex items-center gap-3">
- <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-900/30">
- <Shield class="w-4.5 h-4.5 text-emerald-400" />
+ <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 dark:bg-emerald-900/30">
+ <Shield class="w-4.5 h-4.5 text-emerald-600 dark:text-emerald-400" />
  </div>
  <div class="text-left">
- <h2 class="font-semibold text-base text-white">My Agreements</h2>
+ <h2 class="font-semibold text-base text-[var(--text-primary)]">My Agreements</h2>
  <p class="text-xs text-[var(--text-secondary)] mt-0.5">
  {#if loadingAgreements}
  Loading...
@@ -178,7 +178,7 @@
  <span class="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wide">
  {isClient ?'Host' :'Client'}
  </span>
- <span class="text-sm font-semibold text-white font-mono">
+ <span class="text-sm font-semibold text-[var(--text-primary)] font-mono">
  {formatPeerId(isClient ? agreement.hostPeerId : agreement.clientPeerId)}
  </span>
  <span class="text-[11px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide {statusColor(agreement.status)}">
@@ -237,16 +237,16 @@
  {:else if agreement.status ==='proposed' && isClient}
  <button
  onclick={() => onRequestCancellation(agreement.agreementId)}
- class="text-xs font-medium px-3 py-1.5 text-red-400 border border-red-800/60 rounded-lg
- hover:bg-red-900/20 transition-colors focus:outline-none focus:"
+ class="text-xs font-medium px-3 py-1.5 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800/60 rounded-lg
+ hover:bg-red-100 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus:"
  >
  Withdraw
  </button>
  {:else if agreement.status ==='accepted' || agreement.status ==='active'}
  <button
  onclick={() => onRequestCancellation(agreement.agreementId)}
- class="text-xs font-medium px-3 py-1.5 text-red-400 border border-red-800/60 rounded-lg
- hover:bg-red-900/20 transition-colors focus:outline-none focus:"
+ class="text-xs font-medium px-3 py-1.5 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800/60 rounded-lg
+ hover:bg-red-100 dark:hover:bg-red-900/20 transition-colors focus:outline-none focus:"
  >
  Request Cancellation
  </button>
@@ -266,10 +266,10 @@
  <div class="rounded-xl border border-[var(--border)]/60 bg-[var(--surface-1)] p-5">
  <div class="flex items-center gap-3 mb-4">
  <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10">
- <HardDrive class="w-4.5 h-4.5 text-emerald-400" />
+ <HardDrive class="w-4.5 h-4.5 text-emerald-600 dark:text-emerald-400" />
  </div>
  <div>
- <h2 class="font-semibold text-base text-white">Files I'm Hosting</h2>
+ <h2 class="font-semibold text-base text-[var(--text-primary)]">Files I'm Hosting</h2>
  <p class="text-xs text-[var(--text-secondary)] mt-0.5">
  {hostedFiles.length} file{hostedFiles.length !== 1 ?'s' :''} being seeded for other peers
  </p>
@@ -296,7 +296,7 @@
  </p>
  </div>
  </div>
- <span class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-full bg-emerald-500/10 text-emerald-400 flex-shrink-0 uppercase tracking-wide">
+ <span class="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex-shrink-0 uppercase tracking-wide">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
  Seeding
  </span>

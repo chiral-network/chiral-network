@@ -66,9 +66,9 @@
  <div class="flex items-center justify-between p-5 pb-4 border-b border-[var(--border)]/60">
  <div class="flex items-center gap-2.5">
  <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10">
- <HardDrive class="w-4 h-4 text-violet-400" />
+ <HardDrive class="w-4 h-4 text-violet-600 dark:text-violet-400" />
  </div>
- <h3 class="text-base font-semibold text-white">Select from Drive</h3>
+ <h3 class="text-base font-semibold text-[var(--text-primary)]">Select from Drive</h3>
  </div>
  <button
  onclick={onClose}

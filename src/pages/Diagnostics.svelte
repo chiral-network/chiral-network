@@ -340,7 +340,7 @@
  switch (level) {
  case'error': return'text-red-500';
  case'warn': return'text-yellow-500';
- case'info': return'text-violet-400';
+ case'info': return'text-violet-600 dark:text-violet-400';
  case'debug': return'text-[var(--text-tertiary)]';
  default: return'text-[var(--text-tertiary)]';
  }
@@ -348,9 +348,9 @@
 
  function levelBg(level: string): string {
  switch (level) {
- case'error': return'bg-red-500/10 text-red-400';
- case'warn': return'bg-yellow-500/10 text-yellow-400';
- case'info': return'bg-violet-900/20 text-violet-400';
+ case'error': return'bg-red-500/10 text-red-600 dark:text-red-400';
+ case'warn': return'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400';
+ case'info': return'bg-violet-100 dark:bg-violet-900/20 text-violet-600 dark:text-violet-400';
  case'debug': return'bg-[var(--surface-2)] text-[var(--text-secondary)]';
  default: return'bg-[var(--surface-2)]';
  }
@@ -359,21 +359,21 @@
  function sourceBg(source: string): string {
  const normalized = source.toLowerCase();
  switch (normalized) {
- case'geth': return'bg-violet-500/10 text-violet-400';
- case'mining': return'bg-amber-900/30 text-amber-300';
- case'dht': return'bg-emerald-900/30 text-emerald-700';
+ case'geth': return'bg-violet-500/10 text-violet-600 dark:text-violet-400';
+ case'mining': return'bg-amber-100 dark:bg-amber-900/30 text-amber-300';
+ case'dht': return'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700';
  case'bootstrap': return'bg-orange-100 text-orange-700';
- case'system': return'bg-violet-500/10 text-violet-400';
+ case'system': return'bg-violet-500/10 text-violet-600 dark:text-violet-400';
  default: return'bg-[var(--surface-2)] text-[var(--text-secondary)]';
  }
  }
 
  function gethLogLineColor(line: string, level: string | null): string {
  if (level ==='ERROR' || line.includes('Fatal') || line.includes('ERROR') || line.includes('error')) {
- return'text-red-400';
+ return'text-red-600 dark:text-red-400';
  }
  if (level ==='WARN' || line.includes('WARN') || line.includes('warn')) {
- return'text-yellow-400';
+ return'text-yellow-600 dark:text-yellow-400';
  }
  if (level ==='DEBUG') {
  return'text-[var(--text-secondary)]';
@@ -433,7 +433,7 @@
  >
  <div class="flex items-center gap-3">
  <div class="p-2 {$networkConnected ?'bg-emerald-500/10' :'bg-[var(--surface-2)]'} rounded-lg">
- <Globe class="w-6 h-6 {$networkConnected ?'text-emerald-400' :'text-[var(--text-secondary)]'}" />
+ <Globe class="w-6 h-6 {$networkConnected ?'text-emerald-600 dark:text-emerald-400' :'text-[var(--text-secondary)]'}" />
  </div>
  <div>
  <h2 class="font-semibold">DHT Diagnostics</h2>
@@ -468,21 +468,21 @@
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
- <p class="text-sm font-bold {dhtHealth.running ?'text-emerald-400' :'text-red-400'}">
+ <p class="text-sm font-bold {dhtHealth.running ?'text-emerald-600 dark:text-emerald-400' :'text-red-600 dark:text-red-400'}">
  {dhtHealth.running ?'Running' :'Stopped'}
  </p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Connected Peers</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{dhtHealth.connectedPeerCount}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{dhtHealth.connectedPeerCount}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Kademlia Peers</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{dhtHealth.kademliaPeers}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{dhtHealth.kademliaPeers}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Shared Files</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{dhtHealth.sharedFiles}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{dhtHealth.sharedFiles}</p>
  </div>
  </div>
 
@@ -509,7 +509,7 @@
  <p class="text-xs text-[var(--text-secondary)] mb-2">Active Protocols ({dhtHealth.protocols.length})</p>
  <div class="flex flex-wrap gap-1.5">
  {#each dhtHealth.protocols as protocol}
- <span class="px-2 py-0.5 bg-violet-900/20 text-violet-400 text-xs rounded-full font-mono">
+ <span class="px-2 py-0.5 bg-violet-100 dark:bg-violet-900/20 text-violet-600 dark:text-violet-400 text-xs rounded-full font-mono">
  {protocol}
  </span>
  {/each}
@@ -525,7 +525,7 @@
  <div class="flex items-center gap-2 text-xs">
  <div class="w-2 h-2 rounded-full {node.reachable ?'bg-green-500' :'bg-red-500'} shrink-0"></div>
  <span class="font-mono break-all">{node.address}</span>
- <span class="{node.reachable ?'text-emerald-400' :'text-red-400'} shrink-0">
+ <span class="{node.reachable ?'text-emerald-600 dark:text-emerald-400' :'text-red-600 dark:text-red-400'} shrink-0">
  {node.reachable ?'Reachable' :'Unreachable'}
  </span>
  </div>
@@ -585,13 +585,13 @@
  <div class="grid grid-cols-3 gap-3">
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
- <p class="text-sm font-bold {bootstrapHealth.isHealthy ?'text-emerald-400' :'text-red-400'}">
+ <p class="text-sm font-bold {bootstrapHealth.isHealthy ?'text-emerald-600 dark:text-emerald-400' :'text-red-600 dark:text-red-400'}">
  {bootstrapHealth.isHealthy ?'Healthy' :'Degraded'}
  </p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Healthy Nodes</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Last Checked</p>
@@ -611,11 +611,11 @@
  </div>
  <div class="text-right shrink-0">
  {#if node.reachable && node.latencyMs}
- <span class="text-emerald-400 tabular-nums">{node.latencyMs}ms</span>
+ <span class="text-emerald-600 dark:text-emerald-400 tabular-nums">{node.latencyMs}ms</span>
  {:else if node.error}
  <span class="text-red-500">{node.error}</span>
  {:else}
- <span class="{node.reachable ?'text-emerald-400' :'text-red-400'}">
+ <span class="{node.reachable ?'text-emerald-600 dark:text-emerald-400' :'text-red-600 dark:text-red-400'}">
  {node.reachable ?'Reachable' :'Unreachable'}
  </span>
  {/if}
@@ -640,7 +640,7 @@
  >
  <div class="flex items-center gap-3">
  <div class="p-2 {gethStatus?.running ?'bg-emerald-500/10' :'bg-[var(--surface-2)]'} rounded-lg">
- <Server class="w-6 h-6 {gethStatus?.running ?'text-emerald-400' :'text-[var(--text-secondary)]'}" />
+ <Server class="w-6 h-6 {gethStatus?.running ?'text-emerald-600 dark:text-emerald-400' :'text-[var(--text-secondary)]'}" />
  </div>
  <div>
  <h2 class="font-semibold">Geth Diagnostics</h2>
@@ -675,13 +675,13 @@
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Installed</p>
- <p class="text-sm font-bold {gethStatus.installed ?'text-emerald-400' :'text-red-400'}">
+ <p class="text-sm font-bold {gethStatus.installed ?'text-emerald-600 dark:text-emerald-400' :'text-red-600 dark:text-red-400'}">
  {gethStatus.installed ?'Yes' :'No'}
  </p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
- <p class="text-sm font-bold {gethStatus.running ?'text-emerald-400' :'text-[var(--text-secondary)]'}">
+ <p class="text-sm font-bold {gethStatus.running ?'text-emerald-600 dark:text-emerald-400' :'text-[var(--text-secondary)]'}">
  {gethStatus.running ?'Running' :'Stopped'}
  </p>
  </div>
@@ -691,23 +691,23 @@
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Chain ID</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.chainId ||'N/A'}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{gethStatus.chainId ||'N/A'}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Current Block</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.currentBlock.toLocaleString()}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{gethStatus.currentBlock.toLocaleString()}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Highest Block</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.highestBlock.toLocaleString()}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{gethStatus.highestBlock.toLocaleString()}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Blockchain Peers</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{gethStatus.peerCount}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{gethStatus.peerCount}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Sync Progress</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">
  {#if gethStatus.syncing && gethStatus.highestBlock > 0}
  {((gethStatus.currentBlock / gethStatus.highestBlock) * 100).toFixed(1)}%
  {:else if gethStatus.running}
@@ -734,8 +734,8 @@
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 {miningStatus?.mining ?'bg-amber-900/30' :'bg-[var(--surface-2)]'} rounded-lg">
- <Pickaxe class="w-6 h-6 {miningStatus?.mining ?'text-amber-400' :'text-[var(--text-secondary)]'}" />
+ <div class="p-2 {miningStatus?.mining ?'bg-amber-100 dark:bg-amber-900/30' :'bg-[var(--surface-2)]'} rounded-lg">
+ <Pickaxe class="w-6 h-6 {miningStatus?.mining ?'text-amber-600 dark:text-amber-400' :'text-[var(--text-secondary)]'}" />
  </div>
  <div>
  <h2 class="font-semibold">Mining Diagnostics</h2>
@@ -770,17 +770,17 @@
  <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Status</p>
- <p class="text-sm font-bold {miningStatus.mining ?'text-amber-400' :'text-[var(--text-secondary)]'}">
+ <p class="text-sm font-bold {miningStatus.mining ?'text-amber-600 dark:text-amber-400' :'text-[var(--text-secondary)]'}">
  {miningStatus.mining ?'Mining' :'Inactive'}
  </p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Hash Rate</p>
- <p class="text-sm font-bold tabular-nums font-mono text-violet-400/90">{formatHashRate(miningStatus.hashRate)}</p>
+ <p class="text-sm font-bold tabular-nums font-mono text-violet-600 dark:text-violet-400/90">{formatHashRate(miningStatus.hashRate)}</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Total Mined</p>
- <p class="text-sm font-bold text-amber-400 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
+ <p class="text-sm font-bold text-amber-600 dark:text-amber-400 tabular-nums">{miningStatus.totalMinedChi.toFixed(4)} CHI</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Total Mined (Wei)</p>
@@ -795,7 +795,7 @@
  </div>
  {:else}
  <div class="p-3 bg-yellow-500/10 rounded-lg">
- <p class="text-xs text-yellow-400">No miner address set. Set your wallet address to receive mining rewards.</p>
+ <p class="text-xs text-yellow-600 dark:text-yellow-400">No miner address set. Set your wallet address to receive mining rewards.</p>
  </div>
  {/if}
  {:else}
@@ -815,7 +815,7 @@
  >
  <div class="flex items-center gap-3">
  <div class="p-2 bg-violet-500/10 rounded-lg">
- <FileText class="w-6 h-6 text-violet-400" />
+ <FileText class="w-6 h-6 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
  <h2 class="font-semibold">Geth Log</h2>
@@ -914,7 +914,7 @@
  >
  <div class="flex items-center gap-3">
  <div class="p-2 bg-violet-500/10 rounded-lg">
- <Terminal class="w-6 h-6 text-violet-400" />
+ <Terminal class="w-6 h-6 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
  <h2 class="font-semibold">Event Logs</h2>
@@ -979,7 +979,7 @@
  </button>
  <button
  onclick={clearLogs}
- class="text-xs px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded transition-colors flex items-center gap-1"
+ class="text-xs px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded transition-colors flex items-center gap-1"
  title="Clear logs"
  >
  <Trash2 class="w-3 h-3" />

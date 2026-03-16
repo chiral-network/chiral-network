@@ -17,26 +17,44 @@
     --color-primary-900: 63 27 120;
     --color-primary-950: 38 15 82;
 
-    /* Surface depth system */
+    /* Light mode surface depth system */
+    --surface-0: #FFFFFF;
+    --surface-1: #F9FAFB;
+    --surface-2: #F3F4F6;
+    --surface-3: #E5E7EB;
+
+    /* Light mode border tokens */
+    --border: #E5E7EB;
+    --border-hover: #D1D5DB;
+
+    /* Light mode text hierarchy */
+    --text-primary: #111827;
+    --text-secondary: #6B7280;
+    --text-tertiary: #9CA3AF;
+  }
+
+  .dark {
+    /* Dark mode surface depth system */
     --surface-0: #09090B;
     --surface-1: #111113;
     --surface-2: #1A1A1E;
     --surface-3: #222226;
 
-    /* Border tokens */
+    /* Dark mode border tokens */
     --border: #1F1F23;
     --border-hover: #2E2E33;
 
-    /* Text hierarchy */
+    /* Dark mode text hierarchy */
     --text-primary: #FAFAFA;
     --text-secondary: #A1A1AA;
     --text-tertiary: #52525B;
   }
 
-  html { color-scheme: dark; }
+  html { color-scheme: light; }
+  html.dark { color-scheme: dark; }
 
   body {
-    @apply text-[#FAFAFA] antialiased;
+    @apply text-[var(--text-primary)] antialiased;
     background-color: var(--surface-0);
   }
 
@@ -44,11 +62,12 @@
 
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.14); }
-  * { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.08) transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-black/10 dark:bg-white/[0.08]; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-black/20 dark:bg-white/[0.14]; }
+  * { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.1) transparent; }
+  .dark * { scrollbar-color: rgba(255, 255, 255, 0.08) transparent; }
 }
 
 @layer utilities {
-  .text-muted-foreground { @apply text-[#A1A1AA]; }
+  .text-muted-foreground { @apply text-[var(--text-secondary)]; }
 }

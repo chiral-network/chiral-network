@@ -133,7 +133,7 @@
  <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-violet-500/10 rounded-lg">
- <Download class="w-6 h-6 text-violet-400" />
+ <Download class="w-6 h-6 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
  <h3 class="font-semibold">Install Geth</h3>
@@ -300,7 +300,7 @@
 
  {#if $miningStatus?.mining}
  <div class="bg-yellow-500/10 border border-yellow-200 rounded-lg p-3 mt-4">
- <div class="flex items-center gap-2 text-yellow-400">
+ <div class="flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
  <Cpu class="w-4 h-4" />
  <span class="text-sm">
  Mining to: <span class="font-mono text-xs">{$miningStatus?.minerAddress ||'Not set'}</span>

@@ -61,7 +61,7 @@
  <!-- Icon-only nav (md to xl) -->
  <div class="hidden md:flex xl:hidden items-center gap-0.5 shrink-0">
  {#each navItems as item}
- <button onclick={() => navigate(item.path)} class="flex items-center px-2.5 py-1.5 rounded-lg transition text-sm {currentPage === item.path ?'bg-[var(--surface-2)] text-white' :'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)]/50'}" title={item.label}>
+ <button onclick={() => navigate(item.path)} class="flex items-center px-2.5 py-1.5 rounded-lg transition text-sm {currentPage === item.path ?'bg-[var(--surface-2)] text-[var(--text-primary)]' :'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'}" title={item.label}>
  <svelte:component this={item.icon} class="w-4 h-4" />
  </button>
  {/each}
@@ -69,19 +69,19 @@
  <!-- Full nav (xl+) -->
  <div class="hidden xl:flex items-center gap-0.5 shrink-0">
  {#each visibleItems as item}
- <button onclick={() => navigate(item.path)} class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap {currentPage === item.path ?'bg-[var(--surface-2)] text-white font-medium' :'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)]/50'}" title={item.label}>
+ <button onclick={() => navigate(item.path)} class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap {currentPage === item.path ?'bg-[var(--surface-2)] text-[var(--text-primary)] font-medium' :'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'}" title={item.label}>
  <svelte:component this={item.icon} class="w-4 h-4 shrink-0" /><span>{item.label}</span>
  </button>
  {/each}
  {#if moreItems.length > 0}
  <div class="relative more-menu-container">
- <button bind:this={moreButtonEl} onclick={() => moreMenuOpen = !moreMenuOpen} class="flex items-center gap-1 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap {isMoreActive ?'bg-[var(--surface-2)] text-white font-medium' :'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)]/50'}" title="More">
+ <button bind:this={moreButtonEl} onclick={() => moreMenuOpen = !moreMenuOpen} class="flex items-center gap-1 px-3 py-1.5 rounded-lg transition text-sm whitespace-nowrap {isMoreActive ?'bg-[var(--surface-2)] text-[var(--text-primary)] font-medium' :'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'}" title="More">
  <span>More</span><ChevronDown class="w-4 h-4 transition-transform {moreMenuOpen ?'rotate-180' :''}" />
  </button>
  {#if moreMenuOpen}
  <div class="fixed w-48 overflow-y-auto bg-[var(--surface-1)] rounded-lg border border-[var(--border)] py-1 z-50" style="left: {moreMenuLeft}px; top: {moreMenuTop}px; max-height: {moreMenuMaxHeight}px;">
  {#each moreItems as item}
- <button onclick={() => navigate(item.path)} class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition {currentPage === item.path ?'text-white bg-[var(--surface-2)]' :'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)]/50'}">
+ <button onclick={() => navigate(item.path)} class="flex items-center gap-2.5 w-full px-3 py-2 text-sm transition {currentPage === item.path ?'text-[var(--text-primary)] bg-[var(--surface-2)]' :'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'}">
  <svelte:component this={item.icon} class="w-4 h-4" /><span>{item.label}</span>
  </button>
  {/each}
@@ -91,14 +91,14 @@
  {/if}
  </div>
  <div class="flex items-center gap-2 sm:gap-3 shrink-0">
- <button onclick={handleLogout} class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)] rounded-lg transition text-sm" title="Logout">
+ <button onclick={handleLogout} class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)] rounded-lg transition text-sm" title="Logout">
  <LogOut class="w-4 h-4" /><span class="hidden lg:inline">Logout</span>
  </button>
  <div class="flex items-center gap-1.5 px-2 py-1">
  <div class="w-2 h-2 rounded-full {$networkConnected ?'bg-emerald-400' :'bg-red-400'}"></div>
- <span class="text-xs font-medium hidden sm:inline {$networkConnected ?'text-emerald-400' :'text-red-400'}">{$networkConnected ?'Connected' :'Offline'}</span>
+ <span class="text-xs font-medium hidden sm:inline {$networkConnected ?'text-emerald-600 dark:text-emerald-400' :'text-red-600 dark:text-red-400'}">{$networkConnected ?'Connected' :'Offline'}</span>
  </div>
- <button onclick={() => mobileMenuOpen = !mobileMenuOpen} class="md:hidden p-1.5 text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)] rounded-lg transition">
+ <button onclick={() => mobileMenuOpen = !mobileMenuOpen} class="md:hidden p-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)] rounded-lg transition">
  {#if mobileMenuOpen}<X class="w-5 h-5" />{:else}<Menu class="w-5 h-5" />{/if}
  </button>
  </div>
@@ -108,12 +108,12 @@
  <div class="md:hidden border-t border-[var(--border)] bg-[var(--surface-1)] max-h-[calc(100vh-3.5rem)] overflow-y-auto">
  <div class="px-3 py-2 space-y-0.5">
  {#each navItems as item}
- <button onclick={() => navigate(item.path)} class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm {currentPage === item.path ?'text-white bg-[var(--surface-2)] font-medium' :'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)]/50'}">
+ <button onclick={() => navigate(item.path)} class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm {currentPage === item.path ?'text-[var(--text-primary)] bg-[var(--surface-2)] font-medium' :'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'}">
  <svelte:component this={item.icon} class="w-4 h-4" /><span>{item.label}</span>
  </button>
  {/each}
  <hr class="border-[var(--border)] my-2" />
- <button onclick={handleLogout} class="flex items-center gap-3 w-full px-3 py-2.5 text-[var(--text-secondary)] hover:text-red-400 hover:bg-red-500/10 rounded-lg transition text-sm">
+ <button onclick={handleLogout} class="flex items-center gap-3 w-full px-3 py-2.5 text-[var(--text-secondary)] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/10 rounded-lg transition text-sm">
  <LogOut class="w-4 h-4" /><span>Logout</span>
  </button>
  </div>

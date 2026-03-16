@@ -140,7 +140,7 @@
  <div class="p-6 mb-6">
  <div class="flex items-center gap-3 mb-6">
  <div class="p-2 bg-violet-500/10 rounded-lg">
- <Palette class="w-5 h-5 text-violet-400" />
+ <Palette class="w-5 h-5 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
  <h2 class="font-semibold text-lg">Appearance</h2>
@@ -163,11 +163,11 @@
  >
  {#if $settings.theme === option.value}
  <div class="absolute top-2 right-2">
- <Check class="w-4 h-4 text-violet-400" />
+ <Check class="w-4 h-4 text-violet-600 dark:text-violet-400" />
  </div>
  {/if}
- <Icon class="w-6 h-6 {$settings.theme === option.value ?'text-violet-400' :'text-[var(--text-secondary)]'}" />
- <span class="text-sm font-medium {$settings.theme === option.value ?'text-violet-400' :'text-[var(--text-secondary)]'}">
+ <Icon class="w-6 h-6 {$settings.theme === option.value ?'text-violet-600 dark:text-violet-400' :'text-[var(--text-secondary)]'}" />
+ <span class="text-sm font-medium {$settings.theme === option.value ?'text-violet-600 dark:text-violet-400' :'text-[var(--text-secondary)]'}">
  {option.label}
  </span>
  </button>
@@ -210,20 +210,20 @@
  <div class="flex items-center gap-3">
  <LayoutGrid class="w-5 h-5 text-[var(--text-secondary)]" />
  <div>
- <p class="font-medium text-white">Compact Mode</p>
+ <p class="font-medium text-[var(--text-primary)]">Compact Mode</p>
  <p class="text-sm text-[var(--text-secondary)]">Use smaller spacing and font sizes</p>
  </div>
  </div>
  <button
  onclick={toggleCompactMode}
  class="relative w-12 h-6 rounded-full transition-colors
- {$settings.compactMode ?'bg-violet-600' :'bg-[var(--surface-0)]'}"
+ {$settings.compactMode ?'bg-violet-600' :'bg-[var(--surface-3)]'}"
  role="switch"
  aria-checked={$settings.compactMode}
  aria-label="Toggle compact mode"
  >
  <span
- class="absolute top-0.5 left-0.5 w-5 h-5 bg-[var(--surface-0)] rounded-full shadow transition-transform
+ class="absolute top-0.5 left-0.5 w-5 h-5 bg-white dark:bg-[var(--surface-0)] rounded-full shadow transition-transform
  {$settings.compactMode ?'translate-x-6' :'translate-x-0'}"
  ></span>
  </button>
@@ -244,11 +244,11 @@
  >
  {#if $settings.navStyle === option.value}
  <div class="absolute top-2 right-2">
- <Check class="w-4 h-4 text-violet-400" />
+ <Check class="w-4 h-4 text-violet-600 dark:text-violet-400" />
  </div>
  {/if}
- <Icon class="w-6 h-6 {$settings.navStyle === option.value ?'text-violet-400' :'text-[var(--text-secondary)]'}" />
- <span class="text-sm font-medium {$settings.navStyle === option.value ?'text-violet-400' :'text-[var(--text-secondary)]'}">
+ <Icon class="w-6 h-6 {$settings.navStyle === option.value ?'text-violet-600 dark:text-violet-400' :'text-[var(--text-secondary)]'}" />
+ <span class="text-sm font-medium {$settings.navStyle === option.value ?'text-violet-600 dark:text-violet-400' :'text-[var(--text-secondary)]'}">
  {option.label}
  </span>
  </button>
@@ -263,18 +263,18 @@
  <div class="flex items-center gap-3 mb-3">
  <div class="w-10 h-10 rounded-full bg-violet-600"></div>
  <div>
- <p class="font-medium text-white">Sample User</p>
+ <p class="font-medium text-[var(--text-primary)]">Sample User</p>
  <p class="text-sm text-[var(--text-secondary)]">0x1234...5678</p>
  </div>
  </div>
  <div class="grid grid-cols-2 gap-3">
  <div class="p-3 rounded-lg bg-[var(--surface-2)] border border-[var(--border)]/60">
  <p class="text-xs text-[var(--text-secondary)]">Balance</p>
- <p class="text-lg font-bold text-white tabular-nums">100.00 CHI</p>
+ <p class="text-lg font-bold text-[var(--text-primary)] tabular-nums">100.00 CHI</p>
  </div>
  <div class="p-3 rounded-lg bg-[var(--surface-2)] border border-[var(--border)]/60">
  <p class="text-xs text-[var(--text-secondary)]">Peers</p>
- <p class="text-lg font-bold text-white">12</p>
+ <p class="text-lg font-bold text-[var(--text-primary)]">12</p>
  </div>
  </div>
  </div>
@@ -286,7 +286,7 @@
  <div class="p-6 mb-6">
  <div class="flex items-center gap-3 mb-6">
  <div class="p-2 bg-violet-500/10 rounded-lg">
- <HardDrive class="w-5 h-5 text-violet-400" />
+ <HardDrive class="w-5 h-5 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
  <h2 class="font-semibold text-lg">Storage</h2>
@@ -335,7 +335,7 @@
  <div class="p-6 mb-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-amber-500/10 rounded-lg">
- <Bell class="w-5 h-5 text-amber-400" />
+ <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
  </div>
  <div>
  <h2 class="font-semibold text-lg">Notifications</h2>
@@ -354,9 +354,9 @@
  >
  <span class="text-sm text-[var(--text-secondary)] text-left">{option.label}</span>
  <div class="relative w-9 h-5 rounded-full shrink-0 transition-colors
- {$settings.notifications?.[option.key] ?'bg-violet-600' :'bg-[var(--surface-0)]'}">
+ {$settings.notifications?.[option.key] ?'bg-violet-600' :'bg-[var(--surface-3)]'}">
  <span
- class="absolute top-0.5 left-0.5 w-4 h-4 bg-[var(--surface-0)] rounded-full shadow transition-transform
+ class="absolute top-0.5 left-0.5 w-4 h-4 bg-white dark:bg-[var(--surface-0)] rounded-full shadow transition-transform
  {$settings.notifications?.[option.key] ?'translate-x-4' :'translate-x-0'}"
  ></span>
  </div>
@@ -369,12 +369,12 @@
  <div class="p-6">
  <div class="flex items-center justify-between">
  <div>
- <h3 class="font-semibold text-white">Reset Settings</h3>
+ <h3 class="font-semibold text-[var(--text-primary)]">Reset Settings</h3>
  <p class="text-sm text-[var(--text-secondary)]">Restore all settings to their default values</p>
  </div>
  <button
  onclick={resetSettings}
- class="flex items-center gap-2 px-4 py-2 text-red-400 border border-red-800 rounded-lg hover:bg-red-900/30 transition-colors focus:outline-none focus:"
+ class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 border border-red-300 dark:border-red-800 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors focus:outline-none focus:"
  >
  <RotateCcw class="w-4 h-4" />
  Reset

@@ -91,7 +91,7 @@ export function timeRemaining(expiresAt: number | undefined): string {
 
 export function statusColor(status: string): string {
   switch (status) {
-    case 'proposed': return 'bg-violet-500/10 text-violet-400';
+    case 'proposed': return 'bg-violet-500/10 text-violet-600 dark:text-violet-400';
     case 'accepted': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-emerald-400';
     case 'active': return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400';
     case 'rejected': return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';

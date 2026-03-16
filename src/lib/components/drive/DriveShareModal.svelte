@@ -86,7 +86,7 @@
  onclick={(e) => e.stopPropagation()}
  >
  <div class="flex items-center justify-between mb-4">
- <h3 class="text-lg font-semibold text-white">Share"{item.name}"</h3>
+ <h3 class="text-lg font-semibold text-[var(--text-primary)]">Share"{item.name}"</h3>
  <button onclick={onClose} class="p-1 hover:bg-[var(--surface-2)] rounded-lg transition">
  <X class="w-5 h-5 text-[var(--text-secondary)]" />
  </button>
@@ -108,7 +108,7 @@
  disabled={toggling}
  class="px-3 py-1.5 text-sm font-medium rounded-lg transition disabled:opacity-50 {isItemPublic
  ?'bg-orange-100 text-orange-700 hover:bg-orange-200'
- :'bg-emerald-500/10 text-emerald-400 hover:bg-green-200'}"
+ :'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-green-200'}"
  >
  {isItemPublic ?'Make Private' :'Make Public'}
  </button>
@@ -118,7 +118,7 @@
  <div class="space-y-3 mb-6">
  <p class="text-sm text-[var(--text-secondary)]">
  {#if hasPrice}
- Share at <strong class="text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
+ Share at <strong class="text-emerald-600 dark:text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
  {:else}
  Share for free. Use"Edit Price" from the right-click menu to set a price.
  {/if}
@@ -139,7 +139,7 @@
  </button>
 
  {#if !isItemPublic}
- <div class="p-3 bg-yellow-500/10 border border-yellow-800 rounded-lg">
+ <div class="p-3 bg-yellow-500/10 border border-yellow-300 dark:border-yellow-800 rounded-lg">
  <p class="text-xs text-yellow-300">
  This file is currently private. Share links won't work until you make it public.
  </p>
@@ -149,7 +149,7 @@
  {#if justCreatedUrl}
  <div class="flex items-center gap-2 p-3 bg-emerald-500/10 border border-green-800 rounded-lg">
  <Check class="w-4 h-4 text-green-500 shrink-0" />
- <code class="flex-1 text-xs font-mono text-emerald-400 break-all select-all">{justCreatedUrl}</code>
+ <code class="flex-1 text-xs font-mono text-emerald-600 dark:text-emerald-400 break-all select-all">{justCreatedUrl}</code>
  <button
  onclick={async () => {
  try {
@@ -162,7 +162,7 @@
  class="p-1.5 hover:bg-green-900/30 rounded transition shrink-0"
  title="Copy link"
  >
- <Copy class="w-4 h-4 text-emerald-400" />
+ <Copy class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
  </button>
  </div>
  {/if}
@@ -211,7 +211,7 @@
  </button>
  <button
  onclick={() => revokeLink(share)}
- class="p-1.5 hover:bg-red-900/30 rounded transition"
+ class="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded transition"
  title="Revoke link"
  >
  <Trash2 class="w-4 h-4 text-red-500" />
@@ -223,10 +223,10 @@
  {/if}
 
  <div class="mt-4 p-3 bg-violet-500/10 rounded-lg">
- <p class="text-xs text-violet-300">
+ <p class="text-xs text-violet-700 dark:text-violet-300">
  <strong>File:</strong> {item.name}
  {#if item.size}
- <span class="ml-2 text-violet-400">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
+ <span class="ml-2 text-violet-600 dark:text-violet-400">({(item.size / (1024 * 1024)).toFixed(1)} MB)</span>
  {/if}
  </p>
  </div>

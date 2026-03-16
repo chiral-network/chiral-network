@@ -49,26 +49,26 @@
  {@const Icon = getFileIcon(item.name)}
  <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)} shrink-0" />
  {/if}
- <span class="text-sm font-medium text-white truncate">{item.name}</span>
+ <span class="text-sm font-medium text-[var(--text-primary)] truncate">{item.name}</span>
  {#if item.starred}
  <Star class="w-3.5 h-3.5 text-yellow-500 fill-yellow-500 shrink-0" />
  {/if}
  {#if item.shared}
  {#if item.isPublic}
- <Link class="w-3.5 h-3.5 text-violet-400 shrink-0" />
+ <Link class="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 shrink-0" />
  {:else}
  <EyeOff class="w-3.5 h-3.5 text-orange-500 shrink-0" />
  {/if}
  {/if}
  {#if item.seeding && $networkConnected}
- <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-500/10 text-emerald-400 shrink-0">
+ <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
  Seeding{#if item.protocol} ({item.protocol}){/if}
  </span>
  {/if}
  {#if getPriceLabel(item)}
  {@const priceLabel = getPriceLabel(item)}
- <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/10 text-amber-400 shrink-0">
+ <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
  {priceLabel}
  </span>
  {/if}

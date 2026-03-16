@@ -44,7 +44,7 @@
  {/if}
  {#if item.shared}
  {#if item.isPublic}
- <Link class="w-3.5 h-3.5 text-violet-400" />
+ <Link class="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
  {:else}
  <EyeOff class="w-3.5 h-3.5 text-orange-500" />
  {/if}
@@ -69,7 +69,7 @@
 
  <!-- Name & metadata -->
  <div class="text-center">
- <p class="text-sm font-medium text-white truncate" title={item.name}>
+ <p class="text-sm font-medium text-[var(--text-primary)] truncate" title={item.name}>
  {item.name}
  </p>
  {#if item.type ==='file' && item.size}
@@ -82,7 +82,7 @@
  {#if item.seeding && $networkConnected}
  <div class="flex items-center justify-center gap-1 mt-1">
  <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
- <span class="text-[10px] text-emerald-400 font-medium">Seeding</span>
+ <span class="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Seeding</span>
  {#if item.protocol}
  <span class="text-[10px] text-[var(--text-secondary)]">({item.protocol})</span>
  {/if}

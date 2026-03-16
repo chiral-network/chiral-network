@@ -557,7 +557,7 @@
  case'failed': return'text-red-600';
  case'declined': return'text-[var(--text-secondary)]';
  case'pending': return'text-yellow-600';
- case'accepted': return'text-violet-400';
+ case'accepted': return'text-violet-600 dark:text-violet-400';
  default: return'text-[var(--text-secondary)]';
  }
  }
@@ -569,14 +569,14 @@
  <!-- Header -->
  <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
  <div class="space-y-1">
- <h1 class="text-2xl font-bold tracking-tight text-white">ChiralDrop</h1>
+ <h1 class="text-2xl font-bold tracking-tight text-[var(--text-primary)]">ChiralDrop</h1>
  <p class="text-sm sm:text-base text-[var(--text-secondary)]">
  Your alias:
  <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
  </p>
  </div>
  <div class="flex flex-wrap items-center gap-2 sm:gap-3">
- <div class="inline-flex items-center rounded-full border border-violet-500/20/70 bg-violet-500/10/80 px-3 py-1 text-xs font-medium text-violet-400">
+ <div class="inline-flex items-center rounded-full border border-violet-500/20/70 bg-violet-500/10/80 px-3 py-1 text-xs font-medium text-violet-600 dark:text-violet-400">
  {$nearbyPeers.length} peers online
  </div>
  {#if $incomingPendingTransfers.length > 0}
@@ -661,7 +661,7 @@
  <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--surface-2)] text-[var(--text-secondary)]">
  <User class="h-6 w-6" />
  </div>
- <p class="text-lg font-semibold text-white">No nearby users found</p>
+ <p class="text-lg font-semibold text-[var(--text-primary)]">No nearby users found</p>
  <p class="mt-1 text-sm text-[var(--text-secondary)]">Connect to the network to discover peers</p>
  </div>
  </div>
@@ -684,7 +684,7 @@
  <!-- Incoming Transfer Requests -->
  {#if $incomingPendingTransfers.length > 0}
  <div class="rounded-xl border border-amber-400/20 bg-[var(--surface-2)] p-4">
- <h3 class="mb-3 font-semibold text-white">Incoming Transfers</h3>
+ <h3 class="mb-3 font-semibold text-[var(--text-primary)]">Incoming Transfers</h3>
  <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
  {#each $incomingPendingTransfers as transfer (transfer.id)}
  <div class="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
@@ -696,7 +696,7 @@
  <User class="h-4 w-4 text-white" />
  </div>
  <div class="min-w-0 flex-1">
- <p class="truncate text-sm font-medium text-white">{transfer.fileName}</p>
+ <p class="truncate text-sm font-medium text-[var(--text-primary)]">{transfer.fileName}</p>
  <p class="text-xs text-[var(--text-secondary)]">
  From {transfer.fromAlias.displayName} - {formatFileSize(transfer.fileSize)}
  </p>
@@ -711,7 +711,7 @@
  <div class="mt-3 flex gap-2">
  <button
  onclick={() => handleAccept(transfer)}
- class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 focus:outline-none"
+ class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-[var(--text-primary)] transition hover:bg-emerald-600 focus:outline-none"
  >
  <span class="inline-flex items-center justify-center gap-1">
  <Check class="h-4 w-4" />
@@ -722,7 +722,7 @@
  </button>
  <button
  onclick={() => handleDecline(transfer)}
- class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600 focus:outline-none"
+ class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-[var(--text-primary)] transition hover:bg-rose-600 focus:outline-none"
  >
  <span class="inline-flex items-center justify-center gap-1">
  <X class="h-4 w-4" />
@@ -740,7 +740,7 @@
  {#if $selectedPeer}
  <div class="rounded-xl border border-[var(--border)]/60 bg-[var(--surface-2)] p-4">
  <div class="mb-4 flex items-center justify-between">
- <h3 class="font-semibold text-white">Send to Peer</h3>
+ <h3 class="font-semibold text-[var(--text-primary)]">Send to Peer</h3>
  <button
  onclick={() => selectPeer(null)}
  class="rounded-lg p-1 transition hover:bg-[var(--surface-2)]"
@@ -756,7 +756,7 @@
  <User class="h-6 w-6 text-white" />
  </div>
  <div class="min-w-0">
- <p class="truncate font-medium text-white">{$selectedPeer.alias.displayName}</p>
+ <p class="truncate font-medium text-[var(--text-primary)]">{$selectedPeer.alias.displayName}</p>
  <p class="truncate text-xs text-[var(--text-secondary)]">{$selectedPeer.peerId}</p>
  </div>
  </div>
@@ -773,7 +773,7 @@
  min="0"
  placeholder="0 (free)"
  bind:value={sendPrice}
- class="flex-1 rounded-lg border border-[var(--border)]/60 bg-[var(--surface-2)] px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-500/30 focus:"
+ class="flex-1 rounded-lg border border-[var(--border)]/60 bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none transition focus:border-cyan-500/30 focus:"
  />
  </div>
  {#if sendPrice && parseFloat(sendPrice) > 0 && !$walletAccount}
@@ -782,7 +782,7 @@
  </div>
  <button
  onclick={handleSendClick}
- class="w-full rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500 focus:outline-none focus:border-violet-500/50"
+ class="w-full rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-[var(--text-primary)] transition hover:bg-violet-500 focus:outline-none focus:border-violet-500/50"
  >
  <span class="inline-flex items-center justify-center gap-2">
  <Send class="h-4 w-4" />
@@ -802,7 +802,7 @@
  <!-- Transaction History -->
  {#if showHistory}
  <div class="flex min-h-0 flex-1 flex-col rounded-xl border border-[var(--border)]/60 bg-[var(--surface-2)] p-4">
- <h3 class="mb-3 font-semibold text-white">Transaction History</h3>
+ <h3 class="mb-3 font-semibold text-[var(--text-primary)]">Transaction History</h3>
  <div class="flex-1 space-y-2 overflow-y-auto pr-1">
  {#if $transferHistory.length === 0}
  <p class="py-4 text-center text-sm text-[var(--text-secondary)]">No transfers yet</p>
@@ -812,7 +812,7 @@
  <div class="flex items-start gap-2.5">
  <FileIcon class="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--text-secondary)]" />
  <div class="min-w-0 flex-1">
- <p class="truncate text-sm font-medium text-white">{transfer.fileName}</p>
+ <p class="truncate text-sm font-medium text-[var(--text-primary)]">{transfer.fileName}</p>
  <p class="text-xs text-[var(--text-secondary)]">
  {transfer.direction ==='incoming' ?'From' :'To'} {transfer.direction ==='incoming' ? transfer.fromAlias.displayName : transfer.toAlias.displayName}
  </p>
@@ -820,7 +820,7 @@
  <span class="text-xs capitalize {getStatusColor(transfer.status)}">{transfer.status}</span>
  <span class="text-xs text-[var(--text-secondary)]">{formatFileSize(transfer.fileSize)}</span>
  {#if transfer.priceWei && transfer.priceWei !=='0'}
- <span class="text-xs text-amber-400">{formatPriceWei(transfer.priceWei)}</span>
+ <span class="text-xs text-amber-600 dark:text-amber-400">{formatPriceWei(transfer.priceWei)}</span>
  {/if}
  </div>
  {#if transfer.paymentTxHash}

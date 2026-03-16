@@ -395,19 +395,19 @@
  function getTxTypeStyle(tx: Transaction): { bgColor: string; iconColor: string } {
  switch (tx.txType) {
  case'speed_tier_payment':
- return { bgColor:'bg-amber-900/30', iconColor:'text-amber-400' };
+ return { bgColor:'bg-amber-100 dark:bg-amber-900/30', iconColor:'text-amber-600 dark:text-amber-400' };
  case'file_payment':
- return { bgColor:'bg-violet-500/10', iconColor:'text-violet-400' };
+ return { bgColor:'bg-violet-500/10', iconColor:'text-violet-600 dark:text-violet-400' };
  case'file_sale':
- return { bgColor:'bg-emerald-900/30', iconColor:'text-emerald-400' };
+ return { bgColor:'bg-emerald-100 dark:bg-emerald-900/30', iconColor:'text-emerald-600 dark:text-emerald-400' };
  case'receive':
- return { bgColor:'bg-emerald-500/10', iconColor:'text-emerald-400' };
+ return { bgColor:'bg-emerald-500/10', iconColor:'text-emerald-600 dark:text-emerald-400' };
  case'send':
- return { bgColor:'bg-red-500/10', iconColor:'text-red-400' };
+ return { bgColor:'bg-red-500/10', iconColor:'text-red-600 dark:text-red-400' };
  default:
  return isIncoming(tx)
- ? { bgColor:'bg-emerald-500/10', iconColor:'text-emerald-400' }
- : { bgColor:'bg-red-500/10', iconColor:'text-red-400' };
+ ? { bgColor:'bg-emerald-500/10', iconColor:'text-emerald-600 dark:text-emerald-400' }
+ : { bgColor:'bg-red-500/10', iconColor:'text-red-600 dark:text-red-400' };
  }
  }
 
@@ -435,7 +435,7 @@
  </div>
  <button
  onclick={() => showLogoutModal = true}
- class="flex items-center gap-2 px-4 py-2 text-red-400 hover:bg-red-900/30 rounded-lg transition-colors focus:outline-none focus:"
+ class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg transition-colors focus:outline-none focus:"
  >
  <LogOut class="w-5 h-5" />
  Logout
@@ -449,40 +449,40 @@
  <div class="bg-violet-500 p-6 text-white">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-3 bg-[var(--surface-0)]/15 rounded-full">
+ <div class="p-3 bg-white/15 rounded-full">
  <Wallet class="w-8 h-8" />
  </div>
  <div>
  <h2 class="text-xl font-normal">Chiral Wallet</h2>
- <p class="text-[var(--text-secondary)] text-sm">Your decentralized identity</p>
+ <p class="text-white/70 text-sm">Your decentralized identity</p>
  </div>
  </div>
- <span class="px-3 py-1 bg-[var(--surface-0)]/15 rounded-full text-sm">
+ <span class="px-3 py-1 bg-white/15 rounded-full text-sm">
  {$networkConnected ?'Connected' :'Disconnected'}
  </span>
  </div>
 
  <!-- Balance Display -->
- <div class="bg-[var(--surface-0)]/10 rounded-xl p-4 mt-4">
+ <div class="bg-white/10 rounded-xl p-4 mt-4">
  <div class="flex items-center justify-between">
  <div>
- <p class="text-[var(--text-secondary)] text-sm mb-1">Balance</p>
+ <p class="text-white/70 text-sm mb-1">Balance</p>
  <div class="flex items-baseline gap-2">
  {#if isLoadingBalance}
  <RefreshCw class="w-6 h-6 animate-spin" />
  {:else if balance ==='--'}
- <span class="text-xl font-normal text-[var(--text-secondary)]">--</span>
- <span class="text-[var(--text-secondary)] text-sm">Connecting to network...</span>
+ <span class="text-xl font-normal text-white/70">--</span>
+ <span class="text-white/70 text-sm">Connecting to network...</span>
  {:else}
  <span class="text-3xl font-normal tabular-nums">{formatBalance(balance)}</span>
- <span class="text-[var(--text-secondary)]">CHI</span>
+ <span class="text-white/70">CHI</span>
  {/if}
  </div>
  </div>
  <button
  onclick={loadBalance}
  disabled={isLoadingBalance}
- class="p-2 hover:bg-[var(--surface-2)]/10 rounded-lg transition-colors disabled:opacity-50"
+ class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
  title="Refresh balance"
  >
  <RefreshCw class="w-5 h-5 {isLoadingBalance ?'animate-spin' :''}" />
@@ -514,7 +514,7 @@
  title="Copy address"
  >
  {#if copied ==='address'}
- <Check class="w-5 h-5 text-emerald-400" />
+ <Check class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
  {:else}
  <Copy class="w-5 h-5 text-[var(--text-secondary)]" />
  {/if}
@@ -531,10 +531,10 @@
  </span>
  </div>
 
- <div class="bg-yellow-500/10 border border-yellow-800 rounded-lg p-3 mb-3">
+ <div class="bg-yellow-500/10 border border-yellow-300 dark:border-yellow-800 rounded-lg p-3 mb-3">
  <div class="flex items-start gap-2">
- <AlertTriangle class="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
- <p class="text-sm text-yellow-400">
+ <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+ <p class="text-sm text-yellow-600 dark:text-yellow-400">
  <strong>Security Warning:</strong> Never share your private key with anyone. Anyone with your private key can access your wallet and all its contents.
  </p>
  </div>
@@ -566,7 +566,7 @@
  title="Copy private key"
  >
  {#if copied ==='privateKey'}
- <Check class="w-5 h-5 text-emerald-400" />
+ <Check class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
  {:else}
  <Copy class="w-5 h-5 text-[var(--text-secondary)]" />
  {/if}
@@ -580,7 +580,7 @@
  <div class="p-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-violet-500/10 rounded-lg">
- <Send class="w-6 h-6 text-violet-400" />
+ <Send class="w-6 h-6 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
  <h3 class="font-semibold">Send CHI</h3>
@@ -605,7 +605,7 @@
  }
  showAddRecipient = true;
  }}
- class="flex items-center gap-1 text-xs text-violet-400 hover:text-violet-400"
+ class="flex items-center gap-1 text-xs text-violet-600 dark:text-violet-400 hover:text-violet-600 dark:hover:text-violet-400"
  >
  <UserPlus class="w-3.5 h-3.5" />
  Save
@@ -662,7 +662,7 @@
  />
  <button
  onclick={() => sendAmount = balance}
- class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-violet-400 hover:text-violet-400 font-medium"
+ class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-violet-600 dark:text-violet-400 hover:text-violet-600 dark:hover:text-violet-400 font-medium"
  >
  MAX
  </button>
@@ -691,7 +691,7 @@
  onkeydown={(e) => { if (e.key ==='Enter') selectRecipient(r); }}
  >
  <div class="w-8 h-8 rounded-full bg-violet-500/10 flex items-center justify-center flex-shrink-0">
- <span class="text-sm font-semibold text-violet-400">{r.label.charAt(0).toUpperCase()}</span>
+ <span class="text-sm font-semibold text-violet-600 dark:text-violet-400">{r.label.charAt(0).toUpperCase()}</span>
  </div>
  <div class="flex-1 min-w-0">
  <p class="text-sm font-medium truncate">{r.label}</p>
@@ -699,7 +699,7 @@
  </div>
  <button
  onclick={(e) => { e.stopPropagation(); deleteRecipient(r.id); }}
- class="p-1.5 rounded hover:bg-red-900/30 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+ class="p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/30 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
  title="Remove recipient"
  >
  <Trash2 class="w-4 h-4 text-[var(--text-secondary)] hover:text-red-500" />
@@ -714,7 +714,7 @@
  <!-- Confirmation -->
  <div class="space-y-4">
  <div class="flex items-center gap-2 mb-2">
- <AlertTriangle class="w-5 h-5 text-yellow-400" />
+ <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400" />
  <span class="font-semibold">Confirm Transaction</span>
  </div>
 
@@ -736,12 +736,12 @@
  </div>
  <div class="flex justify-between border-t border-[var(--border)]/60 pt-3">
  <span class="text-sm text-[var(--text-secondary)]">Amount</span>
- <span class="text-lg font-bold text-violet-400">{sendAmount} CHI</span>
+ <span class="text-lg font-bold text-violet-600 dark:text-violet-400">{sendAmount} CHI</span>
  </div>
  </div>
 
- <div class="bg-yellow-500/10 border border-yellow-800 rounded-lg p-3">
- <p class="text-sm text-yellow-400">
+ <div class="bg-yellow-500/10 border border-yellow-300 dark:border-yellow-800 rounded-lg p-3">
+ <p class="text-sm text-yellow-600 dark:text-yellow-400">
  <strong>Warning:</strong> This transaction cannot be reversed.
  </p>
  </div>
@@ -777,8 +777,8 @@
  <div class="p-6">
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
- <div class="p-2 bg-violet-900/20 rounded-lg">
- <History class="w-6 h-6 text-violet-400" />
+ <div class="p-2 bg-violet-100 dark:bg-violet-900/20 rounded-lg">
+ <History class="w-6 h-6 text-violet-600 dark:text-violet-400" />
  </div>
  <div>
  <h3 class="font-semibold">Transaction History</h3>
@@ -834,7 +834,7 @@
  </span>
  <span class="text-xs px-2 py-0.5 rounded-full {
  tx.txType ==='speed_tier_payment'
- ?'bg-amber-500/10 text-amber-400'
+ ?'bg-amber-500/10 text-amber-600 dark:text-amber-400'
  : tx.txType ==='file_payment'
  ?'bg-violet-500/10 text-purple-800'
  : tx.txType ==='file_sale'
@@ -867,11 +867,11 @@
  <!-- File info for download payments -->
  {#if tx.fileName}
  <div class="flex items-center gap-2 p-2 bg-amber-50 rounded-lg">
- <FileIcon class="w-4 h-4 text-amber-400 flex-shrink-0" />
+ <FileIcon class="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
  <div class="min-w-0">
  <p class="text-sm font-medium truncate">{tx.fileName}</p>
  {#if tx.speedTier}
- <p class="text-xs text-amber-400">⚡ {tx.speedTier.charAt(0).toUpperCase() + tx.speedTier.slice(1)} tier</p>
+ <p class="text-xs text-amber-600 dark:text-amber-400">⚡ {tx.speedTier.charAt(0).toUpperCase() + tx.speedTier.slice(1)} tier</p>
  {/if}
  </div>
  </div>
@@ -937,7 +937,7 @@
  <div class="p-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-yellow-500/10 rounded-lg">
- <ShieldCheck class="w-6 h-6 text-yellow-400" />
+ <ShieldCheck class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
  </div>
  <div>
  <h3 class="font-semibold">My Reputation</h3>
@@ -974,7 +974,7 @@
  <div class="bg-[var(--surface-0)] rounded-xl p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-red-500/10 rounded-lg">
- <LogOut class="w-6 h-6 text-red-400" />
+ <LogOut class="w-6 h-6 text-red-600 dark:text-red-400" />
  </div>
  <h3 class="text-lg font-semibold">Logout</h3>
  </div>

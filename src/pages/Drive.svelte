@@ -581,7 +581,7 @@
 >
  <!-- Header -->
  <div>
- <h1 class="text-2xl font-semibold tracking-tight text-white">My Drive</h1>
+ <h1 class="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">My Drive</h1>
  <p class="text-muted-foreground mt-2">
  Cloud storage with shareable links
  {#if manifest.items.length > 0}
@@ -621,7 +621,7 @@
  placeholder="Folder name"
  bind:value={newFolderName}
  onkeydown={(e) => { if (e.key ==='Enter') confirmNewFolder(); if (e.key ==='Escape') cancelNewFolder(); }}
- class="px-3 py-1.5 bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-sm text-white focus:outline-none focus:border-violet-500/50 w-64"
+ class="px-3 py-1.5 bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-sm text-[var(--text-primary)] focus:outline-none focus:border-violet-500/50 w-64"
  />
  <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-500 transition">Create</button>
  <button onclick={cancelNewFolder} class="px-3 py-1.5 text-[var(--text-secondary)] text-sm hover:bg-[var(--surface-2)] rounded-lg transition">Cancel</button>
@@ -630,7 +630,7 @@
 
  <!-- Upload progress -->
  {#if uploading}
- <div class="flex items-center gap-2 text-sm text-violet-400">
+ <div class="flex items-center gap-2 text-sm text-violet-600 dark:text-violet-400">
  <Loader2 class="w-4 h-4 animate-spin" />
  Uploading files to server...
  </div>
@@ -639,15 +639,15 @@
  <!-- Drag overlay -->
  {#if isDragging}
  <div class="border-2 border-dashed border-violet-500 bg-violet-500/10 rounded-xl p-12 text-center">
- <Upload class="w-10 h-10 mx-auto text-violet-400 mb-2" />
- <p class="text-violet-400 font-medium">Drop files here to upload</p>
+ <Upload class="w-10 h-10 mx-auto text-violet-600 dark:text-violet-400 mb-2" />
+ <p class="text-violet-600 dark:text-violet-400 font-medium">Drop files here to upload</p>
  </div>
  {/if}
 
  <!-- Loading -->
  {#if loading}
  <div class="flex items-center justify-center py-16">
- <Loader2 class="w-8 h-8 animate-spin text-violet-400" />
+ <Loader2 class="w-8 h-8 animate-spin text-violet-600 dark:text-violet-400" />
  </div>
  {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
  <!-- Empty state -->
@@ -655,7 +655,7 @@
  <div class="w-16 h-16 bg-[var(--surface-0)] rounded-full flex items-center justify-center mb-4">
  <HardDrive class="w-8 h-8 text-[var(--text-secondary)]" />
  </div>
- <h3 class="text-lg font-medium text-white mb-1">
+ <h3 class="text-lg font-medium text-[var(--text-primary)] mb-1">
  {searchQuery ?'No files found' :'This folder is empty'}
  </h3>
  <p class="text-sm text-[var(--text-secondary)] mb-6">
@@ -691,7 +691,7 @@
  bind:value={renameValue}
  onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white focus:outline-none focus:border-violet-500/50"
+ class="w-full px-2 py-1 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-[var(--text-primary)] focus:outline-none focus:border-violet-500/50"
  />
  </div>
  {:else}
@@ -725,7 +725,7 @@
  bind:value={renameValue}
  onkeydown={(e) => { if (e.key ==='Enter') confirmRename(); if (e.key ==='Escape') { renamingId = null; } }}
  onblur={confirmRename}
- class="w-full px-2 py-1 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-white focus:outline-none focus:border-violet-500/50"
+ class="w-full px-2 py-1 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded text-[var(--text-primary)] focus:outline-none focus:border-violet-500/50"
  />
  </td>
  </tr>
@@ -784,9 +784,9 @@
  class="bg-[var(--surface-0)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
- <h3 class="text-lg font-semibold text-white mb-4">{seedModalItem.seeding ?'Edit Seeding' :'Seed to Network'}</h3>
+ <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-4">{seedModalItem.seeding ?'Edit Seeding' :'Seed to Network'}</h3>
  <p class="text-sm text-[var(--text-secondary)] mb-4">
- {seedModalItem.seeding ?'Update' :'Share'} <strong class="text-white">"{seedModalItem.name}"</strong> on the network.
+ {seedModalItem.seeding ?'Update' :'Share'} <strong class="text-[var(--text-primary)]">"{seedModalItem.name}"</strong> on the network.
  </p>
 
  <div class="space-y-4">
@@ -822,7 +822,7 @@
  min="0"
  placeholder="Free"
  bind:value={seedPrice}
- class="w-full px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-white placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
+ class="w-full px-3 py-1.5 text-sm bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] focus:outline-none focus:border-violet-500/50"
  />
  </div>
  </div>
@@ -864,12 +864,12 @@
  class="bg-[var(--surface-0)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
- <h3 class="text-lg font-semibold text-white mb-2">Delete {deleteConfirmItem.type ==='folder' ?'Folder' :'File'}</h3>
+ <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-2">Delete {deleteConfirmItem.type ==='folder' ?'Folder' :'File'}</h3>
  <p class="text-sm text-[var(--text-secondary)] mb-1">
- Are you sure you want to delete <strong class="text-white">"{deleteConfirmItem.name}"</strong>?
+ Are you sure you want to delete <strong class="text-[var(--text-primary)]">"{deleteConfirmItem.name}"</strong>?
  </p>
  {#if deleteConfirmItem.type ==='folder'}
- <p class="text-sm text-amber-400 mb-4">This will delete all contents inside the folder.</p>
+ <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This will delete all contents inside the folder.</p>
  {:else}
  <p class="text-sm text-[var(--text-secondary)] mb-4">This will remove it from your Drive.</p>
  {/if}

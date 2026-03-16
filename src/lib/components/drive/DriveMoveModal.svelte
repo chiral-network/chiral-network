@@ -49,7 +49,7 @@
  onclick={(e) => e.stopPropagation()}
  >
  <div class="flex items-center justify-between mb-4">
- <h3 class="text-lg font-semibold text-white">Move"{item.name}"</h3>
+ <h3 class="text-lg font-semibold text-[var(--text-primary)]">Move"{item.name}"</h3>
  <button onclick={onClose} class="p-1 hover:bg-[var(--surface-2)] rounded-lg transition">
  <X class="w-5 h-5 text-[var(--text-secondary)]" />
  </button>
@@ -61,7 +61,7 @@
  onclick={() => selectedFolderId = null}
  class="flex items-center gap-2 w-full px-3 py-2.5 text-sm transition
  {selectedFolderId === null
- ?'bg-violet-900/20 text-violet-300'
+ ?'bg-violet-100 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300'
  :'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}"
  >
  <Folder class="w-4 h-4 text-yellow-500 fill-yellow-500 opacity-80" />
@@ -74,7 +74,7 @@
  onclick={() => selectedFolderId = folder.id}
  class="flex items-center gap-2 w-full px-3 py-2 text-sm transition
  {selectedFolderId === folder.id
- ?'bg-violet-900/20 text-violet-300'
+ ?'bg-violet-100 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300'
  :'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'}"
  style="padding-left: {12 + depth * 20}px"
  >
@@ -97,7 +97,7 @@
  </button>
  <button
  onclick={handleMove}
- class="px-4 py-2 text-sm font-medium text-white bg-violet-600 hover:bg-violet-500 rounded-lg transition"
+ class="px-4 py-2 text-sm font-medium text-[var(--text-primary)] bg-violet-600 hover:bg-violet-500 rounded-lg transition"
  >
  Move Here
  </button>

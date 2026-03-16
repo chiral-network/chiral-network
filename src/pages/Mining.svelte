@@ -433,7 +433,7 @@
  <div class="p-6">
  <div class="flex items-center gap-3 mb-4">
  <div class="p-2 bg-yellow-500/10 rounded-lg">
- <AlertTriangle class="w-6 h-6 text-yellow-400" />
+ <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
  </div>
  <div>
  <h2 class="font-semibold">Local Blockchain Node Required</h2>
@@ -446,15 +446,15 @@
  </p>
  </div>
  </div>
- <div class="bg-yellow-500/10 border border-yellow-800 rounded-lg p-4 mb-4">
- <p class="text-sm text-yellow-400">
+ <div class="bg-yellow-500/10 border border-yellow-300 dark:border-yellow-800 rounded-lg p-4 mb-4">
+ <p class="text-sm text-yellow-600 dark:text-yellow-400">
  {#if !gethStatus?.installed}
  You need to download and start a local Geth node before you can mine CHI tokens.
  {:else}
  Mining requires a local Geth node. Start the node from the Network page to begin mining.
  {/if}
  </p>
- <p class="text-sm text-yellow-400 mt-2">
+ <p class="text-sm text-yellow-600 dark:text-yellow-400 mt-2">
  Go to the <strong>Network</strong> page to start your local blockchain node.
  </p>
  </div>
@@ -472,7 +472,7 @@
  <div class="flex items-center justify-between mb-4">
  <div class="flex items-center gap-3">
  <div class="p-2 {isAnyMining ?'bg-yellow-500/10' :'bg-[var(--surface-2)]'} rounded-lg">
- <Pickaxe class="w-6 h-6 {isAnyMining ?'text-yellow-400' :'text-[var(--text-secondary)]'}" />
+ <Pickaxe class="w-6 h-6 {isAnyMining ?'text-yellow-600 dark:text-yellow-400' :'text-[var(--text-secondary)]'}" />
  </div>
  <div>
  <h2 class="font-semibold">Mining</h2>
@@ -481,7 +481,7 @@
  </div>
  <div class="flex items-center gap-2">
  {#if isAnyMining}
- <span class="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-400 rounded-full text-sm">
+ <span class="flex items-center gap-2 px-3 py-1 bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 rounded-full text-sm">
  <span class="w-2 h-2 bg-yellow-500/100 rounded-full animate-pulse"></span>
  Mining ({activeMiningBackend.toUpperCase()})
  </span>
@@ -535,7 +535,7 @@
  <div class="bg-[var(--surface-2)] rounded-lg p-4">
  <div class="flex items-center gap-2 mb-2">
  {#if activeMiningBackend ==='gpu'}
- <Monitor class="w-4 h-4 text-violet-400" />
+ <Monitor class="w-4 h-4 text-violet-600 dark:text-violet-400" />
  <span class="text-sm text-[var(--text-secondary)]">GPUs Active</span>
  {:else}
  <Cpu class="w-4 h-4 text-green-500" />
@@ -579,14 +579,14 @@
  <button
  onclick={() => (miningMode ='cpu')}
  disabled={isAnyMining}
- class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='cpu' ?'bg-violet-500/10 border-violet-500/20 text-violet-400' :'bg-[var(--surface-2)] border-[var(--border)]/60 text-[var(--text-secondary)]'}"
+ class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='cpu' ?'bg-violet-500/10 border-violet-500/20 text-violet-600 dark:text-violet-400' :'bg-[var(--surface-2)] border-[var(--border)]/60 text-[var(--text-secondary)]'}"
  >
  CPU Miner
  </button>
  <button
  onclick={() => (miningMode ='gpu')}
  disabled={isAnyMining}
- class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='gpu' ?'bg-violet-500/10 border-violet-500/20 text-violet-400' :'bg-[var(--surface-2)] border-[var(--border)]/60 text-[var(--text-secondary)]'}"
+ class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode ==='gpu' ?'bg-violet-500/10 border-violet-500/20 text-violet-600 dark:text-violet-400' :'bg-[var(--surface-2)] border-[var(--border)]/60 text-[var(--text-secondary)]'}"
  >
  GPU Miner
  </button>
@@ -644,14 +644,14 @@
  {#if !gpuCapabilities?.binaryPath}
  <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
  {#if gpuCapabilities?.lastError}
- <p class="text-sm text-amber-400">
+ <p class="text-sm text-amber-600 dark:text-amber-400">
  GPU miner is unavailable: {gpuCapabilities.lastError}
  </p>
- <p class="text-xs text-amber-400 mt-1">
+ <p class="text-xs text-amber-600 dark:text-amber-400 mt-1">
  You can still set `CHIRAL_GPU_MINER_PATH` manually and refresh.
  </p>
  {:else}
- <p class="text-sm text-amber-400">
+ <p class="text-sm text-amber-600 dark:text-amber-400">
  Preparing GPU miner automatically. If this stays here, click refresh.
  </p>
  {/if}
@@ -659,10 +659,10 @@
  {:else}
  {#if gpuCapabilities?.lastError}
  <div class="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
- <p class="text-sm text-amber-400">
+ <p class="text-sm text-amber-600 dark:text-amber-400">
  GPU probe warning: {gpuCapabilities.lastError}
  </p>
- <p class="text-xs text-amber-400 mt-1">
+ <p class="text-xs text-amber-600 dark:text-amber-400 mt-1">
  You can still start GPU mining and the app will retry with backend fallbacks automatically.
  </p>
  </div>
@@ -697,7 +697,7 @@
 
  {#if gpuMiningStatus?.lastError}
  <div class="mb-4 rounded-lg border border-red-200 bg-red-500/10 p-3">
- <p class="text-sm text-red-300">{gpuMiningStatus.lastError}</p>
+ <p class="text-sm text-red-700 dark:text-red-300">{gpuMiningStatus.lastError}</p>
  </div>
  {/if}
 
@@ -739,8 +739,8 @@
  class="w-full flex items-center justify-between p-6 text-left"
  >
  <div class="flex items-center gap-3">
- <div class="p-2 bg-emerald-900/30 rounded-lg">
- <History class="w-6 h-6 text-emerald-400" />
+ <div class="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
+ <History class="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
  </div>
  <div>
  <h2 class="font-semibold">Mining History</h2>
@@ -795,7 +795,7 @@
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Total Earned</p>
- <p class="text-lg font-bold text-emerald-400">{totalHistoryReward.toFixed(2)} CHI</p>
+ <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{totalHistoryReward.toFixed(2)} CHI</p>
  </div>
  <div class="bg-[var(--surface-2)] rounded-lg p-3">
  <p class="text-xs text-[var(--text-secondary)]">Reward per Block</p>
@@ -823,7 +823,7 @@
  <td class="py-2 px-3 text-xs text-[var(--text-secondary)]">
  {formatTimestamp(block.timestamp)}
  </td>
- <td class="py-2 px-3 text-right text-xs font-medium tabular-nums text-emerald-400">
+ <td class="py-2 px-3 text-right text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
  +{block.rewardChi} CHI
  </td>
  <td class="py-2 px-3 text-right text-xs tabular-nums text-[var(--text-secondary)] font-mono">

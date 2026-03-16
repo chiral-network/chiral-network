@@ -139,19 +139,19 @@
  <div class="flex-1 grid grid-cols-2 gap-3 text-sm">
  <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-[var(--text-secondary)]">Completed</p>
- <p class="font-semibold text-emerald-400">{completedCount}</p>
+ <p class="font-semibold text-emerald-600 dark:text-emerald-400">{completedCount}</p>
  </div>
  <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-[var(--text-secondary)]">Failed</p>
- <p class="font-semibold text-red-400">{failedCount}</p>
+ <p class="font-semibold text-red-600 dark:text-red-400">{failedCount}</p>
  </div>
  <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-[var(--text-secondary)]">Ratings</p>
- <p class="font-semibold text-white">{ratingCount}</p>
+ <p class="font-semibold text-[var(--text-primary)]">{ratingCount}</p>
  </div>
  <div class="rounded-lg bg-[var(--surface-0)] px-3 py-2 border border-[var(--border)]/60">
  <p class="text-xs text-[var(--text-secondary)]">Earned (180d)</p>
- <p class="font-semibold text-white">{formatWeiAsChi(totalEarnedWei)} CHI</p>
+ <p class="font-semibold text-[var(--text-primary)]">{formatWeiAsChi(totalEarnedWei)} CHI</p>
  </div>
  </div>
  </div>
@@ -176,10 +176,10 @@
  </div>
  <div class="min-w-0">
  <div class="flex items-center gap-2 flex-wrap">
- <span class="text-sm font-medium text-white font-mono">
+ <span class="text-sm font-medium text-[var(--text-primary)] font-mono">
  {formatAddr(event.downloaderWallet)}
  </span>
- <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full {event.outcome ==='completed' ?'bg-emerald-500/10 text-emerald-400' :'bg-red-500/10 text-red-400'}">
+ <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full {event.outcome ==='completed' ?'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :'bg-red-500/10 text-red-600 dark:text-red-400'}">
  {#if event.outcome ==='completed'}
  <CheckCircle2 class="w-3.5 h-3.5" />
  Completed
@@ -197,7 +197,7 @@
  <div class="flex items-center gap-1 mt-1.5">
  {#each [1, 2, 3, 4, 5] as star}
  <Star
- class="w-3.5 h-3.5 {event.ratingScore >= star ?'text-yellow-400 fill-yellow-400' :'text-[var(--text-secondary)]'}"
+ class="w-3.5 h-3.5 {event.ratingScore >= star ?'text-yellow-600 dark:text-yellow-400 fill-yellow-400' :'text-[var(--text-secondary)]'}"
  />
  {/each}
  </div>

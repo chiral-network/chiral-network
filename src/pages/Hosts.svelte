@@ -844,7 +844,7 @@
  <!-- Header -->
  <div class="flex items-start justify-between gap-4">
  <div>
- <h1 class="text-2xl font-semibold tracking-tight text-white">Hosts</h1>
+ <h1 class="text-2xl font-semibold tracking-tight text-[var(--text-primary)]">Hosts</h1>
  <p class="text-sm text-[var(--text-secondary)] mt-1">
  Host websites and files, find hosting providers, and manage agreements
  </p>
@@ -852,7 +852,7 @@
  <!-- Quick stats -->
  <div class="hidden sm:flex items-center gap-3">
  {#if sites.length > 0}
- <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/10 text-xs font-medium text-violet-400">
+ <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/10 text-xs font-medium text-violet-600 dark:text-violet-400">
  <Server class="w-3.5 h-3.5" />
  {sites.length} site{sites.length !== 1 ?'s' :''}
  </div>
@@ -885,7 +885,7 @@
  aria-selected={activeTab ==='sites'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='sites'
- ?'bg-[var(--surface-2)] text-white border border-[var(--border)]/60/50'
+ ?'bg-[var(--surface-2)] text-[var(--text-primary)] border border-[var(--border)]/60/50'
  :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)]/70'}"
  >
  <Server class="w-4 h-4" />
@@ -897,7 +897,7 @@
  aria-selected={activeTab ==='marketplace'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='marketplace'
- ?'bg-[var(--surface-2)] text-white border border-[var(--border)]/60/50'
+ ?'bg-[var(--surface-2)] text-[var(--text-primary)] border border-[var(--border)]/60/50'
  :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)]/70'}"
  >
  <Users class="w-4 h-4" />
@@ -909,7 +909,7 @@
  aria-selected={activeTab ==='agreements'}
  class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
  {activeTab ==='agreements'
- ?'bg-[var(--surface-2)] text-white border border-[var(--border)]/60/50'
+ ?'bg-[var(--surface-2)] text-[var(--text-primary)] border border-[var(--border)]/60/50'
  :'text-[var(--text-secondary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-1)]/70'}"
  >
  <Shield class="w-4 h-4" />
@@ -1025,11 +1025,11 @@
  class="bg-[var(--surface-2)] rounded-xl p-6 max-w-sm w-full mx-4"
  onclick={(e) => e.stopPropagation()}
  >
- <h3 class="text-lg font-semibold text-white mb-2">Delete Site</h3>
+ <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-2">Delete Site</h3>
  <p class="text-sm text-[var(--text-secondary)] mb-1">
- Are you sure you want to delete <strong class="text-white">"{deleteConfirm.name}"</strong>?
+ Are you sure you want to delete <strong class="text-[var(--text-primary)]">"{deleteConfirm.name}"</strong>?
  </p>
- <p class="text-sm text-amber-400 mb-4">This cannot be undone.</p>
+ <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This cannot be undone.</p>
  <div class="flex justify-end gap-3">
  <button
  onclick={() => deleteConfirm = null}

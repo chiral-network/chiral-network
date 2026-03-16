@@ -143,7 +143,7 @@
  </p>
 
  <div class="bg-yellow-500/10 border-l-2 border-yellow-400 p-4 mb-4">
- <p class="text-sm text-yellow-400">
+ <p class="text-sm text-yellow-600 dark:text-yellow-400">
  <strong>Warning:</strong> Never share your recovery phrase with anyone. Anyone with these words can access your wallet.
  </p>
  </div>
@@ -163,8 +163,8 @@
  class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-[var(--surface-0)] hover:bg-[var(--surface-2)] rounded-lg transition"
  >
  {#if copied}
- <Check class="w-4 h-4 text-emerald-400" />
- <span class="text-emerald-400">Copied!</span>
+ <Check class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+ <span class="text-emerald-600 dark:text-emerald-400">Copied!</span>
  {:else}
  <Copy class="w-4 h-4" />
  <span class="text-[var(--text-secondary)]">Copy</span>
@@ -229,7 +229,7 @@
 
  {#if verificationError}
  <div class="bg-red-500/10 border-l-2 border-red-400 p-4 mb-4">
- <p class="text-sm text-red-400">{verificationError}</p>
+ <p class="text-sm text-red-600 dark:text-red-400">{verificationError}</p>
  </div>
  {/if}
 
@@ -251,7 +251,7 @@
  {:else}
  <div class="bg-[var(--surface-0)] rounded-lg p-8">
  <div class="flex items-center gap-2 mb-3">
- <Mail class="w-5 h-5 text-violet-400" />
+ <Mail class="w-5 h-5 text-violet-600 dark:text-violet-400" />
  <h2 class="text-2xl font-bold">One-Time Email Backup</h2>
  </div>
 
@@ -259,7 +259,7 @@
  Enter your email to receive a one-time copy of your recovery phrase and wallet credentials.
  </p>
 
- <div class="bg-violet-900/20 border-l-2 border-violet-500 p-4 mb-6">
+ <div class="bg-violet-100 dark:bg-violet-900/20 border-l-2 border-violet-500 p-4 mb-6">
  <p class="text-sm text-indigo-900">
  This email address is only used to send this backup now. Chiral does not store it.
  </p>
@@ -281,7 +281,7 @@
 
  {#if emailError}
  <div class="bg-red-500/10 border-l-2 border-red-400 p-4 mb-4">
- <p class="text-sm text-red-400">{emailError}</p>
+ <p class="text-sm text-red-600 dark:text-red-400">{emailError}</p>
  </div>
  {/if}
 

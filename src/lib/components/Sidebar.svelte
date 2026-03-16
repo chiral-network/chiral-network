@@ -29,7 +29,7 @@
  </div>
  <div class="flex items-center gap-2">
  <div class="w-2 h-2 rounded-full shrink-0 {$networkConnected ?'bg-emerald-400' :'bg-red-400'}"></div>
- <button onclick={() => mobileOpen = !mobileOpen} class="p-1.5 text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)] rounded-lg transition">
+ <button onclick={() => mobileOpen = !mobileOpen} class="p-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)] rounded-lg transition">
  {#if mobileOpen}<X class="w-5 h-5" />{:else}<Menu class="w-5 h-5" />{/if}
  </button>
  </div>
@@ -40,12 +40,12 @@
  <div class="md:hidden fixed top-14 left-0 right-0 z-50 bg-[var(--surface-1)] border-b border-[var(--border)] max-h-[calc(100vh-3.5rem)] overflow-y-auto">
  <div class="px-3 py-2 space-y-0.5">
  {#each navItems as item}
- <button onclick={() => navigate(item.path)} class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm {currentPage === item.path ?'bg-[var(--surface-2)] text-white font-medium' :'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)]/50'}">
+ <button onclick={() => navigate(item.path)} class="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition text-sm {currentPage === item.path ?'bg-[var(--surface-2)] text-[var(--text-primary)] font-medium' :'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'}">
  <svelte:component this={item.icon} class="w-4 h-4" /><span>{item.label}</span>
  </button>
  {/each}
  <hr class="border-[var(--border)] my-2" />
- <button onclick={handleLogout} class="flex items-center gap-3 w-full px-3 py-2.5 text-[var(--text-secondary)] hover:bg-red-500/10 hover:text-red-400 rounded-lg transition text-sm">
+ <button onclick={handleLogout} class="flex items-center gap-3 w-full px-3 py-2.5 text-[var(--text-secondary)] hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 rounded-lg transition text-sm">
  <LogOut class="w-4 h-4" /><span>Logout</span>
  </button>
  </div>
@@ -62,11 +62,11 @@
  </div>
  <div class="flex items-center gap-3 px-3 py-2 border-b border-[var(--border)] shrink-0 {collapsed ?'justify-center' :''}">
  <div class="w-2 h-2 rounded-full shrink-0 {$networkConnected ?'bg-emerald-400' :'bg-red-400'}"></div>
- {#if !collapsed}<span class="text-xs font-medium whitespace-nowrap {$networkConnected ?'text-emerald-400' :'text-red-400'}">{$networkConnected ?'Connected' :'Offline'}</span>{/if}
+ {#if !collapsed}<span class="text-xs font-medium whitespace-nowrap {$networkConnected ?'text-emerald-600 dark:text-emerald-400' :'text-red-600 dark:text-red-400'}">{$networkConnected ?'Connected' :'Offline'}</span>{/if}
  </div>
  <nav class="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto overflow-x-hidden">
  {#each navItems as item}
- <button onclick={() => navigate(item.path)} class="flex items-center gap-3 w-full py-2 rounded-lg transition text-sm {collapsed ?'justify-center px-0' :'px-3'} {currentPage === item.path ?'bg-[var(--surface-2)] text-white font-medium' :'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface-2)]/50'}" title={collapsed ? item.label :''}>
+ <button onclick={() => navigate(item.path)} class="flex items-center gap-3 w-full py-2 rounded-lg transition text-sm {collapsed ?'justify-center px-0' :'px-3'} {currentPage === item.path ?'bg-[var(--surface-2)] text-[var(--text-primary)] font-medium' :'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]/50'}" title={collapsed ? item.label :''}>
  <svelte:component this={item.icon} class="w-4 h-4 shrink-0" />
  {#if !collapsed}<span class="whitespace-nowrap">{item.label}</span>{/if}
  </button>
@@ -74,7 +74,7 @@
  </nav>
  <div class="px-2 pb-3 space-y-1 border-t border-[var(--border)] pt-3 shrink-0">
  {#if collapsed}<button onclick={toggleCollapse} class="flex items-center justify-center w-full py-2 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-2)] rounded-lg transition text-sm" title="Expand sidebar"><ChevronRight class="w-4 h-4 shrink-0" /></button>{/if}
- <button onclick={handleLogout} class="flex items-center gap-3 w-full py-2 text-[var(--text-secondary)] hover:bg-red-500/10 hover:text-red-400 rounded-lg transition text-sm {collapsed ?'justify-center px-0' :'px-3'}" title={collapsed ?'Logout' :''}>
+ <button onclick={handleLogout} class="flex items-center gap-3 w-full py-2 text-[var(--text-secondary)] hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400 rounded-lg transition text-sm {collapsed ?'justify-center px-0' :'px-3'}" title={collapsed ?'Logout' :''}>
  <LogOut class="w-4 h-4 shrink-0" />{#if !collapsed}<span class="whitespace-nowrap">Logout</span>{/if}
  </button>
  </div>

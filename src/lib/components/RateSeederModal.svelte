@@ -66,7 +66,7 @@
  <div class="bg-[var(--surface-1)] rounded-xl border border-[var(--border)] p-6 max-w-md w-full mx-4">
  <!-- Header -->
  <div class="mb-4">
- <h3 class="font-semibold text-lg text-white">Rate This Download</h3>
+ <h3 class="font-semibold text-lg text-[var(--text-primary)]">Rate This Download</h3>
  <p class="text-sm text-[var(--text-secondary)] mt-1">
  How was your experience downloading <span class="font-medium text-[var(--text-secondary)]">{fileName}</span>?
  </p>
@@ -76,7 +76,7 @@
  <div class="bg-[var(--surface-2)] rounded-lg p-3 mb-4">
  <div class="flex justify-between items-center">
  <span class="text-xs text-[var(--text-secondary)]">Seeder</span>
- <span class="text-sm font-mono text-white">{formatAddr(seederWallet)}</span>
+ <span class="text-sm font-mono text-[var(--text-primary)]">{formatAddr(seederWallet)}</span>
  </div>
  </div>
 
@@ -92,7 +92,7 @@
  class="p-1 transition-transform hover:scale-110"
  >
  <Star
- class="w-8 h-8 transition-colors {(hoveredScore || selectedScore) >= star ?'text-yellow-400 fill-yellow-400' :'text-[var(--text-secondary)]'}"
+ class="w-8 h-8 transition-colors {(hoveredScore || selectedScore) >= star ?'text-yellow-600 dark:text-yellow-400 fill-yellow-400' :'text-[var(--text-secondary)]'}"
  />
  </button>
  {/each}
@@ -119,7 +119,7 @@
  maxlength={500}
  rows={3}
  placeholder="Share your experience..."
- class="w-full px-3 py-2 bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-sm text-white placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-violet-500/50 resize-none"
+ class="w-full px-3 py-2 bg-[var(--surface-2)] border border-[var(--border)]/60 rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-violet-500/50 resize-none"
  ></textarea>
  <p class="text-xs text-[var(--text-tertiary)] mt-1 text-right">{comment.length}/500</p>
  </div>

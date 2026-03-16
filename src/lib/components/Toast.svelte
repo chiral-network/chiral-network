@@ -12,10 +12,10 @@
  let { message, type ='info', index = 0, onClose }: Props = $props();
 
  const typeStyles = {
- success:'bg-[var(--surface-1)] border border-emerald-500/20 text-emerald-400',
- error:'bg-[var(--surface-1)] border border-red-500/20 text-red-400',
- info:'bg-[var(--surface-1)] border border-violet-500/20 text-violet-400',
- warning:'bg-[var(--surface-1)] border border-yellow-500/20 text-yellow-400'
+ success:'bg-[var(--surface-1)] border border-emerald-500/20 text-emerald-600 dark:text-emerald-400',
+ error:'bg-[var(--surface-1)] border border-red-500/20 text-red-600 dark:text-red-400',
+ info:'bg-[var(--surface-1)] border border-violet-500/20 text-violet-600 dark:text-violet-400',
+ warning:'bg-[var(--surface-1)] border border-yellow-500/20 text-yellow-600 dark:text-yellow-400'
  };
 
  // Calculate vertical offset based on index (each toast is ~56px tall + 8px gap)
@@ -24,7 +24,7 @@
 
 <div
  transition:fly={{ y: -20, duration: 300 }}
- class="fixed right-4 z-50 flex items-center gap-3 {typeStyles[type]} px-5 py-3 rounded-lg max-w-md"
+ class="fixed right-4 z-50 flex items-center gap-3 {typeStyles[type]} px-5 py-3 rounded-lg max-w-md shadow-md dark:shadow-none"
  style="top: {topOffset}px;"
 >
  <span class="flex-1 text-sm">{message}</span>

@@ -44,7 +44,7 @@
  placeholder="Search files..."
  value={searchQuery}
  oninput={(e) => onSearchChange((e.target as HTMLInputElement).value)}
- class="pl-9 pr-3 py-2 bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-sm text-white placeholder:text-[var(--text-secondary)] w-48 focus:outline-none focus:border-violet-500/50"
+ class="pl-9 pr-3 py-2 bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] w-48 focus:outline-none focus:border-violet-500/50"
  />
  </div>
 

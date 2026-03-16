@@ -37,7 +37,7 @@
  <!-- Status indicator -->
  <div class="relative flex h-10 w-10 items-center justify-center rounded-xl
  {serverRunning ?'bg-emerald-500/10' :'bg-[var(--surface-2)]'}">
- <Server class="h-5 w-5 {serverRunning ?'text-emerald-400' :'text-[var(--text-secondary)]'}" />
+ <Server class="h-5 w-5 {serverRunning ?'text-emerald-600 dark:text-emerald-400' :'text-[var(--text-secondary)]'}" />
  {#if serverRunning}
  <span class="absolute -top-0.5 -right-0.5 flex h-3 w-3">
  <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
@@ -46,16 +46,16 @@
  {/if}
  </div>
  <div>
- <h2 class="text-sm font-semibold text-white flex items-center gap-2">
+ <h2 class="text-sm font-semibold text-[var(--text-primary)] flex items-center gap-2">
  Local HTTP Server
  {#if serverRunning}
- <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400 uppercase tracking-wide">
+ <span class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 uppercase tracking-wide">
  Online
  </span>
  {/if}
  </h2>
  {#if serverRunning}
- <p class="text-xs text-emerald-400 mt-0.5">
+ <p class="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
  Serving at <a href={localUrl()} target="_blank" rel="noopener noreferrer" class="font-mono underline decoration-green-300 hover:decoration-green-500 transition-colors">{localUrl()}</a>
  </p>
  {:else}
@@ -75,7 +75,7 @@
  oninput={(e) => onPortChange(Number(e.currentTarget.value))}
  min="1024"
  max="65535"
- class="w-20 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-sm text-white text-center tabular-nums
+ class="w-20 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2.5 py-1.5 text-sm text-[var(--text-primary)] text-center tabular-nums
  focus:border-cyan-500/30 focus:outline-none focus:
 "
  />
@@ -85,7 +85,7 @@
  {#if serverRunning}
  <button
  onclick={onStopServer}
- class="flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors
+ class="flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition-colors
  hover:bg-red-600 focus:outline-none focus:"
  >
  <PowerOff class="h-4 w-4" />
@@ -95,7 +95,7 @@
  <button
  onclick={onStartServer}
  disabled={isStartingServer}
- class="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors
+ class="flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-[var(--text-primary)] transition-colors
  hover:bg-violet-500 focus:outline-none focus:border-violet-500/50/50 
  disabled:opacity-50 disabled:cursor-not-allowed"
  >

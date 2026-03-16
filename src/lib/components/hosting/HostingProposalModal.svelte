@@ -69,7 +69,7 @@
  <!-- Header -->
  <div class="flex items-center justify-between p-5 pb-4 border-b border-[var(--border)]/60">
  <div>
- <h3 class="text-lg font-semibold text-white">Propose Hosting Agreement</h3>
+ <h3 class="text-lg font-semibold text-[var(--text-primary)]">Propose Hosting Agreement</h3>
  <p class="text-xs text-[var(--text-secondary)] mt-0.5 font-mono">
  {formatPeerId(proposalHost.advertisement.peerId)}
  </p>
@@ -89,17 +89,17 @@
  <div class="grid grid-cols-3 gap-3">
  <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-[var(--surface-0)]">
  <Coins class="w-4 h-4 text-[var(--text-secondary)]" />
- <span class="text-xs font-semibold text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.pricePerMbPerDayWei)}</span>
+ <span class="text-xs font-semibold text-[var(--text-primary)] tabular-nums">{formatWeiAsChi(proposalHost.advertisement.pricePerMbPerDayWei)}</span>
  <span class="text-[10px] text-[var(--text-secondary)] uppercase tracking-wide">per MB/day</span>
  </div>
  <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-[var(--surface-0)]">
  <Shield class="w-4 h-4 text-[var(--text-secondary)]" />
- <span class="text-xs font-semibold text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
+ <span class="text-xs font-semibold text-[var(--text-primary)] tabular-nums">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
  <span class="text-[10px] text-[var(--text-secondary)] uppercase tracking-wide">deposit</span>
  </div>
  <div class="flex flex-col items-center gap-1.5 p-3 rounded-xl bg-[var(--surface-0)]">
  <HardDrive class="w-4 h-4 text-[var(--text-secondary)]" />
- <span class="text-xs font-semibold text-white tabular-nums">{formatBytes(proposalHost.availableStorageBytes)}</span>
+ <span class="text-xs font-semibold text-[var(--text-primary)] tabular-nums">{formatBytes(proposalHost.availableStorageBytes)}</span>
  <span class="text-[10px] text-[var(--text-secondary)] uppercase tracking-wide">available</span>
  </div>
  </div>
@@ -115,7 +115,7 @@
  </label>
  <button
  onclick={onLoadDriveFiles}
- class="flex items-center gap-1 text-xs font-medium text-violet-400 hover:text-violet-400 transition-colors
+ class="flex items-center gap-1 text-xs font-medium text-violet-600 dark:text-violet-400 hover:text-violet-600 dark:hover:text-violet-400 transition-colors
  focus:outline-none focus:underline"
  >
  <FolderOpen class="w-3.5 h-3.5" />
@@ -128,7 +128,7 @@
  oninput={(e) => onFileHashesChange(e.currentTarget.value)}
  rows="3"
  placeholder="Paste file hashes, one per line..."
- class="w-full p-3 text-sm font-mono bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl text-white placeholder:text-[var(--text-secondary)]
+ class="w-full p-3 text-sm font-mono bg-[var(--surface-0)] border border-[var(--border)]/60 rounded-xl text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]
  focus:ring-blue-400/20 focus:border-violet-500/30 focus:outline-none resize-none transition-all"
  ></textarea>
 
@@ -151,7 +151,7 @@
  <div class="flex items-center gap-2 flex-shrink-0 ml-2">
  <span class="text-xs text-[var(--text-secondary)] tabular-nums">{formatBytes(file.size)}</span>
  {#if publishingDriveFile === file.id}
- <Loader2 class="w-3.5 h-3.5 text-violet-400 animate-spin" />
+ <Loader2 class="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 animate-spin" />
  {/if}
  </div>
  </button>
@@ -168,7 +168,7 @@
  <Calendar class="w-3.5 h-3.5" />
  Duration
  </span>
- <span class="text-sm font-semibold text-white tabular-nums">
+ <span class="text-sm font-semibold text-[var(--text-primary)] tabular-nums">
  {proposalDurationDays} day{proposalDurationDays !== 1 ?'s' :''}
  </span>
  </label>
@@ -192,7 +192,7 @@
  <div class="p-4 rounded-xl bg-violet-500/10/50 border border-[var(--border)]/60">
  <div class="flex justify-between text-sm">
  <span class="text-[var(--text-secondary)]">Required Deposit</span>
- <span class="font-semibold text-white tabular-nums">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
+ <span class="font-semibold text-[var(--text-primary)] tabular-nums">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
  </div>
  <p class="text-[11px] text-[var(--text-secondary)] mt-1.5">
  Total cost depends on file sizes and will be calculated after the host accepts.

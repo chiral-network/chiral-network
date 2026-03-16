@@ -37,9 +37,9 @@
 </script>
 
 <div class="rounded-xl border border-[var(--border)]/60 bg-[var(--surface-1)] p-5">
- <h2 class="mb-4 text-base font-semibold text-white flex items-center gap-2">
+ <h2 class="mb-4 text-base font-semibold text-[var(--text-primary)] flex items-center gap-2">
  <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-500/10">
- <Plus class="h-3.5 w-3.5 text-violet-400" />
+ <Plus class="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
  </div>
  Create New Site
  </h2>
@@ -54,7 +54,7 @@
  value={newSiteName}
  oninput={(e) => onNameChange(e.currentTarget.value)}
  placeholder="e.g. My Portfolio"
- class="w-full rounded-xl border border-[var(--border)]/60 bg-[var(--surface-2)] px-4 py-2.5 text-sm text-white placeholder:text-[var(--text-secondary)] transition-all
+ class="w-full rounded-xl border border-[var(--border)]/60 bg-[var(--surface-2)] px-4 py-2.5 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] transition-all
  focus:border-cyan-500/30 focus:bg-[var(--surface-2)] focus:outline-none focus:ring-cyan-500/20
 "
  />
@@ -64,7 +64,7 @@
  <div class="flex gap-2">
  <button
  onclick={onSelectFromDrive}
- class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-violet-400 border border-violet-500/20
+ class="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-violet-600 dark:text-violet-400 border border-violet-500/20
  rounded-lg hover:bg-violet-500/10 transition-colors
  focus:outline-none focus:ring-cyan-500/20"
  >
@@ -125,7 +125,7 @@
  onclick={(e: MouseEvent) => { e.stopPropagation(); onRemoveFile(i); }}
  aria-label="Remove {file.name}"
  class="ml-2 flex-shrink-0 rounded-xl p-1 text-[var(--text-secondary)] transition-colors
- hover:bg-red-900/30 hover:text-red-500
+ hover:bg-red-100 dark:hover:bg-red-900/30 hover:text-red-500
  opacity-0 group-hover:opacity-100 focus:opacity-100"
  >
  <X class="h-3.5 w-3.5" />
@@ -139,7 +139,7 @@
  <button
  onclick={onCreateSite}
  disabled={!canCreate}
- class="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition-all
+ class="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-[var(--text-primary)] transition-all
  {canCreate
  ?'bg-violet-600 hover:bg-violet-500  active:scale-[0.98]'
  :'bg-[var(--surface-2)] cursor-not-allowed'}
