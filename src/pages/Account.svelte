@@ -941,7 +941,7 @@
         </div>
         <div>
           <h3 class="font-semibold dark:text-white">My Reputation</h3>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Elo score from recent transfers, earnings, and user ratings</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Elo score from recent transfers and earnings</p>
         </div>
       </div>
       <AccountReputation />
