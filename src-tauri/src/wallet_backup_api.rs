@@ -57,10 +57,8 @@ fn is_valid_recovery_phrase(value: &str) -> bool {
 fn parse_smtp_settings() -> Result<SmtpSettings, String> {
     let host = env::var("CHIRAL_WALLET_EMAIL_SMTP_HOST")
         .map_err(|_| "Email backup is not configured".to_string())?;
-    let username = env::var("CHIRAL_WALLET_EMAIL_SMTP_USERNAME")
-        .map_err(|_| "Email backup is not configured".to_string())?;
-    let password = env::var("CHIRAL_WALLET_EMAIL_SMTP_PASSWORD")
-        .map_err(|_| "Email backup is not configured".to_string())?;
+    let username = env::var("CHIRAL_WALLET_EMAIL_SMTP_USERNAME").unwrap_or_default();
+    let password = env::var("CHIRAL_WALLET_EMAIL_SMTP_PASSWORD").unwrap_or_default();
     let from = env::var("CHIRAL_WALLET_EMAIL_FROM")
         .map_err(|_| "Email backup is not configured".to_string())?;
 
@@ -167,10 +165,11 @@ async fn send_wallet_backup_email(Json(req): Json<WalletBackupEmailRequest>) -> 
         AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp.host)
     };
 
-    let mailer = transport_builder
-        .port(smtp.port)
-        .credentials(Credentials::new(smtp.username, smtp.password))
-        .build();
+    let mut builder = transport_builder.port(smtp.port);
+    if !smtp.username.is_empty() {
+        builder = builder.credentials(Credentials::new(smtp.username, smtp.password));
+    }
+    let mailer = builder.build();
 
     if let Err(_) = mailer.send(message).await {
         return (
