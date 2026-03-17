@@ -1639,8 +1639,14 @@ impl GethProcess {
         let mut backend: Option<String> = None;
         let mut scan_messages: Vec<String> = Vec::new();
 
-        // Try CUDA backend first, then OpenCL.
-        for (backend_name, flag) in [("cuda", "-U"), ("opencl", "-G")] {
+        // On macOS there is no CUDA support — try OpenCL only.
+        // On other platforms try CUDA first, then fall back to OpenCL.
+        let backends: Vec<(&str, &str)> = if cfg!(target_os = "macos") {
+            vec![("opencl", "-G")]
+        } else {
+            vec![("cuda", "-U"), ("opencl", "-G")]
+        };
+        for (backend_name, flag) in backends {
             match Self::scan_gpu_devices(&binary_path, flag) {
                 Ok((found, raw)) => {
                     if !found.is_empty() {
@@ -1733,7 +1739,14 @@ impl GethProcess {
         let mut backend_attempts: Vec<String> = match preferred_backend.as_deref() {
             Some("cuda") => vec!["cuda".to_string(), "opencl".to_string()],
             Some("opencl") => vec!["opencl".to_string(), "cuda".to_string()],
-            _ => vec!["cuda".to_string(), "opencl".to_string()],
+            _ => {
+                // macOS has no CUDA — default to OpenCL only.
+                if cfg!(target_os = "macos") {
+                    vec!["opencl".to_string()]
+                } else {
+                    vec!["cuda".to_string(), "opencl".to_string()]
+                }
+            }
         };
         backend_attempts.dedup();
 
