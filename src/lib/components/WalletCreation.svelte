@@ -86,6 +86,21 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
   }
 
+  function finalizeWallet() {
+    if (!pendingWallet) return;
+    walletAccount.set({
+      address: pendingWallet.address,
+      privateKey: pendingWallet.privateKey,
+    });
+    isAuthenticated.set(true);
+    onComplete();
+  }
+
+  function skipEmail() {
+    finalizeWallet();
+    toasts.show('Wallet created successfully', 'success');
+  }
+
   async function sendBackupAndComplete() {
     emailError = '';
 
@@ -109,14 +124,9 @@
         privateKey: pendingWallet.privateKey,
       });
 
-      walletAccount.set({
-        address: pendingWallet.address,
-        privateKey: pendingWallet.privateKey,
-      });
-      isAuthenticated.set(true);
+      finalizeWallet();
       emailInput = '';
       toasts.show('Backup email sent. Wallet created successfully.', 'success');
-      onComplete();
     } catch (error) {
       emailError = walletBackupService.formatError(error);
     } finally {
@@ -288,10 +298,17 @@
       <div class="flex gap-3">
         <button
           on:click={() => step = 'verify'}
-          class="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
+          class="px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
           disabled={sendingEmail}
         >
           Back
+        </button>
+        <button
+          on:click={skipEmail}
+          class="px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
+          disabled={sendingEmail}
+        >
+          Skip
         </button>
         <button
           on:click={sendBackupAndComplete}
