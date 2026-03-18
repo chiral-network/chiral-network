@@ -1,4 +1,5 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
+import { settings, type NotificationSettings } from '$lib/stores';
 
 export interface Toast {
   id: number;
@@ -10,6 +11,7 @@ export interface Toast {
 }
 
 export type ToastType = Toast['type'];
+export type NotificationKey = keyof NotificationSettings;
 
 const DURATIONS: Record<ToastType, number> = {
   success: 4000,
@@ -53,7 +55,19 @@ function createToastStore() {
     },
     remove: (id: number) => {
       update(toasts => toasts.filter(t => t.id !== id));
-    }
+    },
+    /** Show a toast only if the notification setting is enabled */
+    notify: (key: NotificationKey, message: string, type: ToastType = 'info', duration?: number) => {
+      const s = get(settings);
+      if (s.notifications?.[key] === false) return;
+      return toasts.show(message, type, duration);
+    },
+    /** Show a detail toast only if the notification setting is enabled */
+    notifyDetail: (key: NotificationKey, message: string, description: string, type: ToastType = 'info', duration?: number) => {
+      const s = get(settings);
+      if (s.notifications?.[key] === false) return;
+      return toasts.detail(message, description, type, duration);
+    },
   };
 }
 
