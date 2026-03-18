@@ -421,7 +421,7 @@
       if (peerId) {
         localPeerId = peerId;
       }
-      toasts.show('Connected to P2P network', 'success');
+      toasts.notify('networkStatus', 'Connected to P2P network', 'success');
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       // If DHT is already running (e.g. stale state after logout), sync the UI
@@ -429,11 +429,11 @@
         networkConnected.set(true);
         const peerId = await dhtService.getPeerId();
         if (peerId) localPeerId = peerId;
-        toasts.show('Reconnected to P2P network', 'info');
+        toasts.notify('networkStatus', 'Reconnected to P2P network', 'info');
       } else {
         error = errMsg;
         log.error('Failed to connect:', err);
-        toasts.detail('Connection failed', error, 'error');
+        toasts.notifyDetail('networkStatus', 'Connection failed', error, 'error');
       }
     } finally {
       isConnecting = false;
@@ -444,7 +444,7 @@
     try {
       await dhtService.stop();
       localPeerId = '';
-      toasts.show('Disconnected from P2P network', 'info');
+      toasts.notify('networkStatus', 'Disconnected from P2P network', 'info');
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to disconnect';
       log.error('Failed to disconnect:', err);

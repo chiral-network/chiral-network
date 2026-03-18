@@ -886,12 +886,12 @@
 
       log.info('Download request sent:', response);
       if (tierCost > 0) {
-        toasts.detail('Download started', 'Speed tier payment processed — requesting file from seeder', 'success');
+        toasts.notifyDetail('paymentReceived', 'Download started', 'Speed tier payment processed — requesting file from seeder', 'success');
         refreshWalletBalance();
       } else if (seederPriceChi > 0) {
-        toasts.detail('Download started', 'Payment will be sent automatically when transfer begins', 'info');
+        toasts.notifyDetail('paymentReceived', 'Download started', 'Payment will be sent automatically when transfer begins', 'info');
       } else {
-        toasts.show('Download started', 'info');
+        toasts.notify('downloadComplete', 'Download started', 'info');
       }
 
       // Update download with request ID
@@ -1024,7 +1024,7 @@
         });
         saveDownloadHistory();
 
-        toasts.show(`${fileName} downloaded`, 'success');
+        toasts.notify('downloadComplete', `${fileName} downloaded`, 'success');
 
         const context = getTransferContext(requestId, fileHash);
         void (async () => {
@@ -1061,7 +1061,7 @@
           void reportTransferOutcome(context, 'failed');
         }
 
-        toasts.detail('Download failed', error, 'error');
+        toasts.notifyDetail('downloadFailed', 'Download failed', error, 'error');
       });
 
       // Listen for download progress (rate-limited writes)

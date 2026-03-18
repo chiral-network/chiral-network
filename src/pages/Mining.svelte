@@ -326,10 +326,10 @@
           deviceIds: selectedGpuDevices.length > 0 ? selectedGpuDevices : null,
           utilizationPercent: gpuUtilizationPercent
         });
-        toasts.detail('GPU mining started', `${selectedGpuDevices.length || 'All'} device${selectedGpuDevices.length !== 1 ? 's' : ''} at ${gpuUtilizationPercent}% utilization`, 'success');
+        toasts.notifyDetail('miningBlock', 'GPU mining started', `${selectedGpuDevices.length || 'All'} device${selectedGpuDevices.length !== 1 ? 's' : ''} at ${gpuUtilizationPercent}% utilization`, 'success');
       } else {
         await invoke('start_mining', { threads: miningThreads });
-        toasts.detail('CPU mining started', `${miningThreads} thread${miningThreads !== 1 ? 's' : ''} at ${cpuUtilizationPercent}% target`, 'success');
+        toasts.notifyDetail('miningBlock', 'CPU mining started', `${miningThreads} thread${miningThreads !== 1 ? 's' : ''} at ${cpuUtilizationPercent}% target`, 'success');
       }
 
       await Promise.all([loadStatus(), loadGpuCapabilities()]);

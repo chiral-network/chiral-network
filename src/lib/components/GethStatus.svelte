@@ -100,7 +100,7 @@
         await gethService.setMinerAddress($walletAccount.address);
       }
       await gethService.startMining(miningThreads);
-      toasts.show('Mining started', 'success');
+      toasts.notify('miningBlock', 'Mining started', 'success');
     } catch (error) {
       log.error('Failed to start mining:', error);
       toasts.detail('Failed to start mining', String(error), 'error');
