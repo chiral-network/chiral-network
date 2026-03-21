@@ -390,6 +390,8 @@
     }
   }
 
+  let hostingPublished = $state(false);
+
   async function publishHosting() {
     if (hostingPublishing) return;
     if (!get(networkConnected)) { toasts.show('Connect to the network first', 'warning'); return; }
@@ -398,8 +400,10 @@
     hostingPublishing = true;
     try {
       await hostingService.publishHostAdvertisement($settings.hostingConfig, wallet.address);
+      hostingPublished = true;
       toasts.show('Hosting published to network', 'success');
     } catch (err: any) {
+      log.error('Publish hosting failed:', err);
       toasts.detail('Failed to publish hosting', String(err?.message || err), 'error');
     } finally {
       hostingPublishing = false;
@@ -412,8 +416,10 @@
     hostingPublishing = true;
     try {
       await hostingService.unpublishHostAdvertisement();
-      // Silent — toggle state reflects in UI
+      hostingPublished = false;
+      toasts.show('Hosting unpublished', 'info');
     } catch (err: any) {
+      log.error('Unpublish hosting failed:', err);
       toasts.detail('Failed to unpublish', String(err?.message || err), 'error');
     } finally {
       hostingPublishing = false;
@@ -960,6 +966,7 @@
         {hosts}
         {loadingHosts}
         {hostingPublishing}
+        {hostingPublished}
         connected={$networkConnected}
         {sortBy}
         onSortChange={(s) => sortBy = s}
