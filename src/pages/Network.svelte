@@ -11,7 +11,6 @@
     Radio,
     Server,
     Download,
-    Upload,
     RefreshCw,
     AlertTriangle,
     Check,
@@ -21,8 +20,6 @@
     HeartPulse,
     ChevronDown,
     ChevronUp,
-    ArrowDownToLine,
-    ArrowUpFromLine,
     ShieldBan,
     Trash2,
     Plus
@@ -100,61 +97,6 @@
   let bootstrapPeerIds = $state<Set<string>>(new Set());
   let filteredPeers = $derived($peers.filter(p => !bootstrapPeerIds.has(p.id)));
 
-  // Relay / NAT Traversal State
-  interface RelayStatus {
-    relayPeerId: string;
-    active: boolean;
-    timestamp: number;
-  }
-  interface HolePunchEvent {
-    remotePeerId: string;
-    success: boolean;
-    error?: string;
-    timestamp: number;
-  }
-  let relayReservations = $state<RelayStatus[]>([]);
-  let holePunchEvents = $state<HolePunchEvent[]>([]);
-  let unlistenRelay: (() => void) | null = null;
-  let unlistenRelayFailed: (() => void) | null = null;
-  let unlistenRelayCircuit: (() => void) | null = null;
-  let unlistenDcutr: (() => void) | null = null;
-
-  // Traffic Statistics State
-  let trafficStats = $state({
-    totalDownloaded: 0,
-    totalUploaded: 0,
-    downloadSpeed: 0,
-    uploadSpeed: 0,
-    sessionStart: Date.now()
-  });
-  let trafficInterval: ReturnType<typeof setInterval> | null = null;
-
-  // Load traffic stats from localStorage
-  function loadTrafficStats() {
-    if (typeof window === 'undefined') return;
-    const saved = localStorage.getItem('chiral-traffic-stats');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        trafficStats = { ...trafficStats, ...parsed, sessionStart: Date.now() };
-      } catch {}
-    }
-  }
-
-  function saveTrafficStats() {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('chiral-traffic-stats', JSON.stringify({
-      totalDownloaded: trafficStats.totalDownloaded,
-      totalUploaded: trafficStats.totalUploaded
-    }));
-  }
-
-  function formatSpeed(bytesPerSec: number): string {
-    if (bytesPerSec >= 1e9) return `${(bytesPerSec / 1e9).toFixed(2)} GB/s`;
-    if (bytesPerSec >= 1e6) return `${(bytesPerSec / 1e6).toFixed(2)} MB/s`;
-    if (bytesPerSec >= 1e3) return `${(bytesPerSec / 1e3).toFixed(2)} KB/s`;
-    return `${bytesPerSec.toFixed(0)} B/s`;
-  }
 
   // Show "connecting" message only when Geth is running with 0 peers, auto-dismiss after 30s
   $effect(() => {
@@ -197,8 +139,6 @@
   }
 
   onMount(async () => {
-    loadTrafficStats();
-
     if (isTauri()) {
       // Load bootstrap peer IDs to filter them from Connected Peers
       try {
@@ -218,44 +158,6 @@
         }
       });
 
-      // Listen for relay/hole-punch events
-      unlistenRelay = await listen<{ relayPeerId: string; renewal: boolean }>('relay-reservation', (event) => {
-        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
-        if (existing) {
-          existing.active = true;
-          existing.timestamp = Date.now();
-          relayReservations = [...relayReservations];
-        } else {
-          relayReservations = [...relayReservations, {
-            relayPeerId: event.payload.relayPeerId,
-            active: true,
-            timestamp: Date.now(),
-          }];
-        }
-      });
-
-      unlistenRelayFailed = await listen<{ relayPeerId: string }>('relay-reservation-failed', (event) => {
-        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
-        if (existing) {
-          existing.active = false;
-          existing.timestamp = Date.now();
-          relayReservations = [...relayReservations];
-        }
-      });
-
-      unlistenRelayCircuit = await listen<{ direction: string }>('relay-circuit-established', () => {
-        log.info('Relay circuit established');
-      });
-
-      unlistenDcutr = await listen<{ remotePeerId: string; success: boolean; error?: string }>('dcutr-event', (event) => {
-        holePunchEvents = [{
-          remotePeerId: event.payload.remotePeerId,
-          success: event.payload.success,
-          error: event.payload.error,
-          timestamp: Date.now(),
-        }, ...holePunchEvents.slice(0, 9)]; // keep last 10
-      });
-
       // Refresh status every 10 seconds
       refreshInterval = setInterval(loadGethStatus, 10000);
     }
@@ -272,14 +174,6 @@
     if (gethConnectingTimeout) {
       clearTimeout(gethConnectingTimeout);
     }
-    if (trafficInterval) {
-      clearInterval(trafficInterval);
-    }
-    unlistenRelay?.();
-    unlistenRelayFailed?.();
-    unlistenRelayCircuit?.();
-    unlistenDcutr?.();
-    saveTrafficStats();
   });
 
   // Load Geth status
@@ -784,22 +678,14 @@
     </div>
 
     <!-- Stats Grid -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div class="grid grid-cols-2 gap-3 mb-4">
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">DHT Peers</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
         <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.connectedPeers}</p>
       </div>
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
         <p class="text-xs text-gray-500 dark:text-gray-400">Discovered Peers</p>
         <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.totalPeers}</p>
-      </div>
-      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-        <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.peerCount || 0}</p>
-      </div>
-      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
-        <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
       </div>
     </div>
 
@@ -957,96 +843,6 @@
         <p class="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
           Click "Run Check" to view DHT health diagnostics
         </p>
-      {/if}
-    </div>
-
-    <!-- Traffic Statistics -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <div class="flex items-center gap-2 mb-3">
-        <Activity class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Traffic Statistics</span>
-      </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <ArrowDownToLine class="w-3.5 h-3.5 text-green-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Download Speed</p>
-          </div>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{formatSpeed(trafficStats.downloadSpeed)}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <ArrowUpFromLine class="w-3.5 h-3.5 text-blue-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Upload Speed</p>
-          </div>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{formatSpeed(trafficStats.uploadSpeed)}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <Download class="w-3.5 h-3.5 text-green-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Total Downloaded</p>
-          </div>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{formatBytes(trafficStats.totalDownloaded)}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <Upload class="w-3.5 h-3.5 text-blue-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Total Uploaded</p>
-          </div>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{formatBytes(trafficStats.totalUploaded)}</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- NAT Traversal / Relay Status -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <div class="flex items-center gap-2 mb-3">
-        <Globe class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">NAT Traversal</span>
-        {#if relayReservations.some(r => r.active)}
-          <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 font-medium">
-            Relay Active
-          </span>
-        {:else if $networkConnected}
-          <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 font-medium">
-            Connecting to Relays
-          </span>
-        {/if}
-      </div>
-
-      {#if relayReservations.length > 0}
-        <div class="space-y-1.5 mb-3">
-          {#each relayReservations as relay}
-            <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
-              <div class="flex items-center gap-2">
-                <div class="w-2 h-2 rounded-full {relay.active ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                <span class="font-mono dark:text-gray-300">{relay.relayPeerId.slice(0, 16)}...</span>
-              </div>
-              <span class="{relay.active ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-                {relay.active ? 'Reserved' : 'Failed'}
-              </span>
-            </div>
-          {/each}
-        </div>
-      {:else if $networkConnected}
-        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-          Relay reservations will appear here when connected to relay nodes.
-          Relays enable connections between peers behind NAT.
-        </p>
-      {/if}
-
-      {#if holePunchEvents.length > 0}
-        <div class="mb-2">
-          <p class="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Hole-Punch Events (DCUtR)</p>
-          <div class="space-y-1">
-            {#each holePunchEvents.slice(0, 5) as event}
-              <div class="flex items-center justify-between p-1.5 text-xs {event.success ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}">
-                <span class="font-mono">{event.remotePeerId.slice(0, 16)}...</span>
-                <span>{event.success ? 'Direct connection established' : `Failed: ${event.error || 'unknown'}`}</span>
-              </div>
-            {/each}
-          </div>
-        </div>
       {/if}
     </div>
 
