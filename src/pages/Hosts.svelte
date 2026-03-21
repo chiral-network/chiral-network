@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { Server, Users, Shield, AlertCircle, FileText } from 'lucide-svelte';
-  import { settings, walletAccount } from '$lib/stores';
+  import { settings, walletAccount, networkConnected } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
@@ -392,6 +392,7 @@
 
   async function publishHosting() {
     if (hostingPublishing) return;
+    if (!get(networkConnected)) { toasts.show('Connect to the network first', 'warning'); return; }
     const wallet = get(walletAccount);
     if (!wallet?.address) { toasts.show('Connect your wallet first', 'warning'); return; }
     hostingPublishing = true;
@@ -407,6 +408,7 @@
 
   async function unpublishHosting() {
     if (hostingPublishing) return;
+    if (!get(networkConnected)) { toasts.show('Not connected to the network', 'warning'); return; }
     hostingPublishing = true;
     try {
       await hostingService.unpublishHostAdvertisement();
@@ -958,6 +960,7 @@
         {hosts}
         {loadingHosts}
         {hostingPublishing}
+        connected={$networkConnected}
         {sortBy}
         onSortChange={(s) => sortBy = s}
         onRefreshHosts={refreshHosts}
