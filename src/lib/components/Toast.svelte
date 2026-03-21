@@ -22,28 +22,28 @@
 
   const styles = {
     success: {
-      bg: 'bg-gray-900 dark:bg-gray-900',
-      border: 'border-emerald-500/30',
-      icon: 'text-emerald-400',
-      bar: 'bg-emerald-400',
+      bg: 'bg-white dark:bg-gray-900',
+      border: 'border-emerald-300 dark:border-emerald-500/30',
+      icon: 'text-emerald-600 dark:text-emerald-400',
+      bar: 'bg-emerald-500 dark:bg-emerald-400',
     },
     error: {
-      bg: 'bg-gray-900 dark:bg-gray-900',
-      border: 'border-red-500/30',
-      icon: 'text-red-400',
-      bar: 'bg-red-400',
+      bg: 'bg-white dark:bg-gray-900',
+      border: 'border-red-300 dark:border-red-500/30',
+      icon: 'text-red-600 dark:text-red-400',
+      bar: 'bg-red-500 dark:bg-red-400',
     },
     info: {
-      bg: 'bg-gray-900 dark:bg-gray-900',
-      border: 'border-blue-500/30',
-      icon: 'text-blue-400',
-      bar: 'bg-blue-400',
+      bg: 'bg-white dark:bg-gray-900',
+      border: 'border-blue-300 dark:border-blue-500/30',
+      icon: 'text-blue-600 dark:text-blue-400',
+      bar: 'bg-blue-500 dark:bg-blue-400',
     },
     warning: {
-      bg: 'bg-gray-900 dark:bg-gray-900',
-      border: 'border-amber-500/30',
-      icon: 'text-amber-400',
-      bar: 'bg-amber-400',
+      bg: 'bg-white dark:bg-gray-900',
+      border: 'border-amber-300 dark:border-amber-500/30',
+      icon: 'text-amber-600 dark:text-amber-400',
+      bar: 'bg-amber-500 dark:bg-amber-400',
     },
   };
 
@@ -74,7 +74,7 @@
 
 <div
   transition:fly={{ x: 80, duration: 250 }}
-  class="fixed right-4 z-50 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border {s.border} {s.bg} shadow-2xl"
+  class="fixed right-4 z-50 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border {s.border} {s.bg} shadow-lg dark:shadow-2xl"
   style="top: {topOffset}px;"
   role="alert"
   onmouseenter={() => paused = true}
@@ -86,15 +86,15 @@
     </div>
 
     <div class="min-w-0 flex-1">
-      <p class="text-sm font-medium text-gray-100">{message}</p>
+      <p class="text-sm font-medium text-gray-900 dark:text-gray-100">{message}</p>
       {#if description}
-        <p class="mt-0.5 text-xs text-gray-400 leading-relaxed">{description}</p>
+        <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">{description}</p>
       {/if}
     </div>
 
     <button
       onclick={onClose}
-      class="shrink-0 rounded p-0.5 text-gray-500 hover:text-gray-300 hover:bg-white/5 transition-colors"
+      class="shrink-0 rounded p-0.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/5 transition-colors"
       aria-label="Dismiss"
     >
       <X size={14} />
@@ -102,7 +102,7 @@
   </div>
 
   <!-- Progress bar -->
-  <div class="h-[2px] w-full bg-white/5">
+  <div class="h-[2px] w-full bg-gray-200 dark:bg-white/5">
     <div
       class="h-full {s.bar} transition-none"
       style="width: {progress}%; opacity: 0.6;"
