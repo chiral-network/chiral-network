@@ -562,34 +562,20 @@
         </p>
       </div>
 
-      <!-- Mining Backend Mode -->
-      <div class="mb-4">
-        <div class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-          Mining Backend
+      <!-- CPU Section -->
+      <div class="mb-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <Cpu class="w-4 h-4 text-green-500" />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">CPU Mining</span>
+          </div>
+          {#if activeMiningBackend === 'cpu'}
+            <span class="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full">Active</span>
+          {/if}
         </div>
-        <div class="grid grid-cols-2 gap-2">
-          <button
-            onclick={() => (miningMode = 'cpu')}
-            disabled={isAnyMining}
-            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'cpu' ? 'bg-primary-100 dark:bg-primary-900/30 border-primary-300 dark:border-primary-700 text-primary-700 dark:text-primary-300' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300'}"
-          >
-            CPU Miner
-          </button>
-          <button
-            onclick={() => (miningMode = 'gpu')}
-            disabled={isAnyMining}
-            class="px-3 py-2 rounded-lg border text-sm font-medium transition-colors disabled:opacity-50 {miningMode === 'gpu' ? 'bg-primary-100 dark:bg-primary-900/30 border-primary-300 dark:border-primary-700 text-primary-700 dark:text-primary-300' : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300'}"
-          >
-            GPU Miner
-          </button>
-        </div>
-      </div>
-
-      {#if miningMode === 'cpu'}
-        <!-- CPU Utilization Control -->
-        <div class="mb-4">
-          <label for="cpu-utilization" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            CPU Utilization Target ({cpuUtilizationPercent}%)
+        <div class="mb-3">
+          <label for="cpu-utilization" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+            Utilization Target ({cpuUtilizationPercent}%) — {miningThreads} of {maxThreads} threads
           </label>
           <input
             id="cpu-utilization"
@@ -601,73 +587,99 @@
             disabled={isAnyMining}
             class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
           />
-          <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-            <span>{MIN_UTILIZATION_PERCENT}%</span>
-            <span>{MAX_UTILIZATION_PERCENT}%</span>
-          </div>
-          <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
-            Effective CPU threads: <span class="font-medium">{miningThreads}</span> of {maxThreads}
-          </p>
         </div>
-      {:else}
-        <!-- GPU Utilization Control -->
-        <div class="mb-4">
-          <label for="gpu-utilization" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            GPU Utilization Target ({gpuUtilizationPercent}%)
-          </label>
-          <input
-            id="gpu-utilization"
-            type="range"
-            min={MIN_UTILIZATION_PERCENT}
-            max={MAX_UTILIZATION_PERCENT}
-            step="1"
-            bind:value={gpuUtilizationPercent}
-            disabled={isAnyMining}
-            class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
-          />
-          <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-            <span>{MIN_UTILIZATION_PERCENT}%</span>
-            <span>{MAX_UTILIZATION_PERCENT}%</span>
-          </div>
-        </div>
-      {:else}
-        <!-- GPU Control -->
-        <div class="mb-4">
-          {#if !gpuCapabilities?.binaryPath}
-            <div class="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
-              {#if gpuCapabilities?.lastError}
-                <p class="text-sm text-amber-800 dark:text-amber-300">
-                  GPU miner is unavailable: {gpuCapabilities.lastError}
-                </p>
-                <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                  You can still set `CHIRAL_GPU_MINER_PATH` manually and refresh.
-                </p>
-              {:else}
-                <p class="text-sm text-amber-800 dark:text-amber-300">
-                  Preparing GPU miner automatically. If this stays here, click refresh.
-                </p>
-              {/if}
-            </div>
-          {:else}
-            {#if gpuCapabilities?.lastError}
-              <div class="mb-3 rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
-                <p class="text-sm text-amber-800 dark:text-amber-300">
-                  GPU probe warning: {gpuCapabilities.lastError}
-                </p>
-                <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                  You can still start GPU mining and the app will retry with backend fallbacks automatically.
-                </p>
-              </div>
+        {#if !isAnyMining}
+          <button
+            onclick={() => { miningMode = 'cpu'; handleStartMining(); }}
+            disabled={isStartingMining}
+            class="w-full px-3 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
+          >
+            {#if isStartingMining && miningMode === 'cpu'}
+              <Loader2 class="w-4 h-4 animate-spin" />
+              Starting...
+            {:else}
+              <Pickaxe class="w-4 h-4" />
+              Start CPU Mining
             {/if}
-            <div class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              GPU Devices ({selectedGpuDevices.length} selected)
+          </button>
+        {:else if activeMiningBackend === 'cpu'}
+          <button
+            onclick={handleStopMining}
+            class="w-full px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 text-sm"
+          >
+            <Square class="w-4 h-4" />
+            Stop CPU Mining
+          </button>
+        {/if}
+      </div>
+
+      <!-- GPU Section -->
+      <div class="mb-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <Monitor class="w-4 h-4 text-cyan-500" />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">GPU Mining</span>
+          </div>
+          {#if activeMiningBackend === 'gpu'}
+            <span class="text-xs px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full">Active</span>
+          {/if}
+        </div>
+
+        {#if !gpuCapabilities?.binaryPath}
+          <div class="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 mb-3">
+            {#if gpuCapabilities?.lastError}
+              <p class="text-sm text-amber-800 dark:text-amber-300">
+                GPU miner is unavailable: {gpuCapabilities.lastError}
+              </p>
+              <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                You can still set `CHIRAL_GPU_MINER_PATH` manually and refresh.
+              </p>
+            {:else}
+              <p class="text-sm text-amber-800 dark:text-amber-300">
+                Preparing GPU miner automatically. If this stays here, click refresh.
+              </p>
+            {/if}
+          </div>
+        {:else}
+          {#if gpuCapabilities?.lastError}
+            <div class="mb-3 rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3">
+              <p class="text-sm text-amber-800 dark:text-amber-300">
+                GPU probe warning: {gpuCapabilities.lastError}
+              </p>
+              <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                You can still start GPU mining and the app will retry with backend fallbacks automatically.
+              </p>
+            </div>
+          {/if}
+
+          <!-- GPU Utilization -->
+          <div class="mb-3">
+            <label for="gpu-utilization" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+              Utilization Target ({gpuUtilizationPercent}%)
+            </label>
+            <input
+              id="gpu-utilization"
+              type="range"
+              min={MIN_UTILIZATION_PERCENT}
+              max={MAX_UTILIZATION_PERCENT}
+              step="1"
+              bind:value={gpuUtilizationPercent}
+              disabled={isAnyMining}
+              class="w-full h-2 bg-gray-200 dark:bg-gray-600 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+            />
+          </div>
+
+          <!-- GPU Devices -->
+          <div class="mb-3">
+            <div class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+              Devices ({selectedGpuDevices.length} selected)
             </div>
             {#if gpuCapabilities.devices.length === 0}
-              <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700 p-3 text-sm text-gray-600 dark:text-gray-300">
-                No devices were reported by the miner binary. You can still try starting GPU mining with auto-detection.
+              <div class="rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 p-2 text-xs text-gray-500 dark:text-gray-400">
+                No devices detected. GPU mining will use auto-detection.
               </div>
             {:else}
-              <div class="space-y-2 max-h-44 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-700">
+              <div class="space-y-1.5 max-h-32 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 p-2 bg-white dark:bg-gray-700">
                 {#each gpuCapabilities.devices as device (device.id)}
                   <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                     <input
@@ -678,51 +690,48 @@
                       class="rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
                     />
                     <span class="font-mono text-xs text-gray-500 dark:text-gray-400">[{device.id}]</span>
-                    <span>{device.name}</span>
+                    <span class="text-sm">{device.name}</span>
                   </label>
                 {/each}
               </div>
             {/if}
-          {/if}
-        </div>
+          </div>
+        {/if}
 
         {#if gpuMiningStatus?.lastError}
-          <div class="mb-4 rounded-lg border border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/20 p-3">
+          <div class="mb-3 rounded-lg border border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/20 p-3">
             <p class="text-sm text-red-700 dark:text-red-300">{gpuMiningStatus.lastError}</p>
           </div>
         {/if}
-      {/if}
 
-      <!-- Mining Controls -->
-      <div class="flex gap-3">
-        {#if isAnyMining}
+        {#if !isAnyMining}
           <button
-            onclick={handleStopMining}
-            class="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500/30"
+            onclick={() => { miningMode = 'gpu'; handleStartMining(); }}
+            disabled={isStartingMining || !gpuCapabilities?.binaryPath}
+            class="w-full px-3 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
           >
-            <Square class="w-5 h-5" />
-            Stop Mining
-          </button>
-        {:else}
-          <button
-            onclick={handleStartMining}
-            disabled={isStartingMining || (miningMode === 'gpu' && !gpuCapabilities?.binaryPath)}
-            class="flex-1 px-4 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-yellow-500/30"
-          >
-            {#if isStartingMining}
-              <Loader2 class="w-5 h-5 animate-spin" />
+            {#if isStartingMining && miningMode === 'gpu'}
+              <Loader2 class="w-4 h-4 animate-spin" />
               Starting...
             {:else}
-              <Pickaxe class="w-5 h-5" />
-              {#if miningMode === 'gpu'}
-                Start GPU Mining
-              {:else}
-                Start CPU Mining
-              {/if}
+              <Pickaxe class="w-4 h-4" />
+              Start GPU Mining
             {/if}
+          </button>
+        {:else if activeMiningBackend === 'gpu'}
+          <button
+            onclick={handleStopMining}
+            class="w-full px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 text-sm"
+          >
+            <Square class="w-4 h-4" />
+            Stop GPU Mining
           </button>
         {/if}
       </div>
+
+      {#if isAnyMining}
+        <p class="text-xs text-gray-500 dark:text-gray-400 text-center">CPU and GPU mining are mutually exclusive — stop one to start the other.</p>
+      {/if}
     </div>
 
     <!-- Mining History -->
