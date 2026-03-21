@@ -8,7 +8,6 @@
     Moon,
     Monitor,
     Palette,
-    LayoutGrid,
     PanelTop,
     PanelLeft,
     RotateCcw,
@@ -83,10 +82,6 @@
 
   function setColorTheme(color: ColorTheme) {
     settings.update((s) => ({ ...s, colorTheme: color }));
-  }
-
-  function toggleCompactMode() {
-    settings.update((s) => ({ ...s, compactMode: !s.compactMode }));
   }
 
   function setNavStyle(style: NavStyle) {
@@ -203,30 +198,6 @@
           </button>
         {/each}
       </div>
-    </div>
-
-    <!-- Compact Mode -->
-    <div class="flex items-center justify-between py-4 border-t border-gray-200 dark:border-gray-700">
-      <div class="flex items-center gap-3">
-        <LayoutGrid class="w-5 h-5 text-gray-500 dark:text-gray-400" />
-        <div>
-          <p class="font-medium text-gray-900 dark:text-white">Compact Mode</p>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Use smaller spacing and font sizes</p>
-        </div>
-      </div>
-      <button
-        onclick={toggleCompactMode}
-        class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.compactMode ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
-        role="switch"
-        aria-checked={$settings.compactMode}
-        aria-label="Toggle compact mode"
-      >
-        <span
-          class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-            {$settings.compactMode ? 'translate-x-6' : 'translate-x-0'}"
-        ></span>
-      </button>
     </div>
 
     <!-- Navigation Style -->
