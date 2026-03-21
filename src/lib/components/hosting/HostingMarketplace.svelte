@@ -17,6 +17,7 @@
     hosts: HostEntry[];
     loadingHosts: boolean;
     hostingPublishing: boolean;
+    connected: boolean;
     sortBy: 'reputation' | 'price' | 'storage';
     onSortChange: (sort: 'reputation' | 'price' | 'storage') => void;
     onRefreshHosts: () => void;
@@ -30,6 +31,7 @@
     hosts,
     loadingHosts,
     hostingPublishing,
+    connected,
     sortBy,
     onSortChange,
     onRefreshHosts,
@@ -249,10 +251,11 @@
       <div class="mt-5 flex items-center gap-3 pt-4 border-t border-gray-100 dark:border-gray-700/40">
         <button
           onclick={onPublish}
-          disabled={hostingPublishing}
+          disabled={hostingPublishing || !connected}
           class="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors
             focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2 dark:focus:ring-offset-gray-900
             disabled:opacity-50 disabled:cursor-not-allowed"
+          title={!connected ? 'Connect to the network first' : ''}
         >
           {#if hostingPublishing}
             <Loader2 class="w-3.5 h-3.5 animate-spin" />
@@ -261,14 +264,18 @@
         </button>
         <button
           onclick={onUnpublish}
-          disabled={hostingPublishing}
+          disabled={hostingPublishing || !connected}
           class="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600 rounded-lg
             hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors
             focus:outline-none focus:ring-2 focus:ring-gray-400/30
             disabled:opacity-50 disabled:cursor-not-allowed"
+          title={!connected ? 'Connect to the network first' : ''}
         >
           Unpublish
         </button>
+        {#if !connected}
+          <span class="text-xs text-amber-600 dark:text-amber-400">Network not connected</span>
+        {/if}
       </div>
     </div>
   {/if}
