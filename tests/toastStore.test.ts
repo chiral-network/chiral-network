@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { toasts, showToast } from '$lib/toastStore';
+import { settings } from '$lib/stores';
 import { get } from 'svelte/store';
 
 describe('toastStore', () => {
@@ -175,6 +176,55 @@ describe('toastStore', () => {
       expect(get(toasts)).toHaveLength(1);
 
       vi.advanceTimersByTime(1000);
+      expect(get(toasts)).toHaveLength(0);
+    });
+  });
+
+  describe('toasts.notify', () => {
+    it('should show toast when notification setting is enabled', () => {
+      settings.update(s => ({
+        ...s,
+        notifications: { ...s.notifications, downloadComplete: true },
+      }));
+      toasts.notify('downloadComplete', 'Download done', 'success');
+      expect(get(toasts)).toHaveLength(1);
+      expect(get(toasts)[0].message).toBe('Download done');
+    });
+
+    it('should suppress toast when notification setting is disabled', () => {
+      settings.update(s => ({
+        ...s,
+        notifications: { ...s.notifications, downloadComplete: false },
+      }));
+      toasts.notify('downloadComplete', 'Download done', 'success');
+      expect(get(toasts)).toHaveLength(0);
+    });
+
+    it('should default to showing when setting is not explicitly false', () => {
+      toasts.notify('miningBlock', 'Block mined', 'success');
+      expect(get(toasts)).toHaveLength(1);
+    });
+  });
+
+  describe('toasts.notifyDetail', () => {
+    it('should show detail toast when notification setting is enabled', () => {
+      settings.update(s => ({
+        ...s,
+        notifications: { ...s.notifications, networkStatus: true },
+      }));
+      toasts.notifyDetail('networkStatus', 'Connected', 'P2P network active', 'success');
+      const current = get(toasts);
+      expect(current).toHaveLength(1);
+      expect(current[0].message).toBe('Connected');
+      expect(current[0].description).toBe('P2P network active');
+    });
+
+    it('should suppress detail toast when notification setting is disabled', () => {
+      settings.update(s => ({
+        ...s,
+        notifications: { ...s.notifications, networkStatus: false },
+      }));
+      toasts.notifyDetail('networkStatus', 'Connected', 'P2P network active', 'success');
       expect(get(toasts)).toHaveLength(0);
     });
   });
