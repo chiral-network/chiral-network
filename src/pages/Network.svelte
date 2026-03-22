@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { peers, networkStats, networkConnected, walletAccount, blacklist } from '$lib/stores';
+  import { formatBytes } from '$lib/utils';
   import { dhtService, type DhtHealthInfo } from '$lib/dhtService';
   import { toasts } from '$lib/toastStore';
   import {
@@ -144,7 +145,7 @@
       try {
         const ids: string[] = await invoke('get_bootstrap_peer_ids');
         bootstrapPeerIds = new Set(ids);
-      } catch {}
+      } catch { /* bootstrap IDs unavailable — show all peers */ }
 
       await loadGethStatus();
       await loadBootstrapHealth();
@@ -361,12 +362,6 @@
     return d.toLocaleString();
   }
 
-  function formatBytes(bytes: number): string {
-    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
-    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(2)} MB`;
-    if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(2)} KB`;
-    return `${bytes} B`;
-  }
 
   // Blacklist
   let blacklistAddress = $state('');

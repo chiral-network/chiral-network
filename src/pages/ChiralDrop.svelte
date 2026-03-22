@@ -20,12 +20,11 @@
     updateTransferPayment,
     updateTransferByFileHash,
     generateTransferId,
-    formatFileSize,
-    formatPriceWei,
     type NearbyPeer,
     type FileTransfer
   } from '$lib/chiralDropStore';
   import { aliasFromPeerId } from '$lib/aliasService';
+  import { formatBytes as formatFileSize, formatPriceWei } from '$lib/utils';
   import { peers, walletAccount } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
@@ -291,7 +290,7 @@
         const { invoke } = await import('@tauri-apps/api/core');
         const ids: string[] = await invoke('get_bootstrap_peer_ids');
         bootstrapPeerIds = new Set(ids);
-      } catch {}
+      } catch { /* bootstrap IDs unavailable — show all peers */ }
     }
 
     // Sync with existing peers from the network (excluding bootstrap nodes)

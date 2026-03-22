@@ -170,7 +170,7 @@
             addLog('info', source, `Event: ${eventName} — ${payload}`);
           });
           eventListeners.push(unlisten);
-        } catch {}
+        } catch { /* event listener setup is best-effort */ }
       }
 
       // Initial data load

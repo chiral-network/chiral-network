@@ -4,6 +4,7 @@
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import { networkConnected, walletAccount } from '$lib/stores';
   import { toasts } from '$lib/toastStore';
+  import { formatBytes as formatFileSize } from '$lib/utils';
 
   let {
     manifest,
@@ -21,14 +22,6 @@
   let priceDrafts = $state<Record<string, string>>({});
 
   const seedingItems = $derived($networkConnected ? driveStore.getSeedingItems(manifest) : []);
-
-  function formatFileSize(bytes?: number): string {
-    if (!bytes) return '0 B';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
 
   function formatDate(date: number): string {
     return new Intl.DateTimeFormat('en-US', {

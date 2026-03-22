@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
+  import { formatBytes } from '$lib/utils';
   import { setLocalDriveServer } from '$lib/services/driveApiService';
   import { walletAccount, networkConnected } from '$lib/stores';
 
@@ -559,12 +560,6 @@
   });
   onDestroy(() => { unlistenDragDrop?.(); });
 
-  function formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
 </script>
 
 <svelte:head><title>Drive | Chiral Network</title></svelte:head>

@@ -5,8 +5,11 @@
   import { toasts } from '$lib/toastStore';
   import { Copy, RefreshCw, Download, ArrowLeft, Check, Mail } from 'lucide-svelte';
 
-  export let onBack: () => void;
-  export let onComplete: () => void;
+  interface Props {
+    onBack: () => void;
+    onComplete: () => void;
+  }
+  let { onBack, onComplete }: Props = $props();
 
   type WalletCreationStep = 'generate' | 'verify' | 'email';
   type PendingWallet = { address: string; privateKey: string };
@@ -141,7 +144,7 @@
   {#if step === 'generate'}
     <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
       <div class="flex items-center mb-6">
-        <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
+        <button onclick={onBack} class="mr-4 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
           <ArrowLeft class="w-5 h-5 dark:text-gray-300" />
         </button>
         <h2 class="text-2xl font-bold dark:text-white">Create New Wallet</h2>
@@ -169,7 +172,7 @@
 
         <div class="flex gap-3">
           <button
-            on:click={copyToClipboard}
+            onclick={copyToClipboard}
             class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition"
           >
             {#if copied}
@@ -182,7 +185,7 @@
           </button>
 
           <button
-            on:click={generateNewMnemonic}
+            onclick={generateNewMnemonic}
             class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition"
           >
             <RefreshCw class="w-4 h-4 dark:text-gray-300" />
@@ -190,7 +193,7 @@
           </button>
 
           <button
-            on:click={downloadAsText}
+            onclick={downloadAsText}
             class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition"
           >
             <Download class="w-4 h-4 dark:text-gray-300" />
@@ -201,13 +204,13 @@
 
       <div class="flex gap-3">
         <button
-          on:click={onBack}
+          onclick={onBack}
           class="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
         >
           Cancel
         </button>
         <button
-          on:click={proceedToVerification}
+          onclick={proceedToVerification}
           class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
         >
           I've Saved It
@@ -245,13 +248,13 @@
 
       <div class="flex gap-3">
         <button
-          on:click={() => step = 'generate'}
+          onclick={() => step = 'generate'}
           class="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
         >
           Back
         </button>
         <button
-          on:click={verifyAndContinue}
+          onclick={verifyAndContinue}
           class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
         >
           Continue
@@ -297,21 +300,21 @@
 
       <div class="flex gap-3">
         <button
-          on:click={() => step = 'verify'}
+          onclick={() => step = 'verify'}
           class="px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
           disabled={sendingEmail}
         >
           Back
         </button>
         <button
-          on:click={skipEmail}
+          onclick={skipEmail}
           class="px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
           disabled={sendingEmail}
         >
           Skip
         </button>
         <button
-          on:click={sendBackupAndComplete}
+          onclick={sendBackupAndComplete}
           class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-60 disabled:cursor-not-allowed"
           disabled={sendingEmail}
         >
