@@ -28,73 +28,73 @@ describe('chiralDropStore', () => {
 
   describe('formatPriceWei', () => {
     it('should return "Free" for "0"', async () => {
-      const { formatPriceWei } = await import('$lib/chiralDropStore');
+      const { formatPriceWei } = await import('$lib/utils');
       expect(formatPriceWei('0')).toBe('Free');
     });
 
     it('should return "Free" for empty string', async () => {
-      const { formatPriceWei } = await import('$lib/chiralDropStore');
+      const { formatPriceWei } = await import('$lib/utils');
       expect(formatPriceWei('')).toBe('Free');
     });
 
     it('should format 1 CHI (1e18 wei)', async () => {
-      const { formatPriceWei } = await import('$lib/chiralDropStore');
+      const { formatPriceWei } = await import('$lib/utils');
       expect(formatPriceWei('1000000000000000000')).toBe('1 CHI');
     });
 
     it('should format 0.5 CHI (5e17 wei)', async () => {
-      const { formatPriceWei } = await import('$lib/chiralDropStore');
+      const { formatPriceWei } = await import('$lib/utils');
       const result = formatPriceWei('500000000000000000');
       expect(result).toBe('0.5 CHI');
     });
 
     it('should format 2.5 CHI', async () => {
-      const { formatPriceWei } = await import('$lib/chiralDropStore');
+      const { formatPriceWei } = await import('$lib/utils');
       expect(formatPriceWei('2500000000000000000')).toBe('2.5 CHI');
     });
 
     it('should format very small amount (1 wei)', async () => {
-      const { formatPriceWei } = await import('$lib/chiralDropStore');
+      const { formatPriceWei } = await import('$lib/utils');
       const result = formatPriceWei('1');
       expect(result).toContain('CHI');
       expect(result).not.toBe('Free');
     });
 
-    it('should fallback to "X wei" for invalid input', async () => {
-      const { formatPriceWei } = await import('$lib/chiralDropStore');
+    it('should fallback to "Free" for invalid input', async () => {
+      const { formatPriceWei } = await import('$lib/utils');
       const result = formatPriceWei('not_a_number');
-      expect(result).toContain('wei');
+      expect(result).toBe('Free');
     });
   });
 
   describe('formatFileSize', () => {
     it('should format 0 bytes', async () => {
-      const { formatFileSize } = await import('$lib/chiralDropStore');
+      const { formatBytes: formatFileSize } = await import('$lib/utils');
       expect(formatFileSize(0)).toBe('0 B');
     });
 
     it('should format bytes', async () => {
-      const { formatFileSize } = await import('$lib/chiralDropStore');
+      const { formatBytes: formatFileSize } = await import('$lib/utils');
       expect(formatFileSize(500)).toBe('500 B');
     });
 
     it('should format KB', async () => {
-      const { formatFileSize } = await import('$lib/chiralDropStore');
+      const { formatBytes: formatFileSize } = await import('$lib/utils');
       expect(formatFileSize(1024)).toBe('1 KB');
     });
 
     it('should format MB', async () => {
-      const { formatFileSize } = await import('$lib/chiralDropStore');
+      const { formatBytes: formatFileSize } = await import('$lib/utils');
       expect(formatFileSize(1048576)).toBe('1 MB');
     });
 
     it('should format GB', async () => {
-      const { formatFileSize } = await import('$lib/chiralDropStore');
+      const { formatBytes: formatFileSize } = await import('$lib/utils');
       expect(formatFileSize(1073741824)).toBe('1 GB');
     });
 
     it('should format fractional sizes', async () => {
-      const { formatFileSize } = await import('$lib/chiralDropStore');
+      const { formatBytes: formatFileSize } = await import('$lib/utils');
       expect(formatFileSize(1536)).toBe('1.5 KB');
     });
   });

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Plus, FolderOpen, HardDrive, X, File as FileIcon, Loader2 } from 'lucide-svelte';
-  import { formatHostedFileSize as formatFileSize } from '$lib/utils/hostingPageUtils';
+  import { formatBytes as formatFileSize } from '$lib/utils';
 
   interface SelectedFile {
     name: string;

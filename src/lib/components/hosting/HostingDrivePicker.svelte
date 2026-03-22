@@ -1,6 +1,6 @@
 <script lang="ts">
   import { HardDrive, FileText, Loader2, X, Check } from 'lucide-svelte';
-  import { formatHostedFileSize as formatBytes } from '$lib/utils/hostingPageUtils';
+  import { formatBytes } from '$lib/utils';
 
   interface DriveFile {
     id: string;

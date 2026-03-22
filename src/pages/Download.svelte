@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { formatBytes as formatFileSize, formatPriceWei } from '$lib/utils';
   import {
     Search,
     Download,
@@ -173,14 +174,6 @@
   }
 
   // Format file size
-  function formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
-
   // Format date
   function formatDate(date: Date): string {
     return new Intl.DateTimeFormat('en-US', {
@@ -189,23 +182,6 @@
       hour: '2-digit',
       minute: '2-digit'
     }).format(date);
-  }
-
-  // Format wei price as CHI string
-  function formatPriceWei(weiStr: string): string {
-    if (!weiStr || weiStr === '0') return 'Free';
-    try {
-      const wei = BigInt(weiStr);
-      if (wei === 0n) return 'Free';
-      const whole = wei / 1_000_000_000_000_000_000n;
-      const frac = wei % 1_000_000_000_000_000_000n;
-      if (frac === 0n) return `${whole} CHI`;
-      const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
-      const decimals = fracStr.length > 6 ? fracStr.slice(0, 6) : fracStr;
-      return `${whole}.${decimals} CHI`;
-    } catch {
-      return 'Free';
-    }
   }
 
   function formatInvokeError(error: unknown): string {

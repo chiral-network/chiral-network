@@ -3,6 +3,7 @@
   import { getFileIcon, getFileColor, getFolderColor } from '$lib/utils/fileIcons';
   import type { DriveItem } from '$lib/stores/driveStore';
   import { networkConnected } from '$lib/stores';
+  import { formatBytes as formatSize } from '$lib/utils';
 
   let {
     item,
@@ -13,14 +14,6 @@
     onOpen: (item: DriveItem) => void;
     onContextMenu: (item: DriveItem, event: MouseEvent) => void;
   } = $props();
-
-  function formatSize(bytes?: number): string {
-    if (!bytes) return '';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
 
   function getPriceLabel(item: DriveItem): string | null {
     if (item.type !== 'file') return null;
