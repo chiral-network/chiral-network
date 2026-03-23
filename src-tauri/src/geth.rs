@@ -149,6 +149,7 @@ pub struct GpuMiningCapabilities {
     pub devices: Vec<GpuDevice>,
     pub running: bool,
     pub active_devices: Vec<String>,
+    pub utilization_percent: u8,
     pub last_error: Option<String>,
 }
 
@@ -158,6 +159,7 @@ pub struct GpuMiningStatus {
     pub running: bool,
     pub hash_rate: u64,
     pub active_devices: Vec<String>,
+    pub utilization_percent: u8,
     pub last_error: Option<String>,
 }
 
@@ -192,12 +194,11 @@ impl GethDownloader {
     }
 
     pub fn geth_path(&self) -> PathBuf {
-        self.bin_dir()
-            .join(if cfg!(target_os = "windows") {
-                "geth.exe"
-            } else {
-                "geth"
-            })
+        self.bin_dir().join(if cfg!(target_os = "windows") {
+            "geth.exe"
+        } else {
+            "geth"
+        })
     }
 
     pub fn bin_dir(&self) -> PathBuf {
@@ -276,7 +277,10 @@ impl GethDownloader {
             .map_err(|e| format!("Failed to download from {}: {}", url, e))?;
 
         if !response.status().is_success() {
-            return Err(format!("Download failed with status: {}", response.status()));
+            return Err(format!(
+                "Download failed with status: {}",
+                response.status()
+            ));
         }
 
         let total_size = response.content_length().unwrap_or(0);
@@ -342,8 +346,8 @@ impl GethDownloader {
 
     fn extract_zip(&self, data: &[u8], output_dir: &Path) -> Result<(), String> {
         let reader = Cursor::new(data);
-        let mut archive =
-            zip::ZipArchive::new(reader).map_err(|e| format!("Failed to read zip archive: {}", e))?;
+        let mut archive = zip::ZipArchive::new(reader)
+            .map_err(|e| format!("Failed to read zip archive: {}", e))?;
 
         let geth_filename = if cfg!(target_os = "windows") {
             "geth.exe"
@@ -383,6 +387,7 @@ pub struct GethProcess {
     gpu_auto_install_attempted: bool,
     gpu_backend: Option<String>,
     gpu_active_devices: Vec<String>,
+    gpu_utilization_percent: u8,
     gpu_hash_rate: u64,
     gpu_last_error: Option<String>,
     /// Last observed block number for hashrate estimation
@@ -407,6 +412,7 @@ impl GethProcess {
             gpu_auto_install_attempted: false,
             gpu_backend: None,
             gpu_active_devices: Vec::new(),
+            gpu_utilization_percent: 100,
             gpu_hash_rate: 0,
             gpu_last_error: None,
             last_block: 0,
@@ -443,7 +449,11 @@ impl GethProcess {
 
         // Source 2: fuser on port 8545 (catches cases where PID file was deleted
         // but Geth is still running, or a different Geth instance is on our port)
-        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
+        if let Ok(output) = Command::new("fuser")
+            .args(["8545/tcp"])
+            .stderr(Stdio::piped())
+            .output()
+        {
             // fuser outputs PIDs to stderr on some systems, stdout on others
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -477,8 +487,11 @@ impl GethProcess {
         for pid in &pids_to_kill {
             let pid_s = pid.to_string();
             let is_alive = || -> bool {
-                Command::new("kill").args(["-0", &pid_s])
-                    .output().map(|o| o.status.success()).unwrap_or(false)
+                Command::new("kill")
+                    .args(["-0", &pid_s])
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
             };
 
             if !is_alive() {
@@ -493,7 +506,11 @@ impl GethProcess {
             for i in 0..10 {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 if !is_alive() {
-                    println!("✅ Orphaned Geth (PID {}) exited after {}ms", pid, (i + 1) * 500);
+                    println!(
+                        "✅ Orphaned Geth (PID {}) exited after {}ms",
+                        pid,
+                        (i + 1) * 500
+                    );
                     exited = true;
                     break;
                 }
@@ -504,7 +521,9 @@ impl GethProcess {
                 let _ = Command::new("kill").args(["-9", &pid_s]).output();
                 for _ in 0..10 {
                     std::thread::sleep(std::time::Duration::from_millis(500));
-                    if !is_alive() { break; }
+                    if !is_alive() {
+                        break;
+                    }
                 }
             }
         }
@@ -513,7 +532,9 @@ impl GethProcess {
         if ipc_path.exists() {
             println!("⏳ Waiting for geth.ipc cleanup...");
             for _ in 0..10 {
-                if !ipc_path.exists() { break; }
+                if !ipc_path.exists() {
+                    break;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
             if ipc_path.exists() {
@@ -569,7 +590,7 @@ impl GethProcess {
         match (std::env::consts::OS, std::env::consts::ARCH) {
             ("windows", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda10.0-windows-amd64.zip"),
             ("linux", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-linux-x86_64.tar.gz"),
-            ("macos", "x86_64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-darwin-x86_64.tar.gz"),
+            ("macos", "x86_64") | ("macos", "aarch64") => Ok("https://github.com/ethereum-mining/ethminer/releases/download/v0.18.0/ethminer-0.18.0-cuda-9-darwin-x86_64.tar.gz"),
             _ => Err(format!(
                 "GPU miner auto-install is not supported on platform {} {}",
                 std::env::consts::OS,
@@ -580,8 +601,8 @@ impl GethProcess {
 
     fn extract_gpu_miner_zip(data: &[u8], output_dir: &Path) -> Result<PathBuf, String> {
         let reader = Cursor::new(data);
-        let mut archive =
-            zip::ZipArchive::new(reader).map_err(|e| format!("Failed to read zip archive: {}", e))?;
+        let mut archive = zip::ZipArchive::new(reader)
+            .map_err(|e| format!("Failed to read zip archive: {}", e))?;
         let binary_name = Self::gpu_binary_name();
 
         for i in 0..archive.len() {
@@ -648,7 +669,8 @@ impl GethProcess {
 
         if self.gpu_auto_install_attempted {
             return Err(self.gpu_last_error.clone().unwrap_or_else(|| {
-                "GPU miner auto-install already attempted but binary is still unavailable".to_string()
+                "GPU miner auto-install already attempted but binary is still unavailable"
+                    .to_string()
             }));
         }
         self.gpu_auto_install_attempted = true;
@@ -706,7 +728,9 @@ impl GethProcess {
             }
         });
         let Some(path) = found else {
-            return Err("GPU miner download completed but executable could not be located".to_string());
+            return Err(
+                "GPU miner download completed but executable could not be located".to_string(),
+            );
         };
         self.gpu_binary_path = Some(path.clone());
         self.gpu_last_error = None;
@@ -865,8 +889,13 @@ impl GethProcess {
             if trimmed.is_empty() {
                 continue;
             }
-            if let Some(device) = parse_bracket_format(trimmed).or_else(|| parse_tabular_format(trimmed)) {
-                if !out.iter().any(|existing| existing.id == device.id && existing.name == device.name) {
+            if let Some(device) =
+                parse_bracket_format(trimmed).or_else(|| parse_tabular_format(trimmed))
+            {
+                if !out
+                    .iter()
+                    .any(|existing| existing.id == device.id && existing.name == device.name)
+                {
                     out.push(device);
                 }
             }
@@ -874,7 +903,10 @@ impl GethProcess {
         out
     }
 
-    fn scan_gpu_devices(binary_path: &Path, backend_flag: &str) -> Result<(Vec<GpuDevice>, String), String> {
+    fn scan_gpu_devices(
+        binary_path: &Path,
+        backend_flag: &str,
+    ) -> Result<(Vec<GpuDevice>, String), String> {
         let output = Command::new(binary_path)
             .arg(backend_flag)
             .arg("--list-devices")
@@ -891,6 +923,102 @@ impl GethProcess {
         Ok((devices, text))
     }
 
+    fn clamp_gpu_utilization_percent(utilization_percent: Option<u8>) -> u8 {
+        utilization_percent.unwrap_or(100).clamp(10, 100)
+    }
+
+    fn gpu_tuning_args(backend: &str, utilization_percent: u8) -> Vec<String> {
+        if utilization_percent >= 100 {
+            return Vec::new();
+        }
+
+        if backend == "cuda" {
+            // Lower grid size/stream count to cap GPU occupancy.
+            let mut grid = 32_768u32.saturating_mul(utilization_percent as u32) / 100;
+            if grid < 1_024 {
+                grid = 1_024;
+            }
+            grid = (grid / 256).max(1) * 256;
+            let streams = if utilization_percent >= 70 { 2 } else { 1 };
+            vec![
+                "--cuda-grid-size".to_string(),
+                grid.to_string(),
+                "--cuda-streams".to_string(),
+                streams.to_string(),
+            ]
+        } else {
+            // Lower OpenCL global/local work size to reduce device pressure.
+            let mut global_work = 32_768u32.saturating_mul(utilization_percent as u32) / 100;
+            if global_work < 4_096 {
+                global_work = 4_096;
+            }
+            global_work = (global_work / 64).max(1) * 64;
+            let local_work = if utilization_percent >= 70 { 128 } else { 64 };
+            vec![
+                "--opencl-global-work".to_string(),
+                global_work.to_string(),
+                "--opencl-local-work".to_string(),
+                local_work.to_string(),
+            ]
+        }
+    }
+
+    fn read_log_tail(path: &Path, max_lines: usize) -> String {
+        let Ok(contents) = fs::read_to_string(path) else {
+            return String::new();
+        };
+        let mut tail = contents.lines().rev().take(max_lines).collect::<Vec<_>>();
+        tail.reverse();
+        tail.join("\n")
+    }
+
+    fn gpu_log_indicates_activity(contents: &str) -> bool {
+        let activity_markers = [
+            "new job",
+            "job:",
+            "got work package",
+            "work package",
+            "mining on",
+            "speed",
+            "searching for solutions",
+            "solution",
+            "accepted",
+            "epoch",
+            "dag",
+        ];
+        contents.lines().any(|line| {
+            if Self::parse_hash_rate_from_line(line).is_some() {
+                return true;
+            }
+            let lower = line.to_ascii_lowercase();
+            activity_markers.iter().any(|m| lower.contains(m))
+        })
+    }
+
+    fn gpu_log_fatal_error(contents: &str) -> Option<String> {
+        let fatal_markers = [
+            "unrecognized option",
+            "invalid argument",
+            "unknown option",
+            "no usable mining devices found",
+            "no opencl platforms found",
+            "no cuda-capable device",
+            "cuda error",
+            "opencl error",
+            "clcreatecontext",
+            "failed to initialize",
+            "json-rpc problem",
+            "connection refused",
+        ];
+        for line in contents.lines().rev().take(80) {
+            let lower = line.to_ascii_lowercase();
+            if fatal_markers.iter().any(|m| lower.contains(m)) {
+                return Some(line.trim().to_string());
+            }
+        }
+        None
+    }
+
     fn parse_hash_rate_from_line(line: &str) -> Option<u64> {
         let lower = line.to_ascii_lowercase();
         let units = [
@@ -903,8 +1031,10 @@ impl GethProcess {
             if let Some(idx) = lower.rfind(unit) {
                 let before = &lower[..idx];
                 if let Some(token) = before.split_whitespace().last() {
-                    let cleaned = token.trim_matches(|c: char| !(c.is_ascii_digit() || c == '.'));
-                    if let Ok(value) = cleaned.parse::<f64>() {
+                    let cleaned =
+                        token.trim_matches(|c: char| !(c.is_ascii_digit() || c == '.' || c == ','));
+                    let normalized = cleaned.replace(',', ".");
+                    if let Ok(value) = normalized.parse::<f64>() {
                         let h = (value * mult) as u64;
                         if h > 0 {
                             return Some(h);
@@ -935,14 +1065,17 @@ impl GethProcess {
                 Ok(Some(status)) => {
                     self.gpu_miner_child = None;
                     if !status.success() {
-                        self.gpu_last_error =
-                            Some(format!("GPU miner exited unexpectedly with status {}", status));
+                        self.gpu_last_error = Some(format!(
+                            "GPU miner exited unexpectedly with status {}",
+                            status
+                        ));
                     }
                 }
                 Ok(None) => {}
                 Err(err) => {
                     self.gpu_miner_child = None;
-                    self.gpu_last_error = Some(format!("Failed to inspect GPU miner process: {}", err));
+                    self.gpu_last_error =
+                        Some(format!("Failed to inspect GPU miner process: {}", err));
                 }
             }
         }
@@ -962,6 +1095,7 @@ impl GethProcess {
         self.gpu_backend = None;
         self.gpu_hash_rate = 0;
         self.gpu_active_devices.clear();
+        self.gpu_utilization_percent = 100;
         Ok(())
     }
 
@@ -993,7 +1127,8 @@ impl GethProcess {
             "mixhash": "0x0000000000000000000000000000000000000000000000000000000000000000",
             "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
             "timestamp": "0x68b3b2ca"
-        }).to_string()
+        })
+        .to_string()
     }
 
     /// Initialize the blockchain with genesis
@@ -1048,11 +1183,19 @@ impl GethProcess {
         Self::remove_lock_files_recursive(&self.data_dir);
 
         // Debug: check what's on port 8545 right before spawning
-        if let Ok(output) = Command::new("fuser").args(["8545/tcp"]).stderr(Stdio::piped()).output() {
+        if let Ok(output) = Command::new("fuser")
+            .args(["8545/tcp"])
+            .stderr(Stdio::piped())
+            .output()
+        {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             if !stdout.trim().is_empty() || !stderr.trim().is_empty() {
-                println!("⚠️  Port 8545 still in use! stdout='{}' stderr='{}'", stdout.trim(), stderr.trim());
+                println!(
+                    "⚠️  Port 8545 still in use! stdout='{}' stderr='{}'",
+                    stdout.trim(),
+                    stderr.trim()
+                );
             } else {
                 println!("✅ Port 8545 is free");
             }
@@ -1062,7 +1205,10 @@ impl GethProcess {
         if let Ok(entries) = fs::read_dir(self.data_dir.join("geth")) {
             for entry in entries.flatten() {
                 if entry.file_name() == "LOCK" {
-                    println!("⚠️  LOCK file still exists after cleanup: {}", entry.path().display());
+                    println!(
+                        "⚠️  LOCK file still exists after cleanup: {}",
+                        entry.path().display()
+                    );
                 }
             }
         }
@@ -1115,11 +1261,14 @@ impl GethProcess {
         // Get healthy bootstrap nodes (with health checking and caching)
         println!("🔍 Checking bootstrap node health...");
         let bootstrap_nodes = geth_bootstrap::get_healthy_enodes().await;
-        println!("✅ Using bootstrap nodes: {}", if bootstrap_nodes.len() > 100 {
-            format!("{}...", &bootstrap_nodes[..100])
-        } else {
-            bootstrap_nodes.clone()
-        });
+        println!(
+            "✅ Using bootstrap nodes: {}",
+            if bootstrap_nodes.len() > 100 {
+                format!("{}...", &bootstrap_nodes[..100])
+            } else {
+                bootstrap_nodes.clone()
+            }
+        );
 
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
@@ -1128,7 +1277,7 @@ impl GethProcess {
             .arg(NETWORK_ID.to_string())
             .arg("--http")
             .arg("--http.addr")
-            .arg("127.0.0.1")  // Only allow local RPC connections (security)
+            .arg("127.0.0.1") // Only allow local RPC connections (security)
             .arg("--http.port")
             .arg("8545")
             .arg("--http.api")
@@ -1136,9 +1285,9 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("full")  // Use full sync for local/private chain
+            .arg("full") // Use full sync for local/private chain
             .arg("--gcmode")
-            .arg("archive")  // Keep all state for querying
+            .arg("archive") // Keep all state for querying
             .arg("--cache")
             .arg("512")
             .arg("--maxpeers")
@@ -1160,9 +1309,11 @@ impl GethProcess {
 
         // Set miner address and enable mining if provided
         if let Some(addr) = miner_address {
-            cmd.arg("--miner.etherbase").arg(addr)
-               .arg("--mine")
-               .arg("--miner.threads").arg("1");
+            cmd.arg("--miner.etherbase")
+                .arg(addr)
+                .arg("--mine")
+                .arg("--miner.threads")
+                .arg("1");
         }
 
         // Create log file (truncate on each start for clean logs)
@@ -1216,8 +1367,14 @@ impl GethProcess {
                     let log_contents = fs::read_to_string(&log_path).unwrap_or_default();
                     let last_lines: Vec<&str> = log_contents.lines().rev().take(30).collect();
                     let crash_log = last_lines.into_iter().rev().collect::<Vec<_>>().join("\n");
-                    println!("❌ Geth crashed on startup (exit: {}):\n{}", status, crash_log);
-                    return Err(format!("Geth crashed on startup (exit: {}). Check logs:\n{}", status, crash_log));
+                    println!(
+                        "❌ Geth crashed on startup (exit: {}):\n{}",
+                        status, crash_log
+                    );
+                    return Err(format!(
+                        "Geth crashed on startup (exit: {}). Check logs:\n{}",
+                        status, crash_log
+                    ));
                 }
                 Ok(None) => {
                     println!("✅ Geth process still running after 3s startup wait");
@@ -1259,9 +1416,15 @@ impl GethProcess {
             for _ in 0..10 {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 match child.try_wait() {
-                    Ok(Some(_)) => { exited = true; break; }
+                    Ok(Some(_)) => {
+                        exited = true;
+                        break;
+                    }
                     Ok(None) => {} // still running
-                    Err(_) => { exited = true; break; }
+                    Err(_) => {
+                        exited = true;
+                        break;
+                    }
                 }
             }
 
@@ -1339,7 +1502,9 @@ impl GethProcess {
         let client = reqwest::Client::new();
 
         // Check if syncing
-        let syncing_result = self.rpc_call(&client, "eth_syncing", serde_json::json!([])).await;
+        let syncing_result = self
+            .rpc_call(&client, "eth_syncing", serde_json::json!([]))
+            .await;
         let (syncing, current_block, highest_block) = match syncing_result {
             Ok(result) => {
                 if result.is_boolean() && !result.as_bool().unwrap_or(false) {
@@ -1371,7 +1536,10 @@ impl GethProcess {
 
         // Get block number if not syncing
         let block_number = if !syncing {
-            match self.rpc_call(&client, "eth_blockNumber", serde_json::json!([])).await {
+            match self
+                .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
+                .await
+            {
                 Ok(result) => {
                     let hex = result.as_str().unwrap_or("0x0");
                     u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
@@ -1383,7 +1551,10 @@ impl GethProcess {
         };
 
         // Get peer count
-        let peer_count = match self.rpc_call(&client, "net_peerCount", serde_json::json!([])).await {
+        let peer_count = match self
+            .rpc_call(&client, "net_peerCount", serde_json::json!([]))
+            .await
+        {
             Ok(result) => {
                 let hex = result.as_str().unwrap_or("0x0");
                 u32::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
@@ -1392,7 +1563,10 @@ impl GethProcess {
         };
 
         // Get chain ID
-        let chain_id = match self.rpc_call(&client, "eth_chainId", serde_json::json!([])).await {
+        let chain_id = match self
+            .rpc_call(&client, "eth_chainId", serde_json::json!([]))
+            .await
+        {
             Ok(result) => {
                 let hex = result.as_str().unwrap_or("0x0");
                 u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
@@ -1456,6 +1630,7 @@ impl GethProcess {
                 devices: Vec::new(),
                 running: false,
                 active_devices: self.gpu_active_devices.clone(),
+                utilization_percent: self.gpu_utilization_percent,
                 last_error: self.gpu_last_error.clone(),
             });
         };
@@ -1464,8 +1639,14 @@ impl GethProcess {
         let mut backend: Option<String> = None;
         let mut scan_messages: Vec<String> = Vec::new();
 
-        // Try CUDA backend first, then OpenCL.
-        for (backend_name, flag) in [("cuda", "-U"), ("opencl", "-G")] {
+        // On macOS there is no CUDA support — try OpenCL only.
+        // On other platforms try CUDA first, then fall back to OpenCL.
+        let backends: Vec<(&str, &str)> = if cfg!(target_os = "macos") {
+            vec![("opencl", "-G")]
+        } else {
+            vec![("cuda", "-U"), ("opencl", "-G")]
+        };
+        for (backend_name, flag) in backends {
             match Self::scan_gpu_devices(&binary_path, flag) {
                 Ok((found, raw)) => {
                     if !found.is_empty() {
@@ -1498,6 +1679,7 @@ impl GethProcess {
             devices,
             running: self.gpu_miner_child.is_some(),
             active_devices: self.gpu_active_devices.clone(),
+            utilization_percent: self.gpu_utilization_percent,
             last_error: self.gpu_last_error.clone(),
         })
     }
@@ -1506,7 +1688,11 @@ impl GethProcess {
         Ok(self.get_gpu_mining_capabilities().await?.devices)
     }
 
-    pub async fn start_gpu_mining(&mut self, device_ids: Option<Vec<String>>) -> Result<(), String> {
+    pub async fn start_gpu_mining(
+        &mut self,
+        device_ids: Option<Vec<String>>,
+        utilization_percent: Option<u8>,
+    ) -> Result<(), String> {
         if self.child.is_none() {
             return Err(
                 "Cannot start GPU miner: local Geth node is not running. Start the node from the Network page first."
@@ -1519,8 +1705,16 @@ impl GethProcess {
             return Err("GPU miner is already running".to_string());
         }
 
-        // CPU and GPU mining modes are mutually exclusive.
-        let _ = self.stop_mining().await;
+        // Ensure geth serves fresh work packages for external miners.
+        let client = reqwest::Client::new();
+        self.rpc_call(&client, "miner_start", serde_json::json!([1]))
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to enable local mining work packages for GPU miner: {}",
+                    e
+                )
+            })?;
 
         if self.gpu_binary_path.is_none() {
             let binary = self
@@ -1529,15 +1723,13 @@ impl GethProcess {
                 .map_err(|e| format!("GPU miner unavailable: {}", e))?;
             self.gpu_binary_path = Some(binary);
         }
-        let binary = self
-            .gpu_binary_path
-            .clone()
-            .ok_or_else(|| {
-                "No GPU miner binary found after auto-install. Set CHIRAL_GPU_MINER_PATH and retry."
-                    .to_string()
-            })?;
+        let binary = self.gpu_binary_path.clone().ok_or_else(|| {
+            "No GPU miner binary found after auto-install. Set CHIRAL_GPU_MINER_PATH and retry."
+                .to_string()
+        })?;
 
         let selected = device_ids.unwrap_or_default();
+        let utilization_percent = Self::clamp_gpu_utilization_percent(utilization_percent);
         let log_path = self.gpu_log_path();
         if let Some(parent) = log_path.parent() {
             fs::create_dir_all(parent)
@@ -1547,7 +1739,14 @@ impl GethProcess {
         let mut backend_attempts: Vec<String> = match preferred_backend.as_deref() {
             Some("cuda") => vec!["cuda".to_string(), "opencl".to_string()],
             Some("opencl") => vec!["opencl".to_string(), "cuda".to_string()],
-            _ => vec!["cuda".to_string(), "opencl".to_string()],
+            _ => {
+                // macOS has no CUDA — default to OpenCL only.
+                if cfg!(target_os = "macos") {
+                    vec!["opencl".to_string()]
+                } else {
+                    vec!["cuda".to_string(), "opencl".to_string()]
+                }
+            }
         };
         backend_attempts.dedup();
 
@@ -1561,80 +1760,130 @@ impl GethProcess {
 
             for (attempt_index, selected_override) in selection_attempts.into_iter().enumerate() {
                 let selected_for_attempt = selected_override.unwrap_or_default();
-                let log_file = OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(failures.is_empty() && attempt_index == 0)
-                    .append(!(failures.is_empty() && attempt_index == 0))
-                    .open(&log_path)
-                    .map_err(|e| format!("Failed to open GPU miner log file: {}", e))?;
-                let log_clone = log_file
-                    .try_clone()
-                    .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
-
-                let mut cmd = Command::new(&binary);
-                if backend == "cuda" {
-                    cmd.arg("-U");
+                let tuning_args = Self::gpu_tuning_args(&backend, utilization_percent);
+                let tuning_attempts: Vec<(Vec<String>, &str)> = if tuning_args.is_empty() {
+                    vec![(Vec::new(), "default tuning")]
                 } else {
-                    cmd.arg("-G");
-                }
-                cmd.arg("-P")
-                    .arg("http://127.0.0.1:8545")
-                    .arg("--farm-recheck")
-                    .arg("200");
+                    vec![
+                        (tuning_args, "requested utilization"),
+                        (Vec::new(), "fallback without tuning"),
+                    ]
+                };
 
-                if !selected_for_attempt.is_empty() {
-                    let joined = selected_for_attempt.join(",");
+                for (tuning_index, (extra_args, tuning_note)) in
+                    tuning_attempts.into_iter().enumerate()
+                {
+                    let log_file = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(failures.is_empty() && attempt_index == 0 && tuning_index == 0)
+                        .append(!(failures.is_empty() && attempt_index == 0 && tuning_index == 0))
+                        .open(&log_path)
+                        .map_err(|e| format!("Failed to open GPU miner log file: {}", e))?;
+                    let log_clone = log_file
+                        .try_clone()
+                        .map_err(|e| format!("Failed to clone GPU miner log file handle: {}", e))?;
+
+                    let mut cmd = Command::new(&binary);
                     if backend == "cuda" {
-                        cmd.arg("--cuda-devices").arg(&joined);
+                        cmd.arg("-U");
                     } else {
-                        cmd.arg("--opencl-devices").arg(&joined);
+                        cmd.arg("-G");
                     }
-                }
+                    cmd.arg("-P")
+                        .arg("http://127.0.0.1:8545")
+                        .arg("--farm-recheck")
+                        .arg("200")
+                        .args(&extra_args);
 
-                cmd.stdout(Stdio::from(log_clone))
-                    .stderr(Stdio::from(log_file));
-
-                match cmd.spawn() {
-                    Ok(child) => {
-                        self.gpu_miner_child = Some(child);
-                        self.gpu_active_devices = selected_for_attempt.clone();
-                        self.gpu_hash_rate = 0;
-                        self.gpu_last_error = None;
-
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        self.refresh_gpu_runtime();
-                        if self.gpu_miner_child.is_some() {
-                            self.gpu_backend = Some(backend.clone());
-                            return Ok(());
+                    if !selected_for_attempt.is_empty() {
+                        let joined = selected_for_attempt.join(",");
+                        if backend == "cuda" {
+                            cmd.arg("--cuda-devices").arg(&joined);
+                        } else {
+                            cmd.arg("--opencl-devices").arg(&joined);
                         }
                     }
-                    Err(err) => {
-                        failures.push(format!("{} backend failed to spawn: {}", backend, err));
-                        continue;
-                    }
-                }
 
-                let log_tail = fs::read_to_string(&log_path)
-                    .unwrap_or_default()
-                    .lines()
-                    .rev()
-                    .take(20)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let attempt_note = if selected_for_attempt.is_empty() {
-                    "auto device selection"
-                } else {
-                    "explicit device selection"
-                };
-                failures.push(format!(
-                    "{} backend failed during startup ({})\n{}",
-                    backend, attempt_note, log_tail
-                ));
-                let _ = self.stop_gpu_miner_sync();
+                    cmd.stdout(Stdio::from(log_clone))
+                        .stderr(Stdio::from(log_file));
+
+                    match cmd.spawn() {
+                        Ok(child) => {
+                            self.gpu_miner_child = Some(child);
+                            self.gpu_active_devices = selected_for_attempt.clone();
+                            self.gpu_utilization_percent = utilization_percent;
+                            self.gpu_hash_rate = 0;
+                            self.gpu_last_error = None;
+                        }
+                        Err(err) => {
+                            failures.push(format!(
+                                "{} backend failed to spawn ({}): {}",
+                                backend, tuning_note, err
+                            ));
+                            continue;
+                        }
+                    }
+
+                    let mut startup_verified = false;
+                    let mut startup_error: Option<String> = None;
+                    for _ in 0..25 {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        self.refresh_gpu_runtime();
+                        let log_tail = Self::read_log_tail(&log_path, 80);
+
+                        if let Some(fatal_line) = Self::gpu_log_fatal_error(&log_tail) {
+                            startup_error = Some(fatal_line);
+                            break;
+                        }
+                        if self.gpu_miner_child.is_none() {
+                            break;
+                        }
+                        if self.gpu_hash_rate > 0 || Self::gpu_log_indicates_activity(&log_tail) {
+                            startup_verified = true;
+                            break;
+                        }
+                    }
+
+                    if startup_verified && self.gpu_miner_child.is_some() {
+                        self.gpu_backend = Some(backend.clone());
+                        self.gpu_last_error = None;
+                        return Ok(());
+                    }
+
+                    // Some systems are slow to emit hashrate/work logs (DAG build, buffered logs).
+                    // If the process is still alive and we didn't observe a fatal error, treat startup
+                    // as successful and keep a warning instead of failing fast.
+                    if self.gpu_miner_child.is_some() && startup_error.is_none() {
+                        self.gpu_backend = Some(backend.clone());
+                        self.gpu_last_error = Some(
+                            "GPU miner started, but hashrate is not visible yet. This can happen during DAG initialization."
+                                .to_string(),
+                        );
+                        return Ok(());
+                    }
+
+                    let log_tail = Self::read_log_tail(&log_path, 40);
+                    let attempt_note = if selected_for_attempt.is_empty() {
+                        "auto device selection"
+                    } else {
+                        "explicit device selection"
+                    };
+                    let reason = if let Some(line) = startup_error {
+                        format!("startup error: {}", line)
+                    } else if let Some(err) = self.gpu_last_error.clone() {
+                        err
+                    } else if self.gpu_miner_child.is_none() {
+                        "GPU miner process exited during startup".to_string()
+                    } else {
+                        "No job/hashrate activity detected within startup window".to_string()
+                    };
+                    failures.push(format!(
+                        "{} backend failed during startup ({}, {}, target {}%)\nReason: {}\n{}",
+                        backend, attempt_note, tuning_note, utilization_percent, reason, log_tail
+                    ));
+                    let _ = self.stop_gpu_miner_sync();
+                }
             }
         }
 
@@ -1660,6 +1909,7 @@ impl GethProcess {
             running: self.gpu_miner_child.is_some(),
             hash_rate: self.gpu_hash_rate,
             active_devices: self.gpu_active_devices.clone(),
+            utilization_percent: self.gpu_utilization_percent,
             last_error: self.gpu_last_error.clone(),
         })
     }
@@ -1679,7 +1929,10 @@ impl GethProcess {
         println!("⛏️  Local Geth running: {}", self.child.is_some());
         println!("⛏️  GPU miner running: {}", gpu_running);
 
-        let cpu_mining = match self.rpc_call(&client, "eth_mining", serde_json::json!([])).await {
+        let cpu_mining = match self
+            .rpc_call(&client, "eth_mining", serde_json::json!([]))
+            .await
+        {
             Ok(result) => {
                 let m = result.as_bool().unwrap_or(false);
                 println!("⛏️  eth_mining: {} (raw: {})", m, result);
@@ -1697,7 +1950,10 @@ impl GethProcess {
 
         if cpu_mining {
             // Get current block number
-            let current_block = match self.rpc_call(&client, "eth_blockNumber", serde_json::json!([])).await {
+            let current_block = match self
+                .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
+                .await
+            {
                 Ok(result) => {
                     let hex = result.as_str().unwrap_or("0x0");
                     let block = u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
@@ -1717,19 +1973,32 @@ impl GethProcess {
 
             if current_block > 0 {
                 // Get the latest block's difficulty
-                let difficulty = match self.rpc_call(
-                    &client,
-                    "eth_getBlockByNumber",
-                    serde_json::json!(["latest", false]),
-                ).await {
+                let difficulty = match self
+                    .rpc_call(
+                        &client,
+                        "eth_getBlockByNumber",
+                        serde_json::json!(["latest", false]),
+                    )
+                    .await
+                {
                     Ok(result) => {
-                        let diff = result.get("difficulty")
+                        let diff = result
+                            .get("difficulty")
                             .and_then(|d| d.as_str())
-                            .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
+                            .and_then(|hex| {
+                                u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
+                            })
                             .unwrap_or(0);
-                        let miner = result.get("miner").and_then(|m| m.as_str()).unwrap_or("unknown");
-                        let block_num = result.get("number").and_then(|n| n.as_str()).unwrap_or("?");
-                        println!("⛏️  Latest block: number={}, difficulty={}, miner={}", block_num, diff, miner);
+                        let miner = result
+                            .get("miner")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown");
+                        let block_num =
+                            result.get("number").and_then(|n| n.as_str()).unwrap_or("?");
+                        println!(
+                            "⛏️  Latest block: number={}, difficulty={}, miner={}",
+                            block_num, diff, miner
+                        );
                         diff
                     }
                     Err(e) => {
@@ -1738,23 +2007,35 @@ impl GethProcess {
                     }
                 };
 
-                println!("⛏️  Tracking: last_block={}, last_block_time={}, current_block={}, now={}",
-                    self.last_block, self.last_block_time, current_block, now);
+                println!(
+                    "⛏️  Tracking: last_block={}, last_block_time={}, current_block={}, now={}",
+                    self.last_block, self.last_block_time, current_block, now
+                );
 
-                if self.last_block > 0 && current_block > self.last_block && self.last_block_time > 0 {
+                if self.last_block > 0
+                    && current_block > self.last_block
+                    && self.last_block_time > 0
+                {
                     // We have a previous measurement — compute hashrate from blocks mined
                     let blocks_mined = current_block - self.last_block;
                     let elapsed = now.saturating_sub(self.last_block_time);
                     if elapsed > 0 && difficulty > 0 {
                         // hashrate = (blocks_mined * difficulty) / elapsed_seconds
-                        hash_rate = (blocks_mined as u128 * difficulty as u128 / elapsed as u128) as u64;
+                        hash_rate =
+                            (blocks_mined as u128 * difficulty as u128 / elapsed as u128) as u64;
                     }
-                    println!("⛏️  Blocks mined since last poll: {}, elapsed: {}s, hashrate: {}", blocks_mined, elapsed, hash_rate);
+                    println!(
+                        "⛏️  Blocks mined since last poll: {}, elapsed: {}s, hashrate: {}",
+                        blocks_mined, elapsed, hash_rate
+                    );
                 } else if difficulty > 0 {
                     // First poll or no block change yet — estimate from difficulty alone
                     // Assume a ~13 second target block time as baseline
                     hash_rate = difficulty / 13;
-                    println!("⛏️  First poll estimate: hashrate={} (difficulty/{} = {})", hash_rate, 13, difficulty);
+                    println!(
+                        "⛏️  First poll estimate: hashrate={} (difficulty/{} = {})",
+                        hash_rate, 13, difficulty
+                    );
                 }
 
                 // Update tracking
@@ -1779,7 +2060,9 @@ impl GethProcess {
             hash_rate = self.gpu_hash_rate;
         }
 
-        let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await
+        let miner_address = match self
+            .rpc_call(&client, "eth_coinbase", serde_json::json!([]))
+            .await
         {
             Ok(result) => {
                 let addr = result.as_str().map(|s| s.to_string());
@@ -1798,8 +2081,15 @@ impl GethProcess {
             match fs::read_to_string(&log_path) {
                 Ok(contents) => {
                     let lines: Vec<&str> = contents.lines().collect();
-                    let start = if lines.len() > 20 { lines.len() - 20 } else { 0 };
-                    println!("⛏️  ---- Geth Log (last {} lines) ----", lines.len() - start);
+                    let start = if lines.len() > 20 {
+                        lines.len() - 20
+                    } else {
+                        0
+                    };
+                    println!(
+                        "⛏️  ---- Geth Log (last {} lines) ----",
+                        lines.len() - start
+                    );
                     for line in &lines[start..] {
                         println!("⛏️  LOG: {}", line);
                     }
@@ -1820,7 +2110,8 @@ impl GethProcess {
                 "params": [addr, "latest"],
                 "id": 1
             });
-            match client.post(&rpc_endpoint())
+            match client
+                .post(&rpc_endpoint())
                 .json(&balance_payload)
                 .send()
                 .await
@@ -1828,7 +2119,8 @@ impl GethProcess {
                 Ok(resp) => {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
                         let hex = json["result"].as_str().unwrap_or("0x0");
-                        let wei = u128::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                        let wei =
+                            u128::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
                         let chi = wei as f64 / 1e18;
                         println!("⛏️  Miner balance (remote): {} CHI ({} wei)", chi, wei);
                         (wei.to_string(), chi)
@@ -1862,7 +2154,10 @@ impl GethProcess {
         let client = reqwest::Client::new();
 
         // Get current block number
-        let current_block = match self.rpc_call(&client, "eth_blockNumber", serde_json::json!([])).await {
+        let current_block = match self
+            .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
+            .await
+        {
             Ok(result) => {
                 let hex = result.as_str().unwrap_or("0x0");
                 u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
@@ -1875,7 +2170,10 @@ impl GethProcess {
         }
 
         // Get miner address
-        let miner_address = match self.rpc_call(&client, "eth_coinbase", serde_json::json!([])).await {
+        let miner_address = match self
+            .rpc_call(&client, "eth_coinbase", serde_json::json!([]))
+            .await
+        {
             Ok(result) => result.as_str().unwrap_or("").to_lowercase(),
             Err(_) => return Ok(Vec::new()),
         };
@@ -1890,27 +2188,33 @@ impl GethProcess {
         // Scan blocks from newest to oldest
         for block_num in (start_block..=current_block).rev() {
             let hex_num = format!("0x{:x}", block_num);
-            let block = match self.rpc_call(
-                &client,
-                "eth_getBlockByNumber",
-                serde_json::json!([hex_num, false]),
-            ).await {
+            let block = match self
+                .rpc_call(
+                    &client,
+                    "eth_getBlockByNumber",
+                    serde_json::json!([hex_num, false]),
+                )
+                .await
+            {
                 Ok(result) => result,
                 Err(_) => continue,
             };
 
-            let block_miner = block.get("miner")
+            let block_miner = block
+                .get("miner")
                 .and_then(|m| m.as_str())
                 .unwrap_or("")
                 .to_lowercase();
 
             if block_miner == miner_address {
-                let timestamp = block.get("timestamp")
+                let timestamp = block
+                    .get("timestamp")
                     .and_then(|t| t.as_str())
                     .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
                     .unwrap_or(0);
 
-                let difficulty = block.get("difficulty")
+                let difficulty = block
+                    .get("difficulty")
                     .and_then(|d| d.as_str())
                     .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
                     .unwrap_or(0);
@@ -2026,7 +2330,10 @@ mod tests {
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
         let endpoint = rpc_endpoint();
         if std::env::var("CHIRAL_RPC_ENDPOINT").is_err() {
-            assert!(endpoint.contains("130.245.173.73"), "should be remote even when local flag is set");
+            assert!(
+                endpoint.contains("130.245.173.73"),
+                "should be remote even when local flag is set"
+            );
         }
         // Reset
         LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
@@ -2057,7 +2364,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
 
         let alloc = parsed.get("alloc").expect("should have alloc");
-        assert!(alloc.as_object().unwrap().is_empty(), "alloc should be empty to match bootstrap node");
+        assert!(
+            alloc.as_object().unwrap().is_empty(),
+            "alloc should be empty to match bootstrap node"
+        );
     }
 
     #[test]
@@ -2482,6 +2792,29 @@ Id Pci Id Type Name
     }
 
     #[test]
+    fn test_gpu_utilization_clamp() {
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(None), 100);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(100)), 100);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(75)), 75);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(1)), 10);
+    }
+
+    #[test]
+    fn test_gpu_log_activity_detection() {
+        let log = r#"
+m 12:00:01|cuda-0  got work package 0xabc123
+m 12:00:12|cuda-0  Speed 41.25 Mh/s
+"#;
+        assert!(GethProcess::gpu_log_indicates_activity(log));
+    }
+
+    #[test]
+    fn test_gpu_log_fatal_error_detection() {
+        let log = "FATAL: unrecognized option '--opencl-global-work'";
+        assert!(GethProcess::gpu_log_fatal_error(log).is_some());
+    }
+
+    #[test]
     fn test_gpu_mining_capabilities_serialization() {
         let caps = GpuMiningCapabilities {
             supported: true,
@@ -2492,14 +2825,17 @@ Id Pci Id Type Name
             }],
             running: false,
             active_devices: vec!["0".to_string()],
+            utilization_percent: 90,
             last_error: None,
         };
         let json = serde_json::to_string(&caps).unwrap();
         assert!(json.contains("binaryPath"));
         assert!(json.contains("activeDevices"));
+        assert!(json.contains("utilizationPercent"));
         let restored: GpuMiningCapabilities = serde_json::from_str(&json).unwrap();
         assert!(restored.supported);
         assert_eq!(restored.devices.len(), 1);
+        assert_eq!(restored.utilization_percent, 90);
     }
 
     #[test]
@@ -2508,6 +2844,7 @@ Id Pci Id Type Name
             running: true,
             hash_rate: 123_000_000,
             active_devices: vec!["0".to_string(), "1".to_string()],
+            utilization_percent: 80,
             last_error: None,
         };
         let json = serde_json::to_string(&status).unwrap();
@@ -2515,6 +2852,7 @@ Id Pci Id Type Name
         let restored: GpuMiningStatus = serde_json::from_str(&json).unwrap();
         assert!(restored.running);
         assert_eq!(restored.active_devices.len(), 2);
+        assert_eq!(restored.utilization_percent, 80);
     }
 
     #[test]
@@ -2533,5 +2871,567 @@ Id Pci Id Type Name
         assert_eq!(restored.reward_wei, original.reward_wei);
         assert_eq!(restored.reward_chi, original.reward_chi);
         assert_eq!(restored.difficulty, original.difficulty);
+    }
+
+    // ========================================================================
+    // detect_log_level tests
+    // ========================================================================
+
+    #[test]
+    fn test_detect_log_level_error_keyword() {
+        assert_eq!(detect_log_level("Something ERROR happened"), "ERROR");
+    }
+
+    #[test]
+    fn test_detect_log_level_error_case_insensitive() {
+        assert_eq!(detect_log_level("operation failed"), "ERROR");
+    }
+
+    #[test]
+    fn test_detect_log_level_error_emoji() {
+        assert_eq!(detect_log_level("something went wrong ❌"), "ERROR");
+    }
+
+    #[test]
+    fn test_detect_log_level_warn_keyword() {
+        assert_eq!(detect_log_level("WARN: low disk space"), "WARN");
+    }
+
+    #[test]
+    fn test_detect_log_level_warn_case_insensitive() {
+        assert_eq!(detect_log_level("this is a warning"), "WARN");
+    }
+
+    #[test]
+    fn test_detect_log_level_warn_emoji() {
+        assert_eq!(detect_log_level("caution ⚠️"), "WARN");
+    }
+
+    #[test]
+    fn test_detect_log_level_debug_keyword() {
+        assert_eq!(detect_log_level("DEBUG: variable state"), "DEBUG");
+    }
+
+    #[test]
+    fn test_detect_log_level_debug_emoji() {
+        assert_eq!(detect_log_level("inspecting 🔍 internal state"), "DEBUG");
+    }
+
+    #[test]
+    fn test_detect_log_level_info_default() {
+        assert_eq!(detect_log_level("Geth started on port 8545"), "INFO");
+    }
+
+    #[test]
+    fn test_detect_log_level_empty_string() {
+        assert_eq!(detect_log_level(""), "INFO");
+    }
+
+    #[test]
+    fn test_detect_log_level_error_takes_priority_over_warn() {
+        // Both ERROR and WARN present — ERROR check runs first
+        assert_eq!(detect_log_level("ERROR and WARN together"), "ERROR");
+    }
+
+    // ========================================================================
+    // detect_log_source tests
+    // ========================================================================
+
+    #[test]
+    fn test_detect_log_source_mining_keyword() {
+        assert_eq!(detect_log_source("mining started on thread 1"), "MINING");
+    }
+
+    #[test]
+    fn test_detect_log_source_hashrate_keyword() {
+        assert_eq!(detect_log_source("current hashrate: 1000"), "MINING");
+    }
+
+    #[test]
+    fn test_detect_log_source_mining_emoji() {
+        assert_eq!(detect_log_source("⛏️ block found"), "MINING");
+    }
+
+    #[test]
+    fn test_detect_log_source_geth_default() {
+        assert_eq!(detect_log_source("peer connected from 10.0.0.1"), "GETH");
+    }
+
+    #[test]
+    fn test_detect_log_source_empty_string() {
+        assert_eq!(detect_log_source(""), "GETH");
+    }
+
+    // ========================================================================
+    // parse_hash_rate_from_line tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_hash_rate_mh() {
+        let rate = GethProcess::parse_hash_rate_from_line("Speed 41.25 Mh/s");
+        assert_eq!(rate, Some(41_250_000));
+    }
+
+    #[test]
+    fn test_parse_hash_rate_kh() {
+        let rate = GethProcess::parse_hash_rate_from_line("Speed 500 Kh/s");
+        assert_eq!(rate, Some(500_000));
+    }
+
+    #[test]
+    fn test_parse_hash_rate_gh() {
+        let rate = GethProcess::parse_hash_rate_from_line("Speed 1.5 Gh/s");
+        assert_eq!(rate, Some(1_500_000_000));
+    }
+
+    #[test]
+    fn test_parse_hash_rate_h() {
+        let rate = GethProcess::parse_hash_rate_from_line("Speed 750 H/s");
+        assert_eq!(rate, Some(750));
+    }
+
+    #[test]
+    fn test_parse_hash_rate_no_match() {
+        let rate = GethProcess::parse_hash_rate_from_line("connected to peer");
+        assert_eq!(rate, None);
+    }
+
+    #[test]
+    fn test_parse_hash_rate_case_insensitive() {
+        let rate = GethProcess::parse_hash_rate_from_line("Speed 10.0 mh/s ok");
+        assert_eq!(rate, Some(10_000_000));
+    }
+
+    #[test]
+    fn test_parse_hash_rate_with_comma_decimal() {
+        // European locale: comma as decimal separator
+        let rate = GethProcess::parse_hash_rate_from_line("Speed 41,25 Mh/s");
+        assert_eq!(rate, Some(41_250_000));
+    }
+
+    #[test]
+    fn test_parse_hash_rate_zero_returns_none() {
+        // Value of 0 H/s should return None (the function checks h > 0)
+        let rate = GethProcess::parse_hash_rate_from_line("Speed 0 Mh/s");
+        assert_eq!(rate, None);
+    }
+
+    // ========================================================================
+    // gpu_tuning_args tests
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_tuning_args_cuda_full_utilization() {
+        let args = GethProcess::gpu_tuning_args("cuda", 100);
+        assert!(args.is_empty(), "100% should produce no tuning args");
+    }
+
+    #[test]
+    fn test_gpu_tuning_args_opencl_full_utilization() {
+        let args = GethProcess::gpu_tuning_args("opencl", 100);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_gpu_tuning_args_cuda_partial() {
+        let args = GethProcess::gpu_tuning_args("cuda", 50);
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], "--cuda-grid-size");
+        assert_eq!(args[2], "--cuda-streams");
+        // 50% < 70% so streams should be 1
+        assert_eq!(args[3], "1");
+    }
+
+    #[test]
+    fn test_gpu_tuning_args_cuda_high_utilization() {
+        let args = GethProcess::gpu_tuning_args("cuda", 75);
+        assert_eq!(args[2], "--cuda-streams");
+        // 75% >= 70% so streams should be 2
+        assert_eq!(args[3], "2");
+    }
+
+    #[test]
+    fn test_gpu_tuning_args_opencl_partial() {
+        let args = GethProcess::gpu_tuning_args("opencl", 50);
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], "--opencl-global-work");
+        assert_eq!(args[2], "--opencl-local-work");
+        // 50% < 70% so local_work should be 64
+        assert_eq!(args[3], "64");
+    }
+
+    #[test]
+    fn test_gpu_tuning_args_opencl_high_utilization() {
+        let args = GethProcess::gpu_tuning_args("opencl", 80);
+        assert_eq!(args[2], "--opencl-local-work");
+        // 80% >= 70% so local_work should be 128
+        assert_eq!(args[3], "128");
+    }
+
+    #[test]
+    fn test_gpu_tuning_args_cuda_minimum_grid() {
+        // Very low utilization — grid should be clamped to at least 1024
+        let args = GethProcess::gpu_tuning_args("cuda", 10);
+        let grid: u32 = args[1].parse().unwrap();
+        assert!(grid >= 1_024, "grid {} should be at least 1024", grid);
+        assert_eq!(grid % 256, 0, "grid should be aligned to 256");
+    }
+
+    #[test]
+    fn test_gpu_tuning_args_opencl_minimum_global_work() {
+        let args = GethProcess::gpu_tuning_args("opencl", 10);
+        let global_work: u32 = args[1].parse().unwrap();
+        assert!(
+            global_work >= 4_096,
+            "global_work {} should be at least 4096",
+            global_work
+        );
+        assert_eq!(global_work % 64, 0, "global_work should be aligned to 64");
+    }
+
+    // ========================================================================
+    // gpu_log_indicates_activity tests
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_log_no_activity() {
+        let log = "ethminer 0.18.0\nBuild: linux/release/gnu\n";
+        assert!(!GethProcess::gpu_log_indicates_activity(log));
+    }
+
+    #[test]
+    fn test_gpu_log_activity_new_job() {
+        assert!(GethProcess::gpu_log_indicates_activity("new job received"));
+    }
+
+    #[test]
+    fn test_gpu_log_activity_epoch() {
+        assert!(GethProcess::gpu_log_indicates_activity(
+            "Epoch 400 requires 4.97 GB"
+        ));
+    }
+
+    #[test]
+    fn test_gpu_log_activity_hash_rate_line() {
+        assert!(GethProcess::gpu_log_indicates_activity(
+            "Speed 42.00 Mh/s"
+        ));
+    }
+
+    #[test]
+    fn test_gpu_log_activity_empty() {
+        assert!(!GethProcess::gpu_log_indicates_activity(""));
+    }
+
+    // ========================================================================
+    // gpu_log_fatal_error tests
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_log_fatal_error_none() {
+        let log = "ethminer started\nnew job\nSpeed 10.0 Mh/s\n";
+        assert!(GethProcess::gpu_log_fatal_error(log).is_none());
+    }
+
+    #[test]
+    fn test_gpu_log_fatal_no_devices() {
+        let log = "No usable mining devices found";
+        assert!(GethProcess::gpu_log_fatal_error(log).is_some());
+    }
+
+    #[test]
+    fn test_gpu_log_fatal_cuda_error() {
+        let log = "CUDA error: out of memory";
+        let err = GethProcess::gpu_log_fatal_error(log);
+        assert!(err.is_some());
+        assert!(err.unwrap().contains("CUDA"));
+    }
+
+    #[test]
+    fn test_gpu_log_fatal_connection_refused() {
+        let log = "JSON-RPC problem. connection refused";
+        assert!(GethProcess::gpu_log_fatal_error(log).is_some());
+    }
+
+    #[test]
+    fn test_gpu_log_fatal_empty() {
+        assert!(GethProcess::gpu_log_fatal_error("").is_none());
+    }
+
+    // ========================================================================
+    // parse_gpu_devices_from_text edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_parse_gpu_devices_empty_input() {
+        let devices = GethProcess::parse_gpu_devices_from_text("");
+        assert!(devices.is_empty());
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_no_gpu_lines() {
+        let output = "ethminer 0.18.0\nBuild: linux/release/gnu\n\n";
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert!(devices.is_empty());
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_bracket_single() {
+        let output = "[0] : AMD Radeon RX 580\n";
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].id, "0");
+        assert_eq!(devices[0].name, "AMD Radeon RX 580");
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_bracket_no_colon() {
+        // Some formats omit the colon after the bracket
+        let output = "[0] NVIDIA GTX 1080\n";
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "NVIDIA GTX 1080");
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_bracket_empty_name() {
+        // Empty name after bracket should be skipped
+        let output = "[0] : \n";
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert!(devices.is_empty());
+    }
+
+    #[test]
+    fn test_parse_gpu_devices_bracket_non_numeric_id() {
+        // Non-numeric ID should be skipped
+        let output = "[abc] : GPU Name\n";
+        let devices = GethProcess::parse_gpu_devices_from_text(output);
+        assert!(devices.is_empty());
+    }
+
+    // ========================================================================
+    // clamp_gpu_utilization_percent additional edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_utilization_clamp_at_boundary() {
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(10)), 10);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(0)), 10);
+    }
+
+    #[test]
+    fn test_gpu_utilization_clamp_above_max() {
+        // Values above 100 get clamped to 100
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(200)), 100);
+        assert_eq!(GethProcess::clamp_gpu_utilization_percent(Some(255)), 100);
+    }
+
+    // ========================================================================
+    // gpu_binary_name test
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_binary_name() {
+        let name = GethProcess::gpu_binary_name();
+        if cfg!(target_os = "windows") {
+            assert_eq!(name, "ethminer.exe");
+        } else {
+            assert_eq!(name, "ethminer");
+        }
+    }
+
+    // ========================================================================
+    // GpuMiningCapabilities edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_mining_capabilities_unsupported() {
+        let caps = GpuMiningCapabilities {
+            supported: false,
+            binary_path: None,
+            devices: vec![],
+            running: false,
+            active_devices: vec![],
+            utilization_percent: 100,
+            last_error: Some("No GPU found".to_string()),
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        let restored: GpuMiningCapabilities = serde_json::from_str(&json).unwrap();
+        assert!(!restored.supported);
+        assert!(restored.binary_path.is_none());
+        assert!(restored.devices.is_empty());
+        assert_eq!(restored.last_error.as_deref(), Some("No GPU found"));
+    }
+
+    #[test]
+    fn test_gpu_mining_capabilities_camel_case() {
+        let caps = GpuMiningCapabilities {
+            supported: true,
+            binary_path: None,
+            devices: vec![],
+            running: false,
+            active_devices: vec![],
+            utilization_percent: 50,
+            last_error: None,
+        };
+        let json = serde_json::to_string(&caps).unwrap();
+        assert!(json.contains("binaryPath"));
+        assert!(!json.contains("binary_path"));
+        assert!(json.contains("activeDevices"));
+        assert!(!json.contains("active_devices"));
+        assert!(json.contains("utilizationPercent"));
+        assert!(!json.contains("utilization_percent"));
+        assert!(json.contains("lastError"));
+        assert!(!json.contains("last_error"));
+    }
+
+    // ========================================================================
+    // GpuMiningStatus edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_mining_status_with_error() {
+        let status = GpuMiningStatus {
+            running: false,
+            hash_rate: 0,
+            active_devices: vec![],
+            utilization_percent: 100,
+            last_error: Some("CUDA out of memory".to_string()),
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let restored: GpuMiningStatus = serde_json::from_str(&json).unwrap();
+        assert!(!restored.running);
+        assert_eq!(
+            restored.last_error.as_deref(),
+            Some("CUDA out of memory")
+        );
+    }
+
+    #[test]
+    fn test_gpu_mining_status_camel_case() {
+        let status = GpuMiningStatus {
+            running: true,
+            hash_rate: 100,
+            active_devices: vec!["0".to_string()],
+            utilization_percent: 75,
+            last_error: None,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("hashRate"));
+        assert!(!json.contains("hash_rate"));
+        assert!(json.contains("activeDevices"));
+        assert!(!json.contains("active_devices"));
+        assert!(json.contains("utilizationPercent"));
+        assert!(!json.contains("utilization_percent"));
+    }
+
+    // ========================================================================
+    // GethStatus camelCase verification
+    // ========================================================================
+
+    #[test]
+    fn test_geth_status_camel_case() {
+        let status = GethStatus {
+            installed: true,
+            running: false,
+            local_running: false,
+            syncing: true,
+            current_block: 50,
+            highest_block: 100,
+            peer_count: 3,
+            chain_id: CHAIN_ID,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("localRunning"));
+        assert!(!json.contains("local_running"));
+        assert!(json.contains("currentBlock"));
+        assert!(!json.contains("current_block"));
+        assert!(json.contains("highestBlock"));
+        assert!(!json.contains("highest_block"));
+        assert!(json.contains("peerCount"));
+        assert!(!json.contains("peer_count"));
+        assert!(json.contains("chainId"));
+        assert!(!json.contains("chain_id"));
+    }
+
+    // ========================================================================
+    // MiningStatus camelCase verification
+    // ========================================================================
+
+    #[test]
+    fn test_mining_status_camel_case() {
+        let status = MiningStatus {
+            mining: true,
+            hash_rate: 100,
+            miner_address: Some("0x1234".to_string()),
+            total_mined_wei: "0".to_string(),
+            total_mined_chi: 0.0,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("hashRate"));
+        assert!(!json.contains("hash_rate"));
+        assert!(json.contains("minerAddress"));
+        assert!(!json.contains("miner_address"));
+        assert!(json.contains("totalMinedWei"));
+        assert!(!json.contains("total_mined_wei"));
+        assert!(json.contains("totalMinedChi"));
+        assert!(!json.contains("total_mined_chi"));
+    }
+
+    // ========================================================================
+    // GethStatus deserialization from frontend format
+    // ========================================================================
+
+    #[test]
+    fn test_geth_status_deserialization_from_frontend() {
+        let json = r#"{"installed":true,"running":false,"localRunning":false,"syncing":true,"currentBlock":500,"highestBlock":1000,"peerCount":8,"chainId":98765}"#;
+        let status: GethStatus = serde_json::from_str(json).unwrap();
+        assert!(status.installed);
+        assert!(!status.running);
+        assert!(status.syncing);
+        assert_eq!(status.current_block, 500);
+        assert_eq!(status.highest_block, 1000);
+        assert_eq!(status.peer_count, 8);
+        assert_eq!(status.chain_id, CHAIN_ID);
+    }
+
+    // ========================================================================
+    // GpuDevice camelCase and edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_device_empty_name() {
+        let dev = GpuDevice {
+            id: "0".to_string(),
+            name: "".to_string(),
+        };
+        let json = serde_json::to_string(&dev).unwrap();
+        let restored: GpuDevice = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.name, "");
+    }
+
+    #[test]
+    fn test_gpu_device_unicode_name() {
+        let dev = GpuDevice {
+            id: "0".to_string(),
+            name: "GPU \u{00E9}\u{00E8}".to_string(),
+        };
+        let json = serde_json::to_string(&dev).unwrap();
+        let restored: GpuDevice = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.name, dev.name);
+    }
+
+    // ========================================================================
+    // DownloadProgress deserialization from frontend
+    // ========================================================================
+
+    #[test]
+    fn test_download_progress_deserialization_from_frontend() {
+        let json = r#"{"downloaded":5242880,"total":10485760,"percentage":50.0,"status":"Downloading... 5.0 MB"}"#;
+        let progress: DownloadProgress = serde_json::from_str(json).unwrap();
+        assert_eq!(progress.downloaded, 5242880);
+        assert_eq!(progress.total, 10485760);
+        assert_eq!(progress.percentage, 50.0);
+        assert!(progress.status.contains("5.0 MB"));
     }
 }

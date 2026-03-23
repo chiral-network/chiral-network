@@ -268,6 +268,24 @@ function createDriveStore() {
       }
     },
 
+    async updatePrice(id: string, priceChi: string) {
+      syncOwner();
+      try {
+        await driveApi.updateItem(id, { price_chi: priceChi });
+        update(m => {
+          const item = m.items.find(i => i.id === id);
+          if (item) {
+            item.priceChi = priceChi || undefined;
+            item.modifiedAt = Date.now();
+          }
+          return m;
+        });
+      } catch (e) {
+        console.error('Failed to update price:', e);
+        throw e;
+      }
+    },
+
     async deleteItem(id: string) {
       syncOwner();
       try {
@@ -335,10 +353,10 @@ function createDriveStore() {
       }
     },
 
-    async createShareLink(itemId: string, password?: string, isPublic?: boolean): Promise<ShareLink | null> {
+    async createShareLink(itemId: string, priceChi: string, isPublic?: boolean): Promise<ShareLink | null> {
       const owner = syncOwner();
       try {
-        const share = await driveApi.createShareLink(itemId, password, isPublic);
+        const share = await driveApi.createShareLink(itemId, priceChi, isPublic);
         update(m => {
           m.shares.push(share);
           const item = m.items.find(i => i.id === itemId);

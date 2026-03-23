@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::rating_storage::{
-    self, compute_reputation_for_wallet, ReputationEvent, RatingState, TransferOutcome,
+    self, compute_reputation_for_wallet, RatingState, ReputationEvent, TransferOutcome,
     LOOKBACK_SECS,
 };
 
@@ -28,16 +28,6 @@ struct SubmitTransferRequest {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SubmitRatingRequest {
-    transfer_id: String,
-    seeder_wallet: String,
-    file_hash: String,
-    score: u8,
-    comment: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct BatchRequest {
     wallets: Vec<String>,
 }
@@ -51,7 +41,6 @@ struct WalletReputationResponse {
     completed_count: usize,
     failed_count: usize,
     transaction_count: usize,
-    rating_count: usize,
     total_earned_wei: String,
     events: Vec<ReputationEvent>,
 }
@@ -63,7 +52,6 @@ struct BatchEntry {
     completed_count: usize,
     failed_count: usize,
     transaction_count: usize,
-    rating_count: usize,
     total_earned_wei: String,
 }
 
@@ -82,9 +70,7 @@ fn get_owner(headers: &HeaderMap) -> Option<String> {
 }
 
 fn is_valid_wallet(addr: &str) -> bool {
-    addr.len() == 42
-        && addr.starts_with("0x")
-        && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+    addr.len() == 42 && addr.starts_with("0x") && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn parse_wei(value: &str) -> Result<u128, String> {
@@ -219,19 +205,20 @@ async fn submit_transfer(
         let tx_hash = match req.tx_hash.as_deref() {
             Some(v) if !v.trim().is_empty() => v.trim(),
             _ => {
-                return (StatusCode::BAD_REQUEST, "txHash required for paid transfers")
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "txHash required for paid transfers",
+                )
                     .into_response()
             }
         };
-        if let Err(err) = verify_payment_tx(
-            tx_hash,
-            &downloader_wallet,
-            &req.seeder_wallet,
-            amount_wei,
-        )
-        .await
+        if let Err(err) =
+            verify_payment_tx(tx_hash, &downloader_wallet, &req.seeder_wallet, amount_wei).await
         {
-            return (StatusCode::BAD_REQUEST, format!("Payment verification failed: {}", err))
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("Payment verification failed: {}", err),
+            )
                 .into_response();
         }
     }
@@ -277,65 +264,6 @@ async fn submit_transfer(
     (StatusCode::CREATED, Json(event)).into_response()
 }
 
-/// POST /api/ratings — submit/update 1-5 user rating for a transfer event.
-async fn submit_rating(
-    Extension(state): Extension<Arc<RatingState>>,
-    headers: HeaderMap,
-    Json(req): Json<SubmitRatingRequest>,
-) -> Response {
-    let rater_wallet = match get_owner(&headers) {
-        Some(v) => v,
-        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
-    };
-
-    if req.score < 1 || req.score > 5 {
-        return (StatusCode::BAD_REQUEST, "Score must be between 1 and 5").into_response();
-    }
-    if req.transfer_id.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "transferId is required").into_response();
-    }
-    if req.seeder_wallet.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "seederWallet is required").into_response();
-    }
-    if req.file_hash.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "fileHash is required").into_response();
-    }
-    if rater_wallet.eq_ignore_ascii_case(&req.seeder_wallet) {
-        return (StatusCode::BAD_REQUEST, "Cannot rate yourself").into_response();
-    }
-    if let Some(ref c) = req.comment {
-        if c.len() > 500 {
-            return (StatusCode::BAD_REQUEST, "Comment must be 500 characters or less")
-                .into_response();
-        }
-    }
-
-    let event_id = rating_storage::generate_event_id(
-        &req.transfer_id,
-        &req.seeder_wallet,
-        &rater_wallet,
-        &req.file_hash,
-    );
-
-    let now = rating_storage::now_secs();
-    let mut m = state.manifest.write().await;
-    let Some(existing) = m.events.iter_mut().find(|e| e.id == event_id) else {
-        return (StatusCode::BAD_REQUEST, "Transfer event not found").into_response();
-    };
-
-    if existing.outcome != TransferOutcome::Completed {
-        return (StatusCode::BAD_REQUEST, "Ratings require a completed transfer").into_response();
-    }
-
-    existing.rating_score = Some(req.score);
-    existing.rating_comment = req.comment.filter(|c| !c.trim().is_empty());
-    existing.updated_at = now;
-    let updated = existing.clone();
-    drop(m);
-    state.persist().await;
-    (StatusCode::OK, Json(updated)).into_response()
-}
-
 /// GET /api/ratings/:wallet — wallet reputation summary + events.
 async fn get_reputation(
     Extension(state): Extension<Arc<RatingState>>,
@@ -348,7 +276,10 @@ async fn get_reputation(
     let mut events: Vec<ReputationEvent> = m
         .events
         .iter()
-        .filter(|e| e.seeder_wallet.eq_ignore_ascii_case(&wallet))
+        .filter(|e| {
+            e.seeder_wallet.eq_ignore_ascii_case(&wallet)
+                || e.downloader_wallet.eq_ignore_ascii_case(&wallet)
+        })
         .filter(|e| now.saturating_sub(e.created_at) <= LOOKBACK_SECS)
         .cloned()
         .collect();
@@ -361,7 +292,6 @@ async fn get_reputation(
         completed_count: snapshot.completed_count,
         failed_count: snapshot.failed_count,
         transaction_count: snapshot.transaction_count,
-        rating_count: snapshot.rating_count,
         total_earned_wei: snapshot.total_earned_wei,
         events,
     })
@@ -386,7 +316,6 @@ async fn batch_reputation(
                 completed_count: snap.completed_count,
                 failed_count: snap.failed_count,
                 transaction_count: snap.transaction_count,
-                rating_count: snap.rating_count,
                 total_earned_wei: snap.total_earned_wei,
             },
         );
@@ -399,7 +328,6 @@ pub fn rating_routes(state: Arc<RatingState>) -> Router {
     Router::new()
         .route("/api/ratings/transfer", post(submit_transfer))
         .route("/api/ratings/batch", post(batch_reputation))
-        .route("/api/ratings", post(submit_rating))
         .route("/api/ratings/:wallet", get(get_reputation))
         .layer(Extension(state))
 }

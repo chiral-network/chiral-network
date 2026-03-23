@@ -19,8 +19,6 @@ export interface ReputationEvent {
   amountWei: string;
   outcome: TransferOutcome;
   txHash?: string;
-  ratingScore?: number;
-  ratingComment?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -32,7 +30,6 @@ export interface ReputationResponse {
   completedCount: number;
   failedCount: number;
   transactionCount: number;
-  ratingCount: number;
   totalEarnedWei: string;
   events: ReputationEvent[];
 }
@@ -42,7 +39,6 @@ export interface BatchReputationEntry {
   completedCount: number;
   failedCount: number;
   transactionCount: number;
-  ratingCount: number;
   totalEarnedWei: string;
 }
 
@@ -65,12 +61,6 @@ function normalizeEvent(event: any): ReputationEvent {
     outcome: event?.outcome === 'failed' ? 'failed' : 'completed',
     txHash: typeof (event?.txHash ?? event?.tx_hash) === 'string'
       ? (event?.txHash ?? event?.tx_hash)
-      : undefined,
-    ratingScore: typeof event?.ratingScore === 'number'
-      ? event.ratingScore
-      : (typeof event?.rating_score === 'number' ? event.rating_score : undefined),
-    ratingComment: typeof (event?.ratingComment ?? event?.rating_comment) === 'string'
-      ? (event?.ratingComment ?? event?.rating_comment)
       : undefined,
     createdAt: asNumber(event?.createdAt ?? event?.created_at, 0),
     updatedAt: asNumber(event?.updatedAt ?? event?.updated_at, 0),
@@ -120,27 +110,6 @@ export const ratingApi = {
     });
   },
 
-  /** Submit a 1-5 rating for a completed transfer event. */
-  async submitRating(
-    transferId: string,
-    seederWallet: string,
-    fileHash: string,
-    score: number,
-    comment?: string,
-  ): Promise<ReputationEvent> {
-    return request<ReputationEvent>('/api/ratings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        transferId,
-        seederWallet,
-        fileHash,
-        score,
-        comment: comment || null,
-      }),
-    });
-  },
-
   /** Get Elo reputation summary for a wallet. */
   async getReputation(wallet: string): Promise<ReputationResponse> {
     const raw = await request<any>(`/api/ratings/${encodeURIComponent(wallet)}`);
@@ -152,7 +121,6 @@ export const ratingApi = {
       completedCount: asNumber(raw?.completedCount ?? raw?.completed_count, 0),
       failedCount: asNumber(raw?.failedCount ?? raw?.failed_count, 0),
       transactionCount: asNumber(raw?.transactionCount ?? raw?.transaction_count, 0),
-      ratingCount: asNumber(raw?.ratingCount ?? raw?.rating_count, 0),
       totalEarnedWei: asString(raw?.totalEarnedWei ?? raw?.total_earned_wei, '0'),
       events: rawEvents.map(normalizeEvent),
     };

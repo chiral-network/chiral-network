@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
+  import { formatBytes } from '$lib/utils';
   import { setLocalDriveServer } from '$lib/services/driveApiService';
   import { walletAccount, networkConnected } from '$lib/stores';
 
@@ -16,7 +17,7 @@
   import DriveContextMenu from '$lib/components/drive/DriveContextMenu.svelte';
   import DriveShareModal from '$lib/components/drive/DriveShareModal.svelte';
   import DriveMoveModal from '$lib/components/drive/DriveMoveModal.svelte';
-  import DriveSeedingPanel from '$lib/components/drive/DriveSeedingPanel.svelte';
+
 
   let manifest = $state<DriveManifest>({ version: 1, items: [], shares: [], lastModified: 0 });
   let currentFolderId = $state<string | null>(null);
@@ -40,13 +41,10 @@
   let renameValue = $state('');
   let deleteConfirmItem = $state<DriveItem | null>(null);
 
-  // Tab state
-  let activeTab = $state<'files' | 'seeding'>('files');
-  let seedingUploadProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
-  let seedingUploadPriceChi = $state('');
-
-  // Seeding count for tab badge
-  const seedingCount = $derived($networkConnected ? driveStore.getSeedingItems(manifest).length : 0);
+  // Seed modal
+  let seedModalItem = $state<DriveItem | null>(null);
+  let seedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
+  let seedPrice = $state('');
 
   // Drag and drop
   let isDragging = $state(false);
@@ -115,7 +113,7 @@
       // Remove old history after migration
       localStorage.removeItem(UPLOAD_HISTORY_KEY);
       if (migrated > 0) {
-        toasts.show(`Migrated ${migrated} seeded file${migrated > 1 ? 's' : ''} to Drive`, 'success');
+        toasts.detail('Files migrated', `${migrated} seeded file${migrated > 1 ? 's' : ''} moved to Drive`, 'success');
       }
     } catch {
       // Migration failed — keep localStorage for next attempt
@@ -208,12 +206,12 @@
           if (result) count++;
         }
         if (count > 0) {
-          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+          toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
         } else {
-          toasts.show('Upload failed', 'error');
+          toasts.show('Upload failed — no files were saved', 'error');
         }
       } catch (e) {
-        toasts.show('Upload failed: ' + (e as Error).message, 'error');
+        toasts.detail('Upload failed', (e as Error).message, 'error');
       } finally {
         uploading = false;
       }
@@ -237,12 +235,12 @@
         }
         const total = input.files.length;
         if (count > 0) {
-          toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+          toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
         } else if (total > 0) {
-          toasts.show('Upload failed — could not reach the local server', 'error');
+          toasts.show('Upload failed — local server unreachable', 'error');
         }
       } catch (e) {
-        toasts.show('Upload failed: ' + (e as Error).message, 'error');
+        toasts.detail('Upload failed', (e as Error).message, 'error');
       } finally {
         uploading = false;
       }
@@ -265,9 +263,9 @@
     if (!name) return;
     const result = await driveStore.createFolder(name, currentFolderId);
     if (result) {
-      toasts.show(`Created folder "${name}"`, 'success');
+      // Silent — folder appears in the UI immediately
     } else {
-      toasts.show('Failed to create folder — could not reach the local server', 'error');
+      toasts.show('Failed to create folder — local server unreachable', 'error');
     }
     creatingFolder = false;
     newFolderName = '';
@@ -315,7 +313,10 @@
     if (existingShares.length > 0) {
       url = driveStore.getShareUrl(existingShares[0].id);
     } else {
-      const share = await driveStore.createShareLink(item.id, undefined, true);
+      const liveItem = manifest.items.find(i => i.id === item.id);
+      const priceSrc = liveItem?.priceChi ?? item.priceChi;
+      const fallbackPrice = priceSrc && parseFloat(priceSrc) > 0 ? priceSrc : '0';
+      const share = await driveStore.createShareLink(item.id, fallbackPrice, true);
       if (!share) {
         toasts.show('Failed to create share link', 'error');
         return;
@@ -324,9 +325,9 @@
     }
     try {
       await navigator.clipboard.writeText(url);
-      toasts.show('Link copied to clipboard', 'success');
+      toasts.show('Link copied', 'success');
     } catch {
-      toasts.show('Failed to copy link', 'error');
+      toasts.show('Could not copy to clipboard', 'error');
     }
   }
 
@@ -359,7 +360,7 @@
     deleteConfirmItem = null;
     try {
       await driveStore.deleteItem(item.id);
-      toasts.show(`Deleted "${item.name}"`, 'success');
+      // Silent — item disappears from UI
     } catch (e) {
       toasts.show(`Failed to delete "${item.name}"`, 'error');
     }
@@ -372,7 +373,7 @@
 
   async function handleMoveConfirm(itemId: string, targetFolderId: string | null) {
     await driveStore.moveItem(itemId, targetFolderId);
-    toasts.show('Item moved', 'success');
+    // Silent — item moves visually in the UI
   }
 
   // Star
@@ -384,10 +385,7 @@
   async function handleToggleVisibility(item: DriveItem) {
     await driveStore.toggleVisibility(item.id);
     const newState = !item.isPublic;
-    toasts.show(
-      newState ? `"${item.name}" is now public` : `"${item.name}" is now private`,
-      'success'
-    );
+    // Silent — visibility toggle is reflected in the UI badge
   }
 
   // Drag and drop
@@ -408,11 +406,6 @@
     return raw;
   }
 
-  function handleSeedingOptionsChange(protocol: 'WebRTC' | 'BitTorrent', priceChi: string) {
-    seedingUploadProtocol = protocol;
-    seedingUploadPriceChi = normalizePriceChi(priceChi);
-  }
-
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragging = false;
@@ -422,42 +415,11 @@
     // Show a hint to use the Upload button instead.
     const isTauriEnv = !!(window as any).__TAURI_INTERNALS__;
     if (isTauriEnv) {
-      toasts.show('Please use the Upload button to add files', 'info');
+      toasts.show('Use the Upload button to add files in the desktop app', 'info');
       return;
     }
 
     // Web/browser mode — use File objects
-    if (activeTab === 'seeding') {
-      if (!$networkConnected) {
-        toasts.show('Please connect to the network first', 'error');
-        return;
-      }
-      uploading = true;
-      const priceChi = normalizePriceChi(seedingUploadPriceChi);
-      let count = 0;
-      try {
-        for (const file of e.dataTransfer.files) {
-          const driveItem = await driveStore.uploadFile(file, currentFolderId);
-          if (driveItem) {
-            const result = await driveStore.seedFile(
-              driveItem.id,
-              seedingUploadProtocol,
-              priceChi || undefined,
-            );
-            if (result) count++;
-          }
-        }
-        if (count > 0) {
-          toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${seedingUploadProtocol}`, 'success');
-        }
-      } catch (e) {
-        toasts.show('Upload failed: ' + (e as Error).message, 'error');
-      } finally {
-        uploading = false;
-      }
-      return;
-    }
-
     uploading = true;
     let count = 0;
     try {
@@ -466,10 +428,10 @@
         if (result) count++;
       }
       if (count > 0) {
-        toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
+        toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
       }
     } catch (e) {
-      toasts.show('Upload failed: ' + (e as Error).message, 'error');
+      toasts.detail('Upload failed', (e as Error).message, 'error');
     } finally {
       uploading = false;
     }
@@ -477,14 +439,42 @@
 
   // --- Seeding actions (from context menu or seeding panel) ---
 
-  async function handleSeedToNetwork(item: DriveItem) {
+  function handleSeedToNetwork(item: DriveItem) {
     if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
+      toasts.show('Connect to the network to start seeding', 'warning');
       return;
     }
-    const result = await driveStore.seedFile(item.id, 'WebRTC', item.priceChi || undefined);
+    seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
+    seedPrice = item.priceChi || '';
+    seedModalItem = item;
+  }
+
+  async function confirmSeed() {
+    if (!seedModalItem) return;
+    const item = seedModalItem;
+    seedModalItem = null;
+    const priceChi = normalizePriceChi(seedPrice);
+    const priceLabel = priceChi || 'Free';
+
+    if (!$networkConnected) {
+      // No network — just save the price locally
+      try {
+        await driveStore.updatePrice(item.id, priceChi);
+        toasts.detail('Price updated', `Set to ${priceLabel} — connect to network to start seeding`, 'info');
+      } catch {
+        toasts.show(`Failed to update price for "${item.name}"`, 'error');
+      }
+      return;
+    }
+
+    const result = await driveStore.seedFile(item.id, seedProtocol, priceChi || undefined);
     if (result) {
-      toasts.show(`Now seeding "${item.name}"`, 'success');
+      toasts.show(
+        item.seeding
+          ? `Updated "${item.name}" — ${seedProtocol}, ${priceLabel}`
+          : `Now seeding "${item.name}" via ${seedProtocol}`,
+        'success',
+      );
     } else {
       toasts.show(`Failed to seed "${item.name}"`, 'error');
     }
@@ -492,16 +482,22 @@
 
   async function handleStopSeeding(item: DriveItem) {
     await driveStore.stopSeeding(item.id);
-    toasts.show(`Stopped seeding "${item.name}"`, 'info');
+    // Silent — seeding badge disappears from the UI
+  }
+
+  function handleEditPrice(item: DriveItem) {
+    seedProtocol = (item.protocol as 'WebRTC' | 'BitTorrent') || 'WebRTC';
+    seedPrice = item.priceChi || '';
+    seedModalItem = item;
   }
 
   async function handleCopyMerkleHash(item: DriveItem) {
     if (!item.merkleRoot) return;
     try {
       await navigator.clipboard.writeText(item.merkleRoot);
-      toasts.show('Hash copied to clipboard', 'success');
+      toasts.show('Hash copied', 'success');
     } catch {
-      toasts.show('Failed to copy hash', 'error');
+      toasts.show('Could not copy to clipboard', 'error');
     }
   }
 
@@ -521,45 +517,13 @@
     const link = `magnet:?xt=urn:btih:${item.merkleRoot}&dn=${encodeURIComponent(item.name)}&xl=${item.size || 0}`;
     try {
       await navigator.clipboard.writeText(link);
-      toasts.show('Magnet link copied to clipboard', 'success');
+      toasts.show('Magnet link copied', 'success');
     } catch {
-      toasts.show('Failed to copy magnet link', 'error');
+      toasts.show('Could not copy to clipboard', 'error');
     }
   }
 
-  /** Called from DriveSeedingPanel "Add Files to Seed" — opens file picker, uploads to Drive, then seeds */
-  async function handleAddFilesToSeed(protocol: 'WebRTC' | 'BitTorrent', priceChi: string) {
-    if (!$networkConnected) {
-      toasts.show('Please connect to the network first', 'error');
-      return;
-    }
-    const normalizedPrice = normalizePriceChi(priceChi);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const paths: string[] | null = await invoke('open_file_dialog', { multiple: true });
-      if (!paths || paths.length === 0) return;
-      uploading = true;
-      let count = 0;
-      for (const path of paths) {
-        // Upload to Drive storage first
-        const driveItem = await driveStore.uploadFile(path, currentFolderId);
-        if (driveItem) {
-          // Then publish to DHT for seeding
-          const result = await driveStore.seedFile(driveItem.id, protocol, normalizedPrice || undefined);
-          if (result) count++;
-        }
-      }
-      if (count > 0) {
-        toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${protocol}`, 'success');
-      }
-    } catch (e) {
-      toasts.show('Failed to add files: ' + (e as Error).message, 'error');
-    } finally {
-      uploading = false;
-    }
-  }
-
-  // Tauri native drag-drop support (only for seeding tab)
+  // Tauri native drag-drop support
   let unlistenDragDrop: (() => void) | null = null;
   onMount(async () => {
     const isTauriEnv = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -570,50 +534,18 @@
       const unlistenFn = await appWindow.onDragDropEvent(async (event: any) => {
         if (event.payload.type === 'drop' && event.payload.paths?.length > 0) {
           isDragging = false;
-          if (activeTab === 'seeding') {
-            // Seed mode: upload + publish to DHT
-            if (!$networkConnected) {
-              toasts.show('Please connect to the network first', 'error');
-              return;
+          uploading = true;
+          let count = 0;
+          try {
+            for (const path of event.payload.paths) {
+              const result = await driveStore.uploadFile(path as string, currentFolderId);
+              if (result) count++;
             }
-            uploading = true;
-            const normalizedPrice = normalizePriceChi(seedingUploadPriceChi);
-            let count = 0;
-            try {
-              for (const path of event.payload.paths) {
-                const driveItem = await driveStore.uploadFile(path as string, currentFolderId);
-                if (driveItem) {
-                  const result = await driveStore.seedFile(
-                    driveItem.id,
-                    seedingUploadProtocol,
-                    normalizedPrice || undefined,
-                  );
-                  if (result) count++;
-                }
-              }
-              if (count > 0) {
-                toasts.show(`${count} file${count > 1 ? 's' : ''} now seeding via ${seedingUploadProtocol}`, 'success');
-              }
-            } catch (e) {
-              toasts.show('Failed: ' + (e as Error).message, 'error');
-            } finally {
-              uploading = false;
-            }
-          } else {
-            // Files mode: upload to Drive only
-            uploading = true;
-            let count = 0;
-            try {
-              for (const path of event.payload.paths) {
-                const result = await driveStore.uploadFile(path as string, currentFolderId);
-                if (result) count++;
-              }
-              if (count > 0) toasts.show(`Uploaded ${count} file${count > 1 ? 's' : ''}`, 'success');
-            } catch (e) {
-              toasts.show('Upload failed: ' + (e as Error).message, 'error');
-            } finally {
-              uploading = false;
-            }
+            if (count > 0) toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
+          } catch (e) {
+            toasts.detail('Upload failed', (e as Error).message, 'error');
+          } finally {
+            uploading = false;
           }
         } else if (event.payload.type === 'enter') {
           isDragging = true;
@@ -628,16 +560,12 @@
   });
   onDestroy(() => { unlistenDragDrop?.(); });
 
-  function formatBytes(bytes: number): string {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  }
 </script>
 
+<svelte:head><title>Drive | Chiral Network</title></svelte:head>
+
 <div
-  class="p-6 space-y-6"
+  class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
@@ -645,7 +573,7 @@
 >
   <!-- Header -->
   <div>
-    <h1 class="text-3xl font-bold text-gray-900 dark:text-white">My Drive</h1>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">My Drive</h1>
     <p class="text-muted-foreground mt-2">
       Cloud storage with shareable links
       {#if manifest.items.length > 0}
@@ -666,41 +594,6 @@
     onSearchChange={(q) => searchQuery = q}
   />
 
-  <!-- Tab bar -->
-  <div class="flex border-b border-gray-200 dark:border-gray-700">
-    <button
-      onclick={() => activeTab = 'files'}
-      class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px
-        {activeTab === 'files'
-          ? 'text-blue-600 dark:text-blue-400 border-blue-600 dark:border-blue-400'
-          : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
-    >
-      All Files
-    </button>
-    <button
-      onclick={() => activeTab = 'seeding'}
-      class="px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px flex items-center gap-1.5
-        {activeTab === 'seeding'
-          ? 'text-blue-600 dark:text-blue-400 border-blue-600 dark:border-blue-400'
-          : 'text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300'}"
-    >
-      Seeding
-      {#if seedingCount > 0}
-        <span class="px-1.5 py-0.5 text-xs rounded-full bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-          {seedingCount}
-        </span>
-      {/if}
-    </button>
-  </div>
-
-  {#if activeTab === 'seeding'}
-    <!-- Seeding tab -->
-    <DriveSeedingPanel
-      {manifest}
-      onAddFiles={handleAddFilesToSeed}
-      onOptionsChange={handleSeedingOptionsChange}
-    />
-  {:else}
   <!-- Breadcrumb -->
   {#if !searchQuery}
     <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
@@ -764,14 +657,14 @@
         <div class="flex gap-3">
           <button
             onclick={handleUpload}
-            class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium"
+            class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <Upload class="w-4 h-4" />
             Upload File
           </button>
           <button
             onclick={handleNewFolder}
-            class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium"
+            class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <FolderPlus class="w-4 h-4" />
             New Folder
@@ -840,7 +733,6 @@
       </table>
     </div>
   {/if}
-  {/if}
 </div>
 
 <!-- Context menu -->
@@ -854,7 +746,6 @@
     onMove={handleMoveAction}
     onShare={handleShare}
     onCopyLink={handleCopyLink}
-    onDownload={handleDownload}
     onToggleStar={handleToggleStar}
     onToggleVisibility={handleToggleVisibility}
     onDelete={handleDelete}
@@ -863,12 +754,83 @@
     onCopyHash={handleCopyMerkleHash}
     onCopyMagnet={handleCopyMagnetLink}
     onShowInExplorer={handleShowInExplorer}
+    onEditPrice={handleEditPrice}
   />
 {/if}
 
 <!-- Share modal -->
 {#if shareItem}
   <DriveShareModal item={shareItem} {manifest} onClose={() => shareItem = null} />
+{/if}
+
+<!-- Seed to network modal -->
+{#if seedModalItem}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    onclick={() => seedModalItem = null}
+    onkeydown={(e) => { if (e.key === 'Escape') seedModalItem = null; }}
+  >
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
+      <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
+      </p>
+
+      <div class="space-y-4">
+        <!-- Protocol picker -->
+        <div>
+          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Protocol</label>
+          <div class="flex rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600">
+            <button
+              onclick={() => seedProtocol = 'WebRTC'}
+              class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'WebRTC'
+                ? 'bg-blue-600 text-white'
+                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
+            >
+              WebRTC
+            </button>
+            <button
+              onclick={() => seedProtocol = 'BitTorrent'}
+              class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'BitTorrent'
+                ? 'bg-green-600 text-white'
+                : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
+            >
+              BitTorrent
+            </button>
+          </div>
+        </div>
+
+        <!-- Price input -->
+        <div>
+          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Price (CHI)</label>
+          <input
+            type="number"
+            step="0.001"
+            min="0"
+            placeholder="Free"
+            bind:value={seedPrice}
+            class="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-3 mt-5">
+        <button
+          onclick={() => seedModalItem = null}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+        >Cancel</button>
+        <button
+          onclick={confirmSeed}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition"
+        >{seedModalItem?.seeding ? 'Update' : 'Start Seeding'}</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <!-- Move modal -->
@@ -891,7 +853,7 @@
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete {deleteConfirmItem.type === 'folder' ? 'Folder' : 'File'}</h3>

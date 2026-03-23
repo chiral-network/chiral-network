@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { peers, networkStats, networkConnected, walletAccount, blacklist } from '$lib/stores';
+  import { formatBytes } from '$lib/utils';
   import { dhtService, type DhtHealthInfo } from '$lib/dhtService';
   import { toasts } from '$lib/toastStore';
   import {
@@ -11,7 +12,6 @@
     Radio,
     Server,
     Download,
-    Upload,
     RefreshCw,
     AlertTriangle,
     Check,
@@ -21,8 +21,6 @@
     HeartPulse,
     ChevronDown,
     ChevronUp,
-    ArrowDownToLine,
-    ArrowUpFromLine,
     ShieldBan,
     Trash2,
     Plus
@@ -100,61 +98,6 @@
   let bootstrapPeerIds = $state<Set<string>>(new Set());
   let filteredPeers = $derived($peers.filter(p => !bootstrapPeerIds.has(p.id)));
 
-  // Relay / NAT Traversal State
-  interface RelayStatus {
-    relayPeerId: string;
-    active: boolean;
-    timestamp: number;
-  }
-  interface HolePunchEvent {
-    remotePeerId: string;
-    success: boolean;
-    error?: string;
-    timestamp: number;
-  }
-  let relayReservations = $state<RelayStatus[]>([]);
-  let holePunchEvents = $state<HolePunchEvent[]>([]);
-  let unlistenRelay: (() => void) | null = null;
-  let unlistenRelayFailed: (() => void) | null = null;
-  let unlistenRelayCircuit: (() => void) | null = null;
-  let unlistenDcutr: (() => void) | null = null;
-
-  // Traffic Statistics State
-  let trafficStats = $state({
-    totalDownloaded: 0,
-    totalUploaded: 0,
-    downloadSpeed: 0,
-    uploadSpeed: 0,
-    sessionStart: Date.now()
-  });
-  let trafficInterval: ReturnType<typeof setInterval> | null = null;
-
-  // Load traffic stats from localStorage
-  function loadTrafficStats() {
-    if (typeof window === 'undefined') return;
-    const saved = localStorage.getItem('chiral-traffic-stats');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        trafficStats = { ...trafficStats, ...parsed, sessionStart: Date.now() };
-      } catch {}
-    }
-  }
-
-  function saveTrafficStats() {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('chiral-traffic-stats', JSON.stringify({
-      totalDownloaded: trafficStats.totalDownloaded,
-      totalUploaded: trafficStats.totalUploaded
-    }));
-  }
-
-  function formatSpeed(bytesPerSec: number): string {
-    if (bytesPerSec >= 1e9) return `${(bytesPerSec / 1e9).toFixed(2)} GB/s`;
-    if (bytesPerSec >= 1e6) return `${(bytesPerSec / 1e6).toFixed(2)} MB/s`;
-    if (bytesPerSec >= 1e3) return `${(bytesPerSec / 1e3).toFixed(2)} KB/s`;
-    return `${bytesPerSec.toFixed(0)} B/s`;
-  }
 
   // Show "connecting" message only when Geth is running with 0 peers, auto-dismiss after 30s
   $effect(() => {
@@ -197,14 +140,12 @@
   }
 
   onMount(async () => {
-    loadTrafficStats();
-
     if (isTauri()) {
       // Load bootstrap peer IDs to filter them from Connected Peers
       try {
         const ids: string[] = await invoke('get_bootstrap_peer_ids');
         bootstrapPeerIds = new Set(ids);
-      } catch {}
+      } catch { /* bootstrap IDs unavailable — show all peers */ }
 
       await loadGethStatus();
       await loadBootstrapHealth();
@@ -216,44 +157,6 @@
           isDownloading = false;
           loadGethStatus();
         }
-      });
-
-      // Listen for relay/hole-punch events
-      unlistenRelay = await listen<{ relayPeerId: string; renewal: boolean }>('relay-reservation', (event) => {
-        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
-        if (existing) {
-          existing.active = true;
-          existing.timestamp = Date.now();
-          relayReservations = [...relayReservations];
-        } else {
-          relayReservations = [...relayReservations, {
-            relayPeerId: event.payload.relayPeerId,
-            active: true,
-            timestamp: Date.now(),
-          }];
-        }
-      });
-
-      unlistenRelayFailed = await listen<{ relayPeerId: string }>('relay-reservation-failed', (event) => {
-        const existing = relayReservations.find(r => r.relayPeerId === event.payload.relayPeerId);
-        if (existing) {
-          existing.active = false;
-          existing.timestamp = Date.now();
-          relayReservations = [...relayReservations];
-        }
-      });
-
-      unlistenRelayCircuit = await listen<{ direction: string }>('relay-circuit-established', () => {
-        log.info('Relay circuit established');
-      });
-
-      unlistenDcutr = await listen<{ remotePeerId: string; success: boolean; error?: string }>('dcutr-event', (event) => {
-        holePunchEvents = [{
-          remotePeerId: event.payload.remotePeerId,
-          success: event.payload.success,
-          error: event.payload.error,
-          timestamp: Date.now(),
-        }, ...holePunchEvents.slice(0, 9)]; // keep last 10
       });
 
       // Refresh status every 10 seconds
@@ -272,14 +175,6 @@
     if (gethConnectingTimeout) {
       clearTimeout(gethConnectingTimeout);
     }
-    if (trafficInterval) {
-      clearInterval(trafficInterval);
-    }
-    unlistenRelay?.();
-    unlistenRelayFailed?.();
-    unlistenRelayCircuit?.();
-    unlistenDcutr?.();
-    saveTrafficStats();
   });
 
   // Load Geth status
@@ -320,7 +215,7 @@
   // Download Geth
   async function handleDownloadGeth() {
     if (!isTauri()) {
-      toasts.show('Geth download requires desktop app', 'error');
+      toasts.show('Geth download requires the desktop app', 'warning');
       return;
     }
 
@@ -329,11 +224,11 @@
 
     try {
       await invoke('download_geth');
-      toasts.show('Geth downloaded successfully!', 'success');
+      toasts.show('Geth installed', 'success');
       await loadGethStatus();
     } catch (err) {
       log.error('Failed to download Geth:', err);
-      toasts.show(`Download failed: ${err}`, 'error');
+      toasts.detail('Download failed', String(err), 'error');
     } finally {
       isDownloading = false;
     }
@@ -346,11 +241,11 @@
     isStartingGeth = true;
     try {
       await invoke('start_geth', { minerAddress: $walletAccount?.address || null });
-      toasts.show('Blockchain node started!', 'success');
+      toasts.show('Blockchain node started', 'success');
       await loadGethStatus();
     } catch (err) {
       log.error('Failed to start Geth:', err);
-      toasts.show(`Failed to start node: ${err}`, 'error');
+      toasts.detail('Failed to start node', String(err), 'error');
     } finally {
       isStartingGeth = false;
     }
@@ -366,7 +261,7 @@
       await loadGethStatus();
     } catch (err) {
       log.error('Failed to stop Geth:', err);
-      toasts.show(`Failed to stop node: ${err}`, 'error');
+      toasts.detail('Failed to stop node', String(err), 'error');
     }
   }
 
@@ -421,7 +316,7 @@
       if (peerId) {
         localPeerId = peerId;
       }
-      toasts.show('Connected to P2P network!', 'success');
+      toasts.notify('networkStatus', 'Connected to P2P network', 'success');
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       // If DHT is already running (e.g. stale state after logout), sync the UI
@@ -429,11 +324,11 @@
         networkConnected.set(true);
         const peerId = await dhtService.getPeerId();
         if (peerId) localPeerId = peerId;
-        toasts.show('Reconnected to P2P network', 'success');
+        toasts.notify('networkStatus', 'Reconnected to P2P network', 'info');
       } else {
         error = errMsg;
         log.error('Failed to connect:', err);
-        toasts.show(`Connection failed: ${error}`, 'error');
+        toasts.notifyDetail('networkStatus', 'Connection failed', error, 'error');
       }
     } finally {
       isConnecting = false;
@@ -444,7 +339,7 @@
     try {
       await dhtService.stop();
       localPeerId = '';
-      toasts.show('Disconnected from P2P network', 'info');
+      toasts.notify('networkStatus', 'Disconnected from P2P network', 'info');
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to disconnect';
       log.error('Failed to disconnect:', err);
@@ -454,7 +349,7 @@
   async function pingPeer(peerId: string) {
     try {
       const result = await dhtService.pingPeer(peerId);
-      toasts.show('Ping sent!', 'success');
+      // Silent — ping result shown in UI
       log.info('Ping successful:', result);
     } catch (err) {
       toasts.show('Ping failed', 'error');
@@ -467,12 +362,6 @@
     return d.toLocaleString();
   }
 
-  function formatBytes(bytes: number): string {
-    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
-    if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(2)} MB`;
-    if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(2)} KB`;
-    return `${bytes} B`;
-  }
 
   // Blacklist
   let blacklistAddress = $state('');
@@ -481,7 +370,7 @@
   function addToBlacklist() {
     const addr = blacklistAddress.trim();
     if (!addr) {
-      toasts.show('Please enter an address', 'error');
+      toasts.show('Enter an address first', 'warning');
       return;
     }
     const current = $blacklist;
@@ -492,12 +381,12 @@
     blacklist.add(addr, blacklistReason.trim() || 'No reason given');
     blacklistAddress = '';
     blacklistReason = '';
-    toasts.show('Address added to blacklist', 'success');
+    // Silent — address appears in the blacklist UI
   }
 
   function removeFromBlacklist(address: string) {
     blacklist.remove(address);
-    toasts.show('Address removed from blacklist', 'success');
+    // Silent — address removed from the blacklist UI
   }
 
   function truncateAddress(addr: string): string {
@@ -506,16 +395,18 @@
   }
 </script>
 
-<div class="p-6">
+<svelte:head><title>Network | Chiral Network</title></svelte:head>
+
+<div class="max-w-6xl mx-auto p-4 sm:p-6">
   <div class="flex items-center justify-between mb-6">
     <div>
-      <h1 class="text-3xl font-bold dark:text-white">Network</h1>
+      <h1 class="text-2xl font-bold dark:text-white">Network</h1>
       <p class="text-gray-600 dark:text-gray-400 mt-1">Manage blockchain and P2P network connections</p>
     </div>
     <button
       onclick={loadGethStatus}
       disabled={isLoadingGeth}
-      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
+      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500"
       title="Refresh status"
     >
       <RefreshCw class="w-5 h-5 {isLoadingGeth ? 'animate-spin' : ''}" />
@@ -532,7 +423,7 @@
   {/if}
 
   <!-- Blockchain Node Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
         <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
@@ -611,19 +502,19 @@
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.peerCount || 0}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.peerCount || 0}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Chain ID</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.chainId || 'N/A'}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.chainId || 'N/A'}</p>
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
           <p class="text-xs text-gray-500 dark:text-gray-400">Sync Status</p>
-          <p class="text-lg font-bold dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
+          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
         </div>
       </div>
 
@@ -632,7 +523,7 @@
         {#if gethStatus?.running}
           <button
             onclick={handleStopGeth}
-            class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+            class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
           >
             <Square class="w-4 h-4" />
             Stop Node
@@ -641,7 +532,7 @@
           <button
             onclick={handleStartGeth}
             disabled={isStartingGeth}
-            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
           >
             {#if isStartingGeth}
               <Loader2 class="w-4 h-4 animate-spin" />
@@ -695,11 +586,11 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
               <p class="text-xs text-gray-500 dark:text-gray-400">Healthy Nodes</p>
-              <p class="text-sm font-bold dark:text-white">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
+              <p class="text-sm font-bold tabular-nums dark:text-white">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
               <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
-              <p class="text-sm font-bold dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
+              <p class="text-sm font-bold tabular-nums dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
             </div>
           </div>
 
@@ -729,7 +620,7 @@
                   </div>
                   <div class="text-right shrink-0">
                     {#if node.reachable && node.latencyMs}
-                      <span class="text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
+                      <span class="tabular-nums text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
                     {:else if node.error}
                       <span class="text-red-500 dark:text-red-400">{node.error}</span>
                     {:else}
@@ -761,7 +652,7 @@
   </div>
 
   <!-- P2P Network (DHT) Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
     <!-- Header with status and controls -->
     <div class="flex items-center justify-between mb-4">
       <div class="flex items-center gap-3">
@@ -782,22 +673,14 @@
     </div>
 
     <!-- Stats Grid -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+    <div class="grid grid-cols-2 gap-3 mb-4">
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">DHT Peers</p>
-        <p class="text-lg font-bold dark:text-white">{$networkStats.connectedPeers}</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
+        <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.connectedPeers}</p>
       </div>
       <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
         <p class="text-xs text-gray-500 dark:text-gray-400">Discovered Peers</p>
-        <p class="text-lg font-bold dark:text-white">{$networkStats.totalPeers}</p>
-      </div>
-      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-        <p class="text-lg font-bold dark:text-white">{gethStatus?.peerCount || 0}</p>
-      </div>
-      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
-        <p class="text-lg font-bold dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
+        <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.totalPeers}</p>
       </div>
     </div>
 
@@ -814,7 +697,7 @@
       {#if $networkConnected}
         <button
           onclick={disconnectFromNetwork}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
         >
           <Square class="w-4 h-4" />
           <span>Disconnect</span>
@@ -823,7 +706,7 @@
         <button
           onclick={connectToNetwork}
           disabled={isConnecting}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50"
+          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
         >
           {#if isConnecting}
             <Loader2 class="w-4 h-4 animate-spin" />
@@ -867,15 +750,15 @@
           </div>
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
-            <p class="text-sm font-bold dark:text-white">{dhtHealth.connectedPeerCount}</p>
+            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.connectedPeerCount}</p>
           </div>
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
-            <p class="text-sm font-bold dark:text-white">{dhtHealth.kademliaPeers}</p>
+            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.kademliaPeers}</p>
           </div>
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
-            <p class="text-sm font-bold dark:text-white">{dhtHealth.sharedFiles}</p>
+            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.sharedFiles}</p>
           </div>
         </div>
 
@@ -958,96 +841,6 @@
       {/if}
     </div>
 
-    <!-- Traffic Statistics -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <div class="flex items-center gap-2 mb-3">
-        <Activity class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Traffic Statistics</span>
-      </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <ArrowDownToLine class="w-3.5 h-3.5 text-green-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Download Speed</p>
-          </div>
-          <p class="text-lg font-bold dark:text-white">{formatSpeed(trafficStats.downloadSpeed)}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <ArrowUpFromLine class="w-3.5 h-3.5 text-blue-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Upload Speed</p>
-          </div>
-          <p class="text-lg font-bold dark:text-white">{formatSpeed(trafficStats.uploadSpeed)}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <Download class="w-3.5 h-3.5 text-green-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Total Downloaded</p>
-          </div>
-          <p class="text-lg font-bold dark:text-white">{formatBytes(trafficStats.totalDownloaded)}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <div class="flex items-center gap-2 mb-1">
-            <Upload class="w-3.5 h-3.5 text-blue-500" />
-            <p class="text-xs text-gray-500 dark:text-gray-400">Total Uploaded</p>
-          </div>
-          <p class="text-lg font-bold dark:text-white">{formatBytes(trafficStats.totalUploaded)}</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- NAT Traversal / Relay Status -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <div class="flex items-center gap-2 mb-3">
-        <Globe class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">NAT Traversal</span>
-        {#if relayReservations.some(r => r.active)}
-          <span class="px-2 py-0.5 text-xs rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 font-medium">
-            Relay Active
-          </span>
-        {:else if $networkConnected}
-          <span class="px-2 py-0.5 text-xs rounded-full bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 font-medium">
-            Connecting to Relays
-          </span>
-        {/if}
-      </div>
-
-      {#if relayReservations.length > 0}
-        <div class="space-y-1.5 mb-3">
-          {#each relayReservations as relay}
-            <div class="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
-              <div class="flex items-center gap-2">
-                <div class="w-2 h-2 rounded-full {relay.active ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                <span class="font-mono dark:text-gray-300">{relay.relayPeerId.slice(0, 16)}...</span>
-              </div>
-              <span class="{relay.active ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-                {relay.active ? 'Reserved' : 'Failed'}
-              </span>
-            </div>
-          {/each}
-        </div>
-      {:else if $networkConnected}
-        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
-          Relay reservations will appear here when connected to relay nodes.
-          Relays enable connections between peers behind NAT.
-        </p>
-      {/if}
-
-      {#if holePunchEvents.length > 0}
-        <div class="mb-2">
-          <p class="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Hole-Punch Events (DCUtR)</p>
-          <div class="space-y-1">
-            {#each holePunchEvents.slice(0, 5) as event}
-              <div class="flex items-center justify-between p-1.5 text-xs {event.success ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}">
-                <span class="font-mono">{event.remotePeerId.slice(0, 16)}...</span>
-                <span>{event.success ? 'Direct connection established' : `Failed: ${event.error || 'unknown'}`}</span>
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
-    </div>
-
     <!-- Connected Peers -->
     <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
       <div class="flex items-center gap-2 mb-3">
@@ -1091,7 +884,7 @@
   </div>
 
   <!-- Blacklist Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-6">
+  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-6">
     <div class="flex items-center gap-3 mb-4">
       <div class="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
         <ShieldBan class="w-5 h-5 text-red-600 dark:text-red-400" />

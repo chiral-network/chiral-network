@@ -11,8 +11,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::drive_storage::{
-    self, collect_descendants, generate_id, generate_share_token, hash_password, now_secs,
-    DriveItem, DriveManifest, ShareLink,
+    self, collect_descendants, generate_id, generate_share_token, now_secs, DriveItem,
+    DriveManifest, ShareLink,
 };
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,169 @@ fn get_owner(headers: &HeaderMap) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn is_valid_wallet(addr: &str) -> bool {
+    addr.len() == 42 && addr.starts_with("0x") && addr[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn parse_chi_to_wei(amount: &str) -> Result<u128, String> {
+    let amount = amount.trim();
+    let parts: Vec<&str> = amount.split('.').collect();
+    if parts.len() > 2 {
+        return Err("Invalid amount format".to_string());
+    }
+
+    let whole: u128 = if parts[0].is_empty() {
+        0
+    } else {
+        parts[0].parse().map_err(|_| "Invalid amount".to_string())?
+    };
+
+    let frac_wei = if parts.len() == 2 {
+        let frac_str = parts[1];
+        if frac_str.len() > 18 {
+            frac_str[..18]
+                .parse::<u128>()
+                .map_err(|_| "Invalid amount".to_string())?
+        } else {
+            let padded = format!("{:0<18}", frac_str);
+            padded
+                .parse::<u128>()
+                .map_err(|_| "Invalid amount".to_string())?
+        }
+    } else {
+        0u128
+    };
+
+    whole
+        .checked_mul(1_000_000_000_000_000_000u128)
+        .and_then(|w| w.checked_add(frac_wei))
+        .ok_or("Amount overflow".to_string())
+}
+
+fn parse_hex_u128(hex: &str) -> Result<u128, String> {
+    let value = hex.trim_start_matches("0x");
+    u128::from_str_radix(value, 16).map_err(|e| format!("Invalid hex value: {}", e))
+}
+
+async fn verify_payment_tx(
+    tx_hash: &str,
+    expected_to: &str,
+    min_value_wei: u128,
+) -> Result<(), String> {
+    if !tx_hash.starts_with("0x") || tx_hash.len() != 66 {
+        return Err("Invalid transaction hash".to_string());
+    }
+
+    let rpc = crate::geth::rpc_endpoint();
+    let client = reqwest::Client::new();
+
+    let tx_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionByHash",
+        "params": [tx_hash],
+        "id": 1
+    });
+    let tx_resp = client
+        .post(&rpc)
+        .json(&tx_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to query tx: {}", e))?;
+    let tx_json: serde_json::Value = tx_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse tx response: {}", e))?;
+    let tx = tx_json.get("result").ok_or("Tx result missing")?;
+    if tx.is_null() {
+        return Err("Transaction not found".to_string());
+    }
+
+    let tx_to = tx.get("to").and_then(|v| v.as_str()).unwrap_or_default();
+    if !tx_to.eq_ignore_ascii_case(expected_to) {
+        return Err("Transaction recipient does not match share recipient wallet".to_string());
+    }
+
+    let tx_value_hex = tx
+        .get("value")
+        .and_then(|v| v.as_str())
+        .ok_or("Transaction value missing")?;
+    let tx_value = parse_hex_u128(tx_value_hex)?;
+    if tx_value < min_value_wei {
+        return Err("Transaction value is below required share price".to_string());
+    }
+
+    let receipt_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash],
+        "id": 2
+    });
+    let receipt_resp = client
+        .post(&rpc)
+        .json(&receipt_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to query receipt: {}", e))?;
+    let receipt_json: serde_json::Value = receipt_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse receipt response: {}", e))?;
+    let receipt = receipt_json.get("result").ok_or("Receipt result missing")?;
+    if receipt.is_null() {
+        return Err("Transaction not yet confirmed".to_string());
+    }
+
+    let status = receipt
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0x0");
+    if status != "0x1" {
+        return Err("Transaction failed on-chain".to_string());
+    }
+
+    Ok(())
+}
+
+fn is_item_under_shared_root(item: &DriveItem, root: &DriveItem, all_items: &[DriveItem]) -> bool {
+    if item.id == root.id {
+        return true;
+    }
+    let mut current_parent = item.parent_id.as_deref();
+    while let Some(pid) = current_parent {
+        if pid == root.id {
+            return true;
+        }
+        current_parent = all_items
+            .iter()
+            .find(|i| i.id == pid)
+            .and_then(|i| i.parent_id.as_deref());
+    }
+    false
+}
+
+fn normalize_share_price(value: &str) -> String {
+    value.trim().to_string()
+}
+
+fn share_price_wei(share: &ShareLink) -> Result<u128, String> {
+    parse_chi_to_wei(&share.price_chi)
+}
+
+async fn verify_share_access(share: &ShareLink, access: Option<&str>) -> Result<(), String> {
+    let required_wei = share_price_wei(share)?;
+    if required_wei == 0 {
+        return Err("This share is not configured with a valid payment amount.".to_string());
+    }
+    if !is_valid_wallet(&share.recipient_wallet) {
+        return Err("Share recipient wallet is invalid.".to_string());
+    }
+    let tx_hash = access.unwrap_or("").trim();
+    if tx_hash.is_empty() {
+        return Err("Payment is required to unlock this shared content.".to_string());
+    }
+    verify_payment_tx(tx_hash, &share.recipient_wallet, required_wei).await
+}
+
 // ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
@@ -80,29 +243,34 @@ struct UpdateItemRequest {
     name: Option<String>,
     parent_id: Option<String>,
     starred: Option<bool>,
+    price_chi: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct CreateShareRequest {
     item_id: String,
-    password: Option<String>,
+    price_chi: Option<String>,
     is_public: Option<bool>,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ShareLinkResponse {
     id: String,
     item_id: String,
     url: String,
     is_public: bool,
-    has_password: bool,
+    price_chi: String,
+    recipient_wallet: String,
     created_at: u64,
     download_count: u64,
 }
 
 #[derive(Deserialize)]
 struct PublicBrowseQuery {
-    p: Option<String>, // password for protected shares
+    access: Option<String>, // on-chain tx hash used as access proof
+    dl: Option<u8>,         // 1 = force attachment
+    view: Option<u8>,       // 1 = inline preview mode
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +460,11 @@ async fn upload_file(
     }
     state.persist().await;
 
-    println!("[DRIVE] Uploaded file: {} ({} bytes)", item.name, data.len());
+    println!(
+        "[DRIVE] Uploaded file: {} ({} bytes)",
+        item.name,
+        data.len()
+    );
     (StatusCode::CREATED, Json(item)).into_response()
 }
 
@@ -308,7 +480,11 @@ async fn update_item(
         None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
     };
     let mut m = state.manifest.write().await;
-    let Some(item) = m.items.iter_mut().find(|i| i.id == item_id && i.owner == owner) else {
+    let Some(item) = m
+        .items
+        .iter_mut()
+        .find(|i| i.id == item_id && i.owner == owner)
+    else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
 
@@ -323,6 +499,9 @@ async fn update_item(
     }
     if let Some(starred) = req.starred {
         item.starred = starred;
+    }
+    if let Some(p) = req.price_chi {
+        item.price_chi = if p.is_empty() { None } else { Some(p) };
     }
     item.modified_at = now_secs();
 
@@ -409,7 +588,11 @@ async fn download_file(
 ) -> Response {
     let m = state.manifest.read().await;
     let owner = get_owner(&headers);
-    let Some(item) = m.items.iter().find(|i| i.id == item_id && (owner.is_none() || i.owner == *owner.as_ref().unwrap())) else {
+    let Some(item) = m
+        .items
+        .iter()
+        .find(|i| i.id == item_id && (owner.is_none() || i.owner == *owner.as_ref().unwrap()))
+    else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
     if item.item_type != "file" {
@@ -462,9 +645,38 @@ async fn create_share(
     };
     let mut m = state.manifest.write().await;
 
-    // Verify item exists and belongs to owner
-    if !m.items.iter().any(|i| i.id == req.item_id && i.owner == owner) {
+    let Some(item) = m
+        .items
+        .iter()
+        .find(|i| i.id == req.item_id && i.owner == owner)
+        .cloned()
+    else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
+    };
+
+    if !is_valid_wallet(&item.owner) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Item owner wallet must be a valid 0x address",
+        )
+            .into_response();
+    }
+
+    let requested_price = req
+        .price_chi
+        .or_else(|| item.price_chi.clone())
+        .unwrap_or_default();
+    let normalized_price = normalize_share_price(&requested_price);
+    let price_wei = match parse_chi_to_wei(&normalized_price) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if price_wei == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Share price must be greater than 0 CHI",
+        )
+            .into_response();
     }
 
     let token = generate_share_token();
@@ -473,8 +685,9 @@ async fn create_share(
         item_id: req.item_id,
         created_at: now_secs(),
         expires_at: None,
-        password_hash: req.password.as_deref().map(hash_password),
-        is_public: req.is_public.unwrap_or(false),
+        price_chi: normalized_price,
+        recipient_wallet: item.owner,
+        is_public: req.is_public.unwrap_or(true),
         download_count: 0,
     };
     m.shares.push(share.clone());
@@ -486,7 +699,8 @@ async fn create_share(
         item_id: share.item_id,
         url: format!("/drive/{}", share.id),
         is_public: share.is_public,
-        has_password: share.password_hash.is_some(),
+        price_chi: share.price_chi,
+        recipient_wallet: share.recipient_wallet,
         created_at: share.created_at,
         download_count: 0,
     };
@@ -507,7 +721,9 @@ async fn revoke_share(
     // Only allow revoking shares for items the owner owns
     let share = m.shares.iter().find(|s| s.id == token);
     let is_owner = share.map_or(false, |s| {
-        m.items.iter().any(|i| i.id == s.item_id && i.owner == owner)
+        m.items
+            .iter()
+            .any(|i| i.id == s.item_id && i.owner == owner)
     });
     if !is_owner {
         return (StatusCode::NOT_FOUND, "Share link not found").into_response();
@@ -519,10 +735,7 @@ async fn revoke_share(
 }
 
 /// GET /api/drive/shares
-async fn list_shares(
-    Extension(state): Extension<Arc<DriveState>>,
-    headers: HeaderMap,
-) -> Response {
+async fn list_shares(Extension(state): Extension<Arc<DriveState>>, headers: HeaderMap) -> Response {
     let owner = match get_owner(&headers) {
         Some(o) => o,
         None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
@@ -544,7 +757,8 @@ async fn list_shares(
             item_id: s.item_id.clone(),
             url: format!("/drive/{}", s.id),
             is_public: s.is_public,
-            has_password: s.password_hash.is_some(),
+            price_chi: s.price_chi.clone(),
+            recipient_wallet: s.recipient_wallet.clone(),
             created_at: s.created_at,
             download_count: s.download_count,
         })
@@ -562,91 +776,114 @@ async fn public_browse(
     Path(token): Path<String>,
     Query(q): Query<PublicBrowseQuery>,
 ) -> Response {
-    let m = state.manifest.read().await;
-    let Some(share) = m.shares.iter().find(|s| s.id == token) else {
-        return (StatusCode::NOT_FOUND, Html(error_page("Share link not found"))).into_response();
-    };
-
-    // Password check
-    if let Some(pw_hash) = &share.password_hash {
-        match &q.p {
-            Some(pw) if &hash_password(pw) == pw_hash => {} // OK
-            _ => {
-                return Html(password_page(&token)).into_response();
-            }
-        }
-    }
-
-    let Some(item) = m.items.iter().find(|i| i.id == share.item_id) else {
-        return (StatusCode::NOT_FOUND, Html(error_page("Shared item no longer exists")))
-            .into_response();
-    };
-
-    // Block access if the item has been made private
-    if !item.is_public {
-        return (StatusCode::FORBIDDEN, Html(error_page("This file is currently unavailable")))
-            .into_response();
-    }
-
-    let pw_param = q.p.as_deref().map(|p| format!("&p={}", p)).unwrap_or_default();
-
-    if item.item_type == "file" {
-        // Single file share — show download page
-        Html(file_download_page(item, &token, &pw_param)).into_response()
-    } else {
-        // Folder share — list contents
-        let children: Vec<&DriveItem> = m
+    let (share, item, children) = {
+        let m = state.manifest.read().await;
+        let Some(share) = m.shares.iter().find(|s| s.id == token).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(error_page("Share link not found")),
+            )
+                .into_response();
+        };
+        let Some(item) = m.items.iter().find(|i| i.id == share.item_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(error_page("Shared item no longer exists")),
+            )
+                .into_response();
+        };
+        let children = m
             .items
             .iter()
             .filter(|i| i.parent_id.as_deref() == Some(&item.id))
-            .collect();
-        Html(folder_browse_page(item, &children, &token, "", &pw_param)).into_response()
+            .cloned()
+            .collect::<Vec<_>>();
+        (share, item, children)
+    };
+
+    if !item.is_public {
+        return (
+            StatusCode::FORBIDDEN,
+            Html(error_page("This file is currently unavailable")),
+        )
+            .into_response();
+    }
+
+    if let Err(reason) = verify_share_access(&share, q.access.as_deref()).await {
+        return Html(payment_page(&item, &token, &share, &reason)).into_response();
+    }
+
+    let access = q.access.as_deref().unwrap_or("");
+
+    if item.item_type == "file" {
+        Html(file_download_page(&item, &token, access)).into_response()
+    } else {
+        Html(folder_browse_page(&item, &children, &token, "", access)).into_response()
     }
 }
 
-/// GET /drive/:token/download  — download the shared file
+/// GET /drive/:token/download/:item_id/:filename  — download or preview shared file data
 async fn public_download(
     Extension(state): Extension<Arc<DriveState>>,
-    Path(token): Path<String>,
+    Path((token, subpath)): Path<(String, String)>,
     Query(q): Query<PublicBrowseQuery>,
 ) -> Response {
-    let mut m = state.manifest.write().await;
-    let Some(share) = m.shares.iter_mut().find(|s| s.id == token) else {
-        return (StatusCode::NOT_FOUND, "Share link not found").into_response();
+    let item_id_hint = if subpath == "download" {
+        None
+    } else if let Some(rest) = subpath.strip_prefix("download/") {
+        rest.split('/').next().filter(|s| !s.trim().is_empty())
+    } else {
+        None
     };
 
-    // Password check
-    if let Some(pw_hash) = &share.password_hash {
-        match &q.p {
-            Some(pw) if &hash_password(pw) == pw_hash => {}
-            _ => return (StatusCode::UNAUTHORIZED, "Password required").into_response(),
+    let (share, root_item, target_item) = {
+        let m = state.manifest.read().await;
+        let Some(share) = m.shares.iter().find(|s| s.id == token).cloned() else {
+            return (StatusCode::NOT_FOUND, "Share link not found").into_response();
+        };
+
+        let Some(root_item) = m.items.iter().find(|i| i.id == share.item_id).cloned() else {
+            return (StatusCode::NOT_FOUND, "Shared item not found").into_response();
+        };
+        if !root_item.is_public {
+            return (StatusCode::FORBIDDEN, "This file is currently unavailable").into_response();
         }
-    }
 
-    let item_id = share.item_id.clone();
+        let target_id = item_id_hint.unwrap_or(share.item_id.as_str());
+        let Some(target_item) = m.items.iter().find(|i| i.id == target_id).cloned() else {
+            return (StatusCode::NOT_FOUND, "Item not found").into_response();
+        };
 
-    // Check visibility and extract file info before mutable borrow for download_count
-    let Some(item) = m.items.iter().find(|i| i.id == item_id) else {
-        return (StatusCode::NOT_FOUND, "Item not found").into_response();
+        if !is_item_under_shared_root(&target_item, &root_item, &m.items) {
+            return (StatusCode::FORBIDDEN, "Item is outside shared scope").into_response();
+        }
+        if target_item.item_type != "file" {
+            return (StatusCode::BAD_REQUEST, "Cannot download a folder").into_response();
+        }
+        (share, root_item, target_item)
     };
-    if !item.is_public {
-        return (StatusCode::FORBIDDEN, "This file is currently unavailable").into_response();
+
+    if let Err(reason) = verify_share_access(&share, q.access.as_deref()).await {
+        return Html(payment_page(&root_item, &token, &share, &reason)).into_response();
     }
-    if item.item_type != "file" {
-        return (StatusCode::BAD_REQUEST, "Cannot download a folder").into_response();
-    }
-    let Some(sp) = item.storage_path.clone() else {
+
+    let Some(sp) = target_item.storage_path.clone() else {
         return (StatusCode::NOT_FOUND, "File not stored").into_response();
     };
-    let file_name = item.name.clone();
-    let content_type = item
+    let file_name = target_item.name.clone();
+    let content_type = target_item
         .mime_type
         .clone()
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Now safe to mutably borrow shares for download count increment
-    if let Some(share) = m.shares.iter_mut().find(|s| s.id == token) {
-        share.download_count += 1;
+    let as_attachment = q.view.unwrap_or(0) == 0 && q.dl.unwrap_or(1) != 0;
+    if as_attachment {
+        let mut m = state.manifest.write().await;
+        if let Some(link) = m.shares.iter_mut().find(|s| s.id == token) {
+            link.download_count += 1;
+        }
+        drop(m);
+        state.persist().await;
     }
 
     let Some(files_dir) = drive_storage::drive_files_dir() else {
@@ -654,12 +891,15 @@ async fn public_download(
     };
     let file_path = files_dir.join(&sp);
 
-    drop(m);
-    state.persist().await;
-
     let data = match std::fs::read(&file_path) {
         Ok(d) => d,
         Err(_) => return (StatusCode::NOT_FOUND, "File not found on disk").into_response(),
+    };
+
+    let disposition = if as_attachment {
+        format!("attachment; filename=\"{}\"", file_name)
+    } else {
+        format!("inline; filename=\"{}\"", file_name)
     };
 
     (
@@ -667,10 +907,7 @@ async fn public_download(
         [
             ("Content-Type", content_type),
             ("Content-Length", data.len().to_string()),
-            (
-                "Content-Disposition",
-                format!("attachment; filename=\"{}\"", file_name),
-            ),
+            ("Content-Disposition", disposition),
         ],
         data,
     )
@@ -683,87 +920,70 @@ async fn public_browse_path(
     Path((token, subpath)): Path<(String, String)>,
     Query(q): Query<PublicBrowseQuery>,
 ) -> Response {
-    // Handle "download" or "download/filename.ext" as the special download route
+    // Handle "download" and "download/..." as special file-data routes
     if subpath == "download" || subpath.starts_with("download/") {
-        return public_download(Extension(state), Path(token), Query(q)).await;
+        return public_download(Extension(state), Path((token, subpath)), Query(q)).await;
     }
 
-    let m = state.manifest.read().await;
-    let Some(share) = m.shares.iter().find(|s| s.id == token) else {
-        return (StatusCode::NOT_FOUND, Html(error_page("Share link not found"))).into_response();
-    };
+    let (share, root_item, item, children) = {
+        let m = state.manifest.read().await;
+        let Some(share) = m.shares.iter().find(|s| s.id == token).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(error_page("Share link not found")),
+            )
+                .into_response();
+        };
 
-    // Check visibility of the root shared item (blocks access to all children too)
-    if let Some(root_item) = m.items.iter().find(|i| i.id == share.item_id) {
+        let Some(root_item) = m.items.iter().find(|i| i.id == share.item_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Html(error_page("Shared item no longer exists")),
+            )
+                .into_response();
+        };
         if !root_item.is_public {
-            return (StatusCode::FORBIDDEN, Html(error_page("This content is currently unavailable")))
+            return (
+                StatusCode::FORBIDDEN,
+                Html(error_page("This content is currently unavailable")),
+            )
                 .into_response();
         }
-    }
 
-    // Password check
-    if let Some(pw_hash) = &share.password_hash {
-        match &q.p {
-            Some(pw) if &hash_password(pw) == pw_hash => {}
-            _ => return Html(password_page(&token)).into_response(),
+        // Navigate to subfolder by path segments (item IDs)
+        let target_id = subpath.trim_matches('/');
+        let Some(item) = m.items.iter().find(|i| i.id == target_id).cloned() else {
+            return (StatusCode::NOT_FOUND, Html(error_page("Item not found"))).into_response();
+        };
+
+        if !is_item_under_shared_root(&item, &root_item, &m.items) {
+            return (
+                StatusCode::FORBIDDEN,
+                Html(error_page("Item is outside shared scope")),
+            )
+                .into_response();
         }
-    }
 
-    // Navigate to subfolder by path segments (item IDs)
-    let target_id = subpath.trim_matches('/');
-    let Some(item) = m.items.iter().find(|i| i.id == target_id) else {
-        return (StatusCode::NOT_FOUND, Html(error_page("Item not found"))).into_response();
-    };
-
-    let pw_param = q.p.as_deref().map(|p| format!("&p={}", p)).unwrap_or_default();
-
-    if item.item_type == "file" {
-        // It's a file within the shared folder — offer download
-        let Some(sp) = &item.storage_path else {
-            return (StatusCode::NOT_FOUND, Html(error_page("File not stored"))).into_response();
-        };
-        let Some(files_dir) = drive_storage::drive_files_dir() else {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response();
-        };
-        let file_path = files_dir.join(sp);
-        let data = match std::fs::read(&file_path) {
-            Ok(d) => d,
-            Err(_) => {
-                return (StatusCode::NOT_FOUND, Html(error_page("File not found on disk")))
-                    .into_response()
-            }
-        };
-        let content_type = item
-            .mime_type
-            .clone()
-            .unwrap_or_else(|| "application/octet-stream".to_string());
-
-        (
-            StatusCode::OK,
-            [
-                ("Content-Type", content_type),
-                ("Content-Length", data.len().to_string()),
-                (
-                    "Content-Disposition",
-                    format!("attachment; filename=\"{}\"", item.name),
-                ),
-            ],
-            data,
-        )
-            .into_response()
-    } else {
-        // It's a subfolder — list contents
-        let children: Vec<&DriveItem> = m
+        let children = m
             .items
             .iter()
             .filter(|i| i.parent_id.as_deref() == Some(&item.id))
-            .collect();
+            .cloned()
+            .collect::<Vec<_>>();
+
+        (share, root_item, item, children)
+    };
+
+    if let Err(reason) = verify_share_access(&share, q.access.as_deref()).await {
+        return Html(payment_page(&root_item, &token, &share, &reason)).into_response();
+    }
+
+    let access = q.access.as_deref().unwrap_or("");
+    if item.item_type == "file" {
+        Html(file_download_page(&item, &token, access)).into_response()
+    } else {
         Html(folder_browse_page(
-            item,
-            &children,
-            &token,
-            &subpath,
-            &pw_param,
+            &item, &children, &token, &subpath, access,
         ))
         .into_response()
     }
@@ -786,75 +1006,291 @@ fn error_page(msg: &str) -> String {
     )
 }
 
-fn password_page(token: &str) -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Chiral Drive - Password Required</title>
-<script src="https://cdn.tailwindcss.com"></script>
-</head><body class="bg-gray-900 text-white flex items-center justify-center min-h-screen">
-<div class="bg-gray-800 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
-<h1 class="text-xl font-bold mb-2">Password Required</h1>
-<p class="text-gray-400 text-sm mb-6">This shared content is password protected.</p>
-<form method="GET" action="/drive/{}">
-<input type="password" name="p" placeholder="Enter password" required
-  class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4" />
-<button type="submit" class="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">
-Access Files</button>
-</form></div></body></html>"#,
-        token
-    )
-}
-
-fn file_download_page(item: &DriveItem, token: &str, pw_param: &str) -> String {
+fn payment_page(item: &DriveItem, token: &str, share: &ShareLink, reason: &str) -> String {
     let size_str = item
         .size
         .map(|s| format_bytes(s))
         .unwrap_or_else(|| "Unknown size".into());
+    let reason = html_escape(reason);
+    let name = html_escape(&item.name);
+    let recipient = html_escape(&share.recipient_wallet);
+    let price = html_escape(&share.price_chi);
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chiral Drive - Payment Required</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head><body class="bg-gray-900 text-white min-h-screen">
+<div class="max-w-xl mx-auto px-4 py-10">
+  <div class="bg-gray-800 border border-gray-700 rounded-xl p-6 shadow-2xl">
+    <h1 class="text-2xl font-bold mb-2">Payment Required</h1>
+    <p class="text-sm text-gray-300 mb-4">Log in with your wallet in-browser, then pay to unlock this shared content.</p>
+    <div class="rounded-lg bg-amber-950/50 border border-amber-800 px-3 py-2 text-sm text-amber-200 mb-4">{reason}</div>
+
+    <div class="grid grid-cols-2 gap-3 text-sm mb-6">
+      <div class="bg-gray-900/60 border border-gray-700 rounded-lg p-3">
+        <p class="text-gray-400 text-xs mb-1">Item</p>
+        <p class="font-medium break-all">{name}</p>
+        <p class="text-gray-500 text-xs mt-1">{size}</p>
+      </div>
+      <div class="bg-gray-900/60 border border-gray-700 rounded-lg p-3">
+        <p class="text-gray-400 text-xs mb-1">Unlock Price</p>
+        <p class="font-semibold text-green-300">{price} CHI</p>
+        <p class="text-gray-500 text-xs mt-1 break-all">Recipient: {recipient}</p>
+      </div>
+    </div>
+
+    <div class="space-y-3 mb-5">
+      <label class="block text-sm text-gray-300">Wallet Private Key</label>
+      <input id="pk" type="password" placeholder="0x..." class="w-full px-3 py-2 rounded-lg bg-gray-900 border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      <button id="loginBtn" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-sm font-medium transition">Log In</button>
+      <button id="logoutBtn" class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-sm font-medium transition hidden">Log Out</button>
+      <p id="walletInfo" class="text-xs text-gray-400"></p>
+    </div>
+
+    <div class="border-t border-gray-700 pt-5">
+      <button id="payBtn" disabled class="w-full px-4 py-3 rounded-lg bg-green-600/70 text-white font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-green-700 transition">Pay & Unlock</button>
+      <p id="status" class="text-xs text-gray-400 mt-3 min-h-4"></p>
+      <p class="text-xs text-gray-500 mt-2">Your private key stays in this browser session and is not uploaded.</p>
+    </div>
+  </div>
+</div>
+<script type="module">
+  import {{ ethers }} from "https://esm.sh/ethers@6.13.5";
+
+  const token = "{token}";
+  const recipient = "{recipient_js}";
+  const priceChi = "{price_js}";
+  const redirectBase = `/drive/${{token}}`;
+  const rpcUrl = new URL("/api/chain/rpc", window.location.origin).toString();
+  const storageKey = `chiral-share-wallet-${{token}}`;
+
+  const pkInput = document.getElementById("pk");
+  const loginBtn = document.getElementById("loginBtn");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const walletInfo = document.getElementById("walletInfo");
+  const payBtn = document.getElementById("payBtn");
+  const statusEl = document.getElementById("status");
+
+  let privateKey = sessionStorage.getItem(storageKey) || "";
+  let walletAddress = "";
+
+  function setStatus(msg, isError = false) {{
+    statusEl.textContent = msg;
+    statusEl.className = isError ? "text-xs text-red-300 mt-3 min-h-4" : "text-xs text-gray-300 mt-3 min-h-4";
+  }}
+
+  function normalizePrivateKey(input) {{
+    const raw = (input || "").trim();
+    if (!raw) return "";
+    return raw.startsWith("0x") ? raw : `0x${{raw}}`;
+  }}
+
+  function setLoggedOut() {{
+    privateKey = "";
+    walletAddress = "";
+    payBtn.disabled = true;
+    pkInput.value = "";
+    pkInput.type = "password";
+    loginBtn.classList.remove("hidden");
+    logoutBtn.classList.add("hidden");
+    walletInfo.textContent = "Not logged in";
+    sessionStorage.removeItem(storageKey);
+  }}
+
+  function setLoggedIn(nextPrivateKey) {{
+    const wallet = new ethers.Wallet(nextPrivateKey);
+    privateKey = nextPrivateKey;
+    walletAddress = wallet.address;
+    payBtn.disabled = false;
+    pkInput.value = "";
+    pkInput.type = "password";
+    loginBtn.classList.add("hidden");
+    logoutBtn.classList.remove("hidden");
+    walletInfo.textContent = `Logged in: ${{walletAddress}}`;
+    sessionStorage.setItem(storageKey, privateKey);
+  }}
+
+  loginBtn.addEventListener("click", () => {{
+    try {{
+      const normalized = normalizePrivateKey(pkInput.value);
+      if (!normalized) {{
+        setStatus("Enter a private key to continue.", true);
+        return;
+      }}
+      setLoggedIn(normalized);
+      setStatus("Wallet login successful.");
+    }} catch (err) {{
+      setStatus(err?.message || "Invalid private key.", true);
+    }}
+  }});
+
+  logoutBtn.addEventListener("click", () => {{
+    setLoggedOut();
+    setStatus("Logged out.");
+  }});
+
+  payBtn.addEventListener("click", async () => {{
+    if (!privateKey) {{
+      setStatus("Log in with a wallet first.", true);
+      return;
+    }}
+    payBtn.disabled = true;
+    try {{
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const wallet = new ethers.Wallet(privateKey, provider);
+      setStatus("Submitting payment transaction...");
+      const tx = await wallet.sendTransaction({{
+        to: recipient,
+        value: ethers.parseEther(priceChi),
+      }});
+      setStatus(`Transaction sent: ${{tx.hash}}. Waiting for confirmation...`);
+      await tx.wait(1);
+      setStatus("Payment confirmed. Unlocking...");
+      const nextUrl = new URL(redirectBase, window.location.origin);
+      nextUrl.searchParams.set("access", tx.hash);
+      window.location.href = nextUrl.toString();
+    }} catch (err) {{
+      payBtn.disabled = false;
+      setStatus(err?.message || "Payment failed.", true);
+    }}
+  }});
+
+  if (privateKey) {{
+    try {{
+      setLoggedIn(privateKey);
+      setStatus("Restored wallet session.");
+    }} catch {{
+      setLoggedOut();
+    }}
+  }} else {{
+    setLoggedOut();
+  }}
+</script>
+</body></html>"#,
+        reason = reason,
+        name = name,
+        size = size_str,
+        price = price,
+        recipient = recipient,
+        token = token,
+        recipient_js = share.recipient_wallet,
+        price_js = share.price_chi,
+    )
+}
+
+fn preview_kind(item: &DriveItem) -> &'static str {
+    let mime = item.mime_type.as_deref().unwrap_or("");
+    if mime.starts_with("image/") {
+        return "image";
+    }
+    if mime.starts_with("video/") {
+        return "video";
+    }
+    if mime.starts_with("audio/") {
+        return "audio";
+    }
+    if mime == "application/pdf" {
+        return "pdf";
+    }
+    if mime.starts_with("text/") || mime == "application/json" {
+        return "text";
+    }
+    let ext = item
+        .name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" => "image",
+        "mp4" | "webm" => "video",
+        "mp3" | "wav" => "audio",
+        "pdf" => "pdf",
+        "txt" | "md" | "json" | "csv" | "log" => "text",
+        _ => "none",
+    }
+}
+
+fn file_download_page(item: &DriveItem, token: &str, access: &str) -> String {
+    let size_str = item
+        .size
+        .map(|s| format_bytes(s))
+        .unwrap_or_else(|| "Unknown size".into());
+    let encoded_access = url_encode(access);
+    let encoded_name = url_encode(&item.name);
+    let encoded_item_id = url_encode(&item.id);
+    let preview_url = format!(
+        "/drive/{}/download/{}/{}?access={}&view=1",
+        token, encoded_item_id, encoded_name, encoded_access
+    );
+    let download_url = format!(
+        "/drive/{}/download/{}/{}?access={}&dl=1",
+        token, encoded_item_id, encoded_name, encoded_access
+    );
+    let preview_html = match preview_kind(item) {
+        "image" => format!(
+            r#"<img src="{url}" alt="{name}" class="max-h-[68vh] max-w-full object-contain rounded-xl border border-gray-700 bg-gray-900" />"#,
+            url = preview_url,
+            name = html_escape(&item.name),
+        ),
+        "video" => format!(
+            r#"<video controls class="w-full rounded-xl border border-gray-700 bg-black max-h-[68vh]"><source src="{url}" /></video>"#,
+            url = preview_url,
+        ),
+        "audio" => format!(
+            r#"<audio controls class="w-full"><source src="{url}" /></audio>"#,
+            url = preview_url,
+        ),
+        "pdf" | "text" => format!(
+            r#"<iframe src="{url}" class="w-full h-[70vh] rounded-xl border border-gray-700 bg-gray-900" title="preview"></iframe>"#,
+            url = preview_url,
+        ),
+        _ => r#"<div class="rounded-xl border border-gray-700 bg-gray-900 px-4 py-10 text-center text-gray-400 text-sm">Preview is not available for this file type.</div>"#.to_string(),
+    };
+
     format!(
         r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Chiral Drive - {name}</title>
 <script src="https://cdn.tailwindcss.com"></script>
-</head><body class="bg-gray-900 text-white flex items-center justify-center min-h-screen">
-<div class="bg-gray-800 rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl text-center">
-<div class="w-16 h-16 bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
-<svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"/></svg>
-</div>
-<h1 class="text-xl font-bold mb-1">{name}</h1>
-<p class="text-gray-400 text-sm mb-6">{size}</p>
-<a href="/drive/{token}/download/{urlname}?dl=1{pw}"
-  class="inline-block px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">
-Download File</a>
-<p class="text-xs text-gray-500 mt-4">Shared via Chiral Network</p>
+</head><body class="bg-gray-900 text-white min-h-screen">
+<div class="max-w-5xl mx-auto py-8 px-4">
+  <div class="flex items-center justify-between gap-4 mb-5">
+    <div>
+      <h1 class="text-xl font-bold break-all">{name}</h1>
+      <p class="text-sm text-gray-400">{size}</p>
+    </div>
+    <a href="{download_url}" class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">Download</a>
+  </div>
+  <div class="bg-gray-800 rounded-xl border border-gray-700 p-4">
+    {preview}
+  </div>
+  <p class="text-xs text-gray-500 mt-4">Shared via Chiral Network</p>
 </div></body></html>"#,
         name = html_escape(&item.name),
-        urlname = url_encode(&item.name),
         size = size_str,
-        token = token,
-        pw = pw_param,
+        download_url = download_url,
+        preview = preview_html,
     )
 }
 
 fn folder_browse_page(
     folder: &DriveItem,
-    children: &[&DriveItem],
+    children: &[DriveItem],
     token: &str,
     _current_path: &str,
-    pw_param: &str,
+    access: &str,
 ) -> String {
     let mut rows = String::new();
+    let encoded_access = url_encode(access);
     for child in children {
         let icon = if child.item_type == "folder" {
             r#"<svg class="w-5 h-5 text-yellow-400" fill="currentColor" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z"/></svg>"#
         } else {
             r#"<svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>"#
         };
-        let href = if child.item_type == "folder" {
-            format!("/drive/{}/{}?{}", token, child.id, pw_param.trim_start_matches('&'))
-        } else {
-            format!("/drive/{}/{}?{}", token, child.id, pw_param.trim_start_matches('&'))
-        };
+        let href = format!("/drive/{}/{}?access={}", token, child.id, encoded_access);
         let size = child
             .size
             .map(|s| format_bytes(s))

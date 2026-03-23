@@ -1,7 +1,5 @@
 import { ethers } from 'ethers';
 
-const WORD_LIST = ethers.Mnemonic.fromEntropy(ethers.randomBytes(16)).wordlist;
-
 /**
  * Generate a 12-word mnemonic phrase
  */

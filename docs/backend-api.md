@@ -131,6 +131,10 @@ Frontend calls into Rust through Tauri `invoke()` handlers in `src-tauri/src/lib
 
 - `exit_app`
 
+## Relay HTTP Endpoints
+
+- `POST /api/wallet/backup-email` (relay gateway) sends a one-time wallet backup email containing recovery phrase, wallet address, and private key. The relay does not persist this payload.
+
 ## Notes
 
 - `publish_file` / `publish_file_data` return `PublishResult { merkleRoot }`.

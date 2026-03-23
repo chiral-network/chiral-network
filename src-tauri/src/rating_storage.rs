@@ -31,7 +31,7 @@ pub struct ReputationEvent {
     pub outcome: TransferOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
-    /// Optional downloader rating 1-5 for this transfer.
+    /// Deprecated: rating fields are no longer used in Elo calculation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating_score: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,7 +53,6 @@ pub struct ReputationSnapshot {
     pub completed_count: usize,
     pub failed_count: usize,
     pub transaction_count: usize,
-    pub rating_count: usize,
     pub total_earned_wei: String,
 }
 
@@ -157,7 +156,6 @@ pub fn compute_reputation_for_wallet(
     let mut elo = BASE_ELO;
     let mut completed = 0usize;
     let mut failed = 0usize;
-    let mut rating_count = 0usize;
     let mut total_earned_wei: u128 = 0;
 
     for event in &scoped {
@@ -181,15 +179,7 @@ pub fn compute_reputation_for_wallet(
             }
         };
 
-        let rating_signal = match event.rating_score {
-            Some(score) => {
-                rating_count += 1;
-                ((score as f64) - 1.0) / 4.0
-            }
-            None => outcome,
-        };
-
-        let actual = 0.8 * outcome + 0.2 * rating_signal;
+        let actual = outcome;
         let expected = 1.0 / (1.0 + 10f64.powf((BASE_ELO - elo) / 12.0));
         let k = 4.0 * w_time * w_amount;
         elo = clamp_elo(elo + k * (actual - expected));
@@ -201,7 +191,6 @@ pub fn compute_reputation_for_wallet(
         completed_count: completed,
         failed_count: failed,
         transaction_count: scoped.len(),
-        rating_count,
         total_earned_wei: total_earned_wei.to_string(),
     }
 }
@@ -264,7 +253,6 @@ mod tests {
         let snap = compute_reputation_for_wallet(&events, "0xA", now);
         assert!(snap.elo > 50.0);
         assert_eq!(snap.completed_count, 1);
-        assert_eq!(snap.rating_count, 1);
     }
 
     #[test]
@@ -325,5 +313,138 @@ mod tests {
         let snap = compute_reputation_for_wallet(&events, "0xA", now);
         assert_eq!(snap.elo, 50.0);
         assert_eq!(snap.transaction_count, 0);
+    }
+
+    // --- clamp_elo ---
+
+    #[test]
+    fn test_clamp_elo_below_minimum_returns_zero() {
+        assert_eq!(clamp_elo(-10.0), MIN_ELO);
+        assert_eq!(clamp_elo(-0.001), MIN_ELO);
+    }
+
+    #[test]
+    fn test_clamp_elo_above_maximum_returns_hundred() {
+        assert_eq!(clamp_elo(150.0), MAX_ELO);
+        assert_eq!(clamp_elo(100.001), MAX_ELO);
+    }
+
+    #[test]
+    fn test_clamp_elo_within_range_unchanged() {
+        assert_eq!(clamp_elo(0.0), 0.0);
+        assert_eq!(clamp_elo(50.0), 50.0);
+        assert_eq!(clamp_elo(100.0), 100.0);
+        assert_eq!(clamp_elo(73.5), 73.5);
+    }
+
+    // --- wei_to_chi_f64 ---
+
+    #[test]
+    fn test_wei_to_chi_valid_one_ether() {
+        let chi = wei_to_chi_f64("1000000000000000000");
+        assert!((chi - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_wei_to_chi_zero() {
+        let chi = wei_to_chi_f64("0");
+        assert_eq!(chi, 0.0);
+    }
+
+    #[test]
+    fn test_wei_to_chi_invalid_string_returns_zero() {
+        assert_eq!(wei_to_chi_f64("not_a_number"), 0.0);
+        assert_eq!(wei_to_chi_f64(""), 0.0);
+        assert_eq!(wei_to_chi_f64("-100"), 0.0);
+    }
+
+    // --- generate_event_id ---
+
+    #[test]
+    fn test_generate_event_id_different_inputs_produce_different_ids() {
+        let a = generate_event_id("t-1", "0xA", "0xB", "h1");
+        let b = generate_event_id("t-2", "0xA", "0xB", "h1");
+        let c = generate_event_id("t-1", "0xA", "0xC", "h1");
+        let d = generate_event_id("t-1", "0xA", "0xB", "h2");
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, d);
+    }
+
+    #[test]
+    fn test_generate_event_id_wallet_case_insensitive() {
+        let lower = generate_event_id("t-1", "0xabc", "0xdef", "h");
+        let upper = generate_event_id("t-1", "0xABC", "0xDEF", "h");
+        assert_eq!(lower, upper);
+    }
+
+    // --- multiple completed transfers vs single ---
+
+    #[test]
+    fn test_multiple_completed_transfers_higher_elo_than_single() {
+        let now = 1_700_000_000;
+        let single = vec![mk_event(
+            "t-1", "0xA", "0xB",
+            TransferOutcome::Completed,
+            "1000000000000000000", Some(5),
+            now - 86_400,
+        )];
+        let multiple = vec![
+            mk_event("t-1", "0xA", "0xB", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 3 * 86_400),
+            mk_event("t-2", "0xA", "0xC", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 2 * 86_400),
+            mk_event("t-3", "0xA", "0xD", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 86_400),
+        ];
+        let snap_single = compute_reputation_for_wallet(&single, "0xA", now);
+        let snap_multi = compute_reputation_for_wallet(&multiple, "0xA", now);
+        assert!(snap_multi.elo > snap_single.elo);
+        assert_eq!(snap_multi.completed_count, 3);
+    }
+
+    // --- mixed completed + failed ---
+
+    #[test]
+    fn test_mixed_completed_and_failed_moderate_elo() {
+        let now = 1_700_000_000;
+        let events = vec![
+            mk_event("t-1", "0xA", "0xB", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 3 * 86_400),
+            mk_event("t-2", "0xA", "0xC", TransferOutcome::Failed, "0", None, now - 2 * 86_400),
+            mk_event("t-3", "0xA", "0xD", TransferOutcome::Completed, "1000000000000000000", Some(4), now - 86_400),
+        ];
+        let snap = compute_reputation_for_wallet(&events, "0xA", now);
+        // Should be near base (50) — not extremely high or low
+        assert!(snap.elo > 45.0, "elo {} should be above 45", snap.elo);
+        assert!(snap.elo < 60.0, "elo {} should be below 60", snap.elo);
+        assert_eq!(snap.completed_count, 2);
+        assert_eq!(snap.failed_count, 1);
+    }
+
+    // --- ReputationSnapshot serialization roundtrip ---
+
+    #[test]
+    fn test_reputation_snapshot_serialization_roundtrip() {
+        let snap = ReputationSnapshot {
+            elo: 72.3,
+            base_elo: 50.0,
+            completed_count: 10,
+            failed_count: 2,
+            transaction_count: 12,
+            total_earned_wei: "5000000000000000000".to_string(),
+        };
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let deser: ReputationSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deser.elo, snap.elo);
+        assert_eq!(deser.base_elo, snap.base_elo);
+        assert_eq!(deser.completed_count, snap.completed_count);
+        assert_eq!(deser.failed_count, snap.failed_count);
+        assert_eq!(deser.transaction_count, snap.transaction_count);
+        assert_eq!(deser.total_earned_wei, snap.total_earned_wei);
+    }
+
+    // --- RatingManifest default ---
+
+    #[test]
+    fn test_rating_manifest_default_is_empty() {
+        let manifest = RatingManifest::default();
+        assert!(manifest.events.is_empty());
     }
 }
