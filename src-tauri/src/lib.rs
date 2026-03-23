@@ -28,6 +28,7 @@ use secp256k1::{Message, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use speed_tiers::SpeedTier;
 use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
@@ -4493,6 +4494,22 @@ async fn lookup_encryption_key(
 // Hosting commands
 // ---------------------------------------------------------------------------
 
+/// Compute the common path prefix between two paths.
+fn common_prefix(a: &Path, b: &Path) -> PathBuf {
+    let mut iter_a = a.components();
+    let mut iter_b = b.components();
+    let mut out = PathBuf::new();
+
+    loop {
+        match (iter_a.next(), iter_b.next()) {
+            (Some(ca), Some(cb)) if ca == cb && ca != Component::CurDir => out.push(ca.as_os_str()),
+            _ => break,
+        }
+    }
+
+    out
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HostingServerStatus {
@@ -4512,26 +4529,78 @@ async fn create_hosted_site(
     let site_dir = base.join(&site_id);
     std::fs::create_dir_all(&site_dir).map_err(|e| format!("Failed to create site dir: {}", e))?;
 
+    // Preserve folder structure so relative asset paths keep working (e.g., "images/photo.jpg").
+    // We compute the common parent across the selected files and store paths relative to it.
+    let src_paths: Vec<std::path::PathBuf> = file_paths.iter().map(std::path::PathBuf::from).collect();
+    let common_root = src_paths
+        .iter()
+        .filter_map(|p| p.parent())
+        .fold(None, |acc: Option<std::path::PathBuf>, next| match acc {
+            None => Some(next.to_path_buf()),
+            Some(curr) => Some(common_prefix(&curr, next)),
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from(""));
+
     let mut site_files = Vec::new();
 
-    for src_path_str in &file_paths {
-        let src = std::path::Path::new(src_path_str);
+    for src in &src_paths {
         if !src.exists() {
             // Clean up on error
             let _ = std::fs::remove_dir_all(&site_dir);
-            return Err(format!("File not found: {}", src_path_str));
+            return Err(format!("File not found: {}", src.display()));
         }
-        let file_name = src
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| format!("Invalid file name: {}", src_path_str))?;
+        // Path inside the hosted site
+        let rel_path = src
+            .strip_prefix(&common_root)
+            .unwrap_or_else(|_| Path::new(src.file_name().unwrap()))
+            .to_path_buf();
 
-        let dest = site_dir.join(file_name);
-        std::fs::copy(src, &dest).map_err(|e| format!("Failed to copy {}: {}", file_name, e))?;
+        if rel_path.as_os_str().is_empty() {
+            let _ = std::fs::remove_dir_all(&site_dir);
+            return Err("Invalid relative path computed for uploaded file".to_string());
+        }
+
+        let dest = site_dir.join(&rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create folder {}: {}", parent.display(), e))?;
+        }
+
+        std::fs::copy(src, &dest)
+            .map_err(|e| format!("Failed to copy {}: {}", rel_path.display(), e))?;
 
         let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         site_files.push(hosting::SiteFile {
-            path: file_name.to_string(),
+            // Normalize separators for serving in URLs
+            path: rel_path.to_string_lossy().replace('\\', "/"),
+            size,
+        });
+    }
+
+    // If no index.html was provided, generate a simple one that links to or embeds the first file.
+    let has_index = site_files
+        .iter()
+        .any(|f| f.path.eq_ignore_ascii_case("index.html"));
+    if !has_index {
+        let first = site_files.get(0).map(|f| f.path.clone()).unwrap_or_default();
+        let mut html = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Hosted Site</title></head><body style=\"margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#eee;font-family:sans-serif;\">\n");
+        if !first.is_empty() {
+            let lower = first.to_ascii_lowercase();
+            if lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".png") || lower.ends_with(".gif") || lower.ends_with(".webp") || lower.ends_with(".bmp") || lower.ends_with(".svg") {
+                html.push_str(&format!("<img src=\"./{}\" alt=\"Hosted image\" style=\"max-width:100%;max-height:100%;object-fit:contain;\"/>", first));
+            } else {
+                html.push_str(&format!("<a href=\"./{0}\" style=\"color:#4ade80;font-size:1.1rem;\">Open {0}</a>", first));
+            }
+        } else {
+            html.push_str("<p>No content uploaded.</p>");
+        }
+        html.push_str("</body></html>");
+
+        let index_path = site_dir.join("index.html");
+        std::fs::write(&index_path, html).map_err(|e| format!("Failed to write index.html: {}", e))?;
+        let size = std::fs::metadata(&index_path).map(|m| m.len()).unwrap_or(0);
+        site_files.push(hosting::SiteFile {
+            path: "index.html".into(),
             size,
         });
     }
