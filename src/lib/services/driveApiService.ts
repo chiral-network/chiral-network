@@ -47,7 +47,8 @@ export interface ShareLink {
   itemId: string;
   url: string;
   isPublic: boolean;
-  hasPassword: boolean;
+  priceChi: string;
+  recipientWallet: string;
   createdAt: number;
   downloadCount: number;
 }
@@ -213,7 +214,7 @@ export const driveApi = {
   /** Update item properties (rename, move, star) */
   async updateItem(
     id: string,
-    updates: { name?: string; parent_id?: string | null; starred?: boolean },
+    updates: { name?: string; parent_id?: string | null; starred?: boolean; price_chi?: string },
   ): Promise<DriveItem> {
     if (isTauri()) {
       const invoke = await getInvoke();
@@ -223,6 +224,7 @@ export const driveApi = {
         name: updates.name ?? null,
         parentId: updates.parent_id ?? null,
         starred: updates.starred ?? null,
+        priceChi: updates.price_chi ?? null,
       });
       return convertItem(item);
     }
@@ -251,7 +253,7 @@ export const driveApi = {
   /** Create a share link for an item */
   async createShareLink(
     itemId: string,
-    password?: string,
+    priceChi: string,
     isPublic?: boolean,
   ): Promise<ShareLink> {
     if (isTauri()) {
@@ -259,7 +261,7 @@ export const driveApi = {
       const share = await invoke('drive_create_share', {
         owner: currentOwner,
         itemId,
-        password: password ?? null,
+        priceChi,
         isPublic: isPublic ?? false,
       });
       return share as ShareLink;
@@ -269,7 +271,7 @@ export const driveApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         item_id: itemId,
-        password: password || null,
+        price_chi: priceChi,
         is_public: isPublic ?? false,
       }),
     });

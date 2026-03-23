@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive, Users } from 'lucide-svelte';
+  import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
   import { isAuthenticated, walletAccount, networkConnected } from '$lib/stores';
   import { computeAnchoredDropdownPlacement } from '$lib/utils/uiPositioning';
@@ -54,8 +54,8 @@
     { path: '/download', label: 'Download', icon: Download },
     { path: '/drive', label: 'Drive', icon: HardDrive },
     { path: '/account', label: 'Account', icon: Wallet },
-    { path: '/hosts', label: 'Hosts', icon: Users },
-    { path: '/hosting', label: 'Hosting', icon: Server },
+
+    { path: '/hosts', label: 'Hosts', icon: Server },
     { path: '/network', label: 'Network', icon: Globe },
     { path: '/settings', label: 'Settings', icon: Settings },
     { path: '/chiraldrop', label: 'ChiralDrop', icon: Send },

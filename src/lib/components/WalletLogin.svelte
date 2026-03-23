@@ -3,13 +3,16 @@
   import { walletAccount, isAuthenticated } from '$lib/stores';
   import { ArrowLeft, KeyRound, FileText } from 'lucide-svelte';
 
-  export let onBack: () => void;
-  export let onComplete: () => void;
+  interface Props {
+    onBack: () => void;
+    onComplete: () => void;
+  }
+  let { onBack, onComplete }: Props = $props();
 
-  let method: 'privateKey' | 'mnemonic' = 'privateKey';
-  let privateKeyInput = '';
-  let mnemonicInput = '';
-  let error = '';
+  let method: 'privateKey' | 'mnemonic' = $state('privateKey');
+  let privateKeyInput = $state('');
+  let mnemonicInput = $state('');
+  let error = $state('');
 
   function handleLogin() {
     error = '';
@@ -61,7 +64,7 @@
 <div class="max-w-2xl mx-auto p-6">
   <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
     <div class="flex items-center mb-6">
-      <button on:click={onBack} class="mr-4 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
+      <button onclick={onBack} class="mr-4 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">
         <ArrowLeft class="w-5 h-5 dark:text-gray-300" />
       </button>
       <h2 class="text-2xl font-bold dark:text-white">Use Existing Wallet</h2>
@@ -69,7 +72,7 @@
 
     <div class="flex gap-3 mb-6">
       <button
-        on:click={() => method = 'privateKey'}
+        onclick={() => method = 'privateKey'}
         class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'privateKey' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
       >
         <KeyRound class="w-5 h-5" />
@@ -77,7 +80,7 @@
       </button>
 
       <button
-        on:click={() => method = 'mnemonic'}
+        onclick={() => method = 'mnemonic'}
         class="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg transition {method === 'mnemonic' ? 'bg-primary-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300'}"
       >
         <FileText class="w-5 h-5" />
@@ -94,7 +97,7 @@
           id="private-key-input"
           type="password"
           bind:value={privateKeyInput}
-          on:keydown={(e) => e.key === 'Enter' && handleLogin()}
+          onkeydown={(e) => e.key === 'Enter' && handleLogin()}
           class="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent font-mono text-sm bg-white dark:bg-gray-700 dark:text-white"
           placeholder="Enter your private key (with or without 0x prefix)"
         />
@@ -128,13 +131,13 @@
 
     <div class="flex gap-3">
       <button
-        on:click={onBack}
+        onclick={onBack}
         class="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition dark:text-gray-300"
       >
         Cancel
       </button>
       <button
-        on:click={handleLogin}
+        onclick={handleLogin}
         class="flex-1 px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
       >
         Login

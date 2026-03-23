@@ -20,12 +20,11 @@
     updateTransferPayment,
     updateTransferByFileHash,
     generateTransferId,
-    formatFileSize,
-    formatPriceWei,
     type NearbyPeer,
     type FileTransfer
   } from '$lib/chiralDropStore';
   import { aliasFromPeerId } from '$lib/aliasService';
+  import { formatBytes as formatFileSize, formatPriceWei } from '$lib/utils';
   import { peers, walletAccount } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
@@ -169,7 +168,7 @@
             timestamp: Date.now()
           });
 
-          toasts.show(`${fromAlias.displayName} wants to send you a file: ${fileName}`, 'info');
+          toasts.detail('Incoming file', `${fromAlias.displayName} wants to send "${fileName}"`, 'info');
         });
 
         // Listen for file transfer completion (outgoing)
@@ -186,7 +185,7 @@
         unlistenFileReceivedComplete = await listen<any>('file-received', (event) => {
           const { transferId, fileName, fromPeerId, filePath } = event.payload;
           const fromAlias = aliasFromPeerId(fromPeerId);
-          toasts.show(`File "${fileName}" saved to ${filePath}`, 'success', 8000);
+          toasts.detail('File received', `"${fileName}" saved to ${filePath}`, 'success', 8000);
           updateTransferStatus(transferId, 'completed');
         });
 
@@ -219,7 +218,7 @@
           });
 
           const priceDisplay = formatPriceWei(priceWei);
-          toasts.show(`${fromAlias.displayName} wants to send you "${fileName}" for ${priceDisplay}`, 'info');
+          toasts.detail('Paid file offer', `${fromAlias.displayName} wants to send "${fileName}" for ${priceDisplay}`, 'info');
         });
 
         // Listen for payment sent (buyer side) — record in both histories
@@ -291,7 +290,7 @@
         const { invoke } = await import('@tauri-apps/api/core');
         const ids: string[] = await invoke('get_bootstrap_peer_ids');
         bootstrapPeerIds = new Set(ids);
-      } catch {}
+      } catch { /* bootstrap IDs unavailable — show all peers */ }
     }
 
     // Sync with existing peers from the network (excluding bootstrap nodes)
@@ -377,7 +376,7 @@
 
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
-      toasts.show('File transfer requires the desktop app', 'error');
+      toasts.show('File transfer requires the desktop app', 'warning');
       return;
     }
 
@@ -394,7 +393,7 @@
       await sendFile(filePath, fileName, $selectedPeer);
     } catch (error) {
       log.error('Failed to open file dialog:', error);
-      toasts.show(`Failed to open file dialog: ${error}`, 'error');
+      toasts.detail('File dialog failed', String(error), 'error');
     }
   }
 
@@ -407,7 +406,7 @@
 
     // Validate wallet for paid transfers
     if (isPaid && !$walletAccount) {
-      toasts.show('Connect your wallet to set a price on files', 'error');
+      toasts.show('Connect your wallet to set a price', 'warning');
       return;
     }
 
@@ -462,7 +461,7 @@
         });
 
         updateTransferStatus(transferId, 'completed');
-        toasts.show(`Paid file offer sent to ${toAlias.displayName} (${price} CHI)`, 'success');
+        toasts.detail('File offer sent', `${toAlias.displayName} — ${price} CHI`, 'success');
       } else {
         // Free transfer: read file from disk and send directly
         await invoke('send_file_by_path', {
@@ -477,7 +476,7 @@
     } catch (error) {
       log.error('Failed to send file:', error);
       updateTransferStatus(transferId, 'failed');
-      toasts.show(`Failed to send file: ${error}`, 'error');
+      toasts.detail('Failed to send file', String(error), 'error');
     }
 
     sendPrice = '';
@@ -487,7 +486,7 @@
   async function handleAccept(transfer: FileTransfer) {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
-      toasts.show('File transfer requires the desktop app', 'error');
+      toasts.show('File transfer requires the desktop app', 'warning');
       return;
     }
 
@@ -499,12 +498,12 @@
       if (isPaid) {
         // Paid transfer: download via chunked protocol with payment handshake
         if (!$walletAccount) {
-          toasts.show('Connect your wallet to accept paid file transfers', 'error');
+          toasts.show('Connect your wallet to accept paid transfers', 'warning');
           return;
         }
 
         acceptTransfer(transfer.id);
-        toasts.show(`Starting paid download of "${transfer.fileName}" (${formatPriceWei(transfer.priceWei!)})...`, 'info');
+        toasts.detail('Downloading', `"${transfer.fileName}" — ${formatPriceWei(transfer.priceWei!)}`, 'info');
 
         await invoke('start_download', {
           fileHash: transfer.fileHash,
@@ -521,11 +520,11 @@
         // Free transfer: accept via direct file transfer (existing behavior)
         await invoke<string>('accept_file_transfer', { transferId: transfer.id });
         acceptTransfer(transfer.id);
-        toasts.show(`Accepting file from ${transfer.fromAlias.displayName}...`, 'info');
+        toasts.show(`Accepting file from ${transfer.fromAlias.displayName}`, 'info');
       }
     } catch (error) {
       log.error('Failed to accept transfer:', error);
-      toasts.show(`Failed to accept transfer: ${error}`, 'error');
+      toasts.detail('Transfer failed', String(error), 'error');
     }
   }
 
@@ -540,7 +539,7 @@
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('decline_file_transfer', { transferId: transfer.id });
       declineTransfer(transfer.id);
-      toasts.show(`Declined file from ${transfer.fromAlias.displayName}`, 'info');
+      // Silent — transfer removed from pending list
     } catch (error) {
       log.error('Failed to decline transfer:', error);
     }
@@ -563,11 +562,13 @@
   }
 </script>
 
+<svelte:head><title>ChiralDrop | Chiral Network</title></svelte:head>
+
 <div class="p-4 sm:p-6 h-[calc(100vh-64px)] flex flex-col gap-4 sm:gap-6">
   <!-- Header -->
   <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
     <div class="space-y-1">
-      <h1 class="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">ChiralDrop</h1>
+      <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">ChiralDrop</h1>
       <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400">
         Your alias:
         <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
@@ -584,7 +585,7 @@
       {/if}
       <button
         onclick={() => showHistory = !showHistory}
-        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
       >
         <History class="h-4 w-4" />
         <span>{showHistory ? 'Hide History' : 'Show History'}</span>
@@ -711,7 +712,7 @@
                 <div class="mt-3 flex gap-2">
                   <button
                     onclick={() => handleAccept(transfer)}
-                    class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600"
+                    class="flex-1 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
                   >
                     <span class="inline-flex items-center justify-center gap-1">
                       <Check class="h-4 w-4" />
@@ -722,7 +723,7 @@
                   </button>
                   <button
                     onclick={() => handleDecline(transfer)}
-                    class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600"
+                    class="flex-1 rounded-lg bg-rose-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30"
                   >
                     <span class="inline-flex items-center justify-center gap-1">
                       <X class="h-4 w-4" />
@@ -782,7 +783,7 @@
           </div>
           <button
             onclick={handleSendClick}
-            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600"
+            class="w-full rounded-xl bg-primary-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-500/30"
           >
             <span class="inline-flex items-center justify-center gap-2">
               <Send class="h-4 w-4" />

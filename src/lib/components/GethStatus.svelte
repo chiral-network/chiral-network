@@ -58,10 +58,10 @@
     try {
       await gethService.download();
       isInstalled = await gethService.isInstalled();
-      toasts.show('Geth installed successfully', 'success');
+      toasts.show('Geth installed', 'success');
     } catch (error) {
       log.error('Failed to download Geth:', error);
-      toasts.show('Failed to download Geth: ' + error, 'error');
+      toasts.detail('Geth download failed', String(error), 'error');
     }
   }
 
@@ -70,10 +70,10 @@
     try {
       const minerAddr = $walletAccount?.address;
       await gethService.start(minerAddr);
-      toasts.show('Geth started successfully', 'success');
+      toasts.show('Geth started', 'success');
     } catch (error) {
       log.error('Failed to start Geth:', error);
-      toasts.show('Failed to start Geth: ' + error, 'error');
+      toasts.detail('Failed to start Geth', String(error), 'error');
     } finally {
       isStarting = false;
     }
@@ -83,10 +83,10 @@
     isStopping = true;
     try {
       await gethService.stop();
-      toasts.show('Geth stopped', 'info');
+      // Silent — status reflected in UI
     } catch (error) {
       log.error('Failed to stop Geth:', error);
-      toasts.show('Failed to stop Geth: ' + error, 'error');
+      toasts.detail('Failed to stop Geth', String(error), 'error');
     } finally {
       isStopping = false;
     }
@@ -100,10 +100,10 @@
         await gethService.setMinerAddress($walletAccount.address);
       }
       await gethService.startMining(miningThreads);
-      toasts.show('Mining started', 'success');
+      toasts.notify('miningBlock', 'Mining started', 'success');
     } catch (error) {
       log.error('Failed to start mining:', error);
-      toasts.show('Failed to start mining: ' + error, 'error');
+      toasts.detail('Failed to start mining', String(error), 'error');
     } finally {
       isStartingMining = false;
     }
@@ -112,10 +112,10 @@
   async function handleStopMining() {
     try {
       await gethService.stopMining();
-      toasts.show('Mining stopped', 'info');
+      // Silent — status reflected in UI
     } catch (error) {
       log.error('Failed to stop mining:', error);
-      toasts.show('Failed to stop mining: ' + error, 'error');
+      toasts.detail('Failed to stop mining', String(error), 'error');
     }
   }
 

@@ -89,12 +89,11 @@ describe('stores', () => {
       const s = get(settings);
       expect(s.theme).toBe('system');
       expect(s.reducedMotion).toBe(false);
-      expect(s.compactMode).toBe(false);
     });
 
     it('should persist settings to localStorage', async () => {
       const { settings } = await import('$lib/stores');
-      settings.set({ theme: 'dark', reducedMotion: true, compactMode: false });
+      settings.set({ theme: 'dark', reducedMotion: true });
       const stored = JSON.parse(localStorage.getItem('chiral-settings')!);
       expect(stored.theme).toBe('dark');
       expect(stored.reducedMotion).toBe(true);
@@ -104,12 +103,10 @@ describe('stores', () => {
       localStorage.setItem('chiral-settings', JSON.stringify({
         theme: 'dark',
         reducedMotion: false,
-        compactMode: true
       }));
       const { settings } = await import('$lib/stores');
       const s = get(settings);
       expect(s.theme).toBe('dark');
-      expect(s.compactMode).toBe(true);
     });
 
     it('should merge partial localStorage with defaults', async () => {
@@ -120,26 +117,24 @@ describe('stores', () => {
       const s = get(settings);
       expect(s.theme).toBe('light');
       expect(s.reducedMotion).toBe(false);  // default
-      expect(s.compactMode).toBe(false);    // default
     });
 
     it('should support update function', async () => {
       const { settings } = await import('$lib/stores');
-      settings.update(s => ({ ...s, compactMode: true }));
-      expect(get(settings).compactMode).toBe(true);
+      settings.update(s => ({ ...s, reducedMotion: true }));
+      expect(get(settings).reducedMotion).toBe(true);
       // Should also persist
       const stored = JSON.parse(localStorage.getItem('chiral-settings')!);
-      expect(stored.compactMode).toBe(true);
+      expect(stored.reducedMotion).toBe(true);
     });
 
     it('should reset to defaults', async () => {
       const { settings } = await import('$lib/stores');
-      settings.set({ theme: 'dark', reducedMotion: true, compactMode: true });
+      settings.set({ theme: 'dark', reducedMotion: true });
       settings.reset();
       const s = get(settings);
       expect(s.theme).toBe('system');
       expect(s.reducedMotion).toBe(false);
-      expect(s.compactMode).toBe(false);
       expect(localStorage.getItem('chiral-settings')).toBeNull();
     });
   });

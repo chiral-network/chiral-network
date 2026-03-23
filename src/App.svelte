@@ -9,6 +9,7 @@
   import Navbar from '$lib/components/Navbar.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Toast from '$lib/components/Toast.svelte';
+  import { AlertTriangle } from 'lucide-svelte';
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
   import ChiralDropPage from './pages/ChiralDrop.svelte';
@@ -17,9 +18,9 @@
   import MiningPage from './pages/Mining.svelte';
   import DiagnosticsPage from './pages/Diagnostics.svelte';
   import SettingsPage from './pages/Settings.svelte';
-  import HostingPage from './pages/Hosting.svelte';
-  import DrivePage from './pages/Drive.svelte';
   import HostsPage from './pages/Hosts.svelte';
+  import DrivePage from './pages/Drive.svelte';
+
 
   let currentPath = $state('/wallet');
   let sidebarCollapsed = $state(false);
@@ -29,6 +30,8 @@
   let autoReseedInFlight = $state(false);
   let autoReseedCompletedWallet = $state<string | null>(null);
   let unlistenBootstrapComplete: (() => void) | null = null;
+  let showCloseConfirm = $state(false);
+  let closeConfirmResolve: ((confirmed: boolean) => void) | null = null;
 
   // Apply dark mode class to document
   $effect(() => {
@@ -57,12 +60,23 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const { listen } = await import('@tauri-apps/api/event');
 
-      // --- Graceful close: cleanup DHT, then force-close the window ---
+      // --- Graceful close: confirm with user, cleanup DHT, then force-close ---
       let isClosing = false;
       getCurrentWindow().onCloseRequested(async (event) => {
-        if (isClosing) return; // guard against re-entrant calls
+        event.preventDefault();
+        if (isClosing) return;
+
+        // Ask the user to confirm
+        const confirmed = await new Promise<boolean>((resolve) => {
+          closeConfirmResolve = resolve;
+          showCloseConfirm = true;
+        });
+        showCloseConfirm = false;
+        closeConfirmResolve = null;
+
+        if (!confirmed) return;
+
         isClosing = true;
-        event.preventDefault(); // take control of the close sequence
         // Keep close responsive: run cleanup best-effort with a short cap.
         await Promise.race([
           Promise.allSettled([
@@ -101,7 +115,7 @@
               // Register as seeder and publish to DHT
               await invoke('republish_shared_file', {
                 fileHash, filePath, fileName, fileSize,
-                priceChi: null, walletAddress: null,
+                priceChi: null, walletAddress: $walletAccount?.address ?? null,
               });
               console.log(`✅ Auto-registered hosted file ${fileHash} as seeder`);
 
@@ -205,6 +219,7 @@
   async function autoReseedOnStartup() {
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
     const { invoke } = await import('@tauri-apps/api/core');
+    const walletAddress = $walletAccount?.address ?? null;
 
     // 1. Re-register uploaded files from localStorage
     try {
@@ -222,7 +237,7 @@
               fileName: file.name,
               fileSize: file.size,
               priceChi: file.priceChi && file.priceChi !== '0' ? file.priceChi : null,
-              walletAddress: file.priceChi && file.priceChi !== '0' ? $walletAccount?.address : null,
+              walletAddress,
             });
             count++;
           } catch {
@@ -251,7 +266,7 @@
               fileName: entry.fileHash,
               fileSize: 0,
               priceChi: null,
-              walletAddress: null,
+              walletAddress,
             });
             count++;
           } catch {
@@ -341,18 +356,14 @@
       component: DiagnosticsPage
     },
     {
-      path: '/hosting',
-      component: HostingPage
+      path: '/hosts',
+      component: HostsPage
     },
     {
       path: '/drive',
       component: DrivePage
     },
-    {
-      path: '/hosts',
-      component: HostsPage
-    },
-    {
+{
       path: '/settings',
       component: SettingsPage
     },
@@ -511,11 +522,48 @@
 {#each $toasts as toast, index (toast.id)}
   <Toast
     message={toast.message}
+    description={toast.description}
     type={toast.type}
+    duration={toast.duration}
     {index}
     onClose={() => toasts.remove(toast.id)}
   />
 {/each}
+
+<!-- Close confirmation modal -->
+{#if showCloseConfirm}
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]"
+  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') closeConfirmResolve?.(false); }}
+>
+  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 p-6 max-w-sm w-full mx-4">
+    <div class="flex items-center gap-3 mb-3">
+      <div class="p-2 bg-amber-100 dark:bg-amber-900/40 rounded-lg">
+        <AlertTriangle class="w-5 h-5 text-amber-600 dark:text-amber-400" />
+      </div>
+      <h3 class="font-semibold text-lg text-gray-900 dark:text-white">Quit Chiral Network?</h3>
+    </div>
+    <p class="text-sm text-gray-600 dark:text-gray-400 mb-5 ml-[52px]">
+      Active downloads, seeding, and mining will be stopped. Any in-progress file transfers will be cancelled.
+    </p>
+    <div class="flex gap-3 justify-end">
+      <button
+        onclick={() => closeConfirmResolve?.(false)}
+        class="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+      >
+        Cancel
+      </button>
+      <button
+        onclick={() => closeConfirmResolve?.(true)}
+        class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors"
+      >
+        Quit
+      </button>
+    </div>
+  </div>
+</div>
+{/if}
 
 <style>
 </style>

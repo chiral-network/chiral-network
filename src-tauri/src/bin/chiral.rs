@@ -1949,6 +1949,8 @@ struct UpdateItemPayload {
     parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     starred: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    price_chi: Option<String>,
 }
 
 async fn drive_list_items(
@@ -2019,6 +2021,7 @@ async fn drive_set_starred(
         name: None,
         parent_id: None,
         starred: Some(starred),
+        price_chi: None,
     };
     drive_update_item(client, port, owner, item_id, &payload).await
 }
@@ -2537,7 +2540,6 @@ async fn handle_reputation(cmd: ReputationCommand) -> Result<(), String> {
             println!("transactions={}", snapshot.transaction_count);
             println!("completed={}", snapshot.completed_count);
             println!("failed={}", snapshot.failed_count);
-            println!("ratings={}", snapshot.rating_count);
             println!("earned_wei={}", snapshot.total_earned_wei);
             println!("recent_events={}", recent_events);
             Ok(())
@@ -2549,13 +2551,12 @@ async fn handle_reputation(cmd: ReputationCommand) -> Result<(), String> {
             for wallet in wallets {
                 let s = compute_reputation_for_wallet(&manifest.events, &wallet, now);
                 println!(
-                    "{} elo={:.1} tx={} completed={} failed={} ratings={} earned_wei={}",
+                    "{} elo={:.1} tx={} completed={} failed={} earned_wei={}",
                     wallet,
                     s.elo,
                     s.transaction_count,
                     s.completed_count,
                     s.failed_count,
-                    s.rating_count,
                     s.total_earned_wei
                 );
             }
@@ -2996,6 +2997,7 @@ async fn handle_drive(cmd: DriveCommand) -> Result<(), String> {
                 name: Some(name),
                 parent_id: None,
                 starred: None,
+                price_chi: None,
             };
             let item = drive_update_item(&client, port, &owner, &item_id, &payload).await?;
             println!("renamed id={} name={}", item.id, item.name);
@@ -3011,6 +3013,7 @@ async fn handle_drive(cmd: DriveCommand) -> Result<(), String> {
                 name: None,
                 parent_id,
                 starred: None,
+                price_chi: None,
             };
             let item = drive_update_item(&client, port, &owner, &item_id, &payload).await?;
             println!("moved id={} parent_id={:?}", item.id, item.parent_id);

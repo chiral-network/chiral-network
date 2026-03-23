@@ -13,11 +13,13 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::chain_rpc_api;
 use crate::drive_api::{self, DriveState};
 use crate::hosting::{self, HostedSite, SiteFile};
 use crate::rating_api;
 use crate::rating_storage::RatingState;
 use crate::relay_share_proxy::{self, RelayShareRegistry};
+use crate::wallet_backup_api;
 
 /// Maximum total upload size per site (50 MB).
 const MAX_SITE_BYTES: usize = 50 * 1024 * 1024;
@@ -157,10 +159,7 @@ async fn serve_site_path_inner(
     };
 
     // Determine MIME type from extension
-    let ext = canonical
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = canonical.extension().and_then(|e| e.to_str()).unwrap_or("");
     let content_type = hosting::mime_from_extension(ext);
 
     (
@@ -259,7 +258,10 @@ async fn upload_site(
     let base_dir = match hosting::sites_base_dir() {
         Some(d) => d,
         None => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot determine data directory")
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Cannot determine data directory",
+            )
                 .into_response();
         }
     };
@@ -325,11 +327,7 @@ async fn upload_site(
     let url = format!("/sites/{}/", req.id);
     println!("[GATEWAY] Uploaded site: {} -> {}", req.id, url);
 
-    (
-        StatusCode::CREATED,
-        Json(UploadSiteResponse { url }),
-    )
-        .into_response()
+    (StatusCode::CREATED, Json(UploadSiteResponse { url })).into_response()
 }
 
 /// DELETE /api/sites/:site_id — remove a site (used by Tauri clients unpublishing)
@@ -396,7 +394,9 @@ pub fn create_gateway_router(
     relay_share_state: Option<Arc<RelayShareRegistry>>,
 ) -> Router {
     // Base: health check is always present
-    let mut app = Router::new().route("/health", get(health_check));
+    let mut app = Router::new()
+        .route("/health", get(health_check))
+        .merge(chain_rpc_api::chain_rpc_routes());
 
     if relay_share_state.is_some() {
         // Relay mode: /sites/* and /drive/* handled by proxy routes below.
@@ -429,6 +429,9 @@ pub fn create_gateway_router(
         let tunnel_reg = Arc::new(relay_share_proxy::TunnelRegistry::new());
         app = app.merge(relay_share_proxy::relay_share_routes(rss, tunnel_reg));
     }
+
+    // One-time wallet backup email endpoint (relay-backed, no persistence).
+    app = app.merge(wallet_backup_api::wallet_backup_routes());
 
     app.layer(
         CorsLayer::new()
@@ -534,7 +537,12 @@ mod tests {
         let app = create_router(state);
 
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -567,7 +575,10 @@ mod tests {
 
         let state = Arc::new(HostingServerState::new());
         let mut site = make_site("testsite", "Test", &tmp.to_string_lossy());
-        site.files = vec![SiteFile { path: "index.html".into(), size: 14 }];
+        site.files = vec![SiteFile {
+            path: "index.html".into(),
+            size: 14,
+        }];
         state.register_site(site).await;
 
         let app = create_router(state);
@@ -583,7 +594,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let ct = response.headers().get("content-type").unwrap().to_str().unwrap();
+        let ct = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(ct.contains("text/html"));
 
         let _ = std::fs::remove_dir_all(&tmp);
@@ -596,7 +612,9 @@ mod tests {
         std::fs::write(tmp.join("index.html"), "ok").unwrap();
 
         let state = Arc::new(HostingServerState::new());
-        state.register_site(make_site("travsite", "Trav", &tmp.to_string_lossy())).await;
+        state
+            .register_site(make_site("travsite", "Trav", &tmp.to_string_lossy()))
+            .await;
 
         let app = create_router(state);
 
@@ -631,7 +649,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY);
-        let loc = response.headers().get("location").unwrap().to_str().unwrap();
+        let loc = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(loc, "/sites/anysite/");
     }
 

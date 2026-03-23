@@ -3,6 +3,7 @@
   import { getFileIcon, getFileColor, getFolderColor } from '$lib/utils/fileIcons';
   import type { DriveItem } from '$lib/stores/driveStore';
   import { networkConnected } from '$lib/stores';
+  import { formatBytes } from '$lib/utils';
 
   let {
     item,
@@ -16,14 +17,19 @@
 
   function formatSize(bytes?: number): string {
     if (!bytes) return '—';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    return formatBytes(bytes);
   }
 
   function formatDate(ts: number): string {
     return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function getPriceLabel(item: DriveItem): string | null {
+    if (item.type !== 'file') return null;
+    const raw = item.priceChi?.trim();
+    if (raw && raw !== '0') return `${raw} CHI`;
+    if (item.seeding || raw === '0') return 'Free';
+    return null;
   }
 </script>
 
@@ -55,7 +61,13 @@
       {#if item.seeding && $networkConnected}
         <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 shrink-0">
           <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-          Seeding
+          Seeding{#if item.protocol} ({item.protocol}){/if}
+        </span>
+      {/if}
+      {#if getPriceLabel(item)}
+        {@const priceLabel = getPriceLabel(item)}
+        <span class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 shrink-0">
+          {priceLabel}
         </span>
       {/if}
     </div>

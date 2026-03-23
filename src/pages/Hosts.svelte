@@ -1,31 +1,84 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import {
-    Users, HardDrive, Clock, Coins, Shield,
-    Check, X, Loader2, RefreshCw, FileText,
-    ChevronDown, ChevronUp, Rocket, AlertCircle, Send, FolderOpen
-  } from 'lucide-svelte';
-  import { settings, walletAccount } from '$lib/stores';
+  import { Server, Users, Shield, AlertCircle, FileText } from 'lucide-svelte';
+  import { settings, walletAccount, networkConnected } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
+  import { logger } from '$lib/logger';
   import { hostingService } from '$lib/services/hostingService';
   import { ratingApi } from '$lib/services/ratingApiService';
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
-  import type {
-    HostEntry,
-    HostingAgreement,
-  } from '$lib/types/hosting';
+  import {
+    buildHostedSiteUrl,
+    resolveHostingPort,
+  } from '$lib/utils/hostingPageUtils';
+  import type { HostEntry, HostingAgreement } from '$lib/types/hosting';
 
-  // ── State ──
+  import HostingServerBar from '$lib/components/hosting/HostingServerBar.svelte';
+  import HostingSiteCreator from '$lib/components/hosting/HostingSiteCreator.svelte';
+  import HostingSiteList from '$lib/components/hosting/HostingSiteList.svelte';
+  import HostingMarketplace from '$lib/components/hosting/HostingMarketplace.svelte';
+  import HostingAgreements from '$lib/components/hosting/HostingAgreements.svelte';
+  import HostingProposalModal from '$lib/components/hosting/HostingProposalModal.svelte';
+  import HostingDrivePicker from '$lib/components/hosting/HostingDrivePicker.svelte';
+
+  const log = logger('Hosting');
+  const RELAY_GATEWAY = 'http://130.245.173.73:8080';
+
+  // ---------------------------------------------------------------------------
+  // Tauri check
+  // ---------------------------------------------------------------------------
+  let isTauri = $state(false);
+  function checkTauriAvailability(): boolean {
+    return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Types (site hosting)
+  // ---------------------------------------------------------------------------
+  interface SiteFile { path: string; size: number; }
+  interface HostedSite {
+    id: string; name: string; directory: string; createdAt: number;
+    files: SiteFile[]; relayUrl?: string | null;
+  }
+  interface ServerStatus { running: boolean; address: string | null; }
+
+  // ---------------------------------------------------------------------------
+  // Tab state
+  // ---------------------------------------------------------------------------
+  type Tab = 'sites' | 'marketplace' | 'agreements';
+  let activeTab = $state<Tab>('sites');
+
+  // ---------------------------------------------------------------------------
+  // Site hosting state
+  // ---------------------------------------------------------------------------
+  let serverStatus = $state<ServerStatus>({ running: false, address: null });
+  let port = $state(8080);
+  let sites = $state<HostedSite[]>([]);
+  let newSiteName = $state('');
+  let selectedFiles = $state<{ name: string; path: string; size: number }[]>([]);
+  let isCreating = $state(false);
+  let isStartingServer = $state(false);
+  let publishingStates = $state<Record<string, boolean>>({});
+  let isDragOver = $state(false);
+
+  // Delete confirmation
+  let deleteConfirm = $state<{ id: string; name: string } | null>(null);
+
+  // Drive picker for site creation
+  let showDrivePickerForSite = $state(false);
+  let drivePickerFiles = $state<{ id: string; name: string; size: number }[]>([]);
+  let drivePickerLoading = $state(false);
+
+  // ---------------------------------------------------------------------------
+  // Marketplace / agreements state
+  // ---------------------------------------------------------------------------
   let loadingAgreements = $state(true);
   let loadingHosts = $state(true);
   let hostingPublishing = $state(false);
-  let error = $state<string | null>(null);
+  let marketplaceError = $state<string | null>(null);
   let hosts = $state<HostEntry[]>([]);
   let myAgreements = $state<HostingAgreement[]>([]);
   let sortBy = $state<'reputation' | 'price' | 'storage'>('reputation');
-  let showAgreements = $state(true);
   let myPeerId = $state<string | null>(null);
 
   // Proposal modal
@@ -34,284 +87,283 @@
   let proposalDurationDays = $state(7);
   let isProposing = $state(false);
 
-  // Drive file picker
-  let driveFiles = $state<{ id: string; name: string; size: number }[]>([]);
-  let showDrivePicker = $state(false);
+  // Drive picker for proposals
+  let proposalDriveFiles = $state<{ id: string; name: string; size: number }[]>([]);
+  let showProposalDrivePicker = $state(false);
   let publishingDriveFile = $state<string | null>(null);
+
+  // Auto-accept state
   let autoAcceptInFlight = $state<Record<string, boolean>>({});
   const proposerEloCache = new Map<string, { elo: number; expiresAt: number }>();
   const ELO_CACHE_TTL_MS = 60000;
 
-  async function loadDriveFiles() {
-    const wallet = get(walletAccount);
-    if (!wallet?.address) return;
+  // Derived
+  let incomingProposals = $derived(
+    myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status === 'proposed')
+  );
+  let activeAgreements = $derived(
+    myAgreements.filter((a) =>
+      a.status !== 'cancelled' &&
+      (a.status !== 'proposed' || a.clientPeerId === myPeerId)
+    )
+  );
+  let hostedFiles = $derived.by(() => {
+    if (!myPeerId) return [];
+    const files: { fileHash: string; agreementId: string; clientPeerId: string; expiresAt?: number }[] = [];
+    for (const agreement of myAgreements) {
+      if (agreement.hostPeerId !== myPeerId) continue;
+      if (agreement.status !== 'active' && agreement.status !== 'accepted') continue;
+      for (const hash of agreement.fileHashes) {
+        files.push({
+          fileHash: hash,
+          agreementId: agreement.agreementId,
+          clientPeerId: agreement.clientPeerId,
+          expiresAt: agreement.expiresAt,
+        });
+      }
+    }
+    return files;
+  });
+
+  // =========================================================================
+  // Site hosting functions
+  // =========================================================================
+
+  async function loadServerStatus() {
+    if (!isTauri) return;
     try {
-      const items = await invoke<{ id: string; name: string; itemType: string; size?: number }[]>(
-        'drive_list_items', { owner: wallet.address, parentId: null }
-      );
-      driveFiles = items
-        .filter((i) => i.itemType === 'file' && i.size)
-        .map((i) => ({ id: i.id, name: i.name, size: i.size! }));
-      showDrivePicker = true;
-    } catch {
-      toasts.show('Failed to load Drive files', 'error');
+      const { invoke } = await import('@tauri-apps/api/core');
+      serverStatus = await invoke<ServerStatus>('get_hosting_server_status');
+    } catch (err) {
+      log.error('Failed to get server status:', err);
     }
   }
 
-  async function addDriveFile(fileId: string, fileName: string) {
-    const wallet = get(walletAccount);
-    if (!wallet?.address) return;
-    publishingDriveFile = fileId;
+  async function startServer() {
+    if (!isTauri) return;
+    isStartingServer = true;
     try {
-      // publish_drive_file returns a full DriveItem object (not a string)
-      const item = await invoke<{ merkleRoot?: string }>('publish_drive_file', {
-        owner: wallet.address, itemId: fileId,
-        protocol: null, priceChi: null, walletAddress: null,
-      });
-      const hash = item.merkleRoot;
-      if (!hash) {
-        toasts.show(`${fileName} has no file hash — publish failed`, 'error');
-        return;
-      }
-      // Add hash to proposal (avoid duplicates)
-      const existing = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
-      if (!existing.includes(hash)) {
-        proposalFileHashes = [...existing, hash].join('\n');
-      }
-      toasts.show(`${fileName} published to network`, 'success');
+      const { invoke } = await import('@tauri-apps/api/core');
+      const addr = await invoke<string>('start_hosting_server', { port });
+      serverStatus = { running: true, address: addr };
+      toasts.detail('Server started', `Listening on ${addr}`, 'success');
+      localStorage.setItem('chiral-hosting-port', String(port));
     } catch (err: any) {
-      toasts.show(`Failed to publish ${fileName}: ${err.message || err}`, 'error');
+      toasts.detail('Server failed to start', String(err), 'error');
     } finally {
-      publishingDriveFile = null;
+      isStartingServer = false;
     }
   }
 
-  /** Delete hosted files from Drive when agreement is cancelled.
-   *  Searches ALL Drive items (not just "Shared" folder) so files are
-   *  cleaned up regardless of where they were stored. */
-  async function cleanupDriveSharedFiles(agreementId: string) {
-    const wallet = get(walletAccount);
-    if (!wallet?.address) return;
-    const agreement = myAgreements.find((a) => a.agreementId === agreementId);
-    if (!agreement?.fileHashes?.length) return;
+  async function stopServer() {
+    if (!isTauri) return;
     try {
-      const allItems = await invoke<{ id: string; name: string; itemType: string; merkleRoot?: string; parentId?: string | null }[]>(
-        'drive_list_all_items', { owner: wallet.address },
-      );
-      const hashSet = new Set(agreement.fileHashes);
-      for (const item of allItems) {
-        if (item.itemType === 'file' && (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot)))) {
-          await invoke('drive_delete_item', { owner: wallet.address, itemId: item.id });
-          console.log(`🗑️ Removed hosted file ${item.name} from Drive`);
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('stop_hosting_server');
+      serverStatus = { running: false, address: null };
+      // Silent — server status reflected in UI
+    } catch (err: any) {
+      toasts.detail('Failed to stop server', String(err), 'error');
+    }
+  }
+
+  async function loadSites() {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      sites = await invoke<HostedSite[]>('list_hosted_sites');
+    } catch (err) {
+      log.error('Failed to load sites:', err);
+    }
+  }
+
+  async function selectFiles() {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const paths = await invoke<string[]>('open_file_dialog', { multiple: true });
+      if (paths && paths.length > 0) {
+        for (const p of paths) {
+          const name = p.split(/[\\/]/).pop() || p;
+          const size = await invoke<number>('get_file_size', { filePath: p });
+          if (!selectedFiles.some(f => f.path === p)) {
+            selectedFiles = [...selectedFiles, { name, path: p, size }];
+          }
         }
       }
     } catch (err) {
-      console.warn('Failed to cleanup Drive shared files:', err);
+      log.error('File dialog error:', err);
     }
   }
 
-  // ── Helpers ──
-  function formatPeerId(id: string): string {
-    if (id.length <= 16) return id;
-    return `${id.slice(0, 8)}...${id.slice(-6)}`;
-  }
-
-  function formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
-  }
-
-  function formatWeiAsChi(wei: string): string {
-    try {
-      const value = Number(BigInt(wei)) / 1e18;
-      if (value === 0) return 'Free';
-      if (value < 0.000001) return '< 0.000001 CHI';
-      return `${parseFloat(value.toFixed(6))} CHI`;
-    } catch {
-      return 'Free';
-    }
-  }
-
-  function weiToChiNumber(wei: string, fallback: number): number {
-    try {
-      const n = Number(BigInt(wei)) / 1e18;
-      return Number.isFinite(n) && n >= 0 ? n : fallback;
-    } catch {
-      return fallback;
-    }
-  }
-
-  function chiToWeiString(chi: number, fallbackWei: string): string {
-    if (!Number.isFinite(chi) || chi < 0) return fallbackWei;
-    return BigInt(Math.round(chi * 1e18)).toString();
-  }
-
-  function updateHostingEnabled(enabled: boolean) {
-    settings.update((s) => ({
-      ...s,
-      hostingConfig: {
-        ...s.hostingConfig,
-        enabled,
-      },
-    }));
-  }
-
-  function updateHostingMaxStorageGb(gb: number) {
-    const boundedGb = Math.max(1, Math.min(10000, Math.floor(gb || 1)));
-    settings.update((s) => ({
-      ...s,
-      hostingConfig: {
-        ...s.hostingConfig,
-        maxStorageBytes: boundedGb * 1024 * 1024 * 1024,
-      },
-    }));
-  }
-
-  function updateHostingPriceChi(chiPerMbPerDay: number) {
-    settings.update((s) => ({
-      ...s,
-      hostingConfig: {
-        ...s.hostingConfig,
-        pricePerMbPerDayWei: chiToWeiString(
-          chiPerMbPerDay,
-          s.hostingConfig.pricePerMbPerDayWei,
-        ),
-      },
-    }));
-  }
-
-  function updateHostingDepositChi(depositChi: number) {
-    settings.update((s) => ({
-      ...s,
-      hostingConfig: {
-        ...s.hostingConfig,
-        minDepositWei: chiToWeiString(depositChi, s.hostingConfig.minDepositWei),
-      },
-    }));
-  }
-
-  function updateAutoAcceptByElo(enabled: boolean) {
-    settings.update((s) => ({
-      ...s,
-      hostingConfig: {
-        ...s.hostingConfig,
-        autoAcceptByElo: enabled,
-      },
-    }));
-  }
-
-  function updateAutoAcceptMinElo(elo: number) {
-    const bounded = Math.max(0, Math.min(100, Math.round(elo || 0)));
-    settings.update((s) => ({
-      ...s,
-      hostingConfig: {
-        ...s.hostingConfig,
-        minAutoAcceptElo: bounded,
-      },
-    }));
-  }
-
-  async function publishHosting() {
-    if (hostingPublishing) return;
+  async function openDrivePickerForSite() {
     const wallet = get(walletAccount);
     if (!wallet?.address) {
-      toasts.show('Connect your wallet first', 'error');
+      toasts.show('Connect your wallet first', 'warning');
       return;
     }
-    hostingPublishing = true;
+    drivePickerLoading = true;
+    showDrivePickerForSite = true;
     try {
-      await hostingService.publishHostAdvertisement($settings.hostingConfig, wallet.address);
-      toasts.show('Host advertisement published to network', 'success');
-    } catch (err: any) {
-      toasts.show(`Failed to publish: ${err?.message || err}`, 'error');
+      const { invoke } = await import('@tauri-apps/api/core');
+      const items = await invoke<{ id: string; name: string; itemType: string; size?: number }[]>(
+        'drive_list_items', { owner: wallet.address, parentId: null }
+      );
+      drivePickerFiles = items
+        .filter((i) => i.itemType === 'file' && i.size)
+        .map((i) => ({ id: i.id, name: i.name, size: i.size! }));
+    } catch {
+      toasts.show('Failed to load Drive files', 'error');
+      showDrivePickerForSite = false;
     } finally {
-      hostingPublishing = false;
+      drivePickerLoading = false;
     }
   }
 
-  async function unpublishHosting() {
-    if (hostingPublishing) return;
-    hostingPublishing = true;
+  async function addDriveFilesToSite(files: { id: string; name: string; size: number }[]) {
+    showDrivePickerForSite = false;
+    if (files.length === 0) return;
+    const wallet = get(walletAccount);
+    if (!wallet?.address) return;
     try {
-      await hostingService.unpublishHostAdvertisement();
-      toasts.show('Host advertisement removed', 'info');
+      const { invoke } = await import('@tauri-apps/api/core');
+      for (const file of files) {
+        const filePath = await invoke<string>('get_drive_file_path', {
+          owner: wallet.address,
+          itemId: file.id,
+        });
+        if (!selectedFiles.some(f => f.path === filePath)) {
+          selectedFiles = [...selectedFiles, { name: file.name, path: filePath, size: file.size }];
+        }
+      }
     } catch (err: any) {
-      toasts.show(`Failed to unpublish: ${err?.message || err}`, 'error');
+      toasts.detail('Failed to load files', String(err?.message || err), 'error');
+    }
+  }
+
+  function removeSelectedFile(index: number) {
+    selectedFiles = selectedFiles.filter((_, i) => i !== index);
+  }
+
+  async function createSite() {
+    if (!isTauri || !newSiteName.trim() || selectedFiles.length === 0) return;
+    isCreating = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const filePaths = selectedFiles.map(f => f.path);
+      const site = await invoke<HostedSite>('create_hosted_site', {
+        name: newSiteName.trim(),
+        filePaths,
+      });
+      sites = [...sites, site];
+      toasts.show(`Site "${site.name}" created`, 'success');
+      newSiteName = '';
+      selectedFiles = [];
+    } catch (err: any) {
+      toasts.detail('Failed to create site', String(err), 'error');
     } finally {
-      hostingPublishing = false;
+      isCreating = false;
     }
   }
 
-  async function toggleHostingEnabled() {
-    const nextEnabled = !$settings.hostingConfig.enabled;
-    updateHostingEnabled(nextEnabled);
-    if (nextEnabled) {
-      const wallet = get(walletAccount);
-      if (wallet?.address) {
-        await publishHosting();
-      } else {
-        toasts.show('Hosting enabled. It will auto-publish when wallet is connected.', 'info');
+  function deleteSite(siteId: string, siteName: string) {
+    deleteConfirm = { id: siteId, name: siteName };
+  }
+
+  async function confirmDeleteSite() {
+    if (!deleteConfirm || !isTauri) return;
+    const { id, name } = deleteConfirm;
+    deleteConfirm = null;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('delete_hosted_site', { siteId: id });
+      sites = sites.filter(s => s.id !== id);
+      // Silent — site removed from list
+    } catch (err: any) {
+      toasts.detail('Failed to delete site', String(err), 'error');
+    }
+  }
+
+  function copySiteUrl(site: HostedSite) {
+    const url = buildHostedSiteUrl(site.id, site.relayUrl, serverStatus.address, port);
+    navigator.clipboard.writeText(url);
+    toasts.show('URL copied', 'success');
+  }
+
+  async function openSite(site: HostedSite) {
+    const url = buildHostedSiteUrl(site.id, site.relayUrl, serverStatus.address, port);
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(url);
+    } catch {
+      window.open(url, '_blank');
+    }
+  }
+
+  async function publishToRelay(siteId: string) {
+    if (!isTauri) return;
+    publishingStates = { ...publishingStates, [siteId]: true };
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const relayUrl = await invoke<string>('publish_site_to_relay', { siteId, relayUrl: RELAY_GATEWAY });
+      await loadSites();
+      toasts.detail('Site published', relayUrl, 'success');
+    } catch (err: any) {
+      toasts.detail('Failed to publish', String(err), 'error');
+    } finally {
+      publishingStates = { ...publishingStates, [siteId]: false };
+    }
+  }
+
+  async function unpublishFromRelay(siteId: string) {
+    if (!isTauri) return;
+    publishingStates = { ...publishingStates, [siteId]: true };
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('unpublish_site_from_relay', { siteId });
+      await loadSites();
+      // Silent — publish state reflected in UI
+    } catch (err: any) {
+      toasts.detail('Failed to unpublish', String(err), 'error');
+    } finally {
+      publishingStates = { ...publishingStates, [siteId]: false };
+    }
+  }
+
+  // Drag and drop
+  let unlistenDragDrop: (() => void) | undefined;
+
+  async function addFilesFromPaths(paths: string[]) {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      for (const p of paths) {
+        const name = p.split(/[\\/]/).pop() || p;
+        if (selectedFiles.some(f => f.path === p)) continue;
+        let size = 0;
+        try { size = await invoke<number>('get_file_size', { filePath: p }); } catch { /* ignore */ }
+        selectedFiles = [...selectedFiles, { name, path: p, size }];
       }
-      return;
-    }
-    await unpublishHosting();
-  }
-
-  function formatDuration(secs: number): string {
-    const days = Math.floor(secs / 86400);
-    if (days >= 365) return `${(days / 365).toFixed(1)} years`;
-    if (days >= 30) return `${(days / 30).toFixed(1)} months`;
-    return `${days} day${days !== 1 ? 's' : ''}`;
-  }
-
-  function timeRemaining(expiresAt: number | undefined): string {
-    if (!expiresAt) return 'N/A';
-    const remaining = expiresAt - Math.floor(Date.now() / 1000);
-    if (remaining <= 0) return 'Expired';
-    return formatDuration(remaining);
-  }
-
-  function statusColor(status: string): string {
-    switch (status) {
-      case 'proposed': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400';
-      case 'accepted': return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400';
-      case 'active': return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400';
-      case 'rejected': return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
-      case 'expired': return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400';
-      case 'cancelled': return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400';
-      default: return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400';
+    } catch (err) {
+      log.error('Failed to add dropped files:', err);
     }
   }
 
-  // ── Sorting ──
-  function sortedHosts(entries: HostEntry[]): HostEntry[] {
-    return [...entries].sort((a, b) => {
-      switch (sortBy) {
-        case 'price':
-          return Number(BigInt(a.advertisement.pricePerMbPerDayWei) - BigInt(b.advertisement.pricePerMbPerDayWei));
-        case 'storage':
-          return b.availableStorageBytes - a.availableStorageBytes;
-        case 'reputation':
-        default:
-          return b.reputationScore - a.reputationScore;
-      }
-    });
-  }
+  // =========================================================================
+  // Marketplace / agreements functions
+  // =========================================================================
 
-  // ── Data Loading ──
   async function loadAgreements() {
     loadingAgreements = true;
     try {
-      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
       if (isTauri) {
+        const { invoke } = await import('@tauri-apps/api/core');
         const pid = await invoke<string | null>('get_peer_id');
         myPeerId = pid;
       }
       myAgreements = await hostingService.getMyAgreements().catch(() => [] as HostingAgreement[]);
     } catch (err: any) {
-      error = `Failed to load agreements: ${err.message || err}`;
+      marketplaceError = `Failed to load agreements: ${err.message || err}`;
     } finally {
       loadingAgreements = false;
     }
@@ -321,9 +373,7 @@
     loadingHosts = true;
     try {
       hosts = await hostingService.discoverHosts().catch(() => [] as HostEntry[]);
-    } catch {
-      // Don't block the page — hosts section will show empty
-    } finally {
+    } catch { /* show empty */ } finally {
       loadingHosts = false;
     }
   }
@@ -332,120 +382,150 @@
     loadingHosts = true;
     try {
       hosts = await hostingService.discoverHosts();
-      toasts.show('Host list refreshed', 'success');
+      // Silent — host list updated in UI
     } catch (err: any) {
-      toasts.show(`Failed to refresh: ${err.message || err}`, 'error');
+      toasts.detail('Failed to refresh hosts', String(err.message || err), 'error');
     } finally {
       loadingHosts = false;
     }
   }
 
-  // ── Agreement Actions ──
-  async function openProposalModal(host: HostEntry) {
+  let hostingPublished = $state(false);
+
+  async function publishHosting() {
+    if (hostingPublishing) return;
+    if (!get(networkConnected)) { toasts.show('Connect to the network first', 'warning'); return; }
     const wallet = get(walletAccount);
-    if (!wallet?.address) {
-      toasts.show('Connect your wallet first', 'error');
+    if (!wallet?.address) { toasts.show('Connect your wallet first', 'warning'); return; }
+    hostingPublishing = true;
+    try {
+      await hostingService.publishHostAdvertisement($settings.hostingConfig, wallet.address);
+      hostingPublished = true;
+      toasts.show('Hosting published to network', 'success');
+    } catch (err: any) {
+      log.error('Publish hosting failed:', err);
+      toasts.detail('Failed to publish hosting', String(err?.message || err), 'error');
+    } finally {
+      hostingPublishing = false;
+    }
+  }
+
+  async function unpublishHosting() {
+    if (hostingPublishing) return;
+    if (!get(networkConnected)) { toasts.show('Not connected to the network', 'warning'); return; }
+    hostingPublishing = true;
+    try {
+      await hostingService.unpublishHostAdvertisement();
+      hostingPublished = false;
+      toasts.show('Hosting unpublished', 'info');
+    } catch (err: any) {
+      log.error('Unpublish hosting failed:', err);
+      toasts.detail('Failed to unpublish', String(err?.message || err), 'error');
+    } finally {
+      hostingPublishing = false;
+    }
+  }
+
+  async function toggleHostingEnabled() {
+    const nextEnabled = !$settings.hostingConfig.enabled;
+    settings.update((s) => ({
+      ...s,
+      hostingConfig: { ...s.hostingConfig, enabled: nextEnabled },
+    }));
+    if (nextEnabled) {
+      const wallet = get(walletAccount);
+      if (wallet?.address) {
+        await publishHosting();
+      } else {
+        toasts.detail('Hosting enabled', 'Will auto-publish when wallet is connected', 'info');
+      }
       return;
     }
+    await unpublishHosting();
+  }
+
+  // Proposal flow
+  function openProposalModal(host: HostEntry) {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) { toasts.show('Connect your wallet first', 'warning'); return; }
     proposalHost = host;
     proposalFileHashes = '';
     proposalDurationDays = 7;
+  }
+
+  async function loadProposalDriveFiles() {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const items = await invoke<{ id: string; name: string; itemType: string; size?: number }[]>(
+        'drive_list_items', { owner: wallet.address, parentId: null }
+      );
+      proposalDriveFiles = items
+        .filter((i) => i.itemType === 'file' && i.size)
+        .map((i) => ({ id: i.id, name: i.name, size: i.size! }));
+      showProposalDrivePicker = true;
+    } catch {
+      toasts.show('Failed to load Drive files', 'error');
+    }
+  }
+
+  async function addProposalDriveFile(fileId: string, fileName: string) {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) return;
+    publishingDriveFile = fileId;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const item = await invoke<{ merkleRoot?: string }>('publish_drive_file', {
+        owner: wallet.address, itemId: fileId,
+        protocol: null, priceChi: null, walletAddress: wallet.address,
+      });
+      const hash = item.merkleRoot;
+      if (!hash) { toasts.show(`${fileName} has no file hash`, 'error'); return; }
+      const existing = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
+      if (!existing.includes(hash)) {
+        proposalFileHashes = [...existing, hash].join('\n');
+      }
+      toasts.show(`${fileName} published to network`, 'success');
+    } catch (err: any) {
+      toasts.detail(`Failed to publish ${fileName}`, String(err.message || err), 'error');
+    } finally {
+      publishingDriveFile = null;
+    }
   }
 
   async function sendProposal() {
     if (!proposalHost || isProposing) return;
     const wallet = get(walletAccount);
     if (!wallet?.address || !myPeerId) {
-      toasts.show('Wallet or peer ID not available', 'error');
+      toasts.show('Wallet or peer ID not available', 'warning');
       return;
     }
-
-    const hashes = proposalFileHashes
-      .split('\n')
-      .map((h) => h.trim())
-      .filter(Boolean);
-
-    if (hashes.length === 0) {
-      toasts.show('Enter at least one file hash', 'error');
-      return;
-    }
+    const hashes = proposalFileHashes.split('\n').map((h) => h.trim()).filter(Boolean);
+    if (hashes.length === 0) { toasts.show('Enter at least one file hash', 'warning'); return; }
 
     isProposing = true;
     try {
       const agreement = await hostingService.proposeAgreement(
-        myPeerId,
-        wallet.address,
-        proposalHost.advertisement.peerId,
-        proposalHost.advertisement.walletAddress,
-        hashes,
-        0, // total size — will be resolved when host accepts
-        proposalDurationDays * 86400,
+        myPeerId, wallet.address,
+        proposalHost.advertisement.peerId, proposalHost.advertisement.walletAddress,
+        hashes, 0, proposalDurationDays * 86400,
         proposalHost.advertisement.pricePerMbPerDayWei,
         proposalHost.advertisement.minDepositWei,
       );
-
       myAgreements = [...myAgreements, agreement];
       proposalHost = null;
-      toasts.show('Hosting proposal sent!', 'success');
+      toasts.show('Hosting proposal sent', 'success');
     } catch (err: any) {
-      toasts.show(`Failed to send proposal: ${err.message || err}`, 'error');
+      toasts.detail('Proposal failed', String(err.message || err), 'error');
     } finally {
       isProposing = false;
     }
   }
 
-  async function getWalletElo(walletAddress: string): Promise<number> {
-    const key = walletAddress.trim();
-    if (!key) return 50;
-    const now = Date.now();
-    const cached = proposerEloCache.get(key);
-    if (cached && cached.expiresAt > now) return cached.elo;
-    try {
-      const reputations = await ratingApi.getBatchReputation([key]);
-      const elo = reputations?.[key]?.elo;
-      const normalized = Number.isFinite(elo) ? Number(elo) : 50;
-      proposerEloCache.set(key, { elo: normalized, expiresAt: now + ELO_CACHE_TTL_MS });
-      return normalized;
-    } catch {
-      return 50;
-    }
-  }
-
-  async function maybeAutoAcceptAgreement(agreement: HostingAgreement) {
-    if (!myPeerId) return;
-    if (!$settings.hostingConfig.autoAcceptByElo) return;
-    if (agreement.hostPeerId !== myPeerId || agreement.status !== 'proposed') return;
-    if (autoAcceptInFlight[agreement.agreementId]) return;
-
-    autoAcceptInFlight = { ...autoAcceptInFlight, [agreement.agreementId]: true };
-    try {
-      const proposerElo = await getWalletElo(agreement.clientWalletAddress);
-      const threshold = $settings.hostingConfig.minAutoAcceptElo ?? 60;
-      if (proposerElo < threshold) return;
-      await respondToAgreement(agreement.agreementId, true, {
-        silent: true,
-        reason: `Auto-accepted: proposer Elo ${proposerElo.toFixed(1)} >= ${threshold.toFixed(1)}`,
-      });
-    } finally {
-      const next = { ...autoAcceptInFlight };
-      delete next[agreement.agreementId];
-      autoAcceptInFlight = next;
-    }
-  }
-
-  async function maybeAutoAcceptIncomingProposals() {
-    if (!myPeerId || !$settings.hostingConfig.autoAcceptByElo) return;
-    const proposals = myAgreements.filter(
-      (a) => a.hostPeerId === myPeerId && a.status === 'proposed',
-    );
-    for (const proposal of proposals) {
-      await maybeAutoAcceptAgreement(proposal);
-    }
-  }
-
+  // Agreement actions
   async function respondToAgreement(
-    agreementId: string,
-    accept: boolean,
+    agreementId: string, accept: boolean,
     options?: { silent?: boolean; reason?: string },
   ) {
     try {
@@ -456,22 +536,17 @@
           : a
       );
       if (!options?.silent) {
-        toasts.show(
-          accept ? 'Agreement accepted — downloading files...' : 'Agreement rejected',
-          accept ? 'success' : 'info',
-        );
+        toasts.show(accept ? 'Agreement accepted — downloading files' : 'Agreement rejected', accept ? 'success' : 'info');
       } else if (options.reason) {
         toasts.show(options.reason, 'success');
       }
-
-      // Start downloading files from proposer after accepting
       if (accept && updated) {
         hostingService.fulfillAgreement(updated).catch((err: any) => {
-          toasts.show(`Failed to start file download: ${err.message || err}`, 'error');
+          toasts.detail('File download failed', String(err.message || err), 'error');
         });
       }
     } catch (err: any) {
-      toasts.show(`Failed: ${err.message || err}`, 'error');
+      toasts.detail('Action failed', String(err.message || err), 'error');
     }
   }
 
@@ -480,20 +555,18 @@
     try {
       const result = await hostingService.requestCancellation(agreementId, myPeerId);
       if (result === 'cancelled') {
-        // Proposed agreement — directly cancelled
         myAgreements = myAgreements.map((a) =>
           a.agreementId === agreementId ? { ...a, status: 'cancelled' } : a
         );
         toasts.show('Proposal withdrawn', 'info');
       } else {
-        // Accepted/active — waiting for other party
         myAgreements = myAgreements.map((a) =>
-          a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId } : a
+          a.agreementId === agreementId ? { ...a, cancelRequestedBy: myPeerId ?? undefined } : a
         );
         toasts.show('Cancellation requested — waiting for other party', 'info');
       }
     } catch (err: any) {
-      toasts.show(`Failed to request cancellation: ${err.message || err}`, 'error');
+      toasts.detail('Cancellation failed', String(err.message || err), 'error');
     }
   }
 
@@ -502,9 +575,9 @@
     try {
       await hostingService.respondToCancellation(agreementId, approve, myPeerId);
       if (approve) {
-        // Clean up hosted files if we're the host
         const agreement = myAgreements.find((a) => a.agreementId === agreementId);
         if (agreement && agreement.hostPeerId === myPeerId) {
+          const { invoke } = await import('@tauri-apps/api/core');
           try { await invoke('cleanup_agreement_files', { agreementId }); } catch { /* best-effort */ }
           try { await cleanupDriveSharedFiles(agreementId); } catch { /* best-effort */ }
         }
@@ -519,11 +592,81 @@
         toasts.show('Cancellation denied', 'info');
       }
     } catch (err: any) {
-      toasts.show(`Failed: ${err.message || err}`, 'error');
+      toasts.detail('Action failed', String(err.message || err), 'error');
     }
   }
 
-  // ── Lifecycle ──
+  async function cleanupDriveSharedFiles(agreementId: string) {
+    const wallet = get(walletAccount);
+    if (!wallet?.address) return;
+    const agreement = myAgreements.find((a) => a.agreementId === agreementId);
+    if (!agreement?.fileHashes?.length) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const allItems = await invoke<{ id: string; name: string; itemType: string; merkleRoot?: string }[]>(
+        'drive_list_all_items', { owner: wallet.address },
+      );
+      const hashSet = new Set(agreement.fileHashes);
+      for (const item of allItems) {
+        if (item.itemType === 'file' && (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot)))) {
+          await invoke('drive_delete_item', { owner: wallet.address, itemId: item.id });
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to cleanup Drive shared files:', err);
+    }
+  }
+
+  // Auto-accept
+  async function getWalletElo(walletAddress: string): Promise<number> {
+    const key = walletAddress.trim();
+    if (!key) return 50;
+    const now = Date.now();
+    const cached = proposerEloCache.get(key);
+    if (cached && cached.expiresAt > now) return cached.elo;
+    try {
+      const reputations = await ratingApi.getBatchReputation([key]);
+      const elo = reputations?.[key]?.elo;
+      const normalized = Number.isFinite(elo) ? Number(elo) : 50;
+      proposerEloCache.set(key, { elo: normalized, expiresAt: now + ELO_CACHE_TTL_MS });
+      return normalized;
+    } catch { return 50; }
+  }
+
+  async function maybeAutoAcceptAgreement(agreement: HostingAgreement) {
+    if (!myPeerId || !$settings.hostingConfig.autoAcceptByElo) return;
+    if (agreement.hostPeerId !== myPeerId || agreement.status !== 'proposed') return;
+    if (autoAcceptInFlight[agreement.agreementId]) return;
+    autoAcceptInFlight = { ...autoAcceptInFlight, [agreement.agreementId]: true };
+    try {
+      const proposerElo = await getWalletElo(agreement.clientWalletAddress);
+      const threshold = Number.isFinite($settings.hostingConfig.minAutoAcceptElo)
+        ? Number($settings.hostingConfig.minAutoAcceptElo) : 60;
+      if (proposerElo < threshold) return;
+      await respondToAgreement(agreement.agreementId, true, {
+        silent: true,
+        reason: `Auto-accepted: proposer Elo ${proposerElo.toFixed(1)} >= ${threshold.toFixed(1)}`,
+      });
+    } finally {
+      const next = { ...autoAcceptInFlight };
+      delete next[agreement.agreementId];
+      autoAcceptInFlight = next;
+    }
+  }
+
+  async function maybeAutoAcceptIncomingProposals() {
+    if (!myPeerId || !$settings.hostingConfig.autoAcceptByElo) return;
+    const proposals = myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status === 'proposed');
+    for (const proposal of proposals) {
+      await maybeAutoAcceptAgreement(proposal);
+    }
+  }
+
+  // =========================================================================
+  // Lifecycle
+  // =========================================================================
+
+  let unlistenDragDrop_fn: (() => void) | undefined;
   let unlistenProposal: (() => void) | null = null;
   let unlistenResponse: (() => void) | null = null;
   let unlistenDownloadComplete: (() => void) | null = null;
@@ -531,18 +674,45 @@
   let unlistenCancelResponse: (() => void) | null = null;
 
   onMount(async () => {
-    // Load agreements first (sets myPeerId), then hosts in background
+    isTauri = checkTauriAvailability();
+    port = resolveHostingPort(localStorage.getItem('chiral-hosting-port'));
+
+    // Load site hosting data
+    await loadServerStatus();
+    await loadSites();
+
+    // Load marketplace data
     await loadAgreements();
     loadHosts();
 
-    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
     if (isTauri) {
-      // Re-register hosted files in DHT on startup
+      // Drag-drop for site creation
       try {
-        const hostedEntries = await invoke<{ fileHash: string; agreementId: string; clientPeerId: string }[]>(
-          'get_active_hosted_files'
-        );
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+        unlistenDragDrop_fn = await appWindow.onDragDropEvent((event) => {
+          if (activeTab !== 'sites') return;
+          if (event.payload.type === 'drop') {
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) addFilesFromPaths(paths);
+          } else if (event.payload.type === 'enter') {
+            isDragOver = true;
+          } else if (event.payload.type === 'leave') {
+            isDragOver = false;
+          }
+        });
+      } catch (error) {
+        log.error('Failed to setup drag-drop listener:', error);
+      }
+
+      const { listen } = await import('@tauri-apps/api/event');
+      const { invoke } = await import('@tauri-apps/api/core');
+
+      // Re-register hosted files
+      try {
+        const hostedEntries = await invoke<{ fileHash: string; agreementId: string; clientPeerId: string }[]>('get_active_hosted_files');
         const downloadDir = await invoke<string>('get_download_directory');
+        const wallet = get(walletAccount);
         for (const entry of hostedEntries) {
           try {
             await invoke('republish_shared_file', {
@@ -551,56 +721,49 @@
               fileName: entry.fileHash,
               fileSize: 0,
               priceChi: null,
-              walletAddress: null,
+              walletAddress: wallet?.address ?? null,
             });
-          } catch {
-            // File may not exist on disk — skip
-          }
+          } catch { /* skip */ }
         }
-      } catch {
-        // Agreements dir may not exist yet
-      }
-      // Listen for incoming hosting proposals sent directly via echo protocol
+      } catch { /* agreements dir may not exist */ }
+
+      // Listen for incoming proposals
       unlistenProposal = await listen<{ fromPeer: string; agreementJson: string }>(
         'hosting_proposal_received',
         (event) => {
           try {
             const agreement: HostingAgreement = JSON.parse(event.payload.agreementJson);
             hostingService.storeAndIndex(agreement);
-            if (!myAgreements.some((a) => a.agreementId === agreement.agreementId)) {
+            const exists = myAgreements.some((a) => a.agreementId === agreement.agreementId);
+            if (exists) {
+              myAgreements = myAgreements.map((a) =>
+                a.agreementId === agreement.agreementId ? agreement : a,
+              );
+            } else {
               myAgreements = [...myAgreements, agreement];
-              toasts.show(`New hosting proposal from ${event.payload.fromPeer.slice(0, 8)}...`, 'info');
-              void maybeAutoAcceptAgreement(agreement);
+              toasts.detail('New hosting proposal', `From peer ${event.payload.fromPeer.slice(0, 8)}…`, 'info');
             }
-          } catch {
-            // Ignore malformed proposals
-          }
+            void maybeAutoAcceptAgreement(agreement);
+          } catch { /* ignore malformed */ }
         },
       );
 
-      // Listen for acceptance/rejection responses from hosts
+      // Listen for responses
       unlistenResponse = await listen<{ agreementId: string; status: string }>(
         'hosting_response_received',
         (event) => {
           const { agreementId, status } = event.payload;
-          myAgreements = myAgreements.map((a) =>
-            a.agreementId === agreementId ? { ...a, status: status as any } : a
+          myAgreements = myAgreements.map((a): HostingAgreement =>
+            a.agreementId === agreementId ? { ...a, status: status as HostingAgreement['status'] } : a
           );
-          if (status === 'accepted') {
-            toasts.show('Agreement accepted by host!', 'success');
-          } else if (status === 'rejected') {
-            toasts.show('Agreement rejected by host', 'info');
-          } else if (status === 'active') {
-            toasts.show('Host is now seeding your files!', 'success');
-          }
+          if (status === 'accepted') toasts.show('Agreement accepted by host', 'success');
+          else if (status === 'rejected') toasts.show('Agreement rejected by host', 'warning');
+          else if (status === 'active') toasts.show('Host is now seeding your files', 'success');
         },
       );
 
-      // Listen for file download completions — update UI when hosting files finish downloading
-      // (The actual seeder registration + DHT publish is handled globally in App.svelte)
-      unlistenDownloadComplete = await listen<{
-        fileHash: string; fileName: string; filePath: string; fileSize: number;
-      }>(
+      // Listen for download completions
+      unlistenDownloadComplete = await listen<{ fileHash: string; fileName: string; filePath: string; fileSize: number }>(
         'file-download-complete',
         async (event) => {
           const { fileHash, fileName } = event.payload;
@@ -608,21 +771,19 @@
             (a) => a.hostPeerId === myPeerId && (a.status === 'accepted' || a.status === 'active') && a.fileHashes.includes(fileHash)
           );
           if (!agreement) return;
-
-          toasts.show(`Now seeding ${fileName} for hosting agreement`, 'success');
+          toasts.detail('Now seeding', `${fileName} for hosting agreement`, 'success');
           myAgreements = myAgreements.map((a) =>
             a.agreementId === agreement.agreementId ? { ...a, status: 'active' } : a
           );
         },
       );
 
-      // Listen for cancellation requests from the other party
+      // Listen for cancellation requests
       unlistenCancelRequest = await listen<{ agreementId: string; fromPeer: string; autoCancelled: boolean }>(
         'hosting_cancel_request_received',
         async (event) => {
           const { agreementId, fromPeer, autoCancelled } = event.payload;
           if (autoCancelled) {
-            // Auto-cancelled (proposed withdrawal or mutual cancellation) — clean up
             const agreement = myAgreements.find((a) => a.agreementId === agreementId);
             if (agreement && agreement.hostPeerId === myPeerId) {
               try { await invoke('cleanup_agreement_files', { agreementId }); } catch { /* best-effort */ }
@@ -631,24 +792,22 @@
             myAgreements = myAgreements.map((a) =>
               a.agreementId === agreementId ? { ...a, status: 'cancelled', cancelRequestedBy: undefined } : a
             );
-            toasts.show(`Agreement cancelled with ${fromPeer.slice(0, 8)}...`, 'info');
+            toasts.detail('Agreement cancelled', `By peer ${fromPeer.slice(0, 8)}…`, 'info');
           } else {
-            // Accepted/active agreement — show approve/deny buttons
             myAgreements = myAgreements.map((a) =>
               a.agreementId === agreementId ? { ...a, cancelRequestedBy: fromPeer } : a
             );
-            toasts.show(`Cancellation requested by ${fromPeer.slice(0, 8)}...`, 'info');
+            toasts.detail('Cancellation requested', `By peer ${fromPeer.slice(0, 8)}…`, 'info');
           }
         },
       );
 
-      // Listen for cancellation responses (approval/denial)
+      // Listen for cancellation responses
       unlistenCancelResponse = await listen<{ agreementId: string; approved: boolean }>(
         'hosting_cancel_response_received',
         async (event) => {
           const { agreementId, approved } = event.payload;
           if (approved) {
-            // Clean up hosted files if we're the host
             const agreement = myAgreements.find((a) => a.agreementId === agreementId);
             if (agreement && agreement.hostPeerId === myPeerId) {
               try { await invoke('cleanup_agreement_files', { agreementId }); } catch { /* best-effort */ }
@@ -670,52 +829,12 @@
   });
 
   onDestroy(() => {
+    unlistenDragDrop_fn?.();
     unlistenProposal?.();
     unlistenResponse?.();
     unlistenDownloadComplete?.();
     unlistenCancelRequest?.();
     unlistenCancelResponse?.();
-  });
-
-  // Computed
-  let sortedHostList = $derived(sortedHosts(hosts));
-  let proposalCostWei = $derived.by(() => {
-    if (!proposalHost) return '0';
-    return hostingService.calculateTotalCostWei(
-      0, // size unknown until files are resolved
-      proposalDurationDays * 86400,
-      proposalHost.advertisement.pricePerMbPerDayWei,
-    );
-  });
-
-  // Split agreements into incoming (we're host) and outgoing (we're client)
-  let incomingProposals = $derived(
-    myAgreements.filter((a) => a.hostPeerId === myPeerId && a.status === 'proposed')
-  );
-  let activeAgreements = $derived(
-    myAgreements.filter((a) =>
-      a.status !== 'cancelled' &&
-      (a.status !== 'proposed' || a.clientPeerId === myPeerId)
-    )
-  );
-
-  // Files we're hosting on behalf of others
-  let hostedFiles = $derived.by(() => {
-    if (!myPeerId) return [];
-    const files: { fileHash: string; agreementId: string; clientPeerId: string; expiresAt?: number }[] = [];
-    for (const agreement of myAgreements) {
-      if (agreement.hostPeerId !== myPeerId) continue;
-      if (agreement.status !== 'active' && agreement.status !== 'accepted') continue;
-      for (const hash of agreement.fileHashes) {
-        files.push({
-          fileHash: hash,
-          agreementId: agreement.agreementId,
-          clientPeerId: agreement.clientPeerId,
-          expiresAt: agreement.expiresAt,
-        });
-      }
-    }
-    return files;
   });
 
   $effect(() => {
@@ -729,611 +848,207 @@
   <title>Hosts - Chiral Network</title>
 </svelte:head>
 
-<div class="p-6 space-y-6">
+<div class="p-4 sm:p-6 space-y-5 max-w-6xl mx-auto">
   <!-- Header -->
-  <div class="mb-8">
-    <h1 class="text-2xl font-bold dark:text-white">Hosts</h1>
-    <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-      Find hosts to store your files in exchange for CHI tokens
-    </p>
-  </div>
-
-  <!-- ──────────── Host Marketplace Settings ──────────── -->
-  <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-    <div class="flex items-center justify-between gap-4">
-      <div>
-        <h2 class="font-semibold text-lg dark:text-white">Host Marketplace Settings</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          Configure pricing, deposits, and auto-accept rules for incoming hosting requests
-        </p>
-      </div>
-      <button
-        onclick={toggleHostingEnabled}
-        class="relative w-12 h-6 rounded-full transition-colors
-          {$settings.hostingConfig.enabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
-        role="switch"
-        aria-checked={$settings.hostingConfig.enabled}
-        aria-label="Toggle host marketplace"
-      >
-        <span
-          class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform
-            {$settings.hostingConfig.enabled ? 'translate-x-6' : 'translate-x-0'}"
-        ></span>
-      </button>
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Hosts</h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+        Host websites and files, find hosting providers, and manage agreements
+      </p>
     </div>
-
-    {#if $settings.hostingConfig.enabled}
-      <div class="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label for="host-max-storage-gb" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Max Storage Offered
-          </label>
-          <div class="flex items-center gap-2">
-            <input
-              id="host-max-storage-gb"
-              type="number"
-              min="1"
-              max="10000"
-              step="1"
-              value={Math.round($settings.hostingConfig.maxStorageBytes / (1024 * 1024 * 1024))}
-              oninput={(e) => updateHostingMaxStorageGb(Number(e.currentTarget.value))}
-              class="w-28 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
-            />
-            <span class="text-sm text-gray-500 dark:text-gray-400">GB</span>
-          </div>
+    <!-- Quick stats -->
+    <div class="hidden sm:flex items-center gap-3">
+      {#if sites.length > 0}
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-primary-50 dark:bg-primary-900/20 text-xs font-medium text-primary-700 dark:text-primary-300">
+          <Server class="w-3.5 h-3.5" />
+          {sites.length} site{sites.length !== 1 ? 's' : ''}
         </div>
-
-        <div>
-          <label for="host-price-chi" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Hosting Price
-          </label>
-          <div class="flex items-center gap-2">
-            <input
-              id="host-price-chi"
-              type="number"
-              min="0.000001"
-              max="100"
-              step="0.000001"
-              value={weiToChiNumber($settings.hostingConfig.pricePerMbPerDayWei, 0.001)}
-              oninput={(e) => updateHostingPriceChi(Number(e.currentTarget.value))}
-              class="w-36 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
-            />
-            <span class="text-sm text-gray-500 dark:text-gray-400">CHI / MB / day</span>
-          </div>
-        </div>
-
-        <div>
-          <label for="host-deposit-chi" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-            Required Deposit
-          </label>
-          <div class="flex items-center gap-2">
-            <input
-              id="host-deposit-chi"
-              type="number"
-              min="0"
-              max="100000"
-              step="0.000001"
-              value={weiToChiNumber($settings.hostingConfig.minDepositWei, 0.1)}
-              oninput={(e) => updateHostingDepositChi(Number(e.currentTarget.value))}
-              class="w-36 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white"
-            />
-            <span class="text-sm text-gray-500 dark:text-gray-400">CHI</span>
-          </div>
-        </div>
-
-        <div>
-          <div class="flex items-center justify-between mb-1">
-            <label for="host-auto-accept-elo" class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Auto-Accept by Elo
-            </label>
-            <button
-              onclick={() => updateAutoAcceptByElo(!$settings.hostingConfig.autoAcceptByElo)}
-              class="relative w-10 h-5 rounded-full transition-colors
-                {$settings.hostingConfig.autoAcceptByElo ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
-              role="switch"
-              aria-checked={$settings.hostingConfig.autoAcceptByElo}
-              aria-label="Toggle auto accept by Elo"
-            >
-              <span
-                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform
-                  {$settings.hostingConfig.autoAcceptByElo ? 'translate-x-5' : 'translate-x-0'}"
-              ></span>
-            </button>
-          </div>
-          <div class="flex items-center gap-2">
-            <input
-              id="host-auto-accept-elo"
-              type="number"
-              min="0"
-              max="100"
-              step="1"
-              value={$settings.hostingConfig.minAutoAcceptElo}
-              oninput={(e) => updateAutoAcceptMinElo(Number(e.currentTarget.value))}
-              disabled={!$settings.hostingConfig.autoAcceptByElo}
-              class="w-28 px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white disabled:opacity-50"
-            />
-            <span class="text-sm text-gray-500 dark:text-gray-400">Minimum proposer Elo</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="mt-4 flex items-center gap-3">
-        <button
-          onclick={publishHosting}
-          disabled={hostingPublishing}
-          class="px-4 py-2 text-sm bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50"
-        >
-          {hostingPublishing ? 'Publishing...' : 'Publish to Network'}
-        </button>
-        <button
-          onclick={unpublishHosting}
-          disabled={hostingPublishing}
-          class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
-        >
-          Unpublish
-        </button>
-      </div>
-    {/if}
-  </div>
-
-  {#if error}
-    <div class="text-center py-20">
-      <AlertCircle class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-      <p class="text-gray-500 dark:text-gray-400">{error}</p>
-    </div>
-  {:else}
-    <!-- ──────────── Incoming Proposals ──────────── -->
-    {#if loadingAgreements}
-      <!-- will show once loaded -->
-    {:else if incomingProposals.length > 0}
-      <div class="bg-white dark:bg-gray-800 rounded-xl border border-blue-200 dark:border-blue-800 p-6 mb-6">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
-            <Send class="w-5 h-5 text-blue-600 dark:text-blue-400" />
-          </div>
-          <div>
-            <h2 class="font-semibold text-lg dark:text-white">Incoming Proposals</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              {incomingProposals.length} pending request{incomingProposals.length !== 1 ? 's' : ''} to host files
-            </p>
-          </div>
-        </div>
-
-        <div class="space-y-3">
-          {#each incomingProposals as proposal (proposal.agreementId)}
-            <div class="flex items-center justify-between p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <span class="text-sm font-medium text-gray-900 dark:text-white font-mono">
-                    From: {formatPeerId(proposal.clientPeerId)}
-                  </span>
-                  <span class="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300">
-                    {proposal.fileHashes.length} file{proposal.fileHashes.length !== 1 ? 's' : ''}
-                  </span>
-                </div>
-                <div class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  <span>{formatDuration(proposal.durationSecs)}</span>
-                  <span>Deposit: {formatWeiAsChi(proposal.depositWei)}</span>
-                </div>
-              </div>
-              <div class="flex items-center gap-2 flex-shrink-0">
-                <button
-                  onclick={() => respondToAgreement(proposal.agreementId, true)}
-                  class="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
-                >
-                  <Check class="w-3.5 h-3.5" />
-                  Accept
-                </button>
-                <button
-                  onclick={() => respondToAgreement(proposal.agreementId, false)}
-                  class="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-red-100 hover:bg-red-200 text-red-700 dark:bg-red-900/30 dark:hover:bg-red-900/50 dark:text-red-400 rounded-lg transition-colors"
-                >
-                  <X class="w-3.5 h-3.5" />
-                  Reject
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      </div>
-    {/if}
-
-    <!-- ──────────── My Agreements ──────────── -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
-      <button
-        onclick={() => showAgreements = !showAgreements}
-        class="flex items-center justify-between w-full"
-      >
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-emerald-100 dark:bg-emerald-900 rounded-lg">
-            <Shield class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-          </div>
-          <div class="text-left">
-            <h2 class="font-semibold text-lg dark:text-white">My Agreements</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              {#if loadingAgreements}
-                Loading...
-              {:else}
-                {activeAgreements.length} agreement{activeAgreements.length !== 1 ? 's' : ''}
-              {/if}
-            </p>
-          </div>
-        </div>
-        {#if showAgreements}
-          <ChevronUp class="w-5 h-5 text-gray-400" />
-        {:else}
-          <ChevronDown class="w-5 h-5 text-gray-400" />
-        {/if}
-      </button>
-
-      {#if showAgreements}
-        <div class="mt-4">
-          {#if loadingAgreements}
-            <div class="flex items-center justify-center py-8">
-              <Loader2 class="w-6 h-6 text-gray-400 animate-spin" />
-            </div>
-          {:else if activeAgreements.length === 0}
-            <div class="text-center py-8">
-              <Shield class="w-10 h-10 mx-auto text-gray-300 dark:text-gray-600 mb-2" />
-              <p class="text-sm text-gray-500 dark:text-gray-400">No agreements yet</p>
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                Propose an agreement with a host below to get started
-              </p>
-            </div>
-          {:else}
-            <div class="space-y-3">
-              {#each activeAgreements as agreement (agreement.agreementId)}
-                {@const isClient = agreement.clientPeerId === myPeerId}
-                <div class="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-100 dark:border-gray-600">
-                  <div class="min-w-0">
-                    <div class="flex items-center gap-2 flex-wrap">
-                      <span class="text-sm font-medium text-gray-900 dark:text-white font-mono">
-                        {isClient ? 'Host' : 'Client'}: {formatPeerId(isClient ? agreement.hostPeerId : agreement.clientPeerId)}
-                      </span>
-                      <span class="text-xs px-2 py-0.5 rounded-full {statusColor(agreement.status)}">
-                        {agreement.status.charAt(0).toUpperCase() + agreement.status.slice(1)}
-                      </span>
-                    </div>
-                    <div class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      <span class="flex items-center gap-1">
-                        <FileText class="w-3 h-3" />
-                        {agreement.fileHashes.length} file{agreement.fileHashes.length !== 1 ? 's' : ''}
-                      </span>
-                      <span class="flex items-center gap-1">
-                        <Clock class="w-3 h-3" />
-                        {#if agreement.status === 'active'}
-                          {timeRemaining(agreement.expiresAt)} remaining
-                        {:else}
-                          {formatDuration(agreement.durationSecs)}
-                        {/if}
-                      </span>
-                      <span class="flex items-center gap-1">
-                        <Coins class="w-3 h-3" />
-                        {formatWeiAsChi(agreement.totalCostWei)}
-                      </span>
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-2 flex-shrink-0">
-                    {#if agreement.cancelRequestedBy && agreement.cancelRequestedBy !== myPeerId}
-                      <!-- Other party requested cancellation — show approve/deny -->
-                      <button
-                        onclick={() => respondToCancellation(agreement.agreementId, true)}
-                        class="flex items-center gap-1 text-xs px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-                      >
-                        <Check class="w-3 h-3" />
-                        Approve Cancel
-                      </button>
-                      <button
-                        onclick={() => respondToCancellation(agreement.agreementId, false)}
-                        class="text-xs px-3 py-1.5 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                      >
-                        Deny
-                      </button>
-                    {:else if agreement.cancelRequestedBy === myPeerId}
-                      <!-- We requested cancellation — waiting for other party -->
-                      <span class="text-xs text-orange-600 dark:text-orange-400 italic">
-                        Cancellation pending...
-                      </span>
-                    {:else if agreement.status === 'proposed' && isClient}
-                      <button
-                        onclick={() => requestCancellation(agreement.agreementId)}
-                        class="text-xs px-3 py-1.5 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    {:else if agreement.status === 'accepted' || agreement.status === 'active'}
-                      <button
-                        onclick={() => requestCancellation(agreement.agreementId)}
-                        class="text-xs px-3 py-1.5 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
-                      >
-                        Request Cancellation
-                      </button>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
+      {/if}
+      {#if activeAgreements.filter(a => a.status === 'active').length > 0}
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+          <FileText class="w-3.5 h-3.5" />
+          {activeAgreements.filter(a => a.status === 'active').length} active
         </div>
       {/if}
     </div>
+  </div>
 
-    <!-- ──────────── Files I'm Hosting ──────────── -->
-    {#if !loadingAgreements && hostedFiles.length > 0}
-      <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
-        <div class="flex items-center gap-3 mb-4">
-          <div class="p-2 bg-green-100 dark:bg-green-900 rounded-lg">
-            <HardDrive class="w-5 h-5 text-green-600 dark:text-green-400" />
-          </div>
-          <div>
-            <h2 class="font-semibold text-lg dark:text-white">Files I'm Hosting</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              {hostedFiles.length} file{hostedFiles.length !== 1 ? 's' : ''} being seeded on behalf of other peers
-            </p>
-          </div>
-        </div>
+  <!-- Server Status Bar (always visible) -->
+  <HostingServerBar
+    serverRunning={serverStatus.running}
+    serverAddress={serverStatus.address}
+    {port}
+    {isStartingServer}
+    onStartServer={startServer}
+    onStopServer={stopServer}
+    onPortChange={(p) => port = p}
+  />
 
-        <div class="space-y-2">
-          {#each hostedFiles as file (file.fileHash + file.agreementId)}
-            <div class="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-100 dark:border-gray-600">
-              <div class="flex items-center gap-3 min-w-0">
-                <FileText class="w-4 h-4 text-gray-400 flex-shrink-0" />
-                <div class="min-w-0">
-                  <p class="text-sm font-mono text-gray-700 dark:text-gray-300 truncate">
-                    {file.fileHash}
-                  </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    For {formatPeerId(file.clientPeerId)}
-                    {#if file.expiresAt}
-                      · {timeRemaining(file.expiresAt)} remaining
-                    {/if}
-                  </p>
-                </div>
-              </div>
-              <span class="px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 flex-shrink-0">
-                Seeding
-              </span>
-            </div>
-          {/each}
-        </div>
-      </div>
-    {/if}
-
-    <!-- ──────────── Available Hosts ──────────── -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-purple-100 dark:bg-purple-900 rounded-lg">
-            <Users class="w-5 h-5 text-purple-600 dark:text-purple-400" />
-          </div>
-          <div>
-            <h2 class="font-semibold text-lg dark:text-white">Available Hosts</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              {#if loadingHosts}
-                Searching network...
-              {:else}
-                {hosts.length} host{hosts.length !== 1 ? 's' : ''} on the network
-              {/if}
-            </p>
-          </div>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <!-- Sort selector -->
-          <select
-            bind:value={sortBy}
-            class="text-sm bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-1.5 text-gray-700 dark:text-gray-300"
-          >
-            <option value="reputation">Reputation (Elo)</option>
-            <option value="price">Price (low)</option>
-            <option value="storage">Storage (high)</option>
-          </select>
-          <button
-            onclick={refreshHosts}
-            disabled={loadingHosts}
-            class="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
-            title="Refresh host list"
-          >
-            <RefreshCw class="w-4 h-4 {loadingHosts ? 'animate-spin' : ''}" />
-          </button>
-        </div>
-      </div>
-
-      {#if loadingHosts}
-        <div class="flex items-center justify-center py-12">
-          <Loader2 class="w-6 h-6 text-gray-400 animate-spin" />
-          <span class="ml-2 text-sm text-gray-400">Discovering hosts on the network...</span>
-        </div>
-      {:else if sortedHostList.length === 0}
-        <div class="text-center py-12">
-          <Users class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-          <p class="text-gray-500 dark:text-gray-400">No hosts available</p>
-          <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">
-            When peers offer hosting services, they will appear here
-          </p>
-        </div>
-      {:else}
-        <div class="space-y-3">
-          {#each sortedHostList as host (host.advertisement.peerId)}
-            <div class="p-4 rounded-xl border border-gray-100 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50 hover:border-gray-200 dark:hover:border-gray-500 transition-colors">
-              <div class="flex items-start justify-between gap-4">
-                <div class="min-w-0 flex-1">
-                  <!-- Peer ID + online indicator -->
-                  <div class="flex items-center gap-2">
-                    <span class="inline-block w-2 h-2 rounded-full flex-shrink-0 {host.isOnline ? 'bg-green-500' : 'bg-gray-400'}"></span>
-                    <span class="text-sm font-medium text-gray-900 dark:text-white font-mono">
-                      {formatPeerId(host.advertisement.peerId)}
-                    </span>
-                    <!-- Reputation -->
-                    <div class="inline-flex items-center px-2 py-0.5 rounded-full bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 text-xs font-medium">
-                      Elo {host.reputationScore.toFixed(1)}
-                    </div>
-                  </div>
-
-                  <!-- Metrics row -->
-                  <div class="flex items-center gap-4 mt-2 flex-wrap">
-                    <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                      <HardDrive class="w-3.5 h-3.5" />
-                      {formatBytes(host.availableStorageBytes)} available
-                    </span>
-                    <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                      <Coins class="w-3.5 h-3.5" />
-                      {formatWeiAsChi(host.advertisement.pricePerMbPerDayWei)}/MB/day
-                    </span>
-                    <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                      <Shield class="w-3.5 h-3.5" />
-                      Min deposit: {formatWeiAsChi(host.advertisement.minDepositWei)}
-                    </span>
-                    <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                      <Clock class="w-3.5 h-3.5" />
-                      {host.advertisement.uptimePercent.toFixed(0)}% uptime
-                    </span>
-                  </div>
-                </div>
-
-                <!-- Action -->
-                <button
-                  onclick={() => openProposalModal(host)}
-                  class="flex items-center gap-1.5 px-4 py-2 text-sm bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors flex-shrink-0"
-                >
-                  <Rocket class="w-3.5 h-3.5" />
-                  Propose
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
+  <!-- Tab bar -->
+  <div class="flex gap-1 bg-gray-100 dark:bg-gray-800/60 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
+    <button
+      onclick={() => activeTab = 'sites'}
+      role="tab"
+      aria-selected={activeTab === 'sites'}
+      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
+        {activeTab === 'sites'
+          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+    >
+      <Server class="w-4 h-4" />
+      <span class="hidden sm:inline">My Sites</span>
+    </button>
+    <button
+      onclick={() => activeTab = 'marketplace'}
+      role="tab"
+      aria-selected={activeTab === 'marketplace'}
+      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
+        {activeTab === 'marketplace'
+          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+    >
+      <Users class="w-4 h-4" />
+      <span class="hidden sm:inline">Marketplace</span>
+    </button>
+    <button
+      onclick={() => activeTab = 'agreements'}
+      role="tab"
+      aria-selected={activeTab === 'agreements'}
+      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
+        {activeTab === 'agreements'
+          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+    >
+      <Shield class="w-4 h-4" />
+      <span class="hidden sm:inline">Agreements</span>
+      {#if incomingProposals.length > 0}
+        <span class="ml-0.5 min-w-[1.25rem] px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-blue-500 text-white leading-none text-center animate-pulse">
+          {incomingProposals.length}
+        </span>
       {/if}
-    </div>
+    </button>
+  </div>
+
+  <!-- Tab content -->
+  <div role="tabpanel" id="tabpanel-{activeTab}" aria-labelledby="tab-{activeTab}" class="space-y-5">
+  {#if activeTab === 'sites'}
+    <HostingSiteCreator
+      {newSiteName}
+      {selectedFiles}
+      {isDragOver}
+      {isCreating}
+      onNameChange={(name) => newSiteName = name}
+      onSelectFiles={selectFiles}
+      onSelectFromDrive={openDrivePickerForSite}
+      onRemoveFile={removeSelectedFile}
+      onCreateSite={createSite}
+    />
+    <HostingSiteList
+      {sites}
+      serverAddress={serverStatus.address}
+      {port}
+      {publishingStates}
+      onPublish={publishToRelay}
+      onUnpublish={unpublishFromRelay}
+      onCopyUrl={copySiteUrl}
+      onOpenSite={openSite}
+      onDeleteSite={deleteSite}
+    />
+  {:else if activeTab === 'marketplace'}
+    {#if marketplaceError}
+      <div class="text-center py-20">
+        <AlertCircle class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
+        <p class="text-gray-500 dark:text-gray-400">{marketplaceError}</p>
+      </div>
+    {:else}
+      <HostingMarketplace
+        {hosts}
+        {loadingHosts}
+        {hostingPublishing}
+        {hostingPublished}
+        connected={$networkConnected}
+        {sortBy}
+        onSortChange={(s) => sortBy = s}
+        onRefreshHosts={refreshHosts}
+        onPropose={openProposalModal}
+        onToggleEnabled={toggleHostingEnabled}
+        onPublish={publishHosting}
+        onUnpublish={unpublishHosting}
+      />
+    {/if}
+  {:else if activeTab === 'agreements'}
+    <HostingAgreements
+      {myAgreements}
+      {loadingAgreements}
+      {myPeerId}
+      {incomingProposals}
+      {activeAgreements}
+      {hostedFiles}
+      onRespondToAgreement={(id, accept) => respondToAgreement(id, accept)}
+      onRequestCancellation={requestCancellation}
+      onRespondToCancellation={respondToCancellation}
+    />
   {/if}
+  </div>
 </div>
 
-<!-- ──────────── Proposal Modal ──────────── -->
+<!-- Proposal Modal -->
 {#if proposalHost}
+  <HostingProposalModal
+    {proposalHost}
+    {proposalFileHashes}
+    {proposalDurationDays}
+    {isProposing}
+    driveFiles={proposalDriveFiles}
+    showDrivePicker={showProposalDrivePicker}
+    {publishingDriveFile}
+    onFileHashesChange={(v) => proposalFileHashes = v}
+    onDurationChange={(d) => proposalDurationDays = d}
+    onLoadDriveFiles={loadProposalDriveFiles}
+    onAddDriveFile={addProposalDriveFile}
+    onSendProposal={sendProposal}
+    onClose={() => proposalHost = null}
+  />
+{/if}
+
+<!-- Drive File Picker for Site Creation -->
+{#if showDrivePickerForSite}
+  <HostingDrivePicker
+    files={drivePickerFiles}
+    loading={drivePickerLoading}
+    onSelect={addDriveFilesToSite}
+    onClose={() => showDrivePickerForSite = false}
+  />
+{/if}
+
+<!-- Delete site confirmation -->
+{#if deleteConfirm}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-    onclick={(e) => { if (e.target === e.currentTarget) proposalHost = null; }}
-    role="dialog"
-    aria-modal="true"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    onclick={() => deleteConfirm = null}
+    onkeydown={(e) => { if (e.key === 'Escape') deleteConfirm = null; }}
   >
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-lg p-6">
-      <h3 class="text-lg font-semibold dark:text-white mb-1">Propose Hosting Agreement</h3>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-5">
-        Host: <span class="font-mono">{formatPeerId(proposalHost.advertisement.peerId)}</span>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Delete Site</h3>
+      <p class="text-sm text-gray-600 dark:text-gray-400 mb-1">
+        Are you sure you want to delete <strong class="text-gray-900 dark:text-white">"{deleteConfirm.name}"</strong>?
       </p>
-
-      <!-- Host summary -->
-      <div class="flex items-center gap-4 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 mb-5 text-xs text-gray-500 dark:text-gray-400">
-        <span class="flex items-center gap-1">
-          <Coins class="w-3.5 h-3.5" />
-          {formatWeiAsChi(proposalHost.advertisement.pricePerMbPerDayWei)}/MB/day
-        </span>
-        <span class="flex items-center gap-1">
-          <Shield class="w-3.5 h-3.5" />
-          Deposit: {formatWeiAsChi(proposalHost.advertisement.minDepositWei)}
-        </span>
-        <span class="flex items-center gap-1">
-          <HardDrive class="w-3.5 h-3.5" />
-          {formatBytes(proposalHost.availableStorageBytes)}
-        </span>
-      </div>
-
-      <!-- File hashes -->
-      <div class="flex items-center justify-between mb-1.5">
-        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-          File Hashes (one per line)
-        </label>
+      <p class="text-sm text-amber-600 dark:text-amber-400 mb-4">This cannot be undone.</p>
+      <div class="flex justify-end gap-3">
         <button
-          onclick={loadDriveFiles}
-          class="flex items-center gap-1 text-xs text-primary-600 dark:text-primary-400 hover:underline"
-        >
-          <FolderOpen class="w-3.5 h-3.5" />
-          Select from Drive
-        </button>
-      </div>
-      <textarea
-        bind:value={proposalFileHashes}
-        rows="4"
-        placeholder="Enter file hashes to host, one per line..."
-        class="w-full p-3 text-sm font-mono bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
-      ></textarea>
-
-      {#if showDrivePicker}
-        <div class="mt-2 max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/50">
-          {#if driveFiles.length === 0}
-            <p class="text-xs text-gray-400 dark:text-gray-500 p-3 text-center">No files in Drive</p>
-          {:else}
-            {#each driveFiles as file (file.id)}
-              <button
-                onclick={() => addDriveFile(file.id, file.name)}
-                disabled={publishingDriveFile === file.id}
-                class="flex items-center justify-between w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors border-b border-gray-100 dark:border-gray-600 last:border-b-0 disabled:opacity-50"
-              >
-                <div class="flex items-center gap-2 min-w-0">
-                  <FileText class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                  <span class="truncate text-gray-700 dark:text-gray-300">{file.name}</span>
-                </div>
-                <div class="flex items-center gap-2 flex-shrink-0">
-                  <span class="text-xs text-gray-400">{formatBytes(file.size)}</span>
-                  {#if publishingDriveFile === file.id}
-                    <Loader2 class="w-3.5 h-3.5 text-gray-400 animate-spin" />
-                  {/if}
-                </div>
-              </button>
-            {/each}
-          {/if}
-        </div>
-      {/if}
-
-      <!-- Duration -->
-      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mt-4 mb-1.5">
-        Duration: {proposalDurationDays} day{proposalDurationDays !== 1 ? 's' : ''}
-      </label>
-      <input
-        type="range"
-        bind:value={proposalDurationDays}
-        min="1"
-        max="365"
-        step="1"
-        class="w-full accent-primary-600"
-      />
-      <div class="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-        <span>1 day</span>
-        <span>365 days</span>
-      </div>
-
-      <!-- Cost summary -->
-      <div class="mt-4 p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 space-y-1.5">
-        <div class="flex justify-between text-sm">
-          <span class="text-gray-500 dark:text-gray-400">Deposit</span>
-          <span class="font-medium dark:text-white">{formatWeiAsChi(proposalHost.advertisement.minDepositWei)}</span>
-        </div>
-        <p class="text-xs text-gray-400 dark:text-gray-500">
-          Total cost depends on file sizes (calculated after host accepts)
-        </p>
-      </div>
-
-      <!-- Actions -->
-      <div class="flex justify-end gap-3 mt-5">
+          onclick={() => deleteConfirm = null}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+        >Cancel</button>
         <button
-          onclick={() => proposalHost = null}
-          class="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          onclick={sendProposal}
-          disabled={isProposing || !proposalFileHashes.trim()}
-          class="flex items-center gap-2 px-4 py-2 text-sm bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {#if isProposing}
-            <Loader2 class="w-4 h-4 animate-spin" />
-            Sending...
-          {:else}
-            <Send class="w-4 h-4" />
-            Send Proposal
-          {/if}
-        </button>
+          onclick={confirmDeleteSite}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition"
+        >Delete</button>
       </div>
     </div>
   </div>

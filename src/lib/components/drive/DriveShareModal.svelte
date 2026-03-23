@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Copy, Check, X, Link, Lock, Globe, Trash2, Loader2, Eye, EyeOff } from 'lucide-svelte';
+  import { Copy, Check, X, Link, Globe, Trash2, Loader2, Eye, EyeOff } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import type { ShareLink } from '$lib/services/driveApiService';
   import { toasts } from '$lib/toastStore';
@@ -14,7 +14,6 @@
     onClose: () => void;
   } = $props();
 
-  let password = $state('');
   let isPublic = $state(true);
   let creating = $state(false);
   let copied = $state<string | null>(null);
@@ -22,6 +21,8 @@
   const existingShares = $derived(driveStore.getSharesForItem(item.id, manifest));
   const currentItem = $derived(manifest.items.find(i => i.id === item.id));
   const isItemPublic = $derived(currentItem?.isPublic ?? true);
+  const itemPrice = $derived(currentItem?.priceChi ?? item.priceChi);
+  const hasPrice = $derived(itemPrice && parseFloat(itemPrice) > 0);
 
   let justCreatedUrl = $state<string | null>(null);
   let toggling = $state(false);
@@ -30,31 +31,27 @@
     toggling = true;
     try {
       await driveStore.toggleVisibility(item.id);
-      toasts.show(isItemPublic ? 'File is now private' : 'File is now public', 'success');
+      // Silent — toggle state is reflected in the UI
     } finally {
       toggling = false;
     }
   }
 
   async function createLink() {
+    const price = hasPrice ? itemPrice! : '0';
+
     creating = true;
     try {
-      const share = await driveStore.createShareLink(
-        item.id,
-        password || undefined,
-        isPublic,
-      );
+      const share = await driveStore.createShareLink(item.id, price, isPublic);
       if (share) {
         const url = driveStore.getShareUrl(share.id);
         justCreatedUrl = url;
-        // Auto-copy to clipboard
         try {
           await navigator.clipboard.writeText(url);
-          toasts.show('Link created & copied to clipboard!', 'success');
+          toasts.show('Share link copied', 'success');
         } catch {
-          toasts.show('Link created! Copy it below.', 'success');
+          toasts.show('Share link created', 'success');
         }
-        password = '';
       }
     } finally {
       creating = false;
@@ -74,7 +71,7 @@
 
   async function revokeLink(share: ShareLink) {
     await driveStore.revokeShareLink(share.id);
-    toasts.show('Share link revoked', 'success');
+    // Silent — link disappears from the list
   }
 
   function formatDate(ts: number): string {
@@ -95,7 +92,6 @@
       </button>
     </div>
 
-    <!-- Visibility toggle (only show when shares exist) -->
     {#if existingShares.length > 0}
       <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg mb-4">
         <div class="flex items-center gap-2">
@@ -119,29 +115,14 @@
       </div>
     {/if}
 
-    <!-- Create new share link -->
     <div class="space-y-3 mb-6">
       <p class="text-sm text-gray-600 dark:text-gray-400">
-        Create a shareable link. Anyone with the link can download this {item.type}.
+        {#if hasPrice}
+          Share at <strong class="text-emerald-600 dark:text-emerald-400">{itemPrice} CHI</strong>. Recipients must pay before previewing or downloading.
+        {:else}
+          Share for free. Use "Edit Price" from the right-click menu to set a price.
+        {/if}
       </p>
-
-      <div class="flex items-center gap-3">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" bind:checked={isPublic} class="rounded border-gray-300 dark:border-gray-600" />
-          <Globe class="w-4 h-4 text-gray-500" />
-          <span class="text-sm text-gray-700 dark:text-gray-300">Public</span>
-        </label>
-      </div>
-
-      <div class="flex items-center gap-2">
-        <Lock class="w-4 h-4 text-gray-400 shrink-0" />
-        <input
-          type="password"
-          placeholder="Optional password"
-          bind:value={password}
-          class="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-      </div>
 
       <button
         onclick={createLink}
@@ -153,7 +134,7 @@
           Creating...
         {:else}
           <Link class="w-4 h-4" />
-          Create Link
+          Create Share Link
         {/if}
       </button>
 
@@ -173,9 +154,9 @@
             onclick={async () => {
               try {
                 await navigator.clipboard.writeText(justCreatedUrl!);
-                toasts.show('Copied!', 'success');
+                toasts.show('Link copied', 'success');
               } catch {
-                toasts.show('Failed to copy', 'error');
+                toasts.show('Could not copy to clipboard', 'error');
               }
             }}
             class="p-1.5 hover:bg-green-100 dark:hover:bg-green-800 rounded transition shrink-0"
@@ -187,7 +168,6 @@
       {/if}
     </div>
 
-    <!-- Existing share links -->
     {#if existingShares.length > 0}
       <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
         <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
@@ -200,16 +180,19 @@
                 <code class="text-xs text-gray-600 dark:text-gray-400 font-mono truncate block">
                   {driveStore.getShareUrl(share.id)}
                 </code>
-                <div class="flex items-center gap-2 mt-0.5">
+                <div class="flex flex-wrap items-center gap-2 mt-0.5">
                   <span class="text-xs text-gray-400">
                     Created {formatDate(share.createdAt)}
                   </span>
-                  {#if share.hasPassword}
-                    <Lock class="w-3 h-3 text-yellow-500" />
-                  {/if}
                   {#if share.isPublic}
                     <Globe class="w-3 h-3 text-green-500" />
                   {/if}
+                  <span class="text-xs text-emerald-500">
+                    {share.priceChi} CHI
+                  </span>
+                  <span class="text-xs text-gray-500 break-all">
+                    to {share.recipientWallet}
+                  </span>
                   <span class="text-xs text-gray-400">
                     {share.downloadCount} download{share.downloadCount !== 1 ? 's' : ''}
                   </span>

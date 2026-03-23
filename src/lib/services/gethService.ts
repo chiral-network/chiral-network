@@ -55,6 +55,7 @@ export interface GpuMiningCapabilities {
   devices: GpuDevice[];
   running: boolean;
   activeDevices: string[];
+  utilizationPercent: number;
   lastError: string | null;
 }
 
@@ -62,6 +63,7 @@ export interface GpuMiningStatus {
   running: boolean;
   hashRate: number;
   activeDevices: string[];
+  utilizationPercent: number;
   lastError: string | null;
 }
 
@@ -192,9 +194,10 @@ class GethService {
   /**
    * Start GPU mining with optional device ID allowlist
    */
-  async startGpuMining(deviceIds?: string[]): Promise<void> {
+  async startGpuMining(deviceIds?: string[], utilizationPercent: number = 100): Promise<void> {
     await invoke('start_gpu_mining', {
       deviceIds: deviceIds && deviceIds.length > 0 ? deviceIds : null,
+      utilizationPercent,
     });
   }
 

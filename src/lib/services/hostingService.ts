@@ -99,7 +99,7 @@ class HostingService {
     let myPeerId: string | null = null;
     try {
       myPeerId = await invoke<string | null>('get_peer_id');
-    } catch {}
+    } catch { /* peer ID unavailable — don't filter self */ }
 
     // Fetch advertisements
     const ads: { entry: typeof registry[0]; ad: HostAdvertisement }[] = [];
@@ -279,7 +279,7 @@ class HostingService {
         for (const id of diskIds) {
           addToIndex(id);
         }
-      } catch {}
+      } catch { /* disk index sync is best-effort */ }
     }
 
     const ids = loadAgreementIndex();

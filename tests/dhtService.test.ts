@@ -93,6 +93,31 @@ describe('DhtService', () => {
 
       expect(mockInvoke).toHaveBeenCalledWith('get_peer_id');
     });
+
+    it('should re-run drive reseed when bootstrap completes', async () => {
+      const callbacks: Record<string, (event: unknown) => void> = {};
+      vi.mocked(listen).mockImplementation(async (eventName: string, callback: (event: unknown) => void) => {
+        callbacks[eventName] = callback;
+        return mockUnlisten;
+      });
+      mockInvoke.mockResolvedValue('ok');
+
+      const { dhtService } = await import('$lib/dhtService');
+      await dhtService.start();
+
+      const initialReseedCalls = mockInvoke.mock.calls.filter(
+        (call) => call[0] === 'reseed_drive_files',
+      ).length;
+      expect(initialReseedCalls).toBe(1);
+
+      callbacks['dht-bootstrap-complete']?.({} as unknown);
+      await Promise.resolve();
+
+      const reseedCallsAfterBootstrap = mockInvoke.mock.calls.filter(
+        (call) => call[0] === 'reseed_drive_files',
+      ).length;
+      expect(reseedCallsAfterBootstrap).toBe(2);
+    });
   });
 
   describe('stop()', () => {
@@ -122,7 +147,7 @@ describe('DhtService', () => {
       await dhtService.start();
       await dhtService.stop();
 
-      // Each of the 4 event listeners should have been unlistened
+      // Each event listener should have been unlistened
       expect(mockUnlisten).toHaveBeenCalled();
     });
 
