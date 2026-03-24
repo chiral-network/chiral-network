@@ -10,6 +10,7 @@
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import { AlertTriangle } from 'lucide-svelte';
+  import { cancelLogout, confirmLogout, logoutModalOpen } from '$lib/logout';
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
   import ChiralDropPage from './pages/ChiralDrop.svelte';
@@ -529,6 +530,51 @@
     onClose={() => toasts.remove(toast.id)}
   />
 {/each}
+
+<!-- Logout confirmation modal -->
+{#if $logoutModalOpen}
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<div
+  class="fixed inset-0 bg-black/50 flex items-center justify-center z-[9998]"
+  role="dialog"
+  aria-modal="true"
+  tabindex="-1"
+  onclick={cancelLogout}
+  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') cancelLogout(); }}
+>
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md mx-4"
+    role="document"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
+  >
+    <div class="flex items-center gap-3 mb-4">
+      <div class="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+        <AlertTriangle class="w-6 h-6 text-red-600 dark:text-red-400" />
+      </div>
+      <h3 class="text-lg font-semibold dark:text-white">Logout</h3>
+    </div>
+    <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
+      Are you sure you want to logout? Make sure you have saved your recovery phrase or exported your wallet before logging out.
+    </p>
+    <div class="flex gap-3">
+      <button
+        onclick={cancelLogout}
+        class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+      >
+        Cancel
+      </button>
+      <button
+        onclick={confirmLogout}
+        class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+      >
+        Logout
+      </button>
+    </div>
+  </div>
+</div>
+{/if}
 
 <!-- Close confirmation modal -->
 {#if showCloseConfirm}
