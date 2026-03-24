@@ -22,6 +22,7 @@
   let totalEarnedWei = $state('0');
   let loading = $state(true);
   let error = $state<string | null>(null);
+  let hasLoadedReputation = $state(false);
 
   const EVENTS_PER_PAGE = 6;
   let currentPage = $state(0);
@@ -82,6 +83,7 @@
       error = `Failed to load reputation: ${message}`;
     } finally {
       loading = false;
+      hasLoadedReputation = true;
     }
   }
 
@@ -107,12 +109,13 @@
   });
 </script>
 
-{#if loading}
-  <div class="flex items-center justify-center py-12">
+<div class="min-h-[22rem]">
+{#if loading && !hasLoadedReputation}
+  <div class="flex items-center justify-center py-12 min-h-[22rem]">
     <Loader2 class="w-8 h-8 text-gray-400 animate-spin" />
   </div>
-{:else if error}
-  <div class="text-center py-12">
+{:else if error && events.length === 0}
+  <div class="text-center py-12 min-h-[22rem] flex flex-col items-center justify-center">
     <ShieldCheck class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
     <p class="text-gray-500 dark:text-gray-400">{error}</p>
   </div>
@@ -123,6 +126,12 @@
         <div class="text-4xl font-bold dark:text-white">{elo.toFixed(1)}</div>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Elo (base {baseElo})</p>
       </div>
+      {#if loading && hasLoadedReputation}
+        <span class="inline-flex items-center gap-1 text-xs text-yellow-600 dark:text-yellow-400">
+          <Loader2 class="w-3.5 h-3.5 animate-spin" />
+          Refreshing
+        </span>
+      {/if}
       <button
         onclick={() => loadReputation()}
         disabled={loading}
@@ -148,6 +157,12 @@
       </div>
     </div>
   </div>
+
+  {#if error}
+    <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+      {error}
+    </div>
+  {/if}
 
   {#if events.length === 0}
     <div class="text-center py-12">
@@ -223,3 +238,4 @@
     {/if}
   {/if}
 {/if}
+</div>
