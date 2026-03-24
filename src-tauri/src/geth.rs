@@ -1927,7 +1927,20 @@ impl GethProcess {
             }
         }
 
-        let message = if failures.is_empty() {
+        // Check for known issues and provide actionable messages
+        let all_failures = failures.join("\n");
+        let message = if all_failures.contains("invalid device symbol") {
+            // CUDA compute capability mismatch: ethminer 0.18.0 only supports up to ~Compute 7.5.
+            // Newer GPUs (RTX 30xx=8.6, 40xx=8.9, 50xx=12.0) are incompatible.
+            "GPU mining is not available: your GPU is too new for the bundled miner (ethminer 0.18.0).\n\
+             This affects RTX 30-series and newer NVIDIA GPUs.\n\
+             Use CPU mining instead, or set CHIRAL_GPU_MINER_PATH to a compatible ethash miner."
+                .to_string()
+        } else if all_failures.contains("No usable mining devices found") {
+            "GPU mining is not available: no compatible GPU detected.\n\
+             Make sure your GPU drivers are installed. Use CPU mining as an alternative."
+                .to_string()
+        } else if failures.is_empty() {
             "GPU miner could not start with any backend".to_string()
         } else {
             format!(
