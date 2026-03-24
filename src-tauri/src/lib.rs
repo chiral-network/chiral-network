@@ -1872,7 +1872,8 @@ async fn start_download(
         );
 
         // Process payment to burn address
-        let payment_result = send_transaction(
+        let payment_result = send_transaction_to_rpc(
+            default_rpc_endpoint(),
             wallet_addr.to_string(),
             BURN_ADDRESS.to_string(),
             cost_chi.clone(),
@@ -2885,8 +2886,15 @@ fn default_rpc_endpoint() -> String {
 }
 
 #[tauri::command]
-async fn get_wallet_balance(address: String) -> Result<WalletBalanceResult, String> {
-    let rpc_endpoint = default_rpc_endpoint();
+async fn get_wallet_balance(
+    state: tauri::State<'_, AppState>,
+    address: String,
+) -> Result<WalletBalanceResult, String> {
+    // Use local Geth if running (where mining rewards live), fall back to remote
+    let rpc_endpoint = {
+        let geth = state.geth.lock().await;
+        geth.effective_rpc_endpoint()
+    };
     println!(
         "[get_wallet_balance] Querying balance for {} from RPC: {}",
         address, rpc_endpoint
@@ -3178,6 +3186,22 @@ fn encode_signed_tx(
 /// Send a transaction from one address to another (signs locally)
 #[tauri::command]
 async fn send_transaction(
+    state: tauri::State<'_, AppState>,
+    from_address: String,
+    to_address: String,
+    amount: String,
+    private_key: String,
+) -> Result<SendTransactionResult, String> {
+    let rpc_endpoint = {
+        let geth = state.geth.lock().await;
+        geth.effective_rpc_endpoint()
+    };
+    send_transaction_to_rpc(rpc_endpoint, from_address, to_address, amount, private_key).await
+}
+
+/// Core transaction sending logic — takes an explicit RPC endpoint
+async fn send_transaction_to_rpc(
+    rpc_endpoint: String,
     from_address: String,
     to_address: String,
     amount: String,
@@ -3207,7 +3231,7 @@ async fn send_transaction(
     });
 
     let nonce_response = client
-        .post(&default_rpc_endpoint())
+        .post(&rpc_endpoint)
         .json(&nonce_payload)
         .send()
         .await
@@ -3234,7 +3258,7 @@ async fn send_transaction(
     });
 
     let balance_response = client
-        .post(&default_rpc_endpoint())
+        .post(&rpc_endpoint)
         .json(&balance_payload)
         .send()
         .await
@@ -3263,7 +3287,7 @@ async fn send_transaction(
     });
 
     let gas_price_response = client
-        .post(&default_rpc_endpoint())
+        .post(&rpc_endpoint)
         .json(&gas_price_payload)
         .send()
         .await
@@ -3376,7 +3400,7 @@ async fn send_transaction(
     });
 
     let send_response = client
-        .post(&default_rpc_endpoint())
+        .post(&rpc_endpoint)
         .json(&send_payload)
         .send()
         .await
@@ -3405,7 +3429,7 @@ async fn send_transaction(
 
                 // Re-send the same signed transaction
                 let retry_resp = client
-                    .post(&default_rpc_endpoint())
+                    .post(&rpc_endpoint)
                     .json(&send_payload)
                     .send()
                     .await
@@ -3476,7 +3500,7 @@ async fn send_transaction(
     });
 
     let receipt_response = client
-        .post(&default_rpc_endpoint())
+        .post(&rpc_endpoint)
         .json(&receipt_payload)
         .send()
         .await;
@@ -3523,7 +3547,8 @@ pub async fn send_payment_transaction(
     amount_chi: &str,
     private_key: &str,
 ) -> Result<PaymentResult, String> {
-    let result = send_transaction(
+    let result = send_transaction_to_rpc(
+        default_rpc_endpoint(),
         from_address.to_string(),
         to_address.to_string(),
         amount_chi.to_string(),
@@ -3539,7 +3564,14 @@ pub async fn send_payment_transaction(
 
 /// Get a transaction receipt to check if it has been mined
 #[tauri::command]
-async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+async fn get_transaction_receipt(
+    state: tauri::State<'_, AppState>,
+    tx_hash: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let rpc_endpoint = {
+        let geth = state.geth.lock().await;
+        geth.effective_rpc_endpoint()
+    };
     let client = reqwest::Client::new();
 
     let payload = serde_json::json!({
@@ -3550,7 +3582,7 @@ async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::V
     });
 
     let response = client
-        .post(&default_rpc_endpoint())
+        .post(&rpc_endpoint)
         .json(&payload)
         .send()
         .await
@@ -3774,7 +3806,10 @@ async fn get_transaction_history(
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-    let rpc = default_rpc_endpoint();
+    let rpc = {
+        let geth = state.geth.lock().await;
+        geth.effective_rpc_endpoint()
+    };
 
     // Get the latest block number
     let block_payload = serde_json::json!({
