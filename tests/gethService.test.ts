@@ -249,6 +249,113 @@ describe('gethService', () => {
     });
   });
 
+  describe('mining status edge cases', () => {
+    it('syncing with block 0/0 should not be marked as syncing', async () => {
+      // Backend fix: eth_syncing returns object with 0/0 blocks on startup
+      // The backend now treats this as not-syncing, so status.syncing should be false
+      const mockStatus = {
+        installed: true,
+        running: true,
+        localRunning: true,
+        syncing: false, // Backend correctly sets this to false for 0/0
+        currentBlock: 0,
+        highestBlock: 0,
+        peerCount: 0,
+        chainId: 98765,
+      };
+      mockInvoke.mockResolvedValueOnce(mockStatus);
+      const { gethService, gethStatus } = await import('$lib/services/gethService');
+
+      const result = await gethService.getStatus();
+
+      expect(result.syncing).toBe(false);
+      expect(get(gethStatus)?.syncing).toBe(false);
+    });
+
+    it('syncing with current == highest should not be marked as syncing', async () => {
+      const mockStatus = {
+        installed: true,
+        running: true,
+        localRunning: true,
+        syncing: false, // Backend correctly detects caught-up state
+        currentBlock: 200,
+        highestBlock: 200,
+        peerCount: 3,
+        chainId: 98765,
+      };
+      mockInvoke.mockResolvedValueOnce(mockStatus);
+      const { gethService } = await import('$lib/services/gethService');
+
+      const result = await gethService.getStatus();
+
+      expect(result.syncing).toBe(false);
+      expect(result.currentBlock).toBe(200);
+    });
+
+    it('syncing with current < highest should be marked as syncing', async () => {
+      const mockStatus = {
+        installed: true,
+        running: true,
+        localRunning: true,
+        syncing: true, // Backend detects actual sync in progress
+        currentBlock: 50,
+        highestBlock: 200,
+        peerCount: 3,
+        chainId: 98765,
+      };
+      mockInvoke.mockResolvedValueOnce(mockStatus);
+      const { gethService } = await import('$lib/services/gethService');
+
+      const result = await gethService.getStatus();
+
+      expect(result.syncing).toBe(true);
+      expect(result.currentBlock).toBe(50);
+      expect(result.highestBlock).toBe(200);
+    });
+
+    it('mining status should show hash rate when mining', async () => {
+      const status = { mining: true, hashRate: 5000000, minerAddress: '0xABC', totalMinedWei: '0', totalMinedChi: 0.0 };
+      mockInvoke.mockResolvedValueOnce(status);
+      const { gethService, miningStatus } = await import('$lib/services/gethService');
+
+      const result = await gethService.getMiningStatus();
+
+      expect(result.mining).toBe(true);
+      expect(result.hashRate).toBe(5000000);
+      expect(get(miningStatus)?.hashRate).toBe(5000000);
+    });
+
+    it('mining status should show zero hash rate when not mining', async () => {
+      const status = { mining: false, hashRate: 0, minerAddress: null, totalMinedWei: '0', totalMinedChi: 0.0 };
+      mockInvoke.mockResolvedValueOnce(status);
+      const { gethService, miningStatus } = await import('$lib/services/gethService');
+
+      const result = await gethService.getMiningStatus();
+
+      expect(result.mining).toBe(false);
+      expect(result.hashRate).toBe(0);
+      expect(get(miningStatus)?.minerAddress).toBeNull();
+    });
+
+    it('startMining should propagate backend errors', async () => {
+      mockInvoke.mockRejectedValueOnce('Cannot mine: local Geth node is not running. Start the node from the Network page first.');
+      const { gethService } = await import('$lib/services/gethService');
+
+      await expect(gethService.startMining(4)).rejects.toBe(
+        'Cannot mine: local Geth node is not running. Start the node from the Network page first.'
+      );
+    });
+
+    it('setMinerAddress should propagate backend errors when Geth not running', async () => {
+      mockInvoke.mockRejectedValueOnce('Cannot set miner address: local Geth node is not running');
+      const { gethService } = await import('$lib/services/gethService');
+
+      await expect(gethService.setMinerAddress('0x1234')).rejects.toBe(
+        'Cannot set miner address: local Geth node is not running'
+      );
+    });
+  });
+
   describe('getChainId', () => {
     it('should return chain ID from invoke', async () => {
       mockInvoke.mockResolvedValueOnce(13337);
