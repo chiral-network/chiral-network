@@ -1509,6 +1509,9 @@ impl GethProcess {
             Ok(result) => {
                 if result.is_boolean() && !result.as_bool().unwrap_or(false) {
                     (false, 0u64, 0u64)
+                } else if result.is_null() {
+                    // null means not syncing (some Geth versions)
+                    (false, 0, 0)
                 } else if let Some(obj) = result.as_object() {
                     let current = u64::from_str_radix(
                         obj.get("currentBlock")
@@ -1526,7 +1529,10 @@ impl GethProcess {
                         16,
                     )
                     .unwrap_or(0);
-                    (true, current, highest)
+                    // Not really syncing if both are 0 (node just started, no sync
+                    // info yet) or if current has caught up to highest.
+                    let actually_syncing = highest > 0 && current < highest;
+                    (actually_syncing, current, highest)
                 } else {
                     (false, 0, 0)
                 }
@@ -3471,5 +3477,105 @@ m 12:00:12|cuda-0  Speed 41.25 Mh/s
         assert_eq!(progress.total, 10485760);
         assert_eq!(progress.percentage, 50.0);
         assert!(progress.status.contains("5.0 MB"));
+    }
+
+    // ========================================================================
+    // Syncing logic tests — verify eth_syncing response parsing
+    // ========================================================================
+
+    /// Helper: simulates the syncing parsing logic from get_status
+    fn parse_syncing_result(result: serde_json::Value) -> (bool, u64, u64) {
+        if result.is_boolean() && !result.as_bool().unwrap_or(false) {
+            (false, 0u64, 0u64)
+        } else if result.is_null() {
+            (false, 0, 0)
+        } else if let Some(obj) = result.as_object() {
+            let current = u64::from_str_radix(
+                obj.get("currentBlock")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0x0")
+                    .trim_start_matches("0x"),
+                16,
+            )
+            .unwrap_or(0);
+            let highest = u64::from_str_radix(
+                obj.get("highestBlock")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0x0")
+                    .trim_start_matches("0x"),
+                16,
+            )
+            .unwrap_or(0);
+            let actually_syncing = highest > 0 && current < highest;
+            (actually_syncing, current, highest)
+        } else {
+            (false, 0, 0)
+        }
+    }
+
+    #[test]
+    fn test_syncing_false_boolean() {
+        let result = serde_json::json!(false);
+        let (syncing, current, highest) = parse_syncing_result(result);
+        assert!(!syncing);
+        assert_eq!(current, 0);
+        assert_eq!(highest, 0);
+    }
+
+    #[test]
+    fn test_syncing_null_means_not_syncing() {
+        let result = serde_json::Value::Null;
+        let (syncing, _, _) = parse_syncing_result(result);
+        assert!(!syncing);
+    }
+
+    #[test]
+    fn test_syncing_object_both_zero_means_not_syncing() {
+        // Node just started, no sync info yet — should NOT be marked as syncing
+        let result = serde_json::json!({
+            "currentBlock": "0x0",
+            "highestBlock": "0x0",
+            "startingBlock": "0x0"
+        });
+        let (syncing, current, highest) = parse_syncing_result(result);
+        assert!(!syncing, "should not be syncing when both blocks are 0");
+        assert_eq!(current, 0);
+        assert_eq!(highest, 0);
+    }
+
+    #[test]
+    fn test_syncing_object_current_equals_highest_means_synced() {
+        // Node has caught up — not syncing anymore
+        let result = serde_json::json!({
+            "currentBlock": "0x64",
+            "highestBlock": "0x64"
+        });
+        let (syncing, current, highest) = parse_syncing_result(result);
+        assert!(!syncing, "should not be syncing when current == highest");
+        assert_eq!(current, 100);
+        assert_eq!(highest, 100);
+    }
+
+    #[test]
+    fn test_syncing_object_behind_means_syncing() {
+        // Node is behind — actually syncing
+        let result = serde_json::json!({
+            "currentBlock": "0x32",
+            "highestBlock": "0xc8"
+        });
+        let (syncing, current, highest) = parse_syncing_result(result);
+        assert!(syncing, "should be syncing when current < highest");
+        assert_eq!(current, 50);
+        assert_eq!(highest, 200);
+    }
+
+    #[test]
+    fn test_syncing_object_missing_fields_means_not_syncing() {
+        // Empty object — treat as not syncing
+        let result = serde_json::json!({});
+        let (syncing, current, highest) = parse_syncing_result(result);
+        assert!(!syncing);
+        assert_eq!(current, 0);
+        assert_eq!(highest, 0);
     }
 }
