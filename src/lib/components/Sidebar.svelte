@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, ChevronLeft, ChevronRight, Server, HardDrive } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { isAuthenticated, walletAccount, networkConnected } from '$lib/stores';
+  import { networkConnected } from '$lib/stores';
+  import { requestLogout } from '$lib/logout';
 
   let { currentPage = 'download', collapsed = $bindable(false) }: { currentPage?: string; collapsed?: boolean } = $props();
 
@@ -18,12 +19,6 @@
     if (typeof window !== 'undefined') {
       localStorage.setItem(COLLAPSED_KEY, String(collapsed));
     }
-  }
-
-  function handleLogout() {
-    isAuthenticated.set(false);
-    walletAccount.set(null);
-    window.location.href = '/';
   }
 
   function navigate(path: string) {
@@ -90,7 +85,7 @@
       {/each}
       <hr class="border-gray-200 dark:border-gray-700" />
       <button
-        onclick={handleLogout}
+        onclick={requestLogout}
         class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
       >
         <LogOut class="w-4 h-4" />
@@ -174,7 +169,7 @@
 
     <!-- Logout -->
     <button
-      onclick={handleLogout}
+      onclick={requestLogout}
       class="flex items-center gap-3 w-full py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm
         {collapsed ? 'justify-center px-0' : 'px-3'}"
       title={collapsed ? 'Logout' : ''}
