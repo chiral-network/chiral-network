@@ -1588,13 +1588,53 @@ impl GethProcess {
 
     /// Start mining (requires local Geth process)
     pub async fn start_mining(&mut self, threads: u32) -> Result<(), String> {
-        if self.child.is_none() {
+        // Check if local Geth process is still alive
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    self.child = None;
+                    LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+                    return Err("Cannot mine: local Geth node has stopped. Restart it from the Network page.".to_string());
+                }
+                Err(_) => {
+                    self.child = None;
+                    LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
+                    return Err("Cannot mine: local Geth node is not responding. Restart it from the Network page.".to_string());
+                }
+                Ok(None) => {} // Still running
+            }
+        } else {
             return Err("Cannot mine: local Geth node is not running. Start the node from the Network page first.".to_string());
         }
+
         // CPU and GPU mining modes are mutually exclusive.
         self.stop_gpu_miner_sync()?;
 
         let client = reqwest::Client::new();
+
+        // Ensure etherbase is set — miner_start won't mine without a coinbase
+        let coinbase = self
+            .rpc_call(&client, "eth_coinbase", serde_json::json!([]))
+            .await;
+        match coinbase {
+            Ok(ref val) => {
+                let addr = val.as_str().unwrap_or("");
+                if addr.is_empty() || addr == "0x0000000000000000000000000000000000000000" {
+                    return Err(
+                        "Cannot mine: no miner address (coinbase) is set. Please set your wallet address first."
+                            .to_string(),
+                    );
+                }
+            }
+            Err(_) => {
+                return Err("Cannot mine: failed to verify miner address".to_string());
+            }
+        }
+
+        // Stop then start to ensure thread count takes effect
+        let _ = self
+            .rpc_call(&client, "miner_stop", serde_json::json!([]))
+            .await;
         self.rpc_call(&client, "miner_start", serde_json::json!([threads]))
             .await
             .map(|_| ())
@@ -1944,105 +1984,87 @@ impl GethProcess {
             }
         };
 
-        // Estimate hashrate from block production:
-        // hashrate ≈ difficulty / block_time
+        // Get actual hashrate from Geth via eth_hashrate RPC
         let mut hash_rate: u64 = 0;
 
         if cpu_mining {
-            // Get current block number
-            let current_block = match self
-                .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
+            // Primary: use eth_hashrate RPC for actual mining speed
+            match self
+                .rpc_call(&client, "eth_hashrate", serde_json::json!([]))
                 .await
             {
                 Ok(result) => {
                     let hex = result.as_str().unwrap_or("0x0");
-                    let block = u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                    println!("⛏️  eth_blockNumber: {} (hex: {})", block, hex);
-                    block
+                    hash_rate =
+                        u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                    println!("⛏️  eth_hashrate: {} H/s (raw: {})", hash_rate, result);
                 }
                 Err(e) => {
-                    println!("⛏️  eth_blockNumber: ERROR: {}", e);
-                    0
+                    println!("⛏️  eth_hashrate: ERROR: {}", e);
                 }
-            };
+            }
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-
-            if current_block > 0 {
-                // Get the latest block's difficulty
-                let difficulty = match self
-                    .rpc_call(
-                        &client,
-                        "eth_getBlockByNumber",
-                        serde_json::json!(["latest", false]),
-                    )
+            // Fallback: estimate from block production if eth_hashrate returns 0
+            if hash_rate == 0 {
+                let current_block = match self
+                    .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
                     .await
                 {
                     Ok(result) => {
-                        let diff = result
-                            .get("difficulty")
-                            .and_then(|d| d.as_str())
-                            .and_then(|hex| {
-                                u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
-                            })
-                            .unwrap_or(0);
-                        let miner = result
-                            .get("miner")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("unknown");
-                        let block_num =
-                            result.get("number").and_then(|n| n.as_str()).unwrap_or("?");
-                        println!(
-                            "⛏️  Latest block: number={}, difficulty={}, miner={}",
-                            block_num, diff, miner
-                        );
-                        diff
+                        let hex = result.as_str().unwrap_or("0x0");
+                        u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
                     }
-                    Err(e) => {
-                        println!("⛏️  eth_getBlockByNumber: ERROR: {}", e);
-                        0
-                    }
+                    Err(_) => 0,
                 };
 
-                println!(
-                    "⛏️  Tracking: last_block={}, last_block_time={}, current_block={}, now={}",
-                    self.last_block, self.last_block_time, current_block, now
-                );
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
 
-                if self.last_block > 0
+                if current_block > 0
+                    && self.last_block > 0
                     && current_block > self.last_block
                     && self.last_block_time > 0
                 {
-                    // We have a previous measurement — compute hashrate from blocks mined
                     let blocks_mined = current_block - self.last_block;
                     let elapsed = now.saturating_sub(self.last_block_time);
-                    if elapsed > 0 && difficulty > 0 {
-                        // hashrate = (blocks_mined * difficulty) / elapsed_seconds
-                        hash_rate =
-                            (blocks_mined as u128 * difficulty as u128 / elapsed as u128) as u64;
+                    if elapsed > 0 {
+                        let difficulty = match self
+                            .rpc_call(
+                                &client,
+                                "eth_getBlockByNumber",
+                                serde_json::json!(["latest", false]),
+                            )
+                            .await
+                        {
+                            Ok(result) => result
+                                .get("difficulty")
+                                .and_then(|d| d.as_str())
+                                .and_then(|hex| {
+                                    u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
+                                })
+                                .unwrap_or(0),
+                            Err(_) => 0,
+                        };
+                        if difficulty > 0 {
+                            hash_rate = (blocks_mined as u128 * difficulty as u128
+                                / elapsed as u128)
+                                as u64;
+                        }
                     }
                     println!(
-                        "⛏️  Blocks mined since last poll: {}, elapsed: {}s, hashrate: {}",
-                        blocks_mined, elapsed, hash_rate
-                    );
-                } else if difficulty > 0 {
-                    // First poll or no block change yet — estimate from difficulty alone
-                    // Assume a ~13 second target block time as baseline
-                    hash_rate = difficulty / 13;
-                    println!(
-                        "⛏️  First poll estimate: hashrate={} (difficulty/{} = {})",
-                        hash_rate, 13, difficulty
+                        "⛏️  Block-based hashrate estimate: {} (blocks_mined={}, elapsed={}s)",
+                        hash_rate,
+                        blocks_mined,
+                        now.saturating_sub(self.last_block_time)
                     );
                 }
 
-                // Update tracking
-                self.last_block = current_block;
-                self.last_block_time = now;
-            } else {
-                println!("⛏️  Block number is 0 — chain may still be initializing");
+                if current_block > 0 {
+                    self.last_block = current_block;
+                    self.last_block_time = now;
+                }
             }
         } else {
             // Not mining — reset tracking
@@ -2241,8 +2263,11 @@ impl GethProcess {
         Ok(mined_blocks)
     }
 
-    /// Set miner address (coinbase)
+    /// Set miner address (coinbase) — requires local Geth to be running
     pub async fn set_miner_address(&self, address: &str) -> Result<(), String> {
+        if self.child.is_none() {
+            return Err("Cannot set miner address: local Geth node is not running".to_string());
+        }
         let client = reqwest::Client::new();
         self.rpc_call(&client, "miner_setEtherbase", serde_json::json!([address]))
             .await

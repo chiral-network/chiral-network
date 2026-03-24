@@ -311,9 +311,12 @@
 
     isStartingMining = true;
     try {
-      if ($walletAccount?.address) {
-        await invoke('set_miner_address', { address: $walletAccount.address });
+      if (!$walletAccount?.address) {
+        throw new Error('No wallet address set. Please create or import a wallet first.');
       }
+
+      // Set miner address before starting
+      await invoke('set_miner_address', { address: $walletAccount.address });
 
       if (miningMode === 'gpu') {
         if (!gpuCapabilities?.binaryPath) {
@@ -492,6 +495,19 @@
           {/if}
         </div>
       </div>
+
+      <!-- Syncing Warning -->
+      {#if gethStatus?.syncing}
+        <div class="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg flex items-center gap-3">
+          <AlertTriangle class="w-5 h-5 text-amber-500 flex-shrink-0" />
+          <div>
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-300">Node is syncing</p>
+            <p class="text-xs text-amber-700 dark:text-amber-400">
+              Block {gethStatus.currentBlock.toLocaleString()} / {gethStatus.highestBlock.toLocaleString()} — mining will produce blocks once sync completes.
+            </p>
+          </div>
+        </div>
+      {/if}
 
       <!-- Mining Stats Grid -->
       <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
