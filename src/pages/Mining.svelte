@@ -651,11 +651,8 @@
         {#if !gpuCapabilities?.binaryPath}
           <div class="rounded-lg border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 mb-3">
             {#if gpuCapabilities?.lastError}
-              <p class="text-sm text-amber-800 dark:text-amber-300">
-                GPU miner is unavailable: {gpuCapabilities.lastError}
-              </p>
-              <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                You can still set `CHIRAL_GPU_MINER_PATH` manually and refresh.
+              <p class="text-sm text-amber-800 dark:text-amber-300 whitespace-pre-line">
+                {gpuCapabilities.lastError}
               </p>
             {:else}
               <p class="text-sm text-amber-800 dark:text-amber-300">
