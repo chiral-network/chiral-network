@@ -139,6 +139,10 @@
     return port ? `${ip}:${port}` : ip;
   }
 
+  function formatUnixSeconds(timestamp: number): string {
+    return new Date(timestamp * 1000).toLocaleTimeString();
+  }
+
   onMount(async () => {
     if (isTauri()) {
       // Load bootstrap peer IDs to filter them from Connected Peers
@@ -590,7 +594,7 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
               <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
-              <p class="text-sm font-bold tabular-nums dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
+                <p class="text-sm font-bold tabular-nums dark:text-white">{formatUnixSeconds(bootstrapHealth.timestamp)}</p>
             </div>
           </div>
 
