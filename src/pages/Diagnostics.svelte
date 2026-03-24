@@ -300,6 +300,10 @@
     return `${hr} H/s`;
   }
 
+  function formatUnixSeconds(timestamp: number): string {
+    return new Date(timestamp * 1000).toLocaleTimeString();
+  }
+
   function clearLogs() {
     logEntries = [];
     addLog('info', 'system', 'Logs cleared');
@@ -595,7 +599,7 @@
             </div>
             <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
               <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
-              <p class="text-sm font-bold dark:text-white">{new Date(bootstrapHealth.timestamp).toLocaleTimeString()}</p>
+              <p class="text-sm font-bold dark:text-white">{formatUnixSeconds(bootstrapHealth.timestamp)}</p>
             </div>
           </div>
 
