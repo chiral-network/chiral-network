@@ -218,7 +218,7 @@
   });
 
   // Load wallet balance (always queries remote RPC — no local Geth needed)
-  async function loadBalance(address = $walletAccount?.address) {
+  async function loadBalance(address = $walletAccount?.address, notify = false) {
     log.info('[Account.loadBalance] Called, address:', address);
     if (!address) return;
 
@@ -227,16 +227,22 @@
       const result = await walletService.getBalance(address);
       balance = result;
       log.info('[Account.loadBalance] Balance loaded:', result);
+      if (notify) {
+        toasts.show('Balance refreshed', 'success');
+      }
     } catch (error) {
       log.warn('[Account.loadBalance] Failed:', error);
       balance = '--';
+      if (notify) {
+        toasts.detail('Failed to refresh balance', String(error), 'error');
+      }
     } finally {
       isLoadingBalance = false;
     }
   }
 
   // Load transaction history
-  async function loadTransactionHistory(address = $walletAccount?.address) {
+  async function loadTransactionHistory(address = $walletAccount?.address, notify = false) {
     if (!address || !isTauri()) return;
 
     const requestToken = ++historyRequestToken;
@@ -255,8 +261,14 @@
 
       if (requestToken !== historyRequestToken) return;
       transactions = result.transactions;
+      if (notify) {
+        toasts.show('Transaction history refreshed', 'success');
+      }
     } catch (error) {
       if (requestToken !== historyRequestToken) return;
+      if (notify) {
+        toasts.detail('Failed to refresh transaction history', String(error), 'error');
+      }
       // Silent fail - Geth not running is expected initially
       if (!hadTransactions) {
         transactions = [];
@@ -474,7 +486,7 @@
               </div>
             </div>
             <button
-              onclick={() => loadBalance()}
+              onclick={() => loadBalance(undefined, true)}
               disabled={isLoadingBalance}
               class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
               title="Refresh balance"
@@ -788,7 +800,7 @@
           </div>
         </div>
         <button
-          onclick={() => loadTransactionHistory()}
+          onclick={() => loadTransactionHistory(undefined, true)}
           disabled={isLoadingHistory}
           class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
           title="Refresh history"

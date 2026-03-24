@@ -216,19 +216,25 @@
     }
   }
 
-  async function loadDhtHealth() {
+  async function loadDhtHealth(notify = false) {
     isLoadingDht = true;
     try {
       dhtHealth = await dhtService.getHealth();
       addLog('debug', 'dht', `DHT health: ${dhtHealth.running ? 'Running' : 'Stopped'}, ${dhtHealth.connectedPeerCount} peers`);
+      if (notify) {
+        toasts.show('DHT diagnostics refreshed', 'success');
+      }
     } catch (err) {
       addLog('error', 'dht', `Failed to get DHT health: ${err}`);
+      if (notify) {
+        toasts.detail('Failed to refresh DHT diagnostics', String(err), 'error');
+      }
     } finally {
       isLoadingDht = false;
     }
   }
 
-  async function loadBootstrapHealth() {
+  async function loadBootstrapHealth(notify = false) {
     isLoadingBootstrap = true;
     try {
       const cached = await invoke<BootstrapHealthReport | null>('get_bootstrap_health');
@@ -236,58 +242,88 @@
         bootstrapHealth = cached;
         addLog('debug', 'bootstrap', `Bootstrap: ${cached.healthyNodes}/${cached.totalNodes} healthy nodes`);
       }
+      if (notify) {
+        toasts.show('Bootstrap diagnostics refreshed', 'success');
+      }
     } catch (err) {
       addLog('warn', 'bootstrap', `No cached bootstrap health: ${err}`);
+      if (notify) {
+        toasts.detail('Failed to refresh bootstrap diagnostics', String(err), 'error');
+      }
     } finally {
       isLoadingBootstrap = false;
     }
   }
 
-  async function runBootstrapCheck() {
+  async function runBootstrapCheck(notify = false) {
     isLoadingBootstrap = true;
     addLog('info', 'bootstrap', 'Running bootstrap health check...');
     try {
       bootstrapHealth = await invoke<BootstrapHealthReport>('check_bootstrap_health');
       addLog('info', 'bootstrap', `Bootstrap check complete: ${bootstrapHealth.healthyNodes}/${bootstrapHealth.totalNodes} healthy`);
+      if (notify) {
+        toasts.show('Bootstrap check refreshed', 'success');
+      }
     } catch (err) {
       addLog('error', 'bootstrap', `Bootstrap check failed: ${err}`);
+      if (notify) {
+        toasts.detail('Failed to refresh bootstrap check', String(err), 'error');
+      }
     } finally {
       isLoadingBootstrap = false;
     }
   }
 
-  async function loadGethStatus() {
+  async function loadGethStatus(notify = false) {
     isLoadingGeth = true;
     try {
       gethStatus = await invoke<GethStatus>('get_geth_status');
       addLog('debug', 'geth', `Geth: ${gethStatus.running ? 'Running' : 'Stopped'}, block ${gethStatus.currentBlock}, ${gethStatus.peerCount} peers`);
+      if (notify) {
+        toasts.show('Geth diagnostics refreshed', 'success');
+      }
     } catch (err) {
       addLog('error', 'geth', `Failed to get Geth status: ${err}`);
+      if (notify) {
+        toasts.detail('Failed to refresh Geth diagnostics', String(err), 'error');
+      }
       gethStatus = { installed: false, running: false, syncing: false, currentBlock: 0, highestBlock: 0, peerCount: 0, chainId: 0 };
     } finally {
       isLoadingGeth = false;
     }
   }
 
-  async function loadMiningStatus() {
+  async function loadMiningStatus(notify = false) {
     isLoadingMining = true;
     try {
       miningStatus = await invoke<MiningStatus>('get_mining_status');
       addLog('debug', 'mining', `Mining: ${miningStatus.mining ? 'Active' : 'Inactive'}, hashrate: ${miningStatus.hashRate} H/s, mined: ${miningStatus.totalMinedChi.toFixed(4)} CHI`);
+      if (notify) {
+        toasts.show('Mining diagnostics refreshed', 'success');
+      }
     } catch (err) {
       addLog('error', 'mining', `Failed to get mining status: ${err}`);
+      if (notify) {
+        toasts.detail('Failed to refresh mining diagnostics', String(err), 'error');
+      }
       miningStatus = null;
     } finally {
       isLoadingMining = false;
     }
   }
 
-  async function loadGethLog() {
+  async function loadGethLog(notify = false) {
     isLoadingGethLog = true;
     try {
       gethLogContent = await invoke<string>('read_geth_log', { lines: gethLogLines });
+      if (notify) {
+        toasts.show('Geth log refreshed', 'success');
+      }
     } catch (err) {
       gethLogContent = `Error reading log: ${err}`;
+      if (notify) {
+        toasts.detail('Failed to refresh Geth log', String(err), 'error');
+      }
     } finally {
       isLoadingGethLog = false;
     }
@@ -338,6 +374,7 @@
     addLog('info', 'system', 'Refreshing all diagnostics...');
     await Promise.all([loadDhtHealth(), loadBootstrapHealth(), loadGethStatus(), loadMiningStatus(), loadGethLog()]);
     addLog('info', 'system', 'All diagnostics refreshed');
+    toasts.show('All diagnostics refreshed', 'success');
   }
 
   function levelColor(level: string): string {
@@ -455,7 +492,7 @@
       <div class="px-6 pb-6 space-y-4">
         <div class="flex justify-end">
           <button
-            onclick={loadDhtHealth}
+            onclick={() => loadDhtHealth(true)}
             disabled={isLoadingDht}
             class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
@@ -572,7 +609,7 @@
       <div class="px-6 pb-6 space-y-4">
         <div class="flex justify-end">
           <button
-            onclick={runBootstrapCheck}
+            onclick={() => runBootstrapCheck(true)}
             disabled={isLoadingBootstrap}
             class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
@@ -662,7 +699,7 @@
       <div class="px-6 pb-6 space-y-4">
         <div class="flex justify-end">
           <button
-            onclick={loadGethStatus}
+            onclick={() => loadGethStatus(true)}
             disabled={isLoadingGeth}
             class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
@@ -757,7 +794,7 @@
       <div class="px-6 pb-6 space-y-4">
         <div class="flex justify-end">
           <button
-            onclick={loadMiningStatus}
+            onclick={() => loadMiningStatus(true)}
             disabled={isLoadingMining}
             class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
@@ -841,7 +878,7 @@
             <select
               id="geth-log-lines"
               bind:value={gethLogLines}
-              onchange={() => loadGethLog()}
+              onchange={() => loadGethLog(true)}
               class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded dark:text-gray-300"
             >
               <option value={50}>50</option>
@@ -865,7 +902,7 @@
               Copy
             </button>
             <button
-              onclick={loadGethLog}
+              onclick={() => loadGethLog(true)}
               disabled={isLoadingGethLog}
               class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
             >

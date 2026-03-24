@@ -182,7 +182,7 @@
   });
 
   // Load Geth status
-  async function loadGethStatus() {
+  async function loadGethStatus(notify = false) {
     if (!isTauri()) {
       // In non-Tauri mode, set a default status
       gethStatus = {
@@ -200,9 +200,15 @@
 
     try {
       gethStatus = await invoke<GethStatus>('get_geth_status');
+      if (notify) {
+        toasts.show('Node status refreshed', 'success');
+      }
     } catch (err) {
       // If we can't get status, set installed to false
       log.error('Geth status check failed:', err);
+      if (notify) {
+        toasts.detail('Failed to refresh node status', String(err), 'error');
+      }
       gethStatus = {
         installed: false,
         running: false,
@@ -270,14 +276,20 @@
   }
 
   // Check bootstrap node health
-  async function checkBootstrapHealth() {
+  async function checkBootstrapHealth(notify = false) {
     if (!isTauri()) return;
 
     isCheckingBootstrap = true;
     try {
       bootstrapHealth = await invoke<BootstrapHealthReport>('check_bootstrap_health');
+      if (notify) {
+        toasts.show('Bootstrap health refreshed', 'success');
+      }
     } catch (err) {
       log.error('Failed to check bootstrap health:', err);
+      if (notify) {
+        toasts.detail('Failed to refresh bootstrap health', String(err), 'error');
+      }
     } finally {
       isCheckingBootstrap = false;
     }
@@ -298,13 +310,20 @@
   }
 
   // DHT Health Check
-  async function checkDhtHealth() {
+  async function checkDhtHealth(notify = false) {
     isCheckingDhtHealth = true;
     try {
       dhtHealth = await dhtService.getHealth();
+      if (notify) {
+        toasts.show('DHT health refreshed', 'success');
+      }
     } catch (err) {
       log.error('Failed to check DHT health:', err);
-      toasts.show('Failed to check DHT health', 'error');
+      if (notify) {
+        toasts.detail('Failed to refresh DHT health', String(err), 'error');
+      } else {
+        toasts.show('Failed to check DHT health', 'error');
+      }
     } finally {
       isCheckingDhtHealth = false;
     }
@@ -408,7 +427,7 @@
       <p class="text-gray-600 dark:text-gray-400 mt-1">Manage blockchain and P2P network connections</p>
     </div>
     <button
-      onclick={loadGethStatus}
+      onclick={() => loadGethStatus(true)}
       disabled={isLoadingGeth}
       class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500"
       title="Refresh status"
@@ -567,7 +586,7 @@
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Bootstrap Health Check</span>
           </div>
           <button
-            onclick={checkBootstrapHealth}
+            onclick={() => checkBootstrapHealth(true)}
             disabled={isCheckingBootstrap}
             class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
           >
@@ -731,7 +750,7 @@
           <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Health Check</span>
         </div>
         <button
-          onclick={checkDhtHealth}
+          onclick={() => checkDhtHealth(true)}
           disabled={isCheckingDhtHealth}
           class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
         >

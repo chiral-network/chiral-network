@@ -382,7 +382,7 @@
     loadingHosts = true;
     try {
       hosts = await hostingService.discoverHosts();
-      // Silent — host list updated in UI
+      toasts.show('Host list refreshed', 'success');
     } catch (err: any) {
       toasts.detail('Failed to refresh hosts', String(err.message || err), 'error');
     } finally {
