@@ -2142,8 +2142,7 @@ impl GethProcess {
             println!("⛏️  No geth.log found at {}", log_path.display());
         }
 
-        // Query the miner's balance from the shared remote chain so it matches
-        // the wallet balance shown on the Account page.
+        // Query the miner's balance from local Geth (where mining rewards live)
         let (total_mined_wei, total_mined_chi) = if let Some(ref addr) = miner_address {
             let balance_payload = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -2152,7 +2151,7 @@ impl GethProcess {
                 "id": 1
             });
             match client
-                .post(&rpc_endpoint())
+                .post(&self.effective_rpc_endpoint())
                 .json(&balance_payload)
                 .send()
                 .await
