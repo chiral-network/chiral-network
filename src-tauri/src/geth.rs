@@ -1287,9 +1287,9 @@ impl GethProcess {
             .arg("--syncmode")
             .arg("full") // Use full sync for local/private chain
             .arg("--gcmode")
-            .arg("archive") // Keep all state for querying
+            .arg("full") // Prune old state to speed up sync and reduce disk usage
             .arg("--cache")
-            .arg("512")
+            .arg("1024")
             .arg("--maxpeers")
             .arg("50")
             .arg("--port")
