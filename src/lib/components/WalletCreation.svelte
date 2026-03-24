@@ -14,18 +14,18 @@
   type WalletCreationStep = 'generate' | 'verify' | 'email';
   type PendingWallet = { address: string; privateKey: string };
 
-  let step: WalletCreationStep = 'generate';
-  let mnemonic = '';
-  let mnemonicWords: string[] = [];
-  let copied = false;
-  let verificationIndices: number[] = [];
-  let userInputs: string[] = ['', ''];
-  let verificationError = '';
+  let step: WalletCreationStep = $state('generate');
+  let mnemonic = $state('');
+  let mnemonicWords: string[] = $state([]);
+  let copied = $state(false);
+  let verificationIndices: number[] = $state([]);
+  let userInputs: string[] = $state(['', '']);
+  let verificationError = $state('');
 
-  let pendingWallet: PendingWallet | null = null;
-  let emailInput = '';
-  let emailError = '';
-  let sendingEmail = false;
+  let pendingWallet: PendingWallet | null = $state(null);
+  let emailInput = $state('');
+  let emailError = $state('');
+  let sendingEmail = $state(false);
 
   function generateNewMnemonic() {
     mnemonic = generateMnemonic();
@@ -40,6 +40,7 @@
   function copyToClipboard() {
     navigator.clipboard.writeText(mnemonic);
     copied = true;
+    toasts.show('Recovery phrase copied to clipboard', 'success');
     setTimeout(() => copied = false, 2000);
   }
 
