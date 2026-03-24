@@ -1118,7 +1118,7 @@ impl GethProcess {
                 "londonBlock": 0,
                 "ethash": {}
             },
-            "difficulty": "0xA00000000",
+            "difficulty": "0x400000",
             "gasLimit": "0x47b760",
             "alloc": {},
             "coinbase": "0x0000000000000000000000000000000000000000",
@@ -1230,7 +1230,7 @@ impl GethProcess {
 
         // Check if blockchain needs initialization or re-initialization
         // Use a version marker to detect genesis config changes
-        let genesis_version = "4"; // Bump this when genesis config changes
+        let genesis_version = "5"; // Bump this when genesis config changes
         let version_file = self.data_dir.join(".genesis_version");
         let chaindata_path = self.data_dir.join("geth").join("chaindata");
         let needs_init = if !chaindata_path.exists() {
