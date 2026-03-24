@@ -11,6 +11,7 @@
     RefreshCw,
   } from 'lucide-svelte';
   import { walletAccount } from '$lib/stores';
+  import { toasts } from '$lib/toastStore';
   import { ratingApi, setRatingOwner, type ReputationEvent } from '$lib/services/ratingApiService';
   import { get } from 'svelte/store';
 
@@ -55,7 +56,7 @@
     }
   }
 
-  async function loadReputation() {
+  async function loadReputation(notify = false) {
     const wallet = get(walletAccount);
     if (!wallet?.address) {
       loading = false;
@@ -76,11 +77,17 @@
       failedCount = resp.failedCount;
       totalEarnedWei = resp.totalEarnedWei;
       currentPage = 0;
+      if (notify) {
+        toasts.show('Reputation refreshed', 'success');
+      }
     } catch (err: unknown) {
       const message = err instanceof Error
         ? err.message
         : (typeof err === 'string' ? err : 'Unknown error');
       error = `Failed to load reputation: ${message}`;
+      if (notify) {
+        toasts.detail('Failed to refresh reputation', message, 'error');
+      }
     } finally {
       loading = false;
       hasLoadedReputation = true;
@@ -133,7 +140,7 @@
         </span>
       {/if}
       <button
-        onclick={() => loadReputation()}
+        onclick={() => loadReputation(true)}
         disabled={loading}
         class="ml-auto p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-40"
         title="Refresh reputation"
