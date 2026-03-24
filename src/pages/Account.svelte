@@ -474,7 +474,7 @@
               </div>
             </div>
             <button
-              onclick={loadBalance}
+              onclick={() => loadBalance()}
               disabled={isLoadingBalance}
               class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
               title="Refresh balance"
@@ -788,7 +788,7 @@
           </div>
         </div>
         <button
-          onclick={loadTransactionHistory}
+          onclick={() => loadTransactionHistory()}
           disabled={isLoadingHistory}
           class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
           title="Refresh history"
