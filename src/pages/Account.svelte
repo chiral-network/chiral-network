@@ -216,7 +216,7 @@
   });
 
   // Load wallet balance (always queries remote RPC — no local Geth needed)
-  async function loadBalance() {
+  async function loadBalance(notify = false) {
     log.info('[Account.loadBalance] Called, address:', $walletAccount?.address);
     if (!$walletAccount?.address) return;
 
@@ -225,16 +225,22 @@
       const result = await walletService.getBalance($walletAccount.address);
       balance = result;
       log.info('[Account.loadBalance] Balance loaded:', result);
+      if (notify) {
+        toasts.show('Balance refreshed', 'success');
+      }
     } catch (error) {
       log.warn('[Account.loadBalance] Failed:', error);
       balance = '--';
+      if (notify) {
+        toasts.detail('Failed to refresh balance', String(error), 'error');
+      }
     } finally {
       isLoadingBalance = false;
     }
   }
 
   // Load transaction history
-  async function loadTransactionHistory() {
+  async function loadTransactionHistory(notify = false) {
     if (!$walletAccount?.address || !isTauri()) return;
 
     isLoadingHistory = true;
@@ -243,8 +249,13 @@
         address: $walletAccount.address
       });
       transactions = result.transactions;
+      if (notify) {
+        toasts.show('Transaction history refreshed', 'success');
+      }
     } catch (error) {
-      // Silent fail - Geth not running is expected initially
+      if (notify) {
+        toasts.detail('Failed to refresh transaction history', String(error), 'error');
+      }
       transactions = [];
     } finally {
       isLoadingHistory = false;
@@ -456,7 +467,7 @@
               </div>
             </div>
             <button
-              onclick={loadBalance}
+              onclick={() => loadBalance(true)}
               disabled={isLoadingBalance}
               class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
               title="Refresh balance"
@@ -762,7 +773,7 @@
           </div>
         </div>
         <button
-          onclick={loadTransactionHistory}
+          onclick={() => loadTransactionHistory(true)}
           disabled={isLoadingHistory}
           class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
           title="Refresh history"

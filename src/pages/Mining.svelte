@@ -368,16 +368,23 @@
 
   async function refreshAll() {
     await Promise.all([loadStatus(), loadGpuCapabilities()]);
+    toasts.show('Mining status refreshed', 'success');
   }
 
-  async function loadMinedBlocks() {
+  async function loadMinedBlocks(notify = false) {
     if (!isTauri()) return;
     isLoadingHistory = true;
     try {
       minedBlocks = await invoke<MinedBlock[]>('get_mined_blocks', { maxBlocks: 500 });
+      if (notify) {
+        toasts.show('Mining history refreshed', 'success');
+      }
     } catch (error) {
       log.error('Failed to load mined blocks:', error);
       minedBlocks = [];
+      if (notify) {
+        toasts.detail('Failed to refresh mining history', String(error), 'error');
+      }
     } finally {
       isLoadingHistory = false;
     }
@@ -765,7 +772,7 @@
         <div class="px-6 pb-6">
           <div class="flex justify-end mb-4">
             <button
-              onclick={loadMinedBlocks}
+              onclick={() => loadMinedBlocks(true)}
               disabled={isLoadingHistory}
               class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
             >
