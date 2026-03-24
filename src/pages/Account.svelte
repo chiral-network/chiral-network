@@ -1,18 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { walletAccount, isAuthenticated, networkConnected, blacklist, type BlacklistEntry } from '$lib/stores';
+  import { walletAccount, networkConnected, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { toasts } from '$lib/toastStore';
   import { walletService } from '$lib/services/walletService';
-  import { dhtService } from '$lib/dhtService';
   import {
     Wallet,
     Copy,
     Eye,
     EyeOff,
-    LogOut,
     AlertTriangle,
     Check,
     Key,
@@ -136,7 +134,6 @@
   // State
   let privateKeyVisible = $state(false);
   let copied = $state<'address' | 'privateKey' | null>(null);
-  let showLogoutModal = $state(false);
   let balance = $state<string>('--');
   let isLoadingBalance = $state(false);
 
@@ -352,20 +349,6 @@
     }
   }
 
-  // Logout
-  async function logout() {
-    // Stop the DHT backend before resetting UI state
-    try {
-      await dhtService.stop();
-    } catch (e) {
-      log.warn('Failed to stop DHT during logout:', e);
-    }
-    walletAccount.set(null);
-    isAuthenticated.set(false);
-    showLogoutModal = false;
-    // Silent — redirects to login screen
-  }
-
   // Format address for display
   function formatAddress(address: string): string {
     if (!address) return '';
@@ -428,18 +411,11 @@
 <svelte:head><title>Account | Chiral Network</title></svelte:head>
 
 <div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
-  <div class="flex items-center justify-between">
+  <div>
     <div>
       <h1 class="text-2xl font-bold dark:text-white">Account</h1>
       <p class="text-gray-600 dark:text-gray-400 mt-1">Manage your wallet and account settings</p>
     </div>
-    <button
-      onclick={() => showLogoutModal = true}
-      class="flex items-center gap-2 px-4 py-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/30"
-    >
-      <LogOut class="w-5 h-5" />
-      Logout
-    </button>
   </div>
 
   {#if $walletAccount}
@@ -967,37 +943,3 @@
   />
 {/if}
 
-{#if showLogoutModal}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" tabindex="-1" onclick={() => showLogoutModal = false} onkeydown={(e) => e.key === 'Escape' && (showLogoutModal = false)}>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 max-w-md mx-4" role="document" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-      <div class="flex items-center gap-3 mb-4">
-        <div class="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
-          <LogOut class="w-6 h-6 text-red-600 dark:text-red-400" />
-        </div>
-        <h3 class="text-lg font-semibold dark:text-white">Logout</h3>
-      </div>
-
-      <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
-        Are you sure you want to logout? Make sure you have saved your recovery phrase or exported your wallet before logging out.
-      </p>
-
-      <div class="flex gap-3">
-        <button
-          onclick={() => showLogoutModal = false}
-          class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
-        >
-          Cancel
-        </button>
-        <button
-          onclick={logout}
-          class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
-        >
-          <LogOut class="w-4 h-4" />
-          Logout
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
