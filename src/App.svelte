@@ -363,13 +363,13 @@
       path: '/drive',
       component: DrivePage
     },
-{
+    {
       path: '/settings',
       component: SettingsPage
     },
     {
       path: '/',
-      component: NetworkPage
+      component: AccountPage
     }
   ];
   
@@ -393,12 +393,12 @@
     currentPath = window.location.pathname || '/';
   });
   
-  // Redirect to network page when authenticated
+  // Redirect to account page when authenticated
   $effect(() => {
     if ($isAuthenticated) {
       const path = window.location.pathname;
       if (path === '/wallet' || path === '/') {
-        goto('/network');
+        goto('/account');
       }
     }
   });
