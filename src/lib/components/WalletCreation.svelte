@@ -44,15 +44,20 @@
   }
 
   function downloadAsText() {
-    const blob = new Blob([mnemonic], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'chiral-wallet-recovery-phrase.txt';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      const blob = new Blob([mnemonic], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chiral-wallet-recovery-phrase.txt';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toasts.show('Recovery phrase downloaded', 'success');
+    } catch (error) {
+      toasts.detail('Failed to download recovery phrase', String(error), 'error');
+    }
   }
 
   function proceedToVerification() {
