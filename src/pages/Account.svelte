@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { walletAccount, networkConnected, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
@@ -148,6 +148,9 @@
   let transactions = $state<Transaction[]>([]);
   let isLoadingHistory = $state(false);
   let expandedTxHash = $state<string | null>(null);
+  let historyRequestToken = 0;
+
+  const HISTORY_LOADING_SOFT_TIMEOUT_MS = 8000;
 
 
   // Check if Tauri is available
@@ -197,10 +200,6 @@
     checkGethStatus();
     gethCheckInterval = setInterval(checkGethStatus, 5000);
     loadSavedRecipients();
-    if ($walletAccount?.address) {
-      loadBalance();
-      loadTransactionHistory();
-    }
   });
 
   onDestroy(() => {
@@ -209,20 +208,23 @@
 
   // Watch for wallet changes
   $effect(() => {
-    if ($walletAccount?.address) {
-      loadBalance();
-      loadTransactionHistory();
-    }
+    const address = $walletAccount?.address;
+    if (!address) return;
+
+    untrack(() => {
+      loadBalance(address);
+      loadTransactionHistory(address);
+    });
   });
 
   // Load wallet balance (always queries remote RPC — no local Geth needed)
-  async function loadBalance() {
-    log.info('[Account.loadBalance] Called, address:', $walletAccount?.address);
-    if (!$walletAccount?.address) return;
+  async function loadBalance(address = $walletAccount?.address) {
+    log.info('[Account.loadBalance] Called, address:', address);
+    if (!address) return;
 
     isLoadingBalance = true;
     try {
-      const result = await walletService.getBalance($walletAccount.address);
+      const result = await walletService.getBalance(address);
       balance = result;
       log.info('[Account.loadBalance] Balance loaded:', result);
     } catch (error) {
@@ -234,20 +236,36 @@
   }
 
   // Load transaction history
-  async function loadTransactionHistory() {
-    if (!$walletAccount?.address || !isTauri()) return;
+  async function loadTransactionHistory(address = $walletAccount?.address) {
+    if (!address || !isTauri()) return;
 
+    const requestToken = ++historyRequestToken;
+    const hadTransactions = transactions.length > 0;
     isLoadingHistory = true;
+    const loadingTimeout = setTimeout(() => {
+      if (requestToken !== historyRequestToken || !isLoadingHistory) return;
+      log.warn('Transaction history refresh exceeded soft timeout; keeping current results visible');
+      isLoadingHistory = false;
+    }, HISTORY_LOADING_SOFT_TIMEOUT_MS);
+
     try {
       const result = await invoke<{ transactions: Transaction[] }>('get_transaction_history', {
-        address: $walletAccount.address
+        address
       });
+
+      if (requestToken !== historyRequestToken) return;
       transactions = result.transactions;
     } catch (error) {
+      if (requestToken !== historyRequestToken) return;
       // Silent fail - Geth not running is expected initially
-      transactions = [];
+      if (!hadTransactions) {
+        transactions = [];
+      }
     } finally {
-      isLoadingHistory = false;
+      clearTimeout(loadingTimeout);
+      if (requestToken === historyRequestToken) {
+        isLoadingHistory = false;
+      }
     }
   }
 
@@ -456,7 +474,7 @@
               </div>
             </div>
             <button
-              onclick={loadBalance}
+              onclick={() => loadBalance()}
               disabled={isLoadingBalance}
               class="p-2 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
               title="Refresh balance"
@@ -553,7 +571,7 @@
     </div>
 
     <!-- Send CHI Card -->
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 min-h-[28rem]">
       <div class="flex items-center gap-3 mb-4">
         <div class="p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
           <Send class="w-6 h-6 text-primary-600 dark:text-primary-400" />
@@ -750,7 +768,7 @@
     </div>
 
     <!-- Transaction History Card -->
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 min-h-[24rem]">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <div class="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg">
@@ -758,11 +776,19 @@
           </div>
           <div>
             <h3 class="font-semibold dark:text-white">Transaction History</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Recent transactions</p>
+            <div class="flex items-center gap-2">
+              <p class="text-sm text-gray-500 dark:text-gray-400">Recent transactions</p>
+              {#if isLoadingHistory && transactions.length > 0}
+                <span class="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400">
+                  <Loader2 class="w-3.5 h-3.5 animate-spin" />
+                  Refreshing
+                </span>
+              {/if}
+            </div>
           </div>
         </div>
         <button
-          onclick={loadTransactionHistory}
+          onclick={() => loadTransactionHistory()}
           disabled={isLoadingHistory}
           class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
           title="Refresh history"
@@ -771,7 +797,7 @@
         </button>
       </div>
 
-      {#if isLoadingHistory}
+      {#if isLoadingHistory && transactions.length === 0}
         <div class="flex items-center justify-center py-8">
           <Loader2 class="w-8 h-8 animate-spin text-gray-400" />
         </div>

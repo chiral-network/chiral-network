@@ -3771,7 +3771,7 @@ async fn get_transaction_history(
     address: String,
 ) -> Result<TransactionHistoryResult, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     let rpc = default_rpc_endpoint();
@@ -3801,18 +3801,29 @@ async fn get_transaction_history(
         u64::from_str_radix(latest_block_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
     // Load local metadata for enrichment
-    let metadata = state.tx_metadata.lock().await;
+    let metadata = {
+        let metadata = state.tx_metadata.lock().await;
+        metadata.clone()
+    };
 
     let mut transactions = Vec::new();
     let address_lower = address.to_lowercase();
 
-    // Scan only a recent block window from the chain tip.
-    const MAX_BLOCKS_TO_SCAN: u64 = 20000;
-    const BATCH_SIZE: u64 = 100;
+    // Bound the history request so Account page refreshes stay responsive.
+    const MAX_BLOCKS_TO_SCAN: u64 = 3000;
+    const BATCH_SIZE: u64 = 50;
+    const MAX_BATCHES: u64 = 20;
+    const MAX_SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(4);
     let first_block_to_scan = latest_block.saturating_sub(MAX_BLOCKS_TO_SCAN.saturating_sub(1));
     let mut cursor = latest_block;
+    let scan_started_at = std::time::Instant::now();
+    let mut batches_scanned = 0;
 
     'outer: loop {
+        if batches_scanned >= MAX_BATCHES || scan_started_at.elapsed() >= MAX_SCAN_DURATION {
+            break;
+        }
+
         let batch_start = cursor
             .saturating_sub(BATCH_SIZE - 1)
             .max(first_block_to_scan);
@@ -3831,6 +3842,7 @@ async fn get_transaction_history(
             .collect();
 
         let batch_response = client.post(&rpc).json(&batch).send().await;
+        batches_scanned += 1;
 
         if let Ok(response) = batch_response {
             if let Ok(results) = response.json::<Vec<serde_json::Value>>().await {
