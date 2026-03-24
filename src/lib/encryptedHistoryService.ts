@@ -6,7 +6,11 @@ import { logger } from './logger';
 const log = logger('History');
 
 const HISTORY_DHT_PREFIX = 'chiraldrop_history_';
-const HISTORY_LOCAL_KEY = 'chiraldrop_history_encrypted';
+const HISTORY_LOCAL_KEY_PREFIX = 'chiraldrop_history_encrypted_';
+
+function getLocalCacheKey(address: string): string {
+  return `${HISTORY_LOCAL_KEY_PREFIX}${address.toLowerCase()}`;
+}
 
 /**
  * Encrypted History Service
@@ -126,8 +130,8 @@ export async function saveHistoryToDht(history: FileTransfer[]): Promise<void> {
       log.info('History saved to DHT');
     }
 
-    // Always also save locally as cache
-    localStorage.setItem(HISTORY_LOCAL_KEY, encryptedData);
+    // Always also save locally as cache (wallet-specific key)
+    localStorage.setItem(getLocalCacheKey(wallet.address), encryptedData);
   } catch (error) {
     log.error('Failed to save history to DHT:', error);
     // Fall back to localStorage
@@ -159,9 +163,9 @@ export async function loadHistoryFromDht(): Promise<FileTransfer[]> {
       }
     }
 
-    // Fall back to local cache if DHT lookup failed
+    // Fall back to local cache if DHT lookup failed (wallet-specific key)
     if (!encryptedData) {
-      encryptedData = localStorage.getItem(HISTORY_LOCAL_KEY);
+      encryptedData = localStorage.getItem(getLocalCacheKey(wallet.address));
     }
 
     if (!encryptedData) {
@@ -169,8 +173,16 @@ export async function loadHistoryFromDht(): Promise<FileTransfer[]> {
     }
 
     const key = await deriveKey(wallet.privateKey);
-    const decryptedData = await decrypt(encryptedData, key);
-    return JSON.parse(decryptedData);
+    try {
+      const decryptedData = await decrypt(encryptedData, key);
+      return JSON.parse(decryptedData);
+    } catch {
+      // Decryption failed — stale cache from a different wallet or corrupted data.
+      // Clear the invalid cache entry so it doesn't keep failing.
+      log.warn('Encrypted history cache is stale or corrupted, clearing');
+      localStorage.removeItem(getLocalCacheKey(wallet.address));
+      return loadHistoryFromLocal();
+    }
   } catch (error) {
     log.error('Failed to load history from DHT:', error);
     return loadHistoryFromLocal();
