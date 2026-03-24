@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
+const mockInvoke = vi.fn();
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: unknown[]) => mockInvoke(...args),
+}));
 
 describe('walletBackupService', () => {
   beforeEach(() => {
     vi.resetModules();
-    mockFetch.mockReset();
+    mockInvoke.mockReset();
   });
 
   afterEach(() => {
@@ -14,13 +16,10 @@ describe('walletBackupService', () => {
   });
 
   describe('sendBackupEmail', () => {
-    it('should POST to /api/wallet/backup-email with correct payload', async () => {
+    it('should invoke send_wallet_backup_email with correct payload', async () => {
       const { walletBackupService } = await import('$lib/services/walletBackupService');
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ ok: true }),
-      });
+      mockInvoke.mockResolvedValueOnce(undefined);
 
       const payload = {
         email: 'test@example.com',
@@ -31,27 +30,20 @@ describe('walletBackupService', () => {
 
       const result = await walletBackupService.sendBackupEmail(payload);
 
-      expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toContain('/api/wallet/backup-email');
-      expect(init.method).toBe('POST');
-      expect(init.headers['Content-Type']).toBe('application/json');
-
-      const body = JSON.parse(init.body);
-      expect(body.email).toBe('test@example.com');
-      expect(body.recoveryPhrase).toBe(payload.recoveryPhrase);
-      expect(body.walletAddress).toBe(payload.walletAddress);
-      expect(body.privateKey).toBe(payload.privateKey);
+      expect(mockInvoke).toHaveBeenCalledOnce();
+      expect(mockInvoke).toHaveBeenCalledWith('send_wallet_backup_email', {
+        email: 'test@example.com',
+        recoveryPhrase: payload.recoveryPhrase,
+        walletAddress: payload.walletAddress,
+        privateKey: payload.privateKey,
+      });
       expect(result).toBe(true);
     });
 
-    it('should return true when response is ok', async () => {
+    it('should return true on success', async () => {
       const { walletBackupService } = await import('$lib/services/walletBackupService');
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ ok: true }),
-      });
+      mockInvoke.mockResolvedValueOnce(undefined);
 
       const result = await walletBackupService.sendBackupEmail({
         email: 'test@example.com',
@@ -63,14 +55,10 @@ describe('walletBackupService', () => {
       expect(result).toBe(true);
     });
 
-    it('should throw with error text on HTTP failure', async () => {
+    it('should throw when invoke rejects with error message', async () => {
       const { walletBackupService } = await import('$lib/services/walletBackupService');
 
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        text: async () => 'Invalid email address',
-      });
+      mockInvoke.mockRejectedValueOnce('Invalid email address');
 
       await expect(
         walletBackupService.sendBackupEmail({
@@ -79,17 +67,13 @@ describe('walletBackupService', () => {
           walletAddress: '0x1234567890abcdef1234567890abcdef12345678',
           privateKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         })
-      ).rejects.toThrow('Invalid email address');
+      ).rejects.toBe('Invalid email address');
     });
 
-    it('should throw with HTTP status when error text is empty', async () => {
+    it('should throw when invoke rejects with Error object', async () => {
       const { walletBackupService } = await import('$lib/services/walletBackupService');
 
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        text: async () => '',
-      });
+      mockInvoke.mockRejectedValueOnce(new Error('Failed to reach email server'));
 
       await expect(
         walletBackupService.sendBackupEmail({
@@ -98,25 +82,7 @@ describe('walletBackupService', () => {
           walletAddress: '0x1234567890abcdef1234567890abcdef12345678',
           privateKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         })
-      ).rejects.toThrow('HTTP 503');
-    });
-
-    it('should handle JSON parse failure gracefully', async () => {
-      const { walletBackupService } = await import('$lib/services/walletBackupService');
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => { throw new Error('not json'); },
-      });
-
-      const result = await walletBackupService.sendBackupEmail({
-        email: 'test@example.com',
-        recoveryPhrase: 'a b c d e f g h i j k l',
-        walletAddress: '0x1234567890abcdef1234567890abcdef12345678',
-        privateKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-      });
-
-      expect(result).toBe(false);
+      ).rejects.toThrow('Failed to reach email server');
     });
   });
 
@@ -125,6 +91,11 @@ describe('walletBackupService', () => {
       const { walletBackupService } = await import('$lib/services/walletBackupService');
       const result = walletBackupService.formatError(new Error('Something failed'));
       expect(result).toBe('Something failed');
+    });
+
+    it('should format string errors', async () => {
+      const { walletBackupService } = await import('$lib/services/walletBackupService');
+      expect(walletBackupService.formatError('Email server error')).toBe('Email server error');
     });
 
     it('should return default message for non-Error values', async () => {
