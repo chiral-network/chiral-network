@@ -1,3 +1,4 @@
 [target.x86_64-pc-windows-msvc]
-# Work around intermittent MSVC LNK1318 PDB failures during Rust/Tauri links.
-rustflags = ["-C", "link-arg=/DEBUG:NONE"]
+# Use /DEBUG:FULL instead of /DEBUG:NONE to keep PE debug directory intact.
+# /DEBUG:NONE strips metadata that Windows Application Control (WDAC) needs.
+rustflags = ["-C", "link-arg=/DEBUG:FULL"]
