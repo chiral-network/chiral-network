@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { isAuthenticated, walletAccount, networkConnected } from '$lib/stores';
+  import { networkConnected } from '$lib/stores';
+  import { requestLogout } from '$lib/logout';
   import { computeAnchoredDropdownPlacement } from '$lib/utils/uiPositioning';
 
   let { currentPage = 'download' }: { currentPage?: string } = $props();
@@ -12,12 +13,6 @@
   let moreMenuLeft = $state(0);
   let moreMenuTop = $state(0);
   let moreMenuMaxHeight = $state(320);
-
-  function handleLogout() {
-    isAuthenticated.set(false);
-    walletAccount.set(null);
-    window.location.href = '/';
-  }
 
   function navigate(path: string) {
     goto(path);
@@ -177,7 +172,7 @@
       <!-- Right side: logout + status + hamburger -->
       <div class="flex items-center gap-2 sm:gap-3 shrink-0">
         <button
-          onclick={handleLogout}
+          onclick={requestLogout}
           class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
           title="Logout"
         >
@@ -231,7 +226,7 @@
         {/each}
         <hr class="border-gray-200 dark:border-gray-700" />
         <button
-          onclick={handleLogout}
+          onclick={requestLogout}
           class="flex items-center gap-3 w-full px-3 py-2.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
         >
           <LogOut class="w-4 h-4" />
