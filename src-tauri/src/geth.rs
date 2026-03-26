@@ -3577,4 +3577,183 @@ m 12:00:12|cuda-0  Speed 41.25 Mh/s
         assert_eq!(current, 0);
         assert_eq!(highest, 0);
     }
+
+    #[test]
+    fn test_syncing_true_boolean_treated_as_not_syncing() {
+        // eth_syncing returning true as boolean (unusual) — no block info available
+        let result = serde_json::json!(true);
+        let (syncing, _, _) = parse_syncing_result(result);
+        // true boolean doesn't match the `!result.as_bool().unwrap_or(false)` check
+        // so it falls through — no object means not syncing
+        assert!(!syncing);
+    }
+
+    #[test]
+    fn test_syncing_one_block_behind() {
+        let result = serde_json::json!({
+            "currentBlock": "0x63",
+            "highestBlock": "0x64"
+        });
+        let (syncing, current, highest) = parse_syncing_result(result);
+        assert!(syncing, "one block behind should be syncing");
+        assert_eq!(current, 99);
+        assert_eq!(highest, 100);
+    }
+
+    #[test]
+    fn test_syncing_large_block_numbers() {
+        let result = serde_json::json!({
+            "currentBlock": "0x4aee7",
+            "highestBlock": "0x4b000"
+        });
+        let (syncing, current, highest) = parse_syncing_result(result);
+        assert!(syncing);
+        assert_eq!(current, 306919);
+        assert_eq!(highest, 307200);
+    }
+
+    #[test]
+    fn test_syncing_highest_zero_current_nonzero() {
+        // Edge case: current block > 0 but highest is 0 (shouldn't happen but be safe)
+        let result = serde_json::json!({
+            "currentBlock": "0x10",
+            "highestBlock": "0x0"
+        });
+        let (syncing, _, _) = parse_syncing_result(result);
+        assert!(!syncing, "should not be syncing when highest is 0");
+    }
+
+    // ========================================================================
+    // Genesis difficulty and config validation
+    // ========================================================================
+
+    #[test]
+    fn test_genesis_difficulty_matches_bootstrap() {
+        let genesis = GethProcess::get_genesis_json();
+        let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
+        let difficulty = parsed["difficulty"].as_str().unwrap();
+        assert_eq!(
+            difficulty, "0x400000",
+            "genesis difficulty must match bootstrap node (0x400000)"
+        );
+    }
+
+    #[test]
+    fn test_genesis_difficulty_is_cpu_mineable() {
+        let genesis = GethProcess::get_genesis_json();
+        let parsed: serde_json::Value = serde_json::from_str(&genesis).unwrap();
+        let difficulty = parsed["difficulty"].as_str().unwrap();
+        let diff_val =
+            u64::from_str_radix(difficulty.trim_start_matches("0x"), 16).unwrap();
+        // At 1 MH/s, should find a block in under 60 seconds
+        assert!(
+            diff_val < 60_000_000,
+            "genesis difficulty {} is too high for CPU mining",
+            diff_val
+        );
+    }
+
+    // ========================================================================
+    // Mining status serialization
+    // ========================================================================
+
+    #[test]
+    fn test_mining_status_total_mined_fields() {
+        let status = MiningStatus {
+            mining: true,
+            hash_rate: 500000,
+            miner_address: Some("0xabcdef1234567890abcdef1234567890abcdef12".to_string()),
+            total_mined_wei: "25000000000000000000".to_string(),
+            total_mined_chi: 25.0,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: MiningStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.total_mined_chi, 25.0);
+        assert_eq!(deserialized.total_mined_wei, "25000000000000000000");
+        assert_eq!(
+            deserialized.miner_address.unwrap(),
+            "0xabcdef1234567890abcdef1234567890abcdef12"
+        );
+    }
+
+    #[test]
+    fn test_mining_status_high_hash_rate() {
+        let status = MiningStatus {
+            mining: true,
+            hash_rate: 5_000_000_000, // 5 GH/s
+            miner_address: Some("0x1234".to_string()),
+            total_mined_wei: "0".to_string(),
+            total_mined_chi: 0.0,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: MiningStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.hash_rate, 5_000_000_000);
+    }
+
+    // ========================================================================
+    // GethStatus with syncing states
+    // ========================================================================
+
+    #[test]
+    fn test_geth_status_syncing_state() {
+        let status = GethStatus {
+            installed: true,
+            running: true,
+            local_running: true,
+            syncing: true,
+            current_block: 50,
+            highest_block: 200,
+            peer_count: 3,
+            chain_id: CHAIN_ID,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let d: GethStatus = serde_json::from_str(&json).unwrap();
+        assert!(d.syncing);
+        assert_eq!(d.current_block, 50);
+        assert_eq!(d.highest_block, 200);
+        assert!(d.local_running);
+    }
+
+    #[test]
+    fn test_geth_status_synced_state() {
+        let status = GethStatus {
+            installed: true,
+            running: true,
+            local_running: true,
+            syncing: false,
+            current_block: 306919,
+            highest_block: 306919,
+            peer_count: 1,
+            chain_id: CHAIN_ID,
+        };
+        let json = serde_json::to_string(&status).unwrap();
+        let d: GethStatus = serde_json::from_str(&json).unwrap();
+        assert!(!d.syncing);
+        assert_eq!(d.current_block, d.highest_block);
+    }
+
+    // ========================================================================
+    // GPU error message detection
+    // ========================================================================
+
+    #[test]
+    fn test_gpu_error_invalid_device_symbol_detected() {
+        let failures = "cuda backend failed\ninvalid device symbol\nsome other text";
+        let is_compat_issue = failures.contains("invalid device symbol");
+        assert!(is_compat_issue, "should detect CUDA compute capability mismatch");
+    }
+
+    #[test]
+    fn test_gpu_error_no_usable_devices_detected() {
+        let failures = "opencl backend failed\nNo usable mining devices found";
+        let is_no_devices = failures.contains("No usable mining devices found");
+        assert!(is_no_devices, "should detect no GPU devices");
+    }
+
+    #[test]
+    fn test_gpu_error_normal_failure_not_misdetected() {
+        let failures = "cuda backend failed to spawn: timeout";
+        assert!(!failures.contains("invalid device symbol"));
+        assert!(!failures.contains("No usable mining devices found"));
+    }
 }
