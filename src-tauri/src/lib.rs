@@ -26,7 +26,6 @@ use geth_bootstrap::BootstrapHealthReport;
 use rlp::RlpStream;
 use secp256k1::{Message, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
-use speed_tiers::SpeedTier;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -41,7 +40,6 @@ pub struct AppState {
     pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data (for local caching)
     pub geth: Arc<Mutex<GethProcess>>,
     pub encryption_keypair: Arc<Mutex<Option<EncryptionKeypair>>>,
-    pub download_tiers: Arc<Mutex<HashMap<String, SpeedTier>>>, // request_id -> speed tier
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
     pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
     pub download_credentials: dht::DownloadCredentialsMap, // request_id -> wallet credentials for file payment
@@ -126,7 +124,6 @@ async fn start_dht_internal(
 
     let dht = Arc::new(DhtService::new(
         state.file_transfer.clone(),
-        state.download_tiers.clone(),
         state.download_directory.clone(),
         state.download_credentials.clone(),
     ));
@@ -1827,7 +1824,7 @@ struct DownloadStartResult {
     status: String,
 }
 
-/// Burn address for speed tier payments (deflationary)
+/// Burn address for download payments (deflationary)
 const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 
 #[tauri::command]
@@ -1837,37 +1834,33 @@ async fn start_download(
     file_hash: String,
     file_name: String,
     seeders: Vec<String>,
-    speed_tier: String,
     file_size: u64,
     wallet_address: Option<String>,
     private_key: Option<String>,
     seeder_price_wei: Option<String>,
     _seeder_wallet_address: Option<String>,
 ) -> Result<DownloadStartResult, String> {
-    // Parse speed tier
-    let tier = SpeedTier::from_str(&speed_tier)?;
     println!(
-        "⚡ Starting download: {} (hash: {}) from {} seeders [tier: {:?}]",
+        "⚡ Starting download: {} (hash: {}) from {} seeders",
         file_name,
         file_hash,
         seeders.len(),
-        tier
     );
 
-    // Handle payment for paid tiers
-    let cost_wei = speed_tiers::calculate_cost(&tier, file_size);
+    // Handle payment
+    let cost_wei = speed_tiers::calculate_cost(file_size);
     if cost_wei > 0 {
         let wallet_addr = wallet_address
             .as_deref()
-            .ok_or("Wallet address required for paid speed tier")?;
+            .ok_or("Wallet address required for paid download")?;
         let priv_key = private_key
             .as_deref()
-            .ok_or("Private key required for paid speed tier")?;
+            .ok_or("Private key required for paid download")?;
 
         // Convert wei to CHI string for send_transaction
         let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
         println!(
-            "💰 Speed tier payment: {} CHI ({} wei) to burn address",
+            "💰 Download payment: {} CHI ({} wei) to burn address",
             cost_chi, cost_wei
         );
 
@@ -1883,16 +1876,16 @@ async fn start_download(
 
         match payment_result {
             Ok(result) => {
-                println!("✅ Speed tier payment successful: tx {}", result.hash);
+                println!("✅ Download payment successful: tx {}", result.hash);
                 // Record transaction metadata for enriched history
                 let meta = TransactionMeta {
                     tx_hash: result.hash.clone(),
-                    tx_type: "speed_tier_payment".to_string(),
-                    description: format!("⚡ {} tier download: {}", speed_tier, file_name),
+                    tx_type: "download_payment".to_string(),
+                    description: format!("⚡ Download: {}", file_name),
                     file_name: Some(file_name.clone()),
                     file_hash: Some(file_hash.clone()),
-                    speed_tier: Some(speed_tier.clone()),
-                    recipient_label: Some("Burn Address (Speed Tier)".to_string()),
+                    speed_tier: Some("download".to_string()),
+                    recipient_label: Some("Burn Address (Download)".to_string()),
                     balance_before: Some(result.balance_before.clone()),
                     balance_after: Some(result.balance_after.clone()),
                 };
@@ -1906,14 +1899,14 @@ async fn start_download(
                         "txHash": result.hash,
                         "fileHash": file_hash,
                         "fileName": file_name,
-                        "speedTier": speed_tier,
+                        "speedTier": "download",
                         "balanceBefore": result.balance_before,
                         "balanceAfter": result.balance_after,
                     }),
                 );
             }
             Err(e) => {
-                println!("❌ Speed tier payment failed: {}", e);
+                println!("❌ Download payment failed: {}", e);
                 return Err(format!("Payment failed: {}. Download not started.", e));
             }
         }
@@ -1925,7 +1918,7 @@ async fn start_download(
         if let Some(file_data) = storage.get(&file_hash) {
             println!("📁 File found in local cache");
 
-            // Save to downloads folder (rate-limited even for cached files)
+            // Save to downloads folder
             let custom_dir = state.download_directory.lock().await.clone();
             let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
@@ -1941,18 +1934,16 @@ async fn start_download(
 
             let file_data_clone = file_data.clone();
             let app_clone = app.clone();
-            let tier_clone = tier.clone();
             let hash_clone = file_hash.clone();
             let name_clone = file_name.clone();
             let rid_clone = request_id.clone();
 
-            // Spawn rate-limited write
+            // Spawn file write
             tokio::spawn(async move {
-                match speed_tiers::rate_limited_write(
+                match speed_tiers::write_file(
                     &app_clone,
                     &file_path,
                     &file_data_clone,
-                    &tier_clone,
                     &rid_clone,
                     &hash_clone,
                     &name_clone,
@@ -2052,18 +2043,16 @@ async fn start_download(
             );
 
             let app_clone = app.clone();
-            let tier_clone = tier.clone();
             let hash_clone = file_hash.clone();
             let name_clone = file_name.clone();
             let rid_clone = request_id.clone();
             let file_data_clone = file_data.clone();
 
             tokio::spawn(async move {
-                match speed_tiers::rate_limited_write(
+                match speed_tiers::write_file(
                     &app_clone,
                     &file_path,
                     &file_data_clone,
-                    &tier_clone,
                     &rid_clone,
                     &hash_clone,
                     &name_clone,
@@ -2132,12 +2121,6 @@ async fn start_download(
                 .as_millis()
         );
 
-        // Store the speed tier for this download so dht.rs can use it during write
-        {
-            let mut tiers = state.download_tiers.lock().await;
-            tiers.insert(request_id.clone(), tier);
-        }
-
         // Store download credentials if wallet is available (needed for file payment in event loop)
         let seeder_price: u128 = seeder_price_wei
             .as_deref()
@@ -2164,8 +2147,7 @@ async fn start_download(
                 "requestId": request_id,
                 "fileHash": file_hash,
                 "fileName": file_name,
-                "seeders": seeders.len(),
-                "speedTier": speed_tier
+                "seeders": seeders.len()
             }),
         );
 
@@ -2236,11 +2218,6 @@ async fn start_download(
                 status: "requesting".to_string(),
             })
         } else {
-            // Clean up tier entry on failure
-            {
-                let mut tiers = state.download_tiers.lock().await;
-                tiers.remove(&request_id);
-            }
             let error_msg = if last_error.is_empty() {
                 format!(
                     "No seeder could be contacted for this file ({} candidate(s)).",
@@ -2273,26 +2250,19 @@ struct DownloadCostResult {
     speed_label: String,
 }
 
-/// Calculate the cost of downloading a file at a given speed tier
+/// Calculate the cost of downloading a file
 #[tauri::command]
 async fn calculate_download_cost(
-    speed_tier: String,
     file_size: u64,
 ) -> Result<DownloadCostResult, String> {
-    let tier = SpeedTier::from_str(&speed_tier)?;
-    let cost_wei = speed_tiers::calculate_cost(&tier, file_size);
+    let cost_wei = speed_tiers::calculate_cost(file_size);
     let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
-    let speed_label = match tier.bytes_per_second() {
-        Some(bps) if bps < 1024 * 1024 => format!("{} KB/s", bps / 1024),
-        Some(bps) => format!("{} MB/s", bps / (1024 * 1024)),
-        None => "Unlimited".to_string(),
-    };
 
     Ok(DownloadCostResult {
         cost_wei: cost_wei.to_string(),
         cost_chi,
-        tier: speed_tier,
-        speed_label,
+        tier: "standard".to_string(),
+        speed_label: "Unlimited".to_string(),
     })
 }
 
@@ -3744,14 +3714,14 @@ fn classify_transaction(
 
     // Auto-detect based on addresses
     if to_lower == burn_lower && from_lower == address_lower {
-        // Payment to burn address — likely a speed tier payment
+        // Payment to burn address — likely a download payment
         return (
-            "speed_tier_payment".to_string(),
-            "⚡ Speed tier download payment".to_string(),
+            "download_payment".to_string(),
+            "⚡ Download payment".to_string(),
             None,
             None,
             None,
-            Some("Burn Address (Speed Tier)".to_string()),
+            Some("Burn Address (Download)".to_string()),
             None,
             None,
         );
@@ -5983,7 +5953,6 @@ pub fn run() {
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth,
             encryption_keypair: Arc::new(Mutex::new(None)),
-            download_tiers: Arc::new(Mutex::new(HashMap::new())),
             tx_metadata: Arc::new(Mutex::new(HashMap::new())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
@@ -6250,7 +6219,6 @@ mod multi_seeder_tests {
     async fn build_local_search_result_reads_local_shared_file() {
         let dht = Arc::new(DhtService::new(
             Arc::new(Mutex::new(FileTransferService::new())),
-            Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(None)),
             Arc::new(Mutex::new(HashMap::new())),
         ));
@@ -6281,7 +6249,6 @@ mod multi_seeder_tests {
     async fn build_local_search_result_returns_none_for_missing_hash() {
         let dht = Arc::new(DhtService::new(
             Arc::new(Mutex::new(FileTransferService::new())),
-            Arc::new(Mutex::new(HashMap::new())),
             Arc::new(Mutex::new(None)),
             Arc::new(Mutex::new(HashMap::new())),
         ));

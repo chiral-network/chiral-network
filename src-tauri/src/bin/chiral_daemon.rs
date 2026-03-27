@@ -41,7 +41,6 @@ struct DaemonArgs {
 struct HeadlessRuntimeState {
     dht: Arc<Mutex<Option<Arc<dht::DhtService>>>>,
     file_transfer: Arc<Mutex<FileTransferService>>,
-    download_tiers: dht::DownloadTiersMap,
     download_directory: dht::DownloadDirectoryRef,
     download_credentials: dht::DownloadCredentialsMap,
     geth: Arc<Mutex<GethProcess>>,
@@ -52,7 +51,6 @@ impl HeadlessRuntimeState {
         Self {
             dht: Arc::new(Mutex::new(None)),
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
-            download_tiers: Arc::new(Mutex::new(HashMap::new())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
             geth: Arc::new(Mutex::new(GethProcess::new())),
@@ -251,7 +249,6 @@ async fn dht_start(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
 
     let svc = Arc::new(dht::DhtService::new(
         Arc::clone(&state.file_transfer),
-        Arc::clone(&state.download_tiers),
         Arc::clone(&state.download_directory),
         Arc::clone(&state.download_credentials),
     ));

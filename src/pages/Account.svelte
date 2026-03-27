@@ -408,6 +408,7 @@
   function getTxTypeStyle(tx: Transaction): { bgColor: string; iconColor: string } {
     switch (tx.txType) {
       case 'speed_tier_payment':
+      case 'download_payment':
         return { bgColor: 'bg-amber-100 dark:bg-amber-900/30', iconColor: 'text-amber-600 dark:text-amber-400' };
       case 'file_payment':
         return { bgColor: 'bg-purple-100 dark:bg-purple-900/30', iconColor: 'text-purple-600 dark:text-purple-400' };
@@ -427,7 +428,8 @@
   // Get transaction type label
   function getTxTypeLabel(tx: Transaction): string {
     switch (tx.txType) {
-      case 'speed_tier_payment': return 'Download Payment';
+      case 'speed_tier_payment':
+      case 'download_payment': return 'Download Payment';
       case 'file_payment': return 'File Purchase';
       case 'file_sale': return 'File Sale';
       case 'send': return 'Sent';
@@ -831,7 +833,7 @@
                 class="w-full flex items-center gap-4 p-3 text-left"
               >
                 <div class="p-2 {style.bgColor} rounded-full flex-shrink-0">
-                  {#if tx.txType === 'speed_tier_payment'}
+                  {#if tx.txType === 'speed_tier_payment' || tx.txType === 'download_payment'}
                     <Zap class="w-5 h-5 {style.iconColor}" />
                   {:else if tx.txType === 'file_payment' || tx.txType === 'file_sale'}
                     <FileIcon class="w-5 h-5 {style.iconColor}" />
@@ -847,7 +849,7 @@
                       {isIncoming(tx) ? '+' : '-'}{tx.value} CHI
                     </span>
                     <span class="text-xs px-2 py-0.5 rounded-full {
-                      tx.txType === 'speed_tier_payment'
+                      (tx.txType === 'speed_tier_payment' || tx.txType === 'download_payment')
                         ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300'
                         : tx.txType === 'file_payment'
                           ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300'

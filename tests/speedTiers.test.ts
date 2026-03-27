@@ -1,108 +1,42 @@
 import { describe, it, expect } from 'vitest';
-import {
-  calculateCost,
-  formatCost,
-  getTierConfig,
-  formatSpeed,
-  TIERS,
-  type SpeedTier,
-} from '$lib/speedTiers';
+import { calculateCost, formatCost, formatSpeed } from '$lib/speedTiers';
 
 describe('speedTiers', () => {
-  describe('TIERS constant', () => {
-    it('should have exactly 3 tiers', () => {
-      expect(TIERS).toHaveLength(3);
-    });
-
-    it('should have standard, premium, and ultra tiers in order', () => {
-      expect(TIERS[0].id).toBe('standard');
-      expect(TIERS[1].id).toBe('premium');
-      expect(TIERS[2].id).toBe('ultra');
-    });
-
-    it('standard tier should have 1 MB/s speed limit', () => {
-      expect(TIERS[0].speedLimit).toBe(1024 * 1024);
-    });
-
-    it('premium tier should have 5 MB/s speed limit', () => {
-      expect(TIERS[1].speedLimit).toBe(5 * 1024 * 1024);
-    });
-
-    it('ultra tier should have unlimited (0) speed limit', () => {
-      expect(TIERS[2].speedLimit).toBe(0);
-    });
-
-    it('standard tier should cost 0.001 CHI per MB', () => {
-      expect(TIERS[0].costPerMb).toBe(0.001);
-    });
-
-    it('premium tier should cost 0.005 CHI per MB', () => {
-      expect(TIERS[1].costPerMb).toBe(0.005);
-    });
-
-    it('ultra tier should cost 0.01 CHI per MB', () => {
-      expect(TIERS[2].costPerMb).toBe(0.01);
-    });
-  });
-
-  describe('getTierConfig', () => {
-    it('should return correct config for standard tier', () => {
-      const config = getTierConfig('standard');
-      expect(config.name).toBe('Standard');
-      expect(config.speedLabel).toBe('1 MB/s');
-    });
-
-    it('should return correct config for premium tier', () => {
-      const config = getTierConfig('premium');
-      expect(config.name).toBe('Premium');
-      expect(config.speedLabel).toBe('5 MB/s');
-    });
-
-    it('should return correct config for ultra tier', () => {
-      const config = getTierConfig('ultra');
-      expect(config.name).toBe('Ultra');
-      expect(config.speedLabel).toBe('Unlimited');
-    });
-  });
-
   describe('calculateCost', () => {
-    it('should calculate standard tier cost: 10 MB = 0.01 CHI', () => {
-      const cost = calculateCost('standard', 10_000_000);
+    it('should calculate cost: 10 MB = 0.01 CHI', () => {
+      const cost = calculateCost(10_000_000);
       expect(cost).toBeCloseTo(0.01, 6);
     });
 
-    it('should calculate premium tier cost: 10 MB = 0.05 CHI', () => {
-      const cost = calculateCost('premium', 10_000_000);
-      expect(cost).toBeCloseTo(0.05, 6);
+    it('should return 0 for zero bytes', () => {
+      expect(calculateCost(0)).toBe(0);
     });
 
-    it('should calculate ultra tier cost: 10 MB = 0.1 CHI', () => {
-      const cost = calculateCost('ultra', 10_000_000);
-      expect(cost).toBeCloseTo(0.1, 6);
+    it('should return 0 for negative bytes', () => {
+      expect(calculateCost(-100)).toBe(0);
     });
 
-    it('should return 0 for zero bytes on any tier', () => {
-      expect(calculateCost('standard', 0)).toBe(0);
-      expect(calculateCost('premium', 0)).toBe(0);
-      expect(calculateCost('ultra', 0)).toBe(0);
-    });
-
-    it('should handle 1 byte file (tiny non-zero cost for paid tiers)', () => {
-      const stdCost = calculateCost('standard', 1);
-      expect(stdCost).toBeGreaterThan(0);
-      expect(stdCost).toBeLessThan(0.000001);
+    it('should handle 1 byte file (tiny non-zero cost)', () => {
+      const cost = calculateCost(1);
+      expect(cost).toBeGreaterThan(0);
+      expect(cost).toBeLessThan(0.000001);
     });
 
     it('should scale linearly with file size', () => {
-      const cost1 = calculateCost('standard', 100_000_000); // 100 MB
-      const cost2 = calculateCost('standard', 200_000_000); // 200 MB
+      const cost1 = calculateCost(100_000_000); // 100 MB
+      const cost2 = calculateCost(200_000_000); // 200 MB
       expect(cost2).toBeCloseTo(cost1 * 2, 6);
     });
 
     it('should handle large file (1 GB) correctly', () => {
-      const cost = calculateCost('premium', 1_000_000_000);
-      // 1000 MB * 0.005 = 5 CHI
-      expect(cost).toBeCloseTo(5.0, 6);
+      const cost = calculateCost(1_000_000_000);
+      // 1000 MB * 0.001 = 1 CHI
+      expect(cost).toBeCloseTo(1.0, 6);
+    });
+
+    it('should cost 0.001 CHI per MB', () => {
+      const cost = calculateCost(1_000_000); // 1 MB
+      expect(cost).toBeCloseTo(0.001, 6);
     });
   });
 
