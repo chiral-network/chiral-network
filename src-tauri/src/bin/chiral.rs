@@ -1697,19 +1697,11 @@ fn require_wallet() -> Result<WalletProfile, String> {
         .ok_or("No active wallet. Use `chiral wallet create` or `chiral wallet import`".to_string())
 }
 
-fn speed_tier_cost_per_mb_wei(tier: &str) -> Result<u128, String> {
-    match tier.to_lowercase().as_str() {
-        "standard" => Ok(1_000_000_000_000_000),
-        "premium" => Ok(5_000_000_000_000_000),
-        "ultra" => Ok(10_000_000_000_000_000),
-        _ => Err(format!("Unknown speed tier: {}", tier)),
-    }
-}
-
-fn calculate_download_cost_wei(file_size_bytes: u64, tier: &str) -> Result<u128, String> {
-    let cost_per_mb = speed_tier_cost_per_mb_wei(tier)?;
+/// Fixed download cost: 0.001 CHI per MB
+fn calculate_download_cost_wei(file_size_bytes: u64) -> u128 {
+    let cost_per_mb: u128 = 1_000_000_000_000_000; // 0.001 CHI
     let size = file_size_bytes as u128;
-    Ok((size * cost_per_mb + 999_999) / 1_000_000)
+    (size * cost_per_mb + 999_999) / 1_000_000
 }
 
 fn format_wei_as_chi(wei: u128) -> String {
@@ -2884,10 +2876,9 @@ async fn handle_download(cmd: DownloadCommand) -> Result<(), String> {
         }
         DownloadCommand::Cost {
             file_size_bytes,
-            tier,
+            tier: _,
         } => {
-            let cost_wei = calculate_download_cost_wei(file_size_bytes, &tier)?;
-            println!("tier={}", tier);
+            let cost_wei = calculate_download_cost_wei(file_size_bytes);
             println!("file_size_bytes={}", file_size_bytes);
             println!("cost_wei={}", cost_wei);
             println!("cost_chi={}", format_wei_as_chi(cost_wei));

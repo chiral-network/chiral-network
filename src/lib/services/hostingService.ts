@@ -246,7 +246,6 @@ class HostingService {
         fileHash,
         fileName: fileHash,
         seeders: [agreement.clientPeerId],
-        speedTier: 'standard',
         fileSize: 0,
         walletAddress: null,
         privateKey: null,

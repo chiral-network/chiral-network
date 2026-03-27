@@ -1,5 +1,4 @@
 use crate::event_sink::EventSink;
-use crate::speed_tiers::SpeedTier;
 use futures::StreamExt;
 use libp2p::{
     dcutr, identify, kad, mdns, noise, ping, relay, request_response,
@@ -418,9 +417,6 @@ pub struct SharedFileInfo {
     pub wallet_address: String,
 }
 
-/// Map of request_id -> SpeedTier for rate-limited downloads
-pub type DownloadTiersMap = Arc<Mutex<HashMap<String, SpeedTier>>>;
-
 /// Shared reference to the custom download directory setting
 pub type DownloadDirectoryRef = Arc<Mutex<Option<String>>>;
 
@@ -447,7 +443,6 @@ struct ActiveChunkedDownload {
     bytes_written: u64,
     peer_id: PeerId,
     backup_peers: Vec<PeerId>,
-    tier: SpeedTier,
     retry_counts: Vec<u8>,
     current_chunk_index: u32,
     start_time: std::time::Instant,
@@ -489,7 +484,6 @@ pub struct DhtService {
     command_sender: Arc<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
-    download_tiers: DownloadTiersMap,
     download_directory: DownloadDirectoryRef,
     active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
     download_credentials: DownloadCredentialsMap,
@@ -498,7 +492,6 @@ pub struct DhtService {
 impl DhtService {
     pub fn new(
         file_transfer_service: Arc<Mutex<crate::file_transfer::FileTransferService>>,
-        download_tiers: DownloadTiersMap,
         download_directory: DownloadDirectoryRef,
         download_credentials: DownloadCredentialsMap,
     ) -> Self {
@@ -509,7 +502,6 @@ impl DhtService {
             command_sender: Arc::new(Mutex::new(None)),
             file_transfer_service: Some(file_transfer_service),
             shared_files: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            download_tiers,
             download_directory,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_credentials,
@@ -644,7 +636,6 @@ impl DhtService {
         let is_running_clone = self.is_running.clone();
         let file_transfer_clone = self.file_transfer_service.clone();
         let shared_files_clone = self.shared_files.clone();
-        let download_tiers_clone = self.download_tiers.clone();
         let download_dir_clone = self.download_directory.clone();
         let active_downloads_clone = self.active_downloads.clone();
         let download_credentials_clone = self.download_credentials.clone();
@@ -659,7 +650,6 @@ impl DhtService {
                 cmd_rx,
                 file_transfer_clone,
                 shared_files_clone,
-                download_tiers_clone,
                 download_dir_clone,
                 active_downloads_clone,
                 download_credentials_clone,
@@ -1556,7 +1546,6 @@ async fn event_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
-    download_tiers: DownloadTiersMap,
     download_directory: DownloadDirectoryRef,
     active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
     download_credentials: DownloadCredentialsMap,
@@ -1650,7 +1639,6 @@ async fn event_loop(
                             &mut pending_get_queries,
                             &mut pending_get_results,
                             &shared_files,
-                            &download_tiers,
                             &download_directory,
                             &active_downloads,
                             &mut outbound_request_map,
@@ -2109,7 +2097,6 @@ async fn handle_behaviour_event(
     >,
     pending_get_results: &mut HashMap<kad::QueryId, Vec<String>>,
     shared_files: &SharedFilesMap,
-    download_tiers: &DownloadTiersMap,
     download_directory: &DownloadDirectoryRef,
     active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
@@ -3061,8 +3048,6 @@ async fn handle_behaviour_event(
                                             return;
                                         }
                                         pending_file_hashes.remove(&request_id);
-                                        let mut tiers = download_tiers.lock().await;
-                                        tiers.remove(&request_id);
                                         let _ = events.emit(
                                             "file-download-failed",
                                             serde_json::json!({
@@ -3080,15 +3065,6 @@ async fn handle_behaviour_event(
 
                                     let price: u128 = price_wei.parse().unwrap_or(0);
                                     println!("📋 Received FileInfo: {} ({} bytes, {} chunks, price={} wei)", file_name, file_size, total_chunks, price);
-
-                                    // Get speed tier
-                                    let tier = {
-                                        let tiers = download_tiers.lock().await;
-                                        tiers
-                                            .get(&request_id)
-                                            .cloned()
-                                            .unwrap_or(SpeedTier::Standard)
-                                    };
 
                                     // Determine output path
                                     let custom_dir = download_directory.lock().await.clone();
@@ -3138,7 +3114,6 @@ async fn handle_behaviour_event(
                                         bytes_written: 0,
                                         peer_id: peer,
                                         backup_peers: vec![],
-                                        tier,
                                         retry_counts: vec![0u8; total_chunks as usize],
                                         current_chunk_index: 0,
                                         start_time: std::time::Instant::now(),
@@ -3228,8 +3203,6 @@ async fn handle_behaviour_event(
                                                         let _ =
                                                             std::fs::remove_file(&dl.output_path);
                                                     }
-                                                    let mut tiers = download_tiers.lock().await;
-                                                    tiers.remove(&request_id);
                                                     let _ = events.emit("file-download-failed", serde_json::json!({
                                                         "requestId": request_id,
                                                         "fileHash": file_hash,
@@ -3243,8 +3216,6 @@ async fn handle_behaviour_event(
                                             if let Some(dl) = downloads.remove(&request_id) {
                                                 let _ = std::fs::remove_file(&dl.output_path);
                                             }
-                                            let mut tiers = download_tiers.lock().await;
-                                            tiers.remove(&request_id);
                                             let _ = events.emit("file-download-failed", serde_json::json!({
                                                 "requestId": request_id,
                                                 "fileHash": file_hash,
@@ -3323,8 +3294,6 @@ async fn handle_behaviour_event(
                                                     // Max retries exceeded — abort
                                                     let dl = downloads.remove(&request_id).unwrap();
                                                     let _ = std::fs::remove_file(&dl.output_path);
-                                                    let mut tiers = download_tiers.lock().await;
-                                                    tiers.remove(&request_id);
                                                     drop(downloads);
                                                     let _ = events.emit("file-download-failed", serde_json::json!({
                                                         "requestId": request_id,
@@ -3454,8 +3423,6 @@ async fn handle_behaviour_event(
                                                 } else {
                                                     let dl = downloads.remove(&request_id).unwrap();
                                                     let _ = std::fs::remove_file(&dl.output_path);
-                                                    let mut tiers = download_tiers.lock().await;
-                                                    tiers.remove(&request_id);
                                                     drop(downloads);
                                                     let _ = events.emit("file-download-failed", serde_json::json!({
                                                         "requestId": request_id,
@@ -3481,8 +3448,6 @@ async fn handle_behaviour_event(
                                             );
                                             let dl = downloads.remove(&request_id).unwrap();
                                             let _ = std::fs::remove_file(&dl.output_path);
-                                            let mut tiers = download_tiers.lock().await;
-                                            tiers.remove(&request_id);
                                             drop(downloads);
                                             let _ = events.emit(
                                                 "file-download-failed",
@@ -3530,9 +3495,6 @@ async fn handle_behaviour_event(
                                             let file_name_clone = dl.file_name.clone();
                                             let file_size = dl.file_size;
                                             let _ = downloads.remove(&request_id);
-                                            let mut tiers = download_tiers.lock().await;
-                                            tiers.remove(&request_id_clone);
-                                            drop(tiers);
                                             drop(downloads);
 
                                             // Verify full file SHA-256
@@ -3604,23 +3566,12 @@ async fn handle_behaviour_event(
                                                 }
                                             });
                                         } else {
-                                            // Request next chunk after rate-limit delay
+                                            // Request next chunk
                                             let peer_id = dl.peer_id;
                                             let fh = dl.file_hash.clone();
                                             let rid = dl.request_id.clone();
                                             let next_index = dl.current_chunk_index;
-                                            let tier = dl.tier.clone();
                                             drop(downloads);
-
-                                            // Apply rate-limit delay
-                                            if let Some(delay) =
-                                                crate::speed_tiers::chunk_request_delay(
-                                                    CHUNK_SIZE as u32,
-                                                    &tier,
-                                                )
-                                            {
-                                                tokio::time::sleep(delay).await;
-                                            }
 
                                             let request = ChunkRequest::Chunk {
                                                 request_id: rid.clone(),
@@ -3653,8 +3604,6 @@ async fn handle_behaviour_event(
                                         if let Some(dl) = downloads.remove(&request_id) {
                                             let _ = std::fs::remove_file(&dl.output_path);
                                         }
-                                        let mut tiers = download_tiers.lock().await;
-                                        tiers.remove(&request_id);
                                         let _ = events.emit(
                                             "file-download-failed",
                                             serde_json::json!({
@@ -3726,8 +3675,6 @@ async fn handle_behaviour_event(
                                     let dl = downloads.remove(&request_id).unwrap();
                                     file_hash_for_error = Some(dl.file_hash.clone());
                                     let _ = std::fs::remove_file(&dl.output_path);
-                                    let mut tiers = download_tiers.lock().await;
-                                    tiers.remove(&request_id);
                                 } else {
                                     dl.retry_counts[chunk_index as usize] += 1;
                                     let attempt = dl.retry_counts[chunk_index as usize];
@@ -3793,8 +3740,6 @@ async fn handle_behaviour_event(
                                             let dl = downloads.remove(&request_id).unwrap();
                                             file_hash_for_error = Some(dl.file_hash.clone());
                                             let _ = std::fs::remove_file(&dl.output_path);
-                                            let mut tiers = download_tiers.lock().await;
-                                            tiers.remove(&request_id);
                                         }
                                     }
                                 }

@@ -1,51 +1,11 @@
-export type SpeedTier = 'standard' | 'premium' | 'ultra';
+/** Fixed download cost: 0.001 CHI per MB (unlimited speed) */
+const COST_PER_MB = 0.001;
 
-export interface TierConfig {
-  id: SpeedTier;
-  name: string;
-  speedLimit: number; // bytes per second, 0 = unlimited
-  speedLabel: string;
-  costPerMb: number; // in CHI
-  description: string;
-}
-
-export const TIERS: TierConfig[] = [
-  {
-    id: 'standard',
-    name: 'Standard',
-    speedLimit: 1024 * 1024, // 1 MB/s
-    speedLabel: '1 MB/s',
-    costPerMb: 0.001,
-    description: 'Moderate speed, affordable',
-  },
-  {
-    id: 'premium',
-    name: 'Premium',
-    speedLimit: 5 * 1024 * 1024, // 5 MB/s
-    speedLabel: '5 MB/s',
-    costPerMb: 0.005,
-    description: 'Fast speed, balanced pricing',
-  },
-  {
-    id: 'ultra',
-    name: 'Ultra',
-    speedLimit: 0, // unlimited
-    speedLabel: 'Unlimited',
-    costPerMb: 0.01,
-    description: 'Maximum speed, premium pricing',
-  },
-];
-
-export function getTierConfig(tier: SpeedTier): TierConfig {
-  return TIERS.find((t) => t.id === tier)!;
-}
-
-/** Calculate total download cost in CHI for a given tier and file size */
-export function calculateCost(tier: SpeedTier, fileSizeBytes: number): number {
-  const config = getTierConfig(tier);
-  if (config.costPerMb === 0) return 0;
+/** Calculate total download cost in CHI for a given file size */
+export function calculateCost(fileSizeBytes: number): number {
+  if (fileSizeBytes <= 0) return 0;
   const sizeMb = fileSizeBytes / 1_000_000;
-  return sizeMb * config.costPerMb;
+  return sizeMb * COST_PER_MB;
 }
 
 /** Format a CHI cost for display */

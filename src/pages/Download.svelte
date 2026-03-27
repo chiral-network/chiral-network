@@ -28,13 +28,13 @@
     ExternalLink,
     Eye
   } from 'lucide-svelte';
-  import { Zap, Gauge, Rocket } from 'lucide-svelte';
+  import { Zap } from 'lucide-svelte';
   import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { walletService } from '$lib/services/walletService';
   import { ratingApi, setRatingOwner, type BatchReputationEntry } from '$lib/services/ratingApiService';
-  import { TIERS, calculateCost, formatCost, formatSpeed, type SpeedTier } from '$lib/speedTiers';
+  import { calculateCost, formatCost, formatSpeed } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
   const log = logger('Download');
@@ -88,7 +88,7 @@
     seeders: number;
     startedAt: Date;
     completedAt?: Date;
-    speedTier?: SpeedTier;
+    speedTier?: string;
     seederWallet?: string;
     seederElo?: number;
     filePath?: string;
@@ -104,7 +104,7 @@
     completedAt: Date;
     startedAt?: Date;
     status: 'completed' | 'cancelled' | 'failed';
-    speedTier?: SpeedTier;
+    speedTier?: string;
     seeders?: number;
     seederWallet?: string;
     seederElo?: number;
@@ -227,8 +227,6 @@
   let viewerName = $state('');
   let viewerError = $state<string | null>(null);
 
-  // Speed tier state
-  let selectedTier = $state<SpeedTier>('standard');
   let walletBalance = $state<string>('0');
   let isProcessingPayment = $state(false);
 
@@ -713,16 +711,6 @@
     }
   }
 
-  // Get tier icon component
-  function getTierIcon(tier: SpeedTier) {
-    switch (tier) {
-      case 'standard': return Zap;
-      case 'premium': return Gauge;
-      case 'ultra': return Rocket;
-      default: return Zap;
-    }
-  }
-
   // Start download (validates, shows confirmation if paid, then proceeds)
   async function startDownload(result: SearchResult, skipBlacklistCheck = false, skipCostConfirm = false) {
     const tauriAvailable = checkTauriAvailability();
@@ -765,8 +753,8 @@
     const seederPriceWei = selected?.priceWei || result.priceWei || '0';
     const seederWalletAddr = selected?.walletAddress || result.walletAddress || '';
 
-    // Calculate total cost: speed tier + seeder file price
-    const tierCost = calculateCost(selectedTier, result.fileSize);
+    // Calculate total cost: download fee + seeder file price
+    const tierCost = calculateCost(result.fileSize);
     const seederPriceChi = seederPriceWei !== '0'
       ? Number(BigInt(seederPriceWei)) / 1e18
       : 0;
@@ -817,7 +805,6 @@
       seederWallet: seederWalletAddr || selected?.walletAddress || result.walletAddress || '',
       seederElo: selected ? getSeederElo(selected) : BASE_ELO,
       startedAt: new Date(),
-      speedTier: selectedTier
     };
 
     downloads = [...downloads, newDownload];
@@ -841,7 +828,6 @@
         fileHash: result.hash,
         fileName: result.fileName,
         seeders: seederPeerIds,
-        speedTier: selectedTier,
         fileSize: result.fileSize || 0,
       };
       if ($walletAccount?.address) {
@@ -1258,23 +1244,6 @@
     viewerError = null;
   }
 
-  function getTierLabel(tier?: SpeedTier): string {
-    switch (tier) {
-      case 'standard': return 'Standard';
-      case 'premium': return 'Premium';
-      case 'ultra': return 'Ultra';
-      default: return 'Standard';
-    }
-  }
-
-  function getTierBadgeColor(tier?: SpeedTier): string {
-    switch (tier) {
-      case 'ultra': return 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400';
-      case 'premium': return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400';
-      default: return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400';
-    }
-  }
-
   function formatDuration(start: Date, end: Date): string {
     const seconds = Math.round((end.getTime() - start.getTime()) / 1000);
     if (seconds < 60) return `${seconds}s`;
@@ -1480,69 +1449,24 @@
           </div>
         {/if}
 
-        <!-- Speed Tier Selector -->
+        <!-- Download -->
         <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
-          <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Select Download Speed</p>
-          <div class="grid grid-cols-3 gap-3">
-            {#each TIERS as tier}
-              {@const fileSizeKnown = searchResult.fileSize > 0}
-              {@const TierIcon = getTierIcon(tier.id)}
-              {@const cost = fileSizeKnown ? calculateCost(tier.id, searchResult.fileSize) : 0}
-              {@const isPaid = tier.costPerMb > 0}
-              {@const isSelected = selectedTier === tier.id}
-              {@const needsWallet = isPaid && !$walletAccount}
-              {@const insufficientBalance = fileSizeKnown && cost > 0 && parseFloat(walletBalance) < cost}
-              {@const isDisabled = needsWallet || insufficientBalance}
-              <button
-                onclick={() => { if (!isDisabled) selectedTier = tier.id; }}
-                disabled={isDisabled}
-                class="relative p-3 rounded-lg border-2 text-left transition-all
-                  {isSelected
-                    ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 ring-1 ring-primary-500'
-                    : isDisabled
-                      ? 'border-gray-200 dark:border-gray-600 opacity-50 cursor-not-allowed'
-                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 cursor-pointer'
-                  }"
-              >
-                <div class="flex items-center gap-2 mb-1">
-                  <TierIcon class="w-4 h-4 {isSelected ? 'text-primary-600 dark:text-primary-400' : 'text-gray-500 dark:text-gray-400'}" />
-                  <span class="text-sm font-semibold {isSelected ? 'text-primary-700 dark:text-primary-300' : 'dark:text-white'}">{tier.name}</span>
-                </div>
-                <p class="text-xs text-gray-500 dark:text-gray-400">{tier.speedLabel}</p>
-                <p class="text-xs font-medium mt-1 text-amber-600 dark:text-amber-400">
-                  {#if fileSizeKnown}
-                    {formatCost(cost)}
-                  {:else}
-                    {tier.costPerMb} CHI/MB
-                  {/if}
-                </p>
-                {#if needsWallet}
-                  <p class="text-xs text-red-500 mt-1">Wallet required</p>
-                {:else if insufficientBalance}
-                  <p class="text-xs text-red-500 mt-1">Low balance</p>
-                {/if}
-              </button>
-            {/each}
-          </div>
-
-          <!-- Download button -->
           {#if searchResult}
             {@const selectedSeeder = searchResult.seeders[selectedSeederIndex] || searchResult.seeders[0]}
             {@const selectedPriceWei = selectedSeeder?.priceWei || searchResult.priceWei || '0'}
             {@const seederPrice = selectedPriceWei !== '0' ? formatPriceWei(selectedPriceWei) : null}
-            {@const tierCostVal = searchResult.fileSize > 0 ? calculateCost(selectedTier, searchResult.fileSize) : 0}
-            {@const hasCost = seederPrice || tierCostVal > 0}
-            <div class="mt-4 flex items-center justify-between">
+            {@const downloadCost = searchResult.fileSize > 0 ? calculateCost(searchResult.fileSize) : 0}
+            <div class="flex items-center justify-between">
               <div class="text-sm text-gray-600 dark:text-gray-400">
                 Cost:
                 {#if seederPrice}
                   <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span> (file)
                 {/if}
-                {#if seederPrice && tierCostVal > 0}
+                {#if seederPrice && downloadCost > 0}
                   <span class="mx-1">+</span>
                 {/if}
-                {#if tierCostVal > 0}
-                  <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(tierCostVal)}</span> (speed tier)
+                {#if downloadCost > 0}
+                  <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(downloadCost)}</span> (download)
                 {/if}
                 {#if $walletAccount}
                   <span class="text-gray-400 mx-1">•</span>
@@ -1956,7 +1880,7 @@
           {/if}
           {#if pendingDownload.tierCost > 0}
             <div class="flex justify-between text-sm">
-              <span class="text-gray-600 dark:text-gray-300">Speed tier ({selectedTier})</span>
+              <span class="text-gray-600 dark:text-gray-300">Download fee</span>
               <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
             </div>
           {/if}
