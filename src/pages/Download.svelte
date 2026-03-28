@@ -28,7 +28,7 @@
     ExternalLink,
     Eye
   } from 'lucide-svelte';
-  import { Zap } from 'lucide-svelte';
+  import { Zap, Link } from 'lucide-svelte';
   import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
@@ -94,6 +94,7 @@
     filePath?: string;
     balanceBefore?: string;
     balanceAfter?: string;
+    httpLink?: string;
   }
 
   interface HistoryEntry {
@@ -111,6 +112,7 @@
     filePath?: string;
     balanceBefore?: string;
     balanceAfter?: string;
+    httpLink?: string;
   }
 
   interface TransferReputationContext {
@@ -994,6 +996,31 @@
             await reportTransferOutcome(context, 'completed');
           }
 
+          // Generate HTTP link for viewing in browser via local Drive server
+          try {
+            const { invoke: inv } = await import('@tauri-apps/api/core');
+            const serverUrl = await inv<string | null>('get_drive_server_url');
+            if (serverUrl && filePath && $walletAccount?.address) {
+              const driveItem = await inv<{ id: string; name: string }>('drive_upload_file', {
+                owner: $walletAccount.address,
+                filePath,
+                parentId: null,
+                merkleRoot: fileHash,
+              });
+              if (driveItem?.id) {
+                const httpLink = `${serverUrl}/api/drive/download/${driveItem.id}/${encodeURIComponent(fileName)}`;
+                downloads = downloads.map(d => {
+                  if (d.hash === fileHash && d.status === 'completed' && !d.httpLink) {
+                    return { ...d, httpLink };
+                  }
+                  return d;
+                });
+                saveDownloadHistory();
+              }
+            }
+          } catch (e) {
+            log.warn('Failed to generate HTTP link for download:', e);
+          }
         })();
       });
 
@@ -1634,6 +1661,18 @@
                     >
                       <FolderOpen class="w-4 h-4 text-gray-500 dark:text-gray-400" />
                     </button>
+                    {#if download.httpLink}
+                      <button
+                        onclick={() => {
+                          navigator.clipboard.writeText(download.httpLink!);
+                          toasts.show('HTTP link copied to clipboard', 'success');
+                        }}
+                        class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                        title="Copy HTTP link"
+                      >
+                        <Link class="w-4 h-4 text-blue-500" />
+                      </button>
+                    {/if}
                   {/if}
                   <button
                     onclick={() => moveToHistory(download.id)}
@@ -1729,6 +1768,17 @@
                     title="Show in folder"
                   >
                     <FolderOpen class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                  </button>
+                  {#if entry.httpLink}
+                    <button
+                      onclick={() => {
+                        navigator.clipboard.writeText(entry.httpLink!);
+                        toasts.show('HTTP link copied to clipboard', 'success');
+                      }}
+                      class="p-1.5 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                      title="Copy HTTP link"
+                    >
+                      <Link class="w-4 h-4 text-blue-500" />
                   </button>
                 {/if}
                 <button

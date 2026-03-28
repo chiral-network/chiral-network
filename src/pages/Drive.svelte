@@ -15,7 +15,6 @@
   import DriveFileCard from '$lib/components/drive/DriveFileCard.svelte';
   import DriveFileRow from '$lib/components/drive/DriveFileRow.svelte';
   import DriveContextMenu from '$lib/components/drive/DriveContextMenu.svelte';
-  import DriveShareModal from '$lib/components/drive/DriveShareModal.svelte';
   import DriveMoveModal from '$lib/components/drive/DriveMoveModal.svelte';
 
 
@@ -35,7 +34,6 @@
   let contextY = $state(0);
 
   // Modals
-  let shareItem = $state<DriveItem | null>(null);
   let moveItem = $state<DriveItem | null>(null);
   let renamingId = $state<string | null>(null);
   let renameValue = $state('');
@@ -306,31 +304,6 @@
     renameValue = '';
   }
 
-  // Copy link
-  async function handleCopyLink(item: DriveItem) {
-    const existingShares = driveStore.getSharesForItem(item.id, manifest);
-    let url: string;
-    if (existingShares.length > 0) {
-      url = driveStore.getShareUrl(existingShares[0].id);
-    } else {
-      const liveItem = manifest.items.find(i => i.id === item.id);
-      const priceSrc = liveItem?.priceChi ?? item.priceChi;
-      const fallbackPrice = priceSrc && parseFloat(priceSrc) > 0 ? priceSrc : '0';
-      const share = await driveStore.createShareLink(item.id, fallbackPrice, true);
-      if (!share) {
-        toasts.show('Failed to create share link', 'error');
-        return;
-      }
-      url = driveStore.getShareUrl(share.id);
-    }
-    try {
-      await navigator.clipboard.writeText(url);
-      toasts.show('Link copied', 'success');
-    } catch {
-      toasts.show('Could not copy to clipboard', 'error');
-    }
-  }
-
   // Download
   async function handleDownload(item: DriveItem) {
     if (item.type !== 'file') return;
@@ -342,11 +315,6 @@
       // Fallback for non-Tauri environments
       window.open(url, '_blank');
     }
-  }
-
-  // Share
-  function handleShare(item: DriveItem) {
-    shareItem = item;
   }
 
   // Delete
@@ -744,8 +712,6 @@
     onClose={closeContextMenu}
     onRename={startRename}
     onMove={handleMoveAction}
-    onShare={handleShare}
-    onCopyLink={handleCopyLink}
     onToggleStar={handleToggleStar}
     onToggleVisibility={handleToggleVisibility}
     onDelete={handleDelete}
@@ -756,11 +722,6 @@
     onShowInExplorer={handleShowInExplorer}
     onEditPrice={handleEditPrice}
   />
-{/if}
-
-<!-- Share modal -->
-{#if shareItem}
-  <DriveShareModal item={shareItem} {manifest} onClose={() => shareItem = null} />
 {/if}
 
 <!-- Seed to network modal -->
