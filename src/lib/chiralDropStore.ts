@@ -58,12 +58,19 @@ export const pendingTransfers = writable<FileTransfer[]>([]);
 export const transferHistory = writable<FileTransfer[]>([]);
 export const selectedPeer = writable<NearbyPeer | null>(null);
 
-// Load transaction history from localStorage (temporary cache)
-const HISTORY_STORAGE_KEY = 'chiraldrop_history';
+// Load transaction history from localStorage (wallet-specific key)
+const HISTORY_STORAGE_PREFIX = 'chiraldrop_history_';
+let currentHistoryKey: string | null = null;
 
-function loadHistoryFromLocal(): FileTransfer[] {
+function getHistoryKey(address?: string | null): string {
+  if (address) return `${HISTORY_STORAGE_PREFIX}${address.toLowerCase()}`;
+  return `${HISTORY_STORAGE_PREFIX}anonymous`;
+}
+
+function loadHistoryFromLocal(address?: string | null): FileTransfer[] {
   try {
-    const stored = localStorage.getItem(HISTORY_STORAGE_KEY);
+    const key = getHistoryKey(address);
+    const stored = localStorage.getItem(key);
     if (stored) {
       const parsed = JSON.parse(stored);
       // Reconstruct alias objects from stored data
@@ -80,15 +87,13 @@ function loadHistoryFromLocal(): FileTransfer[] {
 }
 
 function saveHistoryToLocal(history: FileTransfer[]) {
+  if (!currentHistoryKey) return;
   try {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+    localStorage.setItem(currentHistoryKey, JSON.stringify(history));
   } catch (e) {
     log.error('Failed to save transfer history to localStorage:', e);
   }
 }
-
-// Initialize history from local storage first (fast)
-transferHistory.set(loadHistoryFromLocal());
 
 // Subscribe to history changes and persist both locally and to DHT
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -107,14 +112,16 @@ transferHistory.subscribe((history) => {
   }, 2000);
 });
 
-// When wallet connects, sync history from DHT
+// When wallet changes, load that wallet's history (or clear on logout)
 walletAccount.subscribe(async (wallet) => {
+  currentHistoryKey = getHistoryKey(wallet?.address);
+
   if (wallet) {
     log.info('Wallet connected, syncing history from DHT...');
     try {
-      const localHistory = get(transferHistory);
+      const localHistory = loadHistoryFromLocal(wallet.address);
+      transferHistory.set(localHistory);
       const syncedHistory = await syncHistory(localHistory);
-      // Update store with synced history (merged local + DHT)
       if (syncedHistory.length > 0) {
         transferHistory.set(syncedHistory);
       }
@@ -122,6 +129,9 @@ walletAccount.subscribe(async (wallet) => {
     } catch (err) {
       log.error('Failed to sync history:', err);
     }
+  } else {
+    // Logged out — clear in-memory history
+    transferHistory.set([]);
   }
 });
 
