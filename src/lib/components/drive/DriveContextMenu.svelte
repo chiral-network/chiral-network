@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderInput, FolderOpen, Pencil, Star, StarOff, Share2, Link, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2, Coins } from 'lucide-svelte';
+  import { FolderInput, FolderOpen, Pencil, Star, StarOff, Trash2, Eye, EyeOff, Globe, StopCircle, Copy, Link2, Coins } from 'lucide-svelte';
   import type { DriveItem } from '$lib/stores/driveStore';
   import { computeContextMenuPlacement } from '$lib/utils/uiPositioning';
 
@@ -10,8 +10,6 @@
     onClose,
     onRename,
     onMove,
-    onShare,
-    onCopyLink,
     onToggleStar,
     onToggleVisibility,
     onDelete,
@@ -28,8 +26,6 @@
     onClose: () => void;
     onRename: (item: DriveItem) => void;
     onMove: (item: DriveItem) => void;
-    onShare: (item: DriveItem) => void;
-    onCopyLink: (item: DriveItem) => void;
     onToggleStar: (item: DriveItem) => void;
     onToggleVisibility: (item: DriveItem) => void;
     onDelete: (item: DriveItem) => void;
@@ -100,8 +96,6 @@
     ...(onShowInExplorer
       ? [{ label: 'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
       : []),
-    { label: 'Copy Link', icon: Link, action: action(onCopyLink) },
-    { label: 'Share...', icon: Share2, action: action(onShare) },
     // Seeding actions
     ...(item.type === 'file' && !item.seeding && onSeed
       ? [{ label: 'Seed to Network', icon: Globe, action: action(onSeed) }]
