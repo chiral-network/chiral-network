@@ -613,8 +613,8 @@
   async function fetchSeederRatings(seeders: SeederInfo[]) {
     try {
       const wallets = [...new Set(
-        seeders.map(s => s.walletAddress).filter(Boolean)
-      )];
+        seeders.map(s => s.walletAddress?.trim().toLowerCase()).filter(Boolean)
+      )] as string[];
       if (wallets.length === 0) return;
       const now = Date.now();
       const cachedRatings: Record<string, BatchReputationEntry> = {};
@@ -640,10 +640,13 @@
             const ratings: Record<string, BatchReputationEntry> =
               raw && typeof raw === 'object' ? raw : {};
             const expiresAt = Date.now() + REPUTATION_CACHE_TTL_MS;
+            const normalized: Record<string, BatchReputationEntry> = {};
             for (const [key, value] of Object.entries(ratings)) {
-              reputationCache.set(key, { rating: value, expiresAt });
+              const normalizedKey = key.trim().toLowerCase();
+              reputationCache.set(normalizedKey, { rating: value, expiresAt });
+              normalized[normalizedKey] = value;
             }
-            return ratings;
+            return normalized;
           })().finally(() => {
             pendingReputationFetches.delete(requestKey);
           });
@@ -661,7 +664,7 @@
 
       let changed = false;
       downloads = downloads.map((download) => {
-        const wallet = download.seederWallet?.trim();
+        const wallet = download.seederWallet?.trim().toLowerCase();
         const nextElo = wallet ? ratings[wallet]?.elo : undefined;
         if (typeof nextElo === 'number' && Number.isFinite(nextElo) && download.seederElo !== nextElo) {
           changed = true;
@@ -670,7 +673,7 @@
         return download;
       });
       downloadHistory = downloadHistory.map((entry) => {
-        const wallet = entry.seederWallet?.trim();
+        const wallet = entry.seederWallet?.trim().toLowerCase();
         const nextElo = wallet ? ratings[wallet]?.elo : undefined;
         if (typeof nextElo === 'number' && Number.isFinite(nextElo) && entry.seederElo !== nextElo) {
           changed = true;
@@ -689,11 +692,11 @@
   function getSeederReputation(seeder: SeederInfo): BatchReputationEntry | null {
     if (!seeder) return null;
     const ratings = seederRatings && typeof seederRatings === 'object' ? seederRatings : {};
-    const wallet = seeder.walletAddress?.trim();
+    const wallet = seeder.walletAddress?.trim().toLowerCase();
     if (wallet && ratings[wallet]) {
       return ratings[wallet];
     }
-    const peer = seeder.peerId?.trim();
+    const peer = seeder.peerId?.trim().toLowerCase();
     if (peer && ratings[peer]) {
       return ratings[peer];
     }
