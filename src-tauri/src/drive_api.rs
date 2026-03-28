@@ -579,12 +579,88 @@ async fn delete_item(
     (StatusCode::OK, "Deleted").into_response()
 }
 
-/// GET /api/drive/download/:id/:filename  — direct file download
-/// The filename in the URL path ensures browsers save with the correct extension.
+/// GET /api/drive/view/:id/:filename  — HTML preview page with download button
+async fn view_file(
+    Extension(state): Extension<Arc<DriveState>>,
+    headers: HeaderMap,
+    Path((item_id, filename)): Path<(String, String)>,
+) -> Response {
+    let m = state.manifest.read().await;
+    let owner = get_owner(&headers);
+    let Some(item) = m
+        .items
+        .iter()
+        .find(|i| i.id == item_id && (owner.is_none() || i.owner == *owner.as_ref().unwrap()))
+    else {
+        return (StatusCode::NOT_FOUND, "Item not found").into_response();
+    };
+    if item.item_type != "file" {
+        return (StatusCode::BAD_REQUEST, "Cannot preview a folder").into_response();
+    }
+    let encoded_name = url_encode(&item.name);
+    let encoded_id = url_encode(&item.id);
+    let download_url = format!("/api/drive/download/{}/{}", encoded_id, encoded_name);
+    let inline_url = format!(
+        "/api/drive/download/{}/{}?inline=1",
+        encoded_id, encoded_name
+    );
+    let size_str = item
+        .size
+        .map(|s| format_bytes(s))
+        .unwrap_or_else(|| "Unknown size".into());
+    let preview_html = match preview_kind(item) {
+        "image" => format!(
+            r#"<img src="{url}" alt="{name}" class="max-h-[68vh] max-w-full object-contain rounded-xl border border-gray-700 bg-gray-900" />"#,
+            url = inline_url,
+            name = html_escape(&item.name),
+        ),
+        "video" => format!(
+            r#"<video controls class="w-full rounded-xl border border-gray-700 bg-black max-h-[68vh]"><source src="{url}" /></video>"#,
+            url = inline_url,
+        ),
+        "audio" => format!(
+            r#"<audio controls class="w-full"><source src="{url}" /></audio>"#,
+            url = inline_url,
+        ),
+        "pdf" | "text" => format!(
+            r#"<iframe src="{url}" class="w-full h-[70vh] rounded-xl border border-gray-700 bg-gray-900" title="preview"></iframe>"#,
+            url = inline_url,
+        ),
+        _ => r#"<div class="rounded-xl border border-gray-700 bg-gray-900 px-4 py-10 text-center text-gray-400 text-sm">Preview is not available for this file type.</div>"#.to_string(),
+    };
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chiral Drive - {name}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head><body class="bg-gray-900 text-white min-h-screen">
+<div class="max-w-5xl mx-auto py-8 px-4">
+  <div class="flex items-center justify-between gap-4 mb-5">
+    <div>
+      <h1 class="text-xl font-bold break-all">{name}</h1>
+      <p class="text-sm text-gray-400">{size}</p>
+    </div>
+    <a href="{download_url}" class="inline-flex items-center justify-center px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">Download</a>
+  </div>
+  <div class="bg-gray-800 rounded-xl border border-gray-700 p-4">
+    {preview}
+  </div>
+  <p class="text-xs text-gray-500 mt-4">Shared via Chiral Network</p>
+</div></body></html>"#,
+        name = html_escape(&item.name),
+        size = size_str,
+        download_url = download_url,
+        preview = preview_html,
+    );
+    axum::response::Html(html).into_response()
+}
+
+/// GET /api/drive/download/:id/:filename  — direct file download (or inline with ?inline=1)
 async fn download_file(
     Extension(state): Extension<Arc<DriveState>>,
     headers: HeaderMap,
     Path((item_id, _filename)): Path<(String, String)>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     let m = state.manifest.read().await;
     let owner = get_owner(&headers);
@@ -614,15 +690,18 @@ async fn download_file(
         .clone()
         .unwrap_or_else(|| "application/octet-stream".to_string());
 
+    let disposition = if params.contains_key("inline") {
+        format!("inline; filename=\"{}\"", item.name)
+    } else {
+        format!("attachment; filename=\"{}\"", item.name)
+    };
+
     (
         StatusCode::OK,
         [
             ("Content-Type", content_type),
             ("Content-Length", data.len().to_string()),
-            (
-                "Content-Disposition",
-                format!("attachment; filename=\"{}\"", item.name),
-            ),
+            ("Content-Disposition", disposition),
         ],
         data,
     )
@@ -1378,6 +1457,7 @@ pub fn drive_routes(state: Arc<DriveState>) -> Router {
         .route("/api/drive/folders", post(create_folder))
         .route("/api/drive/upload", post(upload_file))
         .route("/api/drive/items/:id", put(update_item).delete(delete_item))
+        .route("/api/drive/view/:id/:filename", get(view_file))
         .route("/api/drive/download/:id/:filename", get(download_file))
         .route("/api/drive/share", post(create_share))
         .route("/api/drive/share/:token", delete(revoke_share))

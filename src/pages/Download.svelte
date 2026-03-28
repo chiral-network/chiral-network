@@ -1014,7 +1014,7 @@
                 merkleRoot: fileHash,
               });
               if (driveItem?.id) {
-                const httpLink = `${serverUrl}/api/drive/download/${driveItem.id}/${encodeURIComponent(fileName)}`;
+                const httpLink = `${serverUrl}/api/drive/view/${driveItem.id}/${encodeURIComponent(fileName)}`;
                 downloads = downloads.map(d => {
                   if (d.hash === fileHash && d.status === 'completed' && !d.httpLink) {
                     return { ...d, httpLink };
