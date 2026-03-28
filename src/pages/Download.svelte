@@ -28,7 +28,7 @@
     ExternalLink,
     Eye
   } from 'lucide-svelte';
-  import { Zap, Link } from 'lucide-svelte';
+  import { Zap } from 'lucide-svelte';
   import { networkConnected, walletAccount, blacklist, type BlacklistEntry } from '$lib/stores';
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
@@ -1785,7 +1785,8 @@
                       title="Copy HTTP link"
                     >
                       <Link class="w-4 h-4 text-blue-500" />
-                  </button>
+                    </button>
+                  {/if}
                 {/if}
                 <button
                   onclick={() => { searchQuery = entry.hash; searchMode = 'hash'; searchFile(); }}
