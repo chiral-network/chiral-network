@@ -339,15 +339,16 @@ describe('chiralDropStore', () => {
         direction: 'outgoing' as const,
         timestamp: Date.now(),
       }]);
-      const stored = localStorage.getItem('chiraldrop_history');
+      const stored = localStorage.getItem('chiraldrop_history_anonymous');
       expect(stored).not.toBeNull();
       const parsed = JSON.parse(stored!);
       expect(parsed).toHaveLength(1);
       expect(parsed[0].id).toBe('persist-1');
     });
 
-    it('should load history from localStorage on init', async () => {
-      localStorage.setItem('chiraldrop_history', JSON.stringify([{
+    it('should not load history when no wallet is connected', async () => {
+      // History is now wallet-specific — without a wallet, history should be empty
+      localStorage.setItem('chiraldrop_history_anonymous', JSON.stringify([{
         id: 'loaded-1',
         fileName: 'loaded.txt',
         fileSize: 200,
@@ -359,8 +360,7 @@ describe('chiralDropStore', () => {
       }]));
       const { transferHistory } = await import('$lib/chiralDropStore');
       const history = get(transferHistory);
-      expect(history).toHaveLength(1);
-      expect(history[0].id).toBe('loaded-1');
+      expect(history).toHaveLength(0);
     });
   });
 });

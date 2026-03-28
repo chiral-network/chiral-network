@@ -63,15 +63,18 @@
     lastUsed: number;
   }
 
-  // Saved recipients state
-  const SAVED_RECIPIENTS_KEY = 'chiral_saved_recipients';
+  // Saved recipients state (wallet-specific)
+  function getSavedRecipientsKey(): string {
+    const addr = $walletAccount?.address?.toLowerCase() || 'anonymous';
+    return `chiral_saved_recipients_${addr}`;
+  }
   let savedRecipients = $state<SavedRecipient[]>([]);
   let showAddRecipient = $state(false);
   let newRecipientLabel = $state('');
 
   function loadSavedRecipients() {
     try {
-      const stored = localStorage.getItem(SAVED_RECIPIENTS_KEY);
+      const stored = localStorage.getItem(getSavedRecipientsKey());
       if (stored) {
         savedRecipients = JSON.parse(stored);
       }
@@ -82,7 +85,7 @@
 
   function saveSavedRecipients() {
     try {
-      localStorage.setItem(SAVED_RECIPIENTS_KEY, JSON.stringify(savedRecipients));
+      localStorage.setItem(getSavedRecipientsKey(), JSON.stringify(savedRecipients));
     } catch (e) {
       log.error('Failed to save recipients:', e);
     }

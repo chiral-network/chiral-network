@@ -249,9 +249,15 @@
   let selectedSeederIndex = $state<number>(0);
   const BASE_ELO = 50;
 
-  // Persistence keys
-  const DOWNLOAD_HISTORY_KEY = 'chiral_download_history';
-  const ACTIVE_DOWNLOADS_KEY = 'chiral_active_downloads';
+  // Persistence keys (wallet-specific to isolate data between accounts)
+  function getDownloadHistoryKey(): string {
+    const addr = $walletAccount?.address?.toLowerCase() || 'anonymous';
+    return `chiral_download_history_${addr}`;
+  }
+  function getActiveDownloadsKey(): string {
+    const addr = $walletAccount?.address?.toLowerCase() || 'anonymous';
+    return `chiral_active_downloads_${addr}`;
+  }
 
   function normalizeUniqueIds<T extends { id: string }>(
     items: T[],
@@ -290,7 +296,7 @@
     try {
       let idsChanged = false;
 
-      const stored = localStorage.getItem(DOWNLOAD_HISTORY_KEY);
+      const stored = localStorage.getItem(getDownloadHistoryKey());
       if (stored) {
         const parsed = JSON.parse(stored);
         const mappedHistory = parsed.map((h: any) => ({
@@ -303,7 +309,7 @@
       }
 
       // Load active downloads
-      const activeStored = localStorage.getItem(ACTIVE_DOWNLOADS_KEY);
+      const activeStored = localStorage.getItem(getActiveDownloadsKey());
       if (activeStored) {
         const parsed = JSON.parse(activeStored);
         const mappedDownloads = parsed.map((d: any) => ({
@@ -335,8 +341,8 @@
       if (normalizedHistory.changed) {
         downloadHistory = normalizedHistory.items;
       }
-      localStorage.setItem(DOWNLOAD_HISTORY_KEY, JSON.stringify(downloadHistory));
-      localStorage.setItem(ACTIVE_DOWNLOADS_KEY, JSON.stringify(downloads));
+      localStorage.setItem(getDownloadHistoryKey(), JSON.stringify(downloadHistory));
+      localStorage.setItem(getActiveDownloadsKey(), JSON.stringify(downloads));
     } catch (e) {
       log.error('Failed to save download history:', e);
     }
