@@ -119,22 +119,28 @@
   }
 
   onMount(async () => {
-    // Init local Drive server URL (Tauri only — used as fallback for downloads)
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const url = await invoke<string | null>('get_drive_server_url');
-      if (url) setLocalDriveServer(url);
-    } catch {
-      // Non-Tauri environment — falls back to relay URL
-    }
-
     const saved = localStorage.getItem('drive-view-mode');
     if (saved === 'list' || saved === 'grid') viewMode = saved;
     initialized = true;
 
-    // Migrate chiral_upload_history from old Upload page into Drive
-    await migrateUploadHistory();
-    await loadCurrentFolder();
+    // Load folder immediately — don't block on server URL or migration
+    const folderLoad = loadCurrentFolder();
+
+    // Init local Drive server URL in parallel (only needed for download links)
+    const serverInit = (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const url = await invoke<string | null>('get_drive_server_url');
+        if (url) setLocalDriveServer(url);
+      } catch {
+        // Non-Tauri environment — falls back to relay URL
+      }
+    })();
+
+    await folderLoad;
+
+    // Run migration in background (won't block UI), refresh if items added
+    migrateUploadHistory().then(() => loadCurrentFolder()).catch(() => {});
   });
 
   // Derived
