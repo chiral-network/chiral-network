@@ -16,7 +16,7 @@ mkdir -p "$RESULTS_DIR"
 # --- Parse NODE_LIST into array ---
 # NODE_LIST is a comma-separated list of node base URLs (e.g., http://node1:9419,http://node2:9419)
 if [[ -z "${NODE_LIST:-}" ]]; then
-    log_error "orchestrator" "NODE_LIST environment variable is not set"
+    log_fail "NODE_LIST environment variable is not set"
     echo "Usage: NODE_LIST=http://node1:9419,http://node2:9419 $0"
     exit 1
 fi
@@ -25,11 +25,11 @@ IFS=',' read -ra ALL_NODES_ARRAY <<< "$NODE_LIST"
 TOTAL_NODES=${#ALL_NODES_ARRAY[@]}
 
 if [[ "$TOTAL_NODES" -eq 0 ]]; then
-    log_error "orchestrator" "NODE_LIST is empty"
+    log_fail "NODE_LIST is empty"
     exit 1
 fi
 
-log_info "orchestrator" "Total nodes: $TOTAL_NODES"
+log_info "Total nodes: $TOTAL_NODES"
 
 # --- Assign roles: 20% miners, 30% seeders, rest consumers ---
 miner_count=$(( TOTAL_NODES * 20 / 100 ))
@@ -74,10 +74,10 @@ export MINER_NODES
 export SEEDER_NODES
 export CONSUMER_NODES
 
-log_info "orchestrator" "Role assignment:"
-log_info "orchestrator" "  Miners ($miner_count):    $MINER_NODES"
-log_info "orchestrator" "  Seeders ($seeder_count):   $SEEDER_NODES"
-log_info "orchestrator" "  Consumers ($(( TOTAL_NODES - consumer_start ))): $CONSUMER_NODES"
+log_info "Role assignment:"
+log_info "  Miners ($miner_count):    $MINER_NODES"
+log_info "  Seeders ($seeder_count):   $SEEDER_NODES"
+log_info "  Consumers ($(( TOTAL_NODES - consumer_start ))): $CONSUMER_NODES"
 
 # Clear previous results
 > "$RESULTS_DIR/results.jsonl"
@@ -96,7 +96,7 @@ run_phase() {
     phase_name=$(basename "$phase_script" .sh)
 
     if [[ ! -f "$phase_script" ]]; then
-        log_warn "orchestrator" "Phase script not found: $phase_script — skipping"
+        log_warn "Phase script not found: $phase_script — skipping"
         phases_skipped=$((phases_skipped + 1))
         return 0
     fi
@@ -105,9 +105,9 @@ run_phase() {
         chmod +x "$phase_script"
     fi
 
-    log_info "orchestrator" "=========================================="
-    log_info "orchestrator" "PHASE $phase_num: $phase_name — START"
-    log_info "orchestrator" "=========================================="
+    log_info "=========================================="
+    log_info "PHASE $phase_num: $phase_name — START"
+    log_info "=========================================="
 
     local start_time=$SECONDS
     local exit_code=0
@@ -118,10 +118,10 @@ run_phase() {
     phases_run=$((phases_run + 1))
 
     if [[ "$exit_code" -eq 0 ]]; then
-        log_info "orchestrator" "PHASE $phase_num: $phase_name — PASSED (${elapsed}s)"
+        log_pass "PHASE $phase_num: $phase_name — PASSED (${elapsed}s)"
         phases_passed=$((phases_passed + 1))
     else
-        log_error "orchestrator" "PHASE $phase_num: $phase_name — FAILED (exit=$exit_code, ${elapsed}s)"
+        log_fail "PHASE $phase_num: $phase_name — FAILED (exit=$exit_code, ${elapsed}s)"
         phases_failed=$((phases_failed + 1))
         failed_phases+=("$phase_name")
     fi
@@ -131,23 +131,36 @@ run_phase() {
 
 # --- Run all phases in sequence ---
 run_phase "01" "${SCRIPT_DIR}/phase-01-health.sh"
-run_phase "02" "${SCRIPT_DIR}/phase-02-dht-bootstrap.sh"
-run_phase "03" "${SCRIPT_DIR}/phase-03-dht-operations.sh"
-run_phase "04" "${SCRIPT_DIR}/phase-04-seed-publish.sh"
-run_phase "05" "${SCRIPT_DIR}/phase-05-mining.sh"
+run_phase "02" "${SCRIPT_DIR}/phase-02-wallets.sh"
+run_phase "03" "${SCRIPT_DIR}/phase-03-mining.sh"
+run_phase "04" "${SCRIPT_DIR}/phase-04-drive-upload.sh"
+run_phase "05" "${SCRIPT_DIR}/phase-05-file-publish.sh"
 run_phase "06" "${SCRIPT_DIR}/phase-06-search-download.sh"
 run_phase "07" "${SCRIPT_DIR}/phase-07-chiraldrop.sh"
 run_phase "08" "${SCRIPT_DIR}/phase-08-payments.sh"
 run_phase "09" "${SCRIPT_DIR}/phase-09-reputation.sh"
 run_phase "10" "${SCRIPT_DIR}/phase-10-drive-crud.sh"
 
+# --- Stress test phases ---
+log_info "=========================================="
+log_info "Running stress test phases (11-17)..."
+log_info "=========================================="
+
+run_phase "11" "${SCRIPT_DIR}/phase-11-concurrent-downloads.sh"
+run_phase "12" "${SCRIPT_DIR}/phase-12-rapid-publish-search.sh"
+run_phase "13" "${SCRIPT_DIR}/phase-13-network-partition.sh"
+run_phase "14" "${SCRIPT_DIR}/phase-14-large-file-transfer.sh"
+run_phase "15" "${SCRIPT_DIR}/phase-15-rapid-wallet-ops.sh"
+run_phase "16" "${SCRIPT_DIR}/phase-16-dht-flood.sh"
+run_phase "17" "${SCRIPT_DIR}/phase-17-long-running-stability.sh"
+
 # --- Generate report ---
-log_info "orchestrator" "=========================================="
-log_info "orchestrator" "Generating report..."
-log_info "orchestrator" "=========================================="
+log_info "=========================================="
+log_info "Generating report..."
+log_info "=========================================="
 
 if [[ -f "${SCRIPT_DIR}/report.sh" ]]; then
-    bash "${SCRIPT_DIR}/report.sh" || log_warn "orchestrator" "Report generation had errors"
+    bash "${SCRIPT_DIR}/report.sh" || log_warn "Report generation had errors"
 fi
 
 # --- Final summary ---
