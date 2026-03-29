@@ -1,0 +1,24 @@
+# =============================================================================
+# Test runner container — runs vitest load/stress tests against the network
+# =============================================================================
+
+FROM node:20-bookworm-slim
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json ./
+COPY vite.config.ts tsconfig.json svelte.config.js ./
+RUN npm ci
+
+# Copy source and tests
+COPY src/ ./src/
+COPY tests/ ./tests/
+
+# Results output directory
+RUN mkdir -p /app/results
+
+# Run load tests (remove .skip to enable network tests)
+ENTRYPOINT ["npx", "vitest", "run", "tests/load/", "--reporter=verbose"]
