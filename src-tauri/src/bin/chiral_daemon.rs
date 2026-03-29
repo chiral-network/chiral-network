@@ -29,12 +29,32 @@ use chiral_network::rating_storage::RatingState;
 #[command(about = "Chiral Network headless daemon")]
 struct DaemonArgs {
     /// Local gateway port (Drive + Rating + Hosting + Headless routes)
-    #[arg(long, default_value_t = 9419)]
+    #[arg(long, default_value_t = 9419, env = "CHIRAL_DAEMON_PORT")]
     port: u16,
 
     /// Optional PID file path
-    #[arg(long)]
+    #[arg(long, env = "CHIRAL_DAEMON_PID_FILE")]
     pid_file: Option<PathBuf>,
+
+    /// Auto-start DHT on startup (required for P2P networking)
+    #[arg(long, env = "CHIRAL_AUTO_START_DHT", default_value_t = false)]
+    auto_start_dht: bool,
+
+    /// Auto-start Geth node on startup
+    #[arg(long, env = "CHIRAL_AUTO_START_GETH", default_value_t = false)]
+    auto_start_geth: bool,
+
+    /// Auto-start mining on startup (implies --auto-start-geth and --auto-start-dht)
+    #[arg(long, env = "CHIRAL_AUTO_MINE", default_value_t = false)]
+    auto_mine: bool,
+
+    /// Miner address (wallet) for mining rewards
+    #[arg(long, env = "CHIRAL_MINER_ADDRESS")]
+    miner_address: Option<String>,
+
+    /// Number of CPU mining threads (default: 1)
+    #[arg(long, env = "CHIRAL_MINING_THREADS", default_value_t = 1)]
+    mining_threads: u32,
 }
 
 #[derive(Clone)]
@@ -219,6 +239,37 @@ struct LogsQuery {
 #[derive(Deserialize)]
 struct BlocksQuery {
     max: Option<u64>,
+}
+
+/// GET /api/health — liveness probe (always returns 200 if server is up)
+async fn health_check() -> Response {
+    Json(json!({ "status": "ok" })).into_response()
+}
+
+/// GET /api/ready — readiness probe (checks if DHT and Geth are running)
+async fn readiness_check(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
+    let dht_running = state.dht_service().await.is_some();
+    let geth_running = {
+        let mut geth = state.geth.lock().await;
+        geth.get_status().await.map(|s| s.running).unwrap_or(false)
+    };
+    let ready = dht_running; // DHT is the minimum requirement for readiness
+
+    let status_code = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        status_code,
+        Json(json!({
+            "ready": ready,
+            "dht": dht_running,
+            "geth": geth_running,
+        })),
+    )
+        .into_response()
 }
 
 async fn runtime_status(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
@@ -601,6 +652,9 @@ async fn set_miner_address(
 
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
+        // Health/readiness probes for Docker/Kubernetes
+        .route("/api/health", get(health_check))
+        .route("/api/ready", get(readiness_check))
         .route("/api/headless/runtime", get(runtime_status))
         .route("/api/headless/dht/start", post(dht_start))
         .route("/api/headless/dht/stop", post(dht_stop))
@@ -705,6 +759,70 @@ async fn main() {
     println!("chiral-daemon running on http://{}", bound);
     println!("PID file: {}", pid_file.display());
 
+    // Auto-start services if requested
+    let auto_mine = args.auto_mine;
+    let auto_start_dht = args.auto_start_dht || auto_mine;
+    let auto_start_geth = args.auto_start_geth || auto_mine;
+    let miner_address = args.miner_address.clone();
+    let mining_threads = args.mining_threads;
+
+    if auto_start_dht || auto_start_geth || auto_mine {
+        let rt = Arc::clone(&runtime_state);
+        tokio::spawn(async move {
+            // Start DHT
+            if auto_start_dht {
+                println!("[AUTO] Starting DHT...");
+                let mut guard = rt.dht.lock().await;
+                if guard.is_none() {
+                    let ft = Arc::clone(&rt.file_transfer);
+                    let dd = Arc::clone(&rt.download_directory);
+                    let dc = Arc::clone(&rt.download_credentials);
+                    let svc = Arc::new(dht::DhtService::new(ft, dd, dc));
+                    match svc.start_headless().await {
+                        Ok(_) => {
+                            *guard = Some(svc);
+                            println!("[AUTO] DHT started successfully");
+                        }
+                        Err(e) => eprintln!("[AUTO] DHT start failed: {}", e),
+                    }
+                }
+                drop(guard);
+                // Wait for DHT bootstrap
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+
+            // Start Geth
+            if auto_start_geth {
+                println!("[AUTO] Starting Geth...");
+                let mut geth = rt.geth.lock().await;
+                match geth.start(miner_address.as_deref()).await {
+                    Ok(()) => println!("[AUTO] Geth started successfully"),
+                    Err(e) => eprintln!("[AUTO] Geth start failed: {}", e),
+                }
+                drop(geth);
+                // Wait for Geth RPC to be ready
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+
+            // Start mining
+            if auto_mine {
+                if let Some(ref addr) = miner_address {
+                    println!("[AUTO] Setting miner address: {}", addr);
+                    let geth = rt.geth.lock().await;
+                    let _ = geth.set_miner_address(addr).await;
+                    drop(geth);
+                }
+
+                println!("[AUTO] Starting mining with {} thread(s)...", mining_threads);
+                let mut geth = rt.geth.lock().await;
+                match geth.start_mining(mining_threads).await {
+                    Ok(()) => println!("[AUTO] Mining started successfully"),
+                    Err(e) => eprintln!("[AUTO] Mining start failed: {}", e),
+                }
+            }
+        });
+    }
+
     tokio::spawn(async move {
         let server = axum::serve(
             listener,
@@ -720,11 +838,31 @@ async fn main() {
         }
     });
 
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        eprintln!("Signal handler error: {}", e);
-    }
+    // Wait for SIGINT (Ctrl+C) or SIGTERM (Docker stop)
+    let shutdown = async {
+        let ctrl_c = tokio::signal::ctrl_c();
+
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = ctrl_c => println!("Received SIGINT"),
+                _ = sigterm.recv() => println!("Received SIGTERM"),
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            ctrl_c.await.ok();
+            println!("Received SIGINT");
+        }
+    };
+    shutdown.await;
 
     // Best-effort runtime cleanup.
+    println!("Shutting down...");
     if let Some(dht) = runtime_state.dht_service().await {
         let _ = dht.stop().await;
     }
@@ -736,4 +874,5 @@ async fn main() {
     let _ = shutdown_tx.send(());
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     remove_pid_file(&pid_file);
+    println!("Daemon stopped.");
 }
