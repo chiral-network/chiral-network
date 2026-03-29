@@ -113,7 +113,7 @@ VOLUME ["/data"]
 
 # Healthcheck: verify the HTTP gateway is responsive
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
-    CMD curl -sf http://localhost:9419/api/drive/items || exit 1
+    CMD curl -sf http://localhost:9419/api/health || exit 1
 
 ENTRYPOINT ["chiral_daemon"]
-CMD ["--port", "9419"]
+CMD ["--port", "9419", "--auto-start-dht"]

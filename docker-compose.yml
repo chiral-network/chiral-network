@@ -5,7 +5,7 @@
 #   docker compose up -d                    # Start relay + 3 test nodes
 #   docker compose up -d --scale node=10    # Start relay + 10 test nodes
 #   docker compose logs -f node             # Watch node logs
-#   docker compose exec node-1 chiral wallet create  # Run CLI on node 1
+#   docker compose exec chiral-seeder chiral wallet create  # Create wallet
 #   docker compose down -v                  # Tear down everything
 # =============================================================================
 
@@ -35,7 +35,7 @@ services:
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # Test nodes — scalable P2P participants
+  # Test nodes — scalable P2P participants with auto-start
   # ---------------------------------------------------------------------------
   node:
     build:
@@ -44,22 +44,22 @@ services:
     deploy:
       replicas: 3
     environment:
-      # Point all nodes at the relay for bootstrapping
       - CHIRAL_BOOTSTRAP_NODES=enode://placeholder@relay.chiral.local:30303
       - CHIRAL_RPC_ENDPOINT=http://relay.chiral.local:8080
-    volumes:
-      - node-data:/data
+      - CHIRAL_AUTO_START_DHT=true
+      - CHIRAL_AUTO_START_GETH=true
     expose:
       - "9419"
       - "30303"
     networks:
       - chiral-net
     depends_on:
-      - relay
+      relay:
+        condition: service_started
     restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # Dedicated seeder node — publishes and seeds test files
+  # Dedicated seeder node — publishes and seeds files, auto-mines
   # ---------------------------------------------------------------------------
   seeder:
     build:
@@ -69,6 +69,9 @@ services:
     environment:
       - CHIRAL_BOOTSTRAP_NODES=enode://placeholder@relay.chiral.local:30303
       - CHIRAL_RPC_ENDPOINT=http://relay.chiral.local:8080
+      - CHIRAL_AUTO_MINE=true
+      - CHIRAL_MINER_ADDRESS=0x0000000000000000000000000000000000001337
+      - CHIRAL_MINING_THREADS=2
     volumes:
       - seeder-data:/data
       - ./tests/fixtures:/fixtures:ro
@@ -78,8 +81,35 @@ services:
     networks:
       - chiral-net
     depends_on:
-      - relay
+      relay:
+        condition: service_started
     restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Mining node — dedicated miner with auto-start
+  # ---------------------------------------------------------------------------
+  miner:
+    build:
+      context: .
+      target: test-node
+    container_name: chiral-miner
+    environment:
+      - CHIRAL_BOOTSTRAP_NODES=enode://placeholder@relay.chiral.local:30303
+      - CHIRAL_RPC_ENDPOINT=http://relay.chiral.local:8080
+      - CHIRAL_AUTO_MINE=true
+      - CHIRAL_MINER_ADDRESS=0x0000000000000000000000000000000000000001
+      - CHIRAL_MINING_THREADS=4
+    expose:
+      - "9419"
+      - "30303"
+    networks:
+      - chiral-net
+    depends_on:
+      relay:
+        condition: service_started
+    restart: unless-stopped
+    profiles:
+      - mining
 
   # ---------------------------------------------------------------------------
   # Test runner — executes load/stress tests against the network
@@ -110,6 +140,5 @@ networks:
 
 volumes:
   relay-data:
-  node-data:
   seeder-data:
   test-results:
