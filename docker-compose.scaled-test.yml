@@ -1,0 +1,33 @@
+# =============================================================================
+# Chiral Network — Docker Compose override for scaled integration testing
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.scaled-test.yml \
+#     up -d --scale node=20
+# =============================================================================
+
+services:
+  # Override nodes to auto-start DHT
+  node:
+    environment:
+      - CHIRAL_AUTO_START_DHT=true
+
+  # Test runner that executes all scaled test phases
+  scaled-test-runner:
+    build:
+      context: .
+      target: test-node
+    container_name: chiral-scaled-test-runner
+    entrypoint: ["/bin/bash", "/tests/run-all-phases.sh"]
+    volumes:
+      - ./tests/scaled:/tests:ro
+      - scaled-results:/results
+    environment:
+      - RELAY_URL=http://relay.chiral.local:8080
+    networks:
+      - chiral-net
+    depends_on:
+      - relay
+
+volumes:
+  scaled-results:
