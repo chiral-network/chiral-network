@@ -1,0 +1,21 @@
+# Lightweight image using pre-built binaries (for local testing)
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates libssl3 curl jq \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /data/chiral-network
+ENV XDG_DATA_HOME=/data
+
+COPY src-tauri/target/release/chiral_daemon /usr/local/bin/chiral_daemon
+COPY src-tauri/target/release/chiral /usr/local/bin/chiral
+COPY src-tauri/target/release/relay_server /usr/local/bin/relay_server
+
+EXPOSE 9419/tcp 30303/tcp 30303/udp
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+    CMD curl -sf http://localhost:9419/api/health || exit 1
+
+ENTRYPOINT ["chiral_daemon"]
+CMD ["--port", "9419", "--auto-start-dht"]
