@@ -1,0 +1,59 @@
+# Local testing compose — uses pre-built binaries, no Docker build needed
+# Usage:
+#   docker compose -f docker-compose.local-test.yml up -d --scale node=10
+#   docker compose -f docker-compose.local-test.yml logs -f
+#   docker compose -f docker-compose.local-test.yml down -v
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    container_name: chiral-relay
+    init: true
+    security_opt:
+      - seccomp:unconfined
+    entrypoint: ["relay_server"]
+    command: ["--port", "4001", "--http-port", "8080"]
+    ports:
+      - "4001:4001"
+      - "8080:8080"
+    volumes:
+      - relay-data:/data
+    networks:
+      chiral-net:
+        aliases:
+          - relay.chiral.local
+    restart: unless-stopped
+
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    init: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["--port", "9419", "--auto-start-dht"]
+    environment:
+      - CHIRAL_AUTO_START_DHT=true
+    deploy:
+      replicas: 10
+    expose:
+      - "9419"
+      - "30303"
+    volumes:
+      - node-data:/data
+    networks:
+      - chiral-net
+    depends_on:
+      relay:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  chiral-net:
+    driver: bridge
+
+volumes:
+  relay-data:
+  node-data:

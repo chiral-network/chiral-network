@@ -57,6 +57,12 @@ struct DaemonArgs {
     mining_threads: u32,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct WalletInfo {
+    address: String,
+    private_key: String,
+}
+
 #[derive(Clone)]
 struct HeadlessRuntimeState {
     dht: Arc<Mutex<Option<Arc<dht::DhtService>>>>,
@@ -64,6 +70,7 @@ struct HeadlessRuntimeState {
     download_directory: dht::DownloadDirectoryRef,
     download_credentials: dht::DownloadCredentialsMap,
     geth: Arc<Mutex<GethProcess>>,
+    wallet: Arc<Mutex<Option<WalletInfo>>>,
 }
 
 impl HeadlessRuntimeState {
@@ -74,6 +81,7 @@ impl HeadlessRuntimeState {
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
             geth: Arc::new(Mutex::new(GethProcess::new())),
+            wallet: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -650,11 +658,115 @@ async fn set_miner_address(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Wallet endpoints
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportWalletRequest {
+    private_key: String,
+}
+
+/// POST /api/headless/wallet/create — generate a new wallet (random private key)
+async fn wallet_create(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
+    // Generate a random 32-byte private key
+    let mut rng_bytes = [0u8; 32];
+    use std::io::Read;
+    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut rng_bytes).map(|_| ())) {
+        Ok(()) => {}
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("RNG failed: {}", e)),
+    }
+    let private_key_hex = hex::encode(rng_bytes);
+
+    // Derive address from private key using secp256k1
+    let secp = secp256k1::Secp256k1::new();
+    let secret_key = match secp256k1::SecretKey::from_slice(&rng_bytes) {
+        Ok(k) => k,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid key: {}", e)),
+    };
+    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    let pub_bytes = public_key.serialize_uncompressed();
+    // Address = last 20 bytes of keccak256(pub_key_bytes[1..])
+    use tiny_keccak::{Hasher, Keccak};
+    let mut keccak = Keccak::v256();
+    keccak.update(&pub_bytes[1..]);
+    let mut hash = [0u8; 32];
+    keccak.finalize(&mut hash);
+    let address = format!("0x{}", hex::encode(&hash[12..]));
+
+    let wallet = WalletInfo {
+        address: address.clone(),
+        private_key: format!("0x{}", private_key_hex),
+    };
+    *state.wallet.lock().await = Some(wallet.clone());
+
+    Json(json!({
+        "address": wallet.address,
+        "privateKey": wallet.private_key,
+    }))
+    .into_response()
+}
+
+/// POST /api/headless/wallet/import — import wallet from private key
+async fn wallet_import(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(req): Json<ImportWalletRequest>,
+) -> Response {
+    let pk_hex = req.private_key.trim().trim_start_matches("0x");
+    let pk_bytes = match hex::decode(pk_hex) {
+        Ok(b) if b.len() == 32 => b,
+        _ => return json_error(StatusCode::BAD_REQUEST, "Invalid private key (must be 32 bytes hex)"),
+    };
+
+    let secp = secp256k1::Secp256k1::new();
+    let secret_key = match secp256k1::SecretKey::from_slice(&pk_bytes) {
+        Ok(k) => k,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, format!("Invalid private key: {}", e)),
+    };
+    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    let pub_bytes = public_key.serialize_uncompressed();
+    use tiny_keccak::{Hasher, Keccak};
+    let mut keccak = Keccak::v256();
+    keccak.update(&pub_bytes[1..]);
+    let mut hash = [0u8; 32];
+    keccak.finalize(&mut hash);
+    let address = format!("0x{}", hex::encode(&hash[12..]));
+
+    let wallet = WalletInfo {
+        address: address.clone(),
+        private_key: format!("0x{}", pk_hex),
+    };
+    *state.wallet.lock().await = Some(wallet.clone());
+
+    Json(json!({
+        "address": wallet.address,
+        "privateKey": wallet.private_key,
+    }))
+    .into_response()
+}
+
+/// GET /api/headless/wallet — get current wallet info
+async fn wallet_show(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
+    let guard = state.wallet.lock().await;
+    match &*guard {
+        Some(w) => Json(json!({
+            "address": w.address,
+            "privateKey": w.private_key,
+        })).into_response(),
+        None => json_error(StatusCode::NOT_FOUND, "No wallet loaded"),
+    }
+}
+
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
-        // Health/readiness probes for Docker/Kubernetes
+        // Health/readiness probes
         .route("/api/health", get(health_check))
         .route("/api/ready", get(readiness_check))
+        // Wallet management
+        .route("/api/headless/wallet", get(wallet_show))
+        .route("/api/headless/wallet/create", post(wallet_create))
+        .route("/api/headless/wallet/import", post(wallet_import))
         .route("/api/headless/runtime", get(runtime_status))
         .route("/api/headless/dht/start", post(dht_start))
         .route("/api/headless/dht/stop", post(dht_stop))
