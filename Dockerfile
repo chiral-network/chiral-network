@@ -23,16 +23,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Cache dependency builds — copy manifests first
-COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./src-tauri/
-RUN mkdir -p src-tauri/src src-tauri/src/bin && \
-    echo 'fn main() {}' > src-tauri/src/bin/chiral.rs && \
-    echo 'fn main() {}' > src-tauri/src/bin/chiral_daemon.rs && \
-    echo 'fn main() {}' > src-tauri/src/bin/relay_server.rs && \
-    echo '' > src-tauri/src/lib.rs && \
-    cd src-tauri && cargo fetch
-
-# Copy actual source
+# Copy source
 COPY src-tauri/ ./src-tauri/
 
 # Build all binaries in release mode
