@@ -14,7 +14,7 @@ RESULTS_FILE="$RESULTS_DIR/results.jsonl"
 REPORT_FILE="$RESULTS_DIR/report.json"
 
 if [[ ! -f "$RESULTS_FILE" ]] || [[ ! -s "$RESULTS_FILE" ]]; then
-    log_warn "report" "No results file found at $RESULTS_FILE"
+    log_warn "No results file found at $RESULTS_FILE"
     echo '{"phases":[],"totals":{"pass":0,"fail":0,"skip":0},"failures":[]}' | jq . > "$REPORT_FILE"
     echo "No test results to report."
     exit 0
@@ -27,16 +27,17 @@ total_skip=0
 
 declare -A phase_status
 declare -A phase_message
-declare -a phase_order
-declare -a failures
+declare -A phase_test
+declare -a phase_order=()
+declare -a failures=()
 
 while IFS= read -r line; do
     [[ -z "$line" ]] && continue
 
     phase=$(echo "$line" | jq -r '.phase // "unknown"' 2>/dev/null) || continue
     status=$(echo "$line" | jq -r '.status // "unknown"' 2>/dev/null)
-    message=$(echo "$line" | jq -r '.message // ""' 2>/dev/null)
-    timestamp=$(echo "$line" | jq -r '.timestamp // ""' 2>/dev/null)
+    test_name=$(echo "$line" | jq -r '.test // ""' 2>/dev/null)
+    error_msg=$(echo "$line" | jq -r '.error // ""' 2>/dev/null)
 
     # Track phase order (first occurrence)
     if [[ -z "${phase_status[$phase]+x}" ]]; then
@@ -44,7 +45,8 @@ while IFS= read -r line; do
     fi
 
     phase_status[$phase]="$status"
-    phase_message[$phase]="$message"
+    phase_test[$phase]="$test_name"
+    phase_message[$phase]="$error_msg"
 
     case "$status" in
         pass)
@@ -52,13 +54,13 @@ while IFS= read -r line; do
             ;;
         fail)
             total_fail=$((total_fail + 1))
-            failures+=("$phase: $message")
+            failures+=("$phase/$test_name: $error_msg")
             ;;
         skip)
             total_skip=$((total_skip + 1))
             ;;
         *)
-            log_warn "report" "Unknown status '$status' for phase $phase"
+            log_warn "Unknown status '$status' for phase $phase"
             ;;
     esac
 done < "$RESULTS_FILE"
@@ -76,13 +78,19 @@ printf "  %-35s %-8s %s\n" "-----------------------------------" "--------" "---
 
 for phase in "${phase_order[@]}"; do
     status="${phase_status[$phase]}"
+    test_name="${phase_test[$phase]}"
     message="${phase_message[$phase]}"
 
-    # Truncate long messages for table display
-    if [[ ${#message} -gt 50 ]]; then
-        display_msg="${message:0:47}..."
-    else
+    # Use test name as detail if no error, otherwise show error
+    if [[ -n "$message" ]]; then
         display_msg="$message"
+    else
+        display_msg="$test_name"
+    fi
+
+    # Truncate long messages for table display
+    if [[ ${#display_msg} -gt 50 ]]; then
+        display_msg="${display_msg:0:47}..."
     fi
 
     # Status indicator
@@ -123,12 +131,14 @@ for phase in "${phase_order[@]}"; do
     first=false
 
     status="${phase_status[$phase]}"
+    test_name="${phase_test[$phase]}"
     message="${phase_message[$phase]}"
 
     # Escape message for JSON
     escaped_message=$(echo "$message" | jq -Rs '.' | sed 's/^"//;s/"$//')
+    escaped_test=$(echo "$test_name" | jq -Rs '.' | sed 's/^"//;s/"$//')
 
-    phases_json+="{\"phase\":\"$phase\",\"status\":\"$status\",\"message\":\"$escaped_message\"}"
+    phases_json+="{\"phase\":\"$phase\",\"test\":\"$escaped_test\",\"status\":\"$status\",\"message\":\"$escaped_message\"}"
 done
 phases_json+="]"
 
@@ -163,7 +173,7 @@ report_json=$(jq -n \
     }')
 
 echo "$report_json" > "$REPORT_FILE"
-log_info "report" "Report written to $REPORT_FILE"
+log_info "Report written to $REPORT_FILE"
 
 if [[ "$total_fail" -gt 0 ]]; then
     echo "RESULT: $total_fail phase(s) FAILED"

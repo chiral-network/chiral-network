@@ -3,19 +3,18 @@ set -euo pipefail
 source /tests/lib.sh
 
 PHASE="phase-07-chiraldrop"
-log_phase_start "$PHASE"
+log_info "[$PHASE] Starting ChiralDrop P2P transfer phase"
 
 ###############################################################################
 # Phase 07 — ChiralDrop P2P Transfer
 #
-# Picks random sender/receiver pairs from all nodes, creates a small test file
-# on the sender, sends it via ChiralDrop, and verifies the receiver gets it.
+# Picks random sender/receiver pairs from all nodes, sends a file via
+# ChiralDrop, and verifies the receiver gets it in their inbox.
 ###############################################################################
 
 if [[ -z "${ALL_NODES:-}" ]]; then
-    log_warn "$PHASE" "ALL_NODES is empty — skipping"
-    record_result "$PHASE" "skip" "No nodes available"
-    log_phase_end "$PHASE" 0
+    log_warn "[$PHASE] ALL_NODES is empty — skipping"
+    record_result "$PHASE" "chiraldrop" "skip" "0" "No nodes available"
     exit 0
 fi
 
@@ -23,14 +22,13 @@ IFS=',' read -ra NODES <<< "$ALL_NODES"
 NODE_COUNT=${#NODES[@]}
 
 if [[ "$NODE_COUNT" -lt 2 ]]; then
-    log_warn "$PHASE" "Need at least 2 nodes for ChiralDrop — skipping"
-    record_result "$PHASE" "skip" "Fewer than 2 nodes available"
-    log_phase_end "$PHASE" 0
+    log_warn "[$PHASE] Need at least 2 nodes for ChiralDrop — skipping"
+    record_result "$PHASE" "chiraldrop" "skip" "0" "Fewer than 2 nodes available"
     exit 0
 fi
 
 # Build an array of (url, peerId) tuples
-declare -a NODE_PEERS
+declare -a NODE_PEERS=()
 for url in "${NODES[@]}"; do
     peer_resp=$(curl -sf --max-time 10 \
         "${url}/api/headless/dht/peer-id" 2>/dev/null) || continue
@@ -42,9 +40,8 @@ done
 
 PEER_COUNT=${#NODE_PEERS[@]}
 if [[ "$PEER_COUNT" -lt 2 ]]; then
-    log_warn "$PHASE" "Fewer than 2 nodes have peer IDs — skipping"
-    record_result "$PHASE" "skip" "Fewer than 2 nodes with active DHT"
-    log_phase_end "$PHASE" 0
+    log_warn "[$PHASE] Fewer than 2 nodes have peer IDs — skipping"
+    record_result "$PHASE" "chiraldrop" "skip" "0" "Fewer than 2 nodes with active DHT"
     exit 0
 fi
 
@@ -71,6 +68,8 @@ for (( i=${#indices[@]}-1; i>0; i-- )); do
     indices[$j]="$tmp"
 done
 
+start_timer
+
 pair_idx=0
 while [[ "$pair_idx" -lt $(( max_pairs * 2 - 1 )) ]]; do
     sender_entry="${NODE_PEERS[${indices[$pair_idx]}]}"
@@ -79,26 +78,17 @@ while [[ "$pair_idx" -lt $(( max_pairs * 2 - 1 )) ]]; do
     IFS='|' read -r sender_url sender_peer_id <<< "$sender_entry"
     IFS='|' read -r receiver_url receiver_peer_id <<< "$receiver_entry"
 
-    transfer_id="drop-$(generate_id)"
+    transfer_id="drop-${RANDOM}-$(date +%s)"
     test_file_name="chiraldrop-test-${transfer_id}.txt"
     test_content="ChiralDrop test payload $(date -u +%s) $transfer_id"
 
-    log_info "$PHASE" "Transfer $transfer_id: $sender_url -> $receiver_url"
+    log_info "[$PHASE] Transfer $transfer_id: $sender_url -> $receiver_url"
     transfers_attempted=$((transfers_attempted + 1))
 
-    # Create test file on sender by writing to a known temp path
-    # The send-file endpoint reads from a file path, so we need a file on the sender's filesystem.
-    # In Docker, nodes share no filesystem, so we create the file content inline.
-    # The daemon's send-file reads from disk — the file must exist on that container.
-    # We'll use /tmp as the writable directory inside the container.
+    # The send-file endpoint reads from a file path on the sender's filesystem.
+    # In Docker, each container has its own filesystem. The test file must exist
+    # on the sender container. We use /tmp as the writable directory.
     test_file_path="/tmp/${test_file_name}"
-
-    # Use the DHT put endpoint to indirectly verify connectivity, then send file.
-    # First, write the test file on the sender container.
-    # Since we can only interact via HTTP, we rely on the send-file endpoint which takes
-    # a filePath. The file must already exist on the sender's filesystem. In Docker-based
-    # tests, each container should have pre-created test files, or we create them via
-    # a helper endpoint. As a fallback, we attempt the send and handle failure gracefully.
 
     send_resp=$(curl -sf --max-time 15 \
         -X POST "${sender_url}/api/headless/dht/send-file" \
@@ -115,7 +105,7 @@ while [[ "$pair_idx" -lt $(( max_pairs * 2 - 1 )) ]]; do
         }" 2>/dev/null) || send_resp=""
 
     if [[ -z "$send_resp" ]]; then
-        log_warn "$PHASE" "Transfer $transfer_id: send-file request failed (no response)"
+        log_warn "[$PHASE] Transfer $transfer_id: send-file request failed (no response)"
         transfers_failed=$((transfers_failed + 1))
         pair_idx=$((pair_idx + 2))
         continue
@@ -123,13 +113,13 @@ while [[ "$pair_idx" -lt $(( max_pairs * 2 - 1 )) ]]; do
 
     if echo "$send_resp" | jq -e '.error' >/dev/null 2>&1; then
         err_msg=$(echo "$send_resp" | jq -r '.error')
-        log_warn "$PHASE" "Transfer $transfer_id: send-file error: $err_msg"
+        log_warn "[$PHASE] Transfer $transfer_id: send-file error: $err_msg"
         transfers_failed=$((transfers_failed + 1))
         pair_idx=$((pair_idx + 2))
         continue
     fi
 
-    log_info "$PHASE" "Transfer $transfer_id: send initiated, checking receiver inbox..."
+    log_info "[$PHASE] Transfer $transfer_id: send initiated, checking receiver inbox..."
 
     # Wait for transfer to appear in receiver's inbox (up to 15s)
     found_in_inbox=false
@@ -147,7 +137,7 @@ while [[ "$pair_idx" -lt $(( max_pairs * 2 - 1 )) ]]; do
     done
 
     if [[ "$found_in_inbox" != "true" ]]; then
-        log_warn "$PHASE" "Transfer $transfer_id: not found in receiver inbox after 15s"
+        log_warn "[$PHASE] Transfer $transfer_id: not found in receiver inbox after 15s"
         transfers_failed=$((transfers_failed + 1))
         pair_idx=$((pair_idx + 2))
         continue
@@ -160,43 +150,44 @@ while [[ "$pair_idx" -lt $(( max_pairs * 2 - 1 )) ]]; do
         -d "{\"transferId\": \"$transfer_id\"}" 2>/dev/null) || accept_resp=""
 
     if [[ -z "$accept_resp" ]]; then
-        log_warn "$PHASE" "Transfer $transfer_id: accept request failed"
+        log_warn "[$PHASE] Transfer $transfer_id: accept request failed"
         transfers_failed=$((transfers_failed + 1))
         pair_idx=$((pair_idx + 2))
         continue
     fi
 
     if echo "$accept_resp" | jq -e '.error' >/dev/null 2>&1; then
-        log_warn "$PHASE" "Transfer $transfer_id: accept error: $(echo "$accept_resp" | jq -r '.error')"
+        log_warn "[$PHASE] Transfer $transfer_id: accept error: $(echo "$accept_resp" | jq -r '.error')"
         transfers_failed=$((transfers_failed + 1))
         pair_idx=$((pair_idx + 2))
         continue
     fi
 
-    log_info "$PHASE" "Transfer $transfer_id: accepted by receiver"
+    log_info "[$PHASE] Transfer $transfer_id: accepted by receiver"
     transfers_completed=$((transfers_completed + 1))
 
     pair_idx=$((pair_idx + 2))
 done
 
+elapsed=$(stop_timer)
+
 # --- Report ---
-log_info "$PHASE" "=== ChiralDrop Report ==="
-log_info "$PHASE" "  Nodes with peer IDs:    $PEER_COUNT"
-log_info "$PHASE" "  Transfers attempted:    $transfers_attempted"
-log_info "$PHASE" "  Transfers completed:    $transfers_completed"
-log_info "$PHASE" "  Transfers failed:       $transfers_failed"
+log_info "[$PHASE] === ChiralDrop Report ==="
+log_info "[$PHASE]   Nodes with peer IDs:    $PEER_COUNT"
+log_info "[$PHASE]   Transfers attempted:    $transfers_attempted"
+log_info "[$PHASE]   Transfers completed:    $transfers_completed"
+log_info "[$PHASE]   Transfers failed:       $transfers_failed"
 
 if [[ "$transfers_attempted" -eq 0 ]]; then
-    record_result "$PHASE" "skip" "No transfer pairs attempted"
-    log_phase_end "$PHASE" 0
+    record_result "$PHASE" "chiraldrop" "skip" "$elapsed" "No transfer pairs attempted"
     exit 0
 fi
 
 if [[ "$transfers_completed" -gt 0 ]]; then
-    record_result "$PHASE" "pass" "Completed $transfers_completed/$transfers_attempted transfers"
-    log_phase_end "$PHASE" 0
+    record_result "$PHASE" "chiraldrop" "pass" "$elapsed" ""
+    log_pass "[$PHASE] Completed $transfers_completed/$transfers_attempted transfers"
 else
-    record_result "$PHASE" "fail" "All $transfers_attempted transfers failed"
-    log_phase_end "$PHASE" 1
+    record_result "$PHASE" "chiraldrop" "fail" "$elapsed" "All $transfers_attempted transfers failed"
+    log_fail "[$PHASE] All $transfers_attempted transfers failed"
     exit 1
 fi

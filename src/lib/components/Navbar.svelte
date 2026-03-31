@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, Server, ChevronDown, HardDrive } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { networkConnected } from '$lib/stores';
+  import { networkConnected, walletAccount } from '$lib/stores';
   import { requestLogout } from '$lib/logout';
   import { computeAnchoredDropdownPlacement } from '$lib/utils/uiPositioning';
 
@@ -169,8 +169,14 @@
         {/if}
       </div>
 
-      <!-- Right side: logout + status + hamburger -->
+      <!-- Right side: wallet + logout + status + hamburger -->
       <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+        {#if $walletAccount?.address}
+          <span class="hidden md:inline-flex items-center gap-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs font-mono text-gray-600 dark:text-gray-400" title={$walletAccount.address}>
+            <Wallet class="w-3 h-3" />
+            {$walletAccount.address.slice(0, 6)}...{$walletAccount.address.slice(-4)}
+          </span>
+        {/if}
         <button
           onclick={requestLogout}
           class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition text-sm"
