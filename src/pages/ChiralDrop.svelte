@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Send, X, Check, History, User, FileIcon, Upload, Coins } from 'lucide-svelte';
+  import { Send, X, Check, History, User, FileIcon, Upload, Coins, Search } from 'lucide-svelte';
   import {
     userAlias,
     nearbyPeers,
@@ -45,6 +45,14 @@
 
   let showHistory = $state(false);
   let sendPrice = $state('');
+  let peerSearchQuery = $state('');
+  let filteredNearbyPeers = $derived(
+    peerSearchQuery.trim()
+      ? $nearbyPeers.filter((p) =>
+          p.alias.displayName.toLowerCase().includes(peerSearchQuery.trim().toLowerCase())
+        )
+      : $nearbyPeers
+  );
   let mapPaneRatio = $state(72);
   let isWideLayout = $state(false);
   let isResizingSplit = $state(false);
@@ -610,8 +618,19 @@
       <div class="absolute left-4 top-4 z-20 inline-flex items-center rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-200 dark:ring-gray-700">
         Live Peer Mesh
       </div>
-      <div class="absolute right-4 top-4 z-20 inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs text-slate-600 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-300 dark:ring-gray-700">
-        {$nearbyPeers.length} discovered
+      <div class="absolute right-4 top-4 z-20 flex items-center gap-2">
+        <div class="relative">
+          <Search class="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 dark:text-slate-500 pointer-events-none" />
+          <input
+            type="text"
+            bind:value={peerSearchQuery}
+            placeholder="Filter peers..."
+            class="w-32 pl-6 pr-2 py-1 text-xs rounded-full bg-white/85 text-slate-700 shadow-sm ring-1 ring-slate-200 backdrop-blur placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-300 dark:bg-gray-900/70 dark:text-slate-200 dark:ring-gray-700 dark:placeholder:text-slate-500"
+          />
+        </div>
+        <span class="inline-flex items-center rounded-full bg-white/85 px-3 py-1 text-xs text-slate-600 shadow-sm ring-1 ring-slate-200 backdrop-blur dark:bg-gray-900/70 dark:text-slate-300 dark:ring-gray-700">
+          {filteredNearbyPeers.length}{peerSearchQuery.trim() ? ` / ${$nearbyPeers.length}` : ''} discovered
+        </span>
       </div>
 
       <!-- User -->
@@ -634,7 +653,7 @@
       </div>
 
       <!-- Nearby Peers -->
-      {#each $nearbyPeers as peer (peer.peerId)}
+      {#each filteredNearbyPeers as peer (peer.peerId)}
         <button
           onclick={() => handlePeerClick(peer)}
           class="peer-node group absolute z-20 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-2"
@@ -656,14 +675,19 @@
       {/each}
 
       <!-- Empty state -->
-      {#if $nearbyPeers.length === 0}
+      {#if filteredNearbyPeers.length === 0}
         <div class="absolute inset-0 flex items-center justify-center p-6">
           <div class="max-w-sm rounded-2xl border border-white/70 bg-white/75 p-6 text-center shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-900/75">
             <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-gray-700 dark:text-gray-300">
               <User class="h-6 w-6" />
             </div>
-            <p class="text-lg font-semibold text-gray-800 dark:text-gray-100">No nearby users found</p>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Connect to the network to discover peers</p>
+            {#if peerSearchQuery.trim() && $nearbyPeers.length > 0}
+              <p class="text-lg font-semibold text-gray-800 dark:text-gray-100">No matching peers</p>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Try a different search term</p>
+            {:else}
+              <p class="text-lg font-semibold text-gray-800 dark:text-gray-100">No nearby users found</p>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Connect to the network to discover peers</p>
+            {/if}
           </div>
         </div>
       {/if}

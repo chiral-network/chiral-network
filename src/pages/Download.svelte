@@ -229,6 +229,20 @@
   let viewerName = $state('');
   let viewerError = $state<string | null>(null);
 
+  // History pagination
+  const HISTORY_PER_PAGE = 10;
+  let historyPage = $state(0);
+  let historyTotalPages = $derived(Math.max(1, Math.ceil(downloadHistory.length / HISTORY_PER_PAGE)));
+  let paginatedHistory = $derived(
+    downloadHistory.slice(historyPage * HISTORY_PER_PAGE, (historyPage + 1) * HISTORY_PER_PAGE)
+  );
+  // Reset to last valid page when history shrinks
+  $effect(() => {
+    if (historyPage >= historyTotalPages) {
+      historyPage = Math.max(0, historyTotalPages - 1);
+    }
+  });
+
   let walletBalance = $state<string>('0');
   let isProcessingPayment = $state(false);
 
@@ -1712,7 +1726,7 @@
         {/each}
 
         <!-- History (persisted from previous sessions) -->
-        {#each downloadHistory as entry (entry.id)}
+        {#each paginatedHistory as entry (entry.id)}
           {@const EntryIcon = getFileIcon(entry.fileName)}
           <div class="p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
             <div class="flex items-start gap-3">
@@ -1803,6 +1817,39 @@
           </div>
         {/each}
       </div>
+
+      {#if historyTotalPages > 1}
+        <div class="flex items-center justify-between px-5 py-3 border-t border-gray-200 dark:border-gray-700">
+          <span class="text-xs text-gray-500 dark:text-gray-400">
+            Showing {historyPage * HISTORY_PER_PAGE + 1}–{Math.min((historyPage + 1) * HISTORY_PER_PAGE, downloadHistory.length)} of {downloadHistory.length}
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              onclick={() => { historyPage = 0; }}
+              disabled={historyPage === 0}
+              class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+            >First</button>
+            <button
+              onclick={() => { historyPage = Math.max(0, historyPage - 1); }}
+              disabled={historyPage === 0}
+              class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+            >Prev</button>
+            <span class="px-2 py-1 text-xs text-gray-600 dark:text-gray-400">
+              {historyPage + 1} / {historyTotalPages}
+            </span>
+            <button
+              onclick={() => { historyPage = Math.min(historyTotalPages - 1, historyPage + 1); }}
+              disabled={historyPage >= historyTotalPages - 1}
+              class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+            >Next</button>
+            <button
+              onclick={() => { historyPage = historyTotalPages - 1; }}
+              disabled={historyPage >= historyTotalPages - 1}
+              class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+            >Last</button>
+          </div>
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

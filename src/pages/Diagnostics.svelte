@@ -110,6 +110,15 @@
   // Events
   let eventListeners: (() => void)[] = [];
   let autoScroll = $state(true);
+
+  // Auto-scroll log to bottom when new entries arrive
+  $effect(() => {
+    if (autoScroll && logs.length > 0) {
+      const el = document.getElementById('log-output');
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  });
+
   let showDhtSection = $state(true);
   let showBootstrapSection = $state(true);
   let showGethSection = $state(true);
@@ -1035,11 +1044,18 @@
             <p class="text-gray-500 text-center py-8">No log entries{logFilter !== 'all' || sourceFilter !== 'all' ? ' matching filters' : ''}</p>
           {:else}
             {#each filteredLogs as entry (entry.id)}
-              <div class="flex gap-2 py-0.5 hover:bg-gray-800 px-1 rounded">
+              <div class="flex gap-2 py-0.5 hover:bg-gray-800 px-1 rounded group">
                 <span class="text-gray-500 shrink-0">{entry.timestamp.toLocaleTimeString()}</span>
                 <span class="shrink-0 px-1 rounded {levelBg(entry.level)} text-[10px] uppercase font-bold">{entry.level}</span>
                 <span class="shrink-0 px-1 rounded text-[10px] uppercase font-bold {sourceBg(entry.source)}">{entry.source}</span>
-                <span class="text-gray-300 break-all">{entry.message}</span>
+                <span class="text-gray-300 break-all flex-1">{entry.message}</span>
+                <button
+                  class="shrink-0 px-1 text-gray-600 hover:text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Copy log entry"
+                  onclick={() => { navigator.clipboard.writeText(`[${entry.timestamp.toISOString()}] [${entry.level}] [${entry.source}] ${entry.message}`); toasts.show('Log entry copied', 'success'); }}
+                >
+                  <Copy class="w-3 h-3" />
+                </button>
               </div>
             {/each}
           {/if}

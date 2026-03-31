@@ -3,7 +3,7 @@ set -euo pipefail
 source /tests/lib.sh
 
 PHASE="phase-09-reputation"
-log_phase_start "$PHASE"
+log_info "[$PHASE] Starting reputation check phase"
 
 ###############################################################################
 # Phase 09 — Reputation System Check
@@ -16,9 +16,8 @@ RELAY_URL="${RELAY_URL:-http://130.245.173.73:8080}"
 WALLETS_FILE="/results/wallets.txt"
 
 if [[ ! -f "$WALLETS_FILE" ]] || [[ ! -s "$WALLETS_FILE" ]]; then
-    log_warn "$PHASE" "No wallets file found at $WALLETS_FILE — skipping"
-    record_result "$PHASE" "skip" "No wallets file available"
-    log_phase_end "$PHASE" 0
+    log_warn "[$PHASE] No wallets file found at $WALLETS_FILE — skipping"
+    record_result "$PHASE" "reputation" "skip" "0" "No wallets file available"
     exit 0
 fi
 
@@ -27,18 +26,19 @@ mapfile -t WALLETS < "$WALLETS_FILE"
 WALLET_COUNT=${#WALLETS[@]}
 
 if [[ "$WALLET_COUNT" -eq 0 ]]; then
-    log_warn "$PHASE" "Wallets file is empty — skipping"
-    record_result "$PHASE" "skip" "No wallet addresses found"
-    log_phase_end "$PHASE" 0
+    log_warn "[$PHASE] Wallets file is empty — skipping"
+    record_result "$PHASE" "reputation" "skip" "0" "No wallet addresses found"
     exit 0
 fi
 
-log_info "$PHASE" "Loaded $WALLET_COUNT wallet addresses"
+log_info "[$PHASE] Loaded $WALLET_COUNT wallet addresses"
+
+start_timer
 
 # Build JSON array of wallet addresses for batch query
 wallet_json=$(printf '%s\n' "${WALLETS[@]}" | jq -R . | jq -s '{ "wallets": . }')
 
-log_info "$PHASE" "Querying relay reputation batch endpoint..."
+log_info "[$PHASE] Querying relay reputation batch endpoint..."
 
 batch_resp=$(curl -sf --max-time 30 \
     -X POST "${RELAY_URL}/api/ratings/batch" \
@@ -46,17 +46,17 @@ batch_resp=$(curl -sf --max-time 30 \
     -d "$wallet_json" 2>/dev/null) || batch_resp=""
 
 if [[ -z "$batch_resp" ]]; then
-    log_warn "$PHASE" "Batch reputation request failed (no response from relay)"
-    record_result "$PHASE" "fail" "Relay server did not respond to batch reputation query"
-    log_phase_end "$PHASE" 1
+    elapsed=$(stop_timer)
+    log_fail "[$PHASE] Batch reputation request failed (no response from relay)"
+    record_result "$PHASE" "reputation-batch" "fail" "$elapsed" "Relay server did not respond to batch reputation query"
     exit 1
 fi
 
 if echo "$batch_resp" | jq -e '.error' >/dev/null 2>&1; then
+    elapsed=$(stop_timer)
     err_msg=$(echo "$batch_resp" | jq -r '.error')
-    log_warn "$PHASE" "Batch reputation error: $err_msg"
-    record_result "$PHASE" "fail" "Relay returned error: $err_msg"
-    log_phase_end "$PHASE" 1
+    log_fail "[$PHASE] Batch reputation error: $err_msg"
+    record_result "$PHASE" "reputation-batch" "fail" "$elapsed" "Relay returned error: $err_msg"
     exit 1
 fi
 
@@ -67,7 +67,6 @@ elo_valid=0
 elo_invalid=0
 
 # The batch endpoint may return a map of wallet -> {elo, events} or an array
-# Try to iterate over the response entries
 for wallet in "${WALLETS[@]}"; do
     # Try to extract elo for this wallet (handle both object and array response shapes)
     elo=$(echo "$batch_resp" | jq -r "
@@ -87,13 +86,12 @@ for wallet in "${WALLETS[@]}"; do
 
     wallets_with_data=$((wallets_with_data + 1))
 
-    # Validate Elo range (0-100)
-    # Use awk for floating-point comparison
+    # Validate Elo range (0-100) using awk for floating-point comparison
     in_range=$(awk -v elo="$elo" 'BEGIN { print (elo >= 0 && elo <= 100) ? "yes" : "no" }')
     if [[ "$in_range" == "yes" ]]; then
         elo_valid=$((elo_valid + 1))
     else
-        log_warn "$PHASE" "Wallet $wallet: Elo $elo is outside 0-100 range"
+        log_warn "[$PHASE] Wallet $wallet: Elo $elo is outside 0-100 range"
         elo_invalid=$((elo_invalid + 1))
     fi
 done
@@ -109,7 +107,7 @@ individual_fail=0
 
 for i in $(seq 0 $(( sample_count - 1 ))); do
     wallet="${WALLETS[$i]}"
-    log_info "$PHASE" "Querying individual reputation for $wallet"
+    log_info "[$PHASE] Querying individual reputation for $wallet"
 
     indiv_resp=$(curl -sf --max-time 10 \
         "${RELAY_URL}/api/ratings/${wallet}" 2>/dev/null) || indiv_resp=""
@@ -121,22 +119,24 @@ for i in $(seq 0 $(( sample_count - 1 ))); do
     fi
 done
 
+elapsed=$(stop_timer)
+
 # --- Report ---
-log_info "$PHASE" "=== Reputation Check Report ==="
-log_info "$PHASE" "  Total wallets:           $WALLET_COUNT"
-log_info "$PHASE" "  Wallets with rep data:   $wallets_with_data"
-log_info "$PHASE" "  Wallets without data:    $wallets_without_data"
-log_info "$PHASE" "  Elo scores in range:     $elo_valid"
-log_info "$PHASE" "  Elo scores out of range: $elo_invalid"
-log_info "$PHASE" "  Individual queries OK:   $individual_ok"
-log_info "$PHASE" "  Individual queries fail: $individual_fail"
+log_info "[$PHASE] === Reputation Check Report ==="
+log_info "[$PHASE]   Total wallets:           $WALLET_COUNT"
+log_info "[$PHASE]   Wallets with rep data:   $wallets_with_data"
+log_info "[$PHASE]   Wallets without data:    $wallets_without_data"
+log_info "[$PHASE]   Elo scores in range:     $elo_valid"
+log_info "[$PHASE]   Elo scores out of range: $elo_invalid"
+log_info "[$PHASE]   Individual queries OK:   $individual_ok"
+log_info "[$PHASE]   Individual queries fail: $individual_fail"
 
 if [[ "$elo_invalid" -gt 0 ]]; then
-    record_result "$PHASE" "fail" "$elo_invalid wallets have Elo scores outside 0-100 range"
-    log_phase_end "$PHASE" 1
+    record_result "$PHASE" "reputation" "fail" "$elapsed" "$elo_invalid wallets have Elo scores outside 0-100 range"
+    log_fail "[$PHASE] $elo_invalid wallets have Elo scores outside 0-100 range"
     exit 1
 fi
 
 # Having no reputation data is acceptable for fresh test nodes
-record_result "$PHASE" "pass" "Checked $WALLET_COUNT wallets; $wallets_with_data have reputation data; all Elo scores within 0-100"
-log_phase_end "$PHASE" 0
+record_result "$PHASE" "reputation" "pass" "$elapsed" ""
+log_pass "[$PHASE] Checked $WALLET_COUNT wallets; $wallets_with_data have reputation data; all Elo scores within 0-100"

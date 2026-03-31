@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Download, Wallet, Globe, Settings, LogOut, Send, Pickaxe, Bug, Menu, X, ChevronLeft, ChevronRight, Server, HardDrive } from 'lucide-svelte';
   import { goto } from '@mateothegreat/svelte5-router';
-  import { networkConnected } from '$lib/stores';
+  import { networkConnected, walletAccount } from '$lib/stores';
   import { requestLogout } from '$lib/logout';
 
   let { currentPage = 'download', collapsed = $bindable(false) }: { currentPage?: string; collapsed?: boolean } = $props();
@@ -165,6 +165,15 @@
       >
         <ChevronRight class="w-4 h-4 shrink-0" />
       </button>
+    {/if}
+
+    <!-- Wallet address -->
+    {#if $walletAccount?.address && !collapsed}
+      <div class="px-3 py-1.5 mb-1">
+        <span class="text-[10px] font-mono text-gray-500 dark:text-gray-500 truncate block" title={$walletAccount.address}>
+          {$walletAccount.address.slice(0, 6)}...{$walletAccount.address.slice(-4)}
+        </span>
+      </div>
     {/if}
 
     <!-- Logout -->
