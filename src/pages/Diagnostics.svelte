@@ -113,7 +113,7 @@
 
   // Auto-scroll log to bottom when new entries arrive
   $effect(() => {
-    if (autoScroll && logs.length > 0) {
+    if (autoScroll && logEntries.length > 0) {
       const el = document.getElementById('log-output');
       if (el) el.scrollTop = el.scrollHeight;
     }
