@@ -3412,7 +3412,10 @@ async fn send_transaction_to_rpc(
 
                 if retry_json.get("result").is_some() && !retry_json["result"].is_null() {
                     println!("✅ Transaction accepted on retry {}", attempt);
-                    let tx_hash = retry_json["result"].as_str().unwrap().to_string();
+                    let tx_hash = retry_json["result"]
+                        .as_str()
+                        .unwrap_or("0x0")
+                        .to_string();
                     println!("✅ Transaction submitted: {}", tx_hash);
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     return Ok(SendTransactionResult {
@@ -3434,10 +3437,11 @@ async fn send_transaction_to_rpc(
                     break;
                 }
                 if !retry_msg.contains("overdraft") {
-                    return Err(format!(
-                        "Transaction failed on retry: {}",
-                        retry_json.get("error").unwrap()
-                    ));
+                    let err_detail = retry_json
+                        .get("error")
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    return Err(format!("Transaction failed on retry: {}", err_detail));
                 }
             }
         } else {
