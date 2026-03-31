@@ -269,12 +269,16 @@
       <div>
         <span class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Download Directory</span>
         <div class="flex items-center gap-3">
-          <div class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
+          <button
+            class="flex-1 flex items-center gap-2 px-3 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg hover:border-primary-400 dark:hover:border-primary-500 transition-colors cursor-pointer text-left"
+            title="Click to copy path"
+            onclick={() => { if (displayDownloadDir) { navigator.clipboard.writeText(displayDownloadDir); toasts.show('Path copied', 'success'); } }}
+          >
             <FolderOpen class="w-4 h-4 text-gray-400 flex-shrink-0" />
             <span class="text-sm text-gray-700 dark:text-gray-300 truncate font-mono">
               {displayDownloadDir || 'Loading...'}
             </span>
-          </div>
+          </button>
           <button
             onclick={browseDownloadDirectory}
             class="px-4 py-2.5 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors flex-shrink-0 focus:outline-none focus:ring-2 focus:ring-primary-500/30"

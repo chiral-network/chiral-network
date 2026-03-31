@@ -781,9 +781,12 @@
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-            <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-              {dhtHealth.running ? 'Running' : 'Stopped'}
-            </p>
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full {dhtHealth.running ? 'bg-green-500' : 'bg-red-500'}"></span>
+              <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
+                {dhtHealth.running ? 'Running' : 'Stopped'}
+              </p>
+            </div>
           </div>
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
@@ -899,9 +902,13 @@
             <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
-                  <div class="font-mono text-sm break-all dark:text-gray-200">{peer.id}</div>
+                  <button
+                    class="font-mono text-sm break-all dark:text-gray-200 text-left hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+                    title="Click to copy peer ID"
+                    onclick={() => { navigator.clipboard.writeText(peer.id); toasts.show('Peer ID copied', 'success'); }}
+                  >{peer.id}</button>
                   {#if peer.address}
-                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">Address: {peer.address}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate" title={peer.address}>Address: {peer.address}</div>
                   {/if}
                 </div>
                 <button
@@ -1007,9 +1014,13 @@
         {#each $blacklist as entry}
           <div class="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg group">
             <div class="flex-1 min-w-0">
-              <div class="font-mono text-sm dark:text-gray-200 truncate" title={entry.address}>
+              <button
+                class="font-mono text-sm dark:text-gray-200 truncate text-left hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+                title="Click to copy: {entry.address}"
+                onclick={() => { navigator.clipboard.writeText(entry.address); toasts.show('Address copied', 'success'); }}
+              >
                 {truncateAddress(entry.address)}
-              </div>
+              </button>
               <div class="flex items-center gap-2 mt-0.5">
                 <span class="text-xs text-gray-500 dark:text-gray-400">{entry.reason}</span>
                 <span class="text-xs text-gray-400 dark:text-gray-500">&middot;</span>
