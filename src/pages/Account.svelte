@@ -502,7 +502,7 @@
         </div>
 
         <div class="flex items-center gap-2 mt-4">
-          <span class="font-mono text-lg">{formatAddress($walletAccount.address)}</span>
+          <span class="font-mono text-lg" title={$walletAccount.address}>{formatAddress($walletAccount.address)}</span>
         </div>
       </div>
 
@@ -732,16 +732,16 @@
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-3">
             <div class="flex justify-between">
               <span class="text-sm text-gray-500 dark:text-gray-400">From</span>
-              <span class="text-sm font-mono dark:text-gray-300">{formatAddress($walletAccount?.address || '')}</span>
+              <span class="text-sm font-mono dark:text-gray-300" title={$walletAccount?.address || ''}>{formatAddress($walletAccount?.address || '')}</span>
             </div>
             <div class="flex justify-between">
               <span class="text-sm text-gray-500 dark:text-gray-400">To</span>
               <span class="text-sm dark:text-gray-300">
                 {#if getRecipientLabel(recipientAddress)}
                   <span class="font-medium">{getRecipientLabel(recipientAddress)}</span>
-                  <span class="font-mono text-gray-400 dark:text-gray-500 ml-1">({formatAddress(recipientAddress)})</span>
+                  <span class="font-mono text-gray-400 dark:text-gray-500 ml-1" title={recipientAddress}>({formatAddress(recipientAddress)})</span>
                 {:else}
-                  <span class="font-mono">{formatAddress(recipientAddress)}</span>
+                  <span class="font-mono" title={recipientAddress}>{formatAddress(recipientAddress)}</span>
                 {/if}
               </span>
             </div>
@@ -849,7 +849,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="font-medium {style.iconColor}">
-                      {isIncoming(tx) ? '+' : '-'}{tx.value} CHI
+                      {isIncoming(tx) ? '+' : '-'}{formatBalance(tx.value)} CHI
                     </span>
                     <span class="text-xs px-2 py-0.5 rounded-full {
                       (tx.txType === 'speed_tier_payment' || tx.txType === 'download_payment')
@@ -917,11 +917,11 @@
                     {#if tx.balanceBefore && tx.balanceAfter}
                       <div>
                         <span class="text-gray-400">Balance Before</span>
-                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceBefore} CHI</p>
+                        <p class="text-gray-700 dark:text-gray-300">{formatBalance(tx.balanceBefore)} CHI</p>
                       </div>
                       <div>
                         <span class="text-gray-400">Balance After</span>
-                        <p class="text-gray-700 dark:text-gray-300">{tx.balanceAfter} CHI</p>
+                        <p class="text-gray-700 dark:text-gray-300">{formatBalance(tx.balanceAfter)} CHI</p>
                       </div>
                     {/if}
                     {#if tx.fileHash}
@@ -933,7 +933,7 @@
                     <div class="col-span-2">
                       <span class="text-gray-400">Transaction Hash</span>
                       <div class="flex items-center gap-2">
-                        <p class="font-mono text-gray-700 dark:text-gray-300 truncate flex-1">{tx.hash}</p>
+                        <p class="font-mono text-gray-700 dark:text-gray-300 flex-1" title={tx.hash}>{tx.hash.slice(0, 10)}...</p>
                         <button
                           onclick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(tx.hash); toasts.show('Hash copied', 'success'); }}
                           class="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex-shrink-0"

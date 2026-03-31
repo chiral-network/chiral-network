@@ -406,6 +406,13 @@
     if (rate >= 1e3) return `${(rate / 1e3).toFixed(2)} KH/s`;
     return `${rate} H/s`;
   }
+
+  function formatDifficulty(d: number): string {
+    if (d >= 1e9) return (d / 1e9).toFixed(1) + 'G';
+    if (d >= 1e6) return (d / 1e6).toFixed(1) + 'M';
+    if (d >= 1e3) return (d / 1e3).toFixed(1) + 'K';
+    return d.toString();
+  }
 </script>
 
 <svelte:head><title>Mining | Chiral Network</title></svelte:head>
@@ -543,7 +550,7 @@
             <Clock class="w-4 h-4 text-purple-500" />
             <span class="text-sm text-gray-600 dark:text-gray-400">Session Time</span>
           </div>
-          <p class="text-2xl font-bold tabular-nums dark:text-white">
+          <p class="text-2xl font-bold tabular-nums dark:text-white {isAnyMining ? 'animate-pulse' : ''}">
             {isAnyMining ? miningElapsed : '--:--:--'}
           </p>
         </div>
@@ -710,7 +717,7 @@
                       class="rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
                     />
                     <span class="font-mono text-xs text-gray-500 dark:text-gray-400">[{device.id}]</span>
-                    <span class="text-sm">{device.name}</span>
+                    <span class="text-sm truncate" title={device.name}>{device.name}</span>
                   </label>
                 {/each}
               </div>
@@ -848,8 +855,8 @@
                       <td class="py-2 px-3 text-right text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
                         +{block.rewardChi} CHI
                       </td>
-                      <td class="py-2 px-3 text-right text-xs tabular-nums text-gray-500 dark:text-gray-400 font-mono">
-                        {block.difficulty.toLocaleString()}
+                      <td class="py-2 px-3 text-right text-xs tabular-nums text-gray-500 dark:text-gray-400 font-mono" title={block.difficulty.toLocaleString()}>
+                        {formatDifficulty(block.difficulty)}
                       </td>
                     </tr>
                   {/each}
