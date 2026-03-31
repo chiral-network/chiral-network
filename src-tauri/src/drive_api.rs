@@ -590,7 +590,7 @@ async fn view_file(
     let Some(item) = m
         .items
         .iter()
-        .find(|i| i.id == item_id && (owner.is_none() || i.owner == *owner.as_ref().unwrap()))
+        .find(|i| i.id == item_id && owner.as_ref().map_or(true, |o| &i.owner == o))
     else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
@@ -667,7 +667,7 @@ async fn download_file(
     let Some(item) = m
         .items
         .iter()
-        .find(|i| i.id == item_id && (owner.is_none() || i.owner == *owner.as_ref().unwrap()))
+        .find(|i| i.id == item_id && owner.as_ref().map_or(true, |o| &i.owner == o))
     else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
@@ -681,6 +681,13 @@ async fn download_file(
         return (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response();
     };
     let path = files_dir.join(sp);
+    let metadata = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(_) => return (StatusCode::NOT_FOUND, "File not found on disk").into_response(),
+    };
+    if metadata.len() > 500 * 1024 * 1024 {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "File too large").into_response();
+    }
     let data = match std::fs::read(&path) {
         Ok(d) => d,
         Err(_) => return (StatusCode::NOT_FOUND, "File not found on disk").into_response(),

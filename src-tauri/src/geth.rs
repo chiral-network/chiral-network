@@ -1981,26 +1981,13 @@ impl GethProcess {
         let gpu_running = self.gpu_miner_child.is_some();
 
         let client = reqwest::Client::new();
-        let rpc_url = self.effective_rpc_endpoint();
-
-        println!("⛏️  ---- Mining Status Debug ----");
-        println!("⛏️  RPC endpoint: {}", rpc_url);
-        println!("⛏️  Local Geth running: {}", self.child.is_some());
-        println!("⛏️  GPU miner running: {}", gpu_running);
 
         let cpu_mining = match self
             .rpc_call(&client, "eth_mining", serde_json::json!([]))
             .await
         {
-            Ok(result) => {
-                let m = result.as_bool().unwrap_or(false);
-                println!("⛏️  eth_mining: {} (raw: {})", m, result);
-                m
-            }
-            Err(e) => {
-                println!("⛏️  eth_mining: ERROR: {}", e);
-                false
-            }
+            Ok(result) => result.as_bool().unwrap_or(false),
+            Err(_) => false,
         };
 
         // Get actual hashrate from Geth via eth_hashrate RPC
@@ -2016,11 +2003,8 @@ impl GethProcess {
                     let hex = result.as_str().unwrap_or("0x0");
                     hash_rate =
                         u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                    println!("⛏️  eth_hashrate: {} H/s (raw: {})", hash_rate, result);
                 }
-                Err(e) => {
-                    println!("⛏️  eth_hashrate: ERROR: {}", e);
-                }
+                Err(_) => {}
             }
 
             // Fallback: estimate from block production if eth_hashrate returns 0
@@ -2072,12 +2056,6 @@ impl GethProcess {
                                 as u64;
                         }
                     }
-                    println!(
-                        "⛏️  Block-based hashrate estimate: {} (blocks_mined={}, elapsed={}s)",
-                        hash_rate,
-                        blocks_mined,
-                        now.saturating_sub(self.last_block_time)
-                    );
                 }
 
                 if current_block > 0 {
@@ -2089,11 +2067,6 @@ impl GethProcess {
             // Not mining — reset tracking
             self.last_block = 0;
             self.last_block_time = 0;
-            if gpu_running {
-                println!("⛏️  CPU mining is OFF (GPU mining active)");
-            } else {
-                println!("⛏️  Mining is OFF");
-            }
         }
 
         let mining = cpu_mining || gpu_running;
@@ -2105,42 +2078,9 @@ impl GethProcess {
             .rpc_call(&client, "eth_coinbase", serde_json::json!([]))
             .await
         {
-            Ok(result) => {
-                let addr = result.as_str().map(|s| s.to_string());
-                println!("⛏️  eth_coinbase: {:?}", addr);
-                addr
-            }
-            Err(e) => {
-                println!("⛏️  eth_coinbase: ERROR: {}", e);
-                None
-            }
+            Ok(result) => result.as_str().map(|s| s.to_string()),
+            Err(_) => None,
         };
-
-        // Tail the Geth log file for recent activity
-        let log_path = self.data_dir.join("geth.log");
-        if log_path.exists() {
-            match fs::read_to_string(&log_path) {
-                Ok(contents) => {
-                    let lines: Vec<&str> = contents.lines().collect();
-                    let start = if lines.len() > 20 {
-                        lines.len() - 20
-                    } else {
-                        0
-                    };
-                    println!(
-                        "⛏️  ---- Geth Log (last {} lines) ----",
-                        lines.len() - start
-                    );
-                    for line in &lines[start..] {
-                        println!("⛏️  LOG: {}", line);
-                    }
-                    println!("⛏️  ---- End Geth Log ----");
-                }
-                Err(e) => println!("⛏️  Could not read geth.log: {}", e),
-            }
-        } else {
-            println!("⛏️  No geth.log found at {}", log_path.display());
-        }
 
         // Query the miner's balance from local Geth (where mining rewards live)
         let (total_mined_wei, total_mined_chi) = if let Some(ref addr) = miner_address {
@@ -2162,22 +2102,16 @@ impl GethProcess {
                         let wei =
                             u128::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
                         let chi = wei as f64 / 1e18;
-                        println!("⛏️  Miner balance (remote): {} CHI ({} wei)", chi, wei);
                         (wei.to_string(), chi)
                     } else {
                         ("0".to_string(), 0.0)
                     }
                 }
-                Err(e) => {
-                    println!("⛏️  eth_getBalance (remote): ERROR: {}", e);
-                    ("0".to_string(), 0.0)
-                }
+                Err(_) => ("0".to_string(), 0.0),
             }
         } else {
             ("0".to_string(), 0.0)
         };
-
-        println!("⛏️  ---- End Mining Status Debug ----");
 
         Ok(MiningStatus {
             mining,
