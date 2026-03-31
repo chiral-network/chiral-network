@@ -98,6 +98,20 @@
   let bootstrapPeerIds = $state<Set<string>>(new Set());
   let filteredPeers = $derived($peers.filter(p => !bootstrapPeerIds.has(p.id)));
 
+  // Peer list pagination
+  const PEERS_PER_PAGE = 10;
+  let peerPage = $state(0);
+  let peerTotalPages = $derived(Math.max(1, Math.ceil(filteredPeers.length / PEERS_PER_PAGE)));
+  let paginatedPeers = $derived(
+    filteredPeers.slice(peerPage * PEERS_PER_PAGE, (peerPage + 1) * PEERS_PER_PAGE)
+  );
+  // Reset to first page when peer list changes significantly
+  $effect(() => {
+    if (peerPage >= peerTotalPages) {
+      peerPage = Math.max(0, peerTotalPages - 1);
+    }
+  });
+
 
   // Show "connecting" message only when Geth is running with 0 peers, auto-dismiss after 30s
   $effect(() => {
@@ -881,7 +895,7 @@
         </div>
       {:else}
         <div class="space-y-2">
-          {#each filteredPeers as peer}
+          {#each paginatedPeers as peer}
             <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
@@ -902,6 +916,39 @@
             </div>
           {/each}
         </div>
+
+        {#if peerTotalPages > 1}
+          <div class="flex items-center justify-between mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+            <span class="text-xs text-gray-500 dark:text-gray-400">
+              Showing {peerPage * PEERS_PER_PAGE + 1}–{Math.min((peerPage + 1) * PEERS_PER_PAGE, filteredPeers.length)} of {filteredPeers.length}
+            </span>
+            <div class="flex items-center gap-1">
+              <button
+                onclick={() => { peerPage = 0; }}
+                disabled={peerPage === 0}
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+              >First</button>
+              <button
+                onclick={() => { peerPage = Math.max(0, peerPage - 1); }}
+                disabled={peerPage === 0}
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+              >Prev</button>
+              <span class="px-2 py-1 text-xs text-gray-600 dark:text-gray-400">
+                {peerPage + 1} / {peerTotalPages}
+              </span>
+              <button
+                onclick={() => { peerPage = Math.min(peerTotalPages - 1, peerPage + 1); }}
+                disabled={peerPage >= peerTotalPages - 1}
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+              >Next</button>
+              <button
+                onclick={() => { peerPage = peerTotalPages - 1; }}
+                disabled={peerPage >= peerTotalPages - 1}
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+              >Last</button>
+            </div>
+          </div>
+        {/if}
       {/if}
     </div>
   </div>
