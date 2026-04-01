@@ -172,6 +172,10 @@
     return 'other';
   }
 
+  function isRelayCircuitAddress(addr: string): boolean {
+    return addr.includes('/p2p-circuit');
+  }
+
   // Extract the IP address and port from a multiaddr like /ip4/1.2.3.4/tcp/4001/...
   function extractIpPort(addr: string): string {
     const parts = addr.split('/').filter(Boolean);
@@ -186,6 +190,10 @@
   function formatUnixSeconds(timestamp: number): string {
     return new Date(timestamp * 1000).toLocaleTimeString();
   }
+
+  let relayListeningCount = $derived(
+    dhtHealth ? dhtHealth.listeningAddresses.filter((addr) => isRelayCircuitAddress(addr)).length : 0
+  );
 
   function parseUnixSeconds(value: unknown): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -913,7 +921,7 @@
       </div>
 
       {#if dhtHealth}
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
             <div class="flex items-center gap-1.5">
@@ -934,6 +942,12 @@
           <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
             <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
             <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.sharedFiles}</p>
+          </div>
+          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
+            <p class="text-xs text-gray-500 dark:text-gray-400">Relay Listeners</p>
+            <p class="text-sm font-bold tabular-nums {relayListeningCount > 0 ? 'text-green-600 dark:text-green-400' : 'text-yellow-600 dark:text-yellow-400'}">
+              {relayListeningCount}
+            </p>
           </div>
         </div>
 
@@ -968,7 +982,14 @@
                       <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(addr) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}">
                         {addrType(addr)}
                       </span>
-                      <span class="font-mono break-all dark:text-gray-300">{extractIpPort(addr)}</span>
+                      {#if isRelayCircuitAddress(addr)}
+                        <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">
+                          Relay
+                        </span>
+                      {/if}
+                      <span class="font-mono break-all dark:text-gray-300" title={addr}>
+                        {isRelayCircuitAddress(addr) ? addr : extractIpPort(addr)}
+                      </span>
                     </div>
                   {/each}
                 </div>
