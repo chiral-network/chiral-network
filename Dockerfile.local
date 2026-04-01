@@ -1,8 +1,17 @@
 # Lightweight image using pre-built binaries (for local testing)
 FROM debian:trixie-slim
 
-RUN apt-get update && apt-get install -y \
-    ca-certificates libssl3 curl jq \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    jq \
+    libssl3 \
+    libglib2.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libgtk-3-0 \
+    libsoup-3.0-0 \
+    libjavascriptcoregtk-4.1-0 \
+    libwebkit2gtk-4.1-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /data/chiral-network
