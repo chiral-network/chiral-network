@@ -6,6 +6,7 @@
   import { formatBytes } from '$lib/utils';
   import { dhtService, type DhtHealthInfo } from '$lib/dhtService';
   import { toasts } from '$lib/toastStore';
+  import type { HostAdvertisement } from '$lib/types/hosting';
   import {
     Play,
     Square,
@@ -66,6 +67,20 @@
     healthyEnodeString: string;
   }
 
+  interface HostRegistryEntry {
+    peerId: string;
+    walletAddress: string;
+    updatedAt: number;
+  }
+
+  interface AdvertisedHostRow {
+    peerId: string;
+    walletAddress: string;
+    updatedAt: number | null;
+    publishedAt: number | null;
+    lastHeartbeatAt: number | null;
+  }
+
   // DHT State
   let isConnecting = $state(false);
   let error = $state('');
@@ -94,16 +109,31 @@
   let isCheckingDhtHealth = $state(false);
   let showDhtHealthDetails = $state(false);
 
-  // Bootstrap peer IDs (to filter from Connected Peers)
+  // Bootstrap peer IDs and Connected Peers visibility controls
   let bootstrapPeerIds = $state<Set<string>>(new Set());
-  let filteredPeers = $derived($peers.filter(p => !bootstrapPeerIds.has(p.id)));
+  let showBootstrapPeers = $state(true);
+  let visiblePeers = $derived(
+    showBootstrapPeers ? $peers : $peers.filter((peer) => !bootstrapPeerIds.has(peer.id))
+  );
 
   // Peer list pagination
   const PEERS_PER_PAGE = 10;
   let peerPage = $state(0);
-  let peerTotalPages = $derived(Math.max(1, Math.ceil(filteredPeers.length / PEERS_PER_PAGE)));
+  let peerTotalPages = $derived(Math.max(1, Math.ceil(visiblePeers.length / PEERS_PER_PAGE)));
   let paginatedPeers = $derived(
-    filteredPeers.slice(peerPage * PEERS_PER_PAGE, (peerPage + 1) * PEERS_PER_PAGE)
+    visiblePeers.slice(peerPage * PEERS_PER_PAGE, (peerPage + 1) * PEERS_PER_PAGE)
+  );
+
+  // Wallet-visible host advertisements (registry + ad payloads)
+  let advertisedHosts = $state<AdvertisedHostRow[]>([]);
+  let isLoadingAdvertisedHosts = $state(false);
+  let advertisedHostsError = $state('');
+  let connectedPeerIds = $derived(new Set($peers.map((peer) => peer.id)));
+  let advertisedHostsWithStatus = $derived(
+    advertisedHosts.map((host) => ({
+      ...host,
+      isOnline: connectedPeerIds.has(host.peerId)
+    }))
   );
   // Reset to first page when peer list changes significantly
   $effect(() => {
@@ -157,6 +187,23 @@
     return new Date(timestamp * 1000).toLocaleTimeString();
   }
 
+  function parseUnixSeconds(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Math.floor(value);
+    }
+    if (typeof value === 'string' && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return Math.floor(parsed);
+      }
+    }
+    return null;
+  }
+
+  function formatUnixDateTime(timestamp: number | null): string {
+    return timestamp ? new Date(timestamp * 1000).toLocaleString() : 'Unknown';
+  }
+
   onMount(async () => {
     if (isTauri()) {
       // Load bootstrap peer IDs to filter them from Connected Peers
@@ -167,6 +214,7 @@
 
       await loadGethStatus();
       await loadBootstrapHealth();
+      await loadAdvertisedHosts();
 
       // Set up download progress listener
       unlistenDownload = await listen<DownloadProgress>('geth-download-progress', (event) => {
@@ -323,6 +371,89 @@
     }
   }
 
+  async function loadAdvertisedHosts(notify = false) {
+    if (!isTauri()) {
+      advertisedHosts = [];
+      return;
+    }
+
+    isLoadingAdvertisedHosts = true;
+    advertisedHostsError = '';
+
+    try {
+      const registryJson = await invoke<string>('get_host_registry');
+      const parsed = JSON.parse(registryJson) as unknown;
+      const registry: HostRegistryEntry[] = Array.isArray(parsed)
+        ? parsed
+            .map((entry) => {
+              if (!entry || typeof entry !== 'object') return null;
+              const maybeEntry = entry as Partial<HostRegistryEntry>;
+              if (typeof maybeEntry.peerId !== 'string' || maybeEntry.peerId.trim().length === 0) {
+                return null;
+              }
+              return {
+                peerId: maybeEntry.peerId,
+                walletAddress: typeof maybeEntry.walletAddress === 'string' ? maybeEntry.walletAddress : '',
+                updatedAt: parseUnixSeconds(maybeEntry.updatedAt) ?? 0
+              };
+            })
+            .filter((entry): entry is HostRegistryEntry => entry !== null)
+        : [];
+
+      const rows = await Promise.all(
+        registry.map(async (entry): Promise<AdvertisedHostRow> => {
+          let ad: Partial<HostAdvertisement> | null = null;
+          try {
+            const adJson = await invoke<string | null>('get_host_advertisement', { peerId: entry.peerId });
+            if (adJson) {
+              const adValue = JSON.parse(adJson) as unknown;
+              if (adValue && typeof adValue === 'object') {
+                ad = adValue as Partial<HostAdvertisement>;
+              }
+            }
+          } catch {
+            // Ignore individual ad failures and still show registry entry.
+          }
+
+          const walletAddress = typeof ad?.walletAddress === 'string' && ad.walletAddress.trim().length > 0
+            ? ad.walletAddress
+            : entry.walletAddress || '(unknown)';
+
+          return {
+            peerId: entry.peerId,
+            walletAddress,
+            updatedAt: parseUnixSeconds(entry.updatedAt),
+            publishedAt: parseUnixSeconds(ad?.publishedAt),
+            lastHeartbeatAt: parseUnixSeconds(ad?.lastHeartbeatAt)
+          };
+        })
+      );
+
+      advertisedHosts = rows.sort((a, b) => {
+        const aTs = a.lastHeartbeatAt ?? a.updatedAt ?? 0;
+        const bTs = b.lastHeartbeatAt ?? b.updatedAt ?? 0;
+        return bTs - aTs;
+      });
+
+      if (notify) {
+        toasts.show('Host advertisements refreshed', 'success');
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('DHT not running')) {
+        advertisedHosts = [];
+      } else {
+        advertisedHostsError = errMsg;
+        log.error('Failed to load host advertisements:', err);
+        if (notify) {
+          toasts.detail('Failed to refresh host advertisements', errMsg, 'error');
+        }
+      }
+    } finally {
+      isLoadingAdvertisedHosts = false;
+    }
+  }
+
   // DHT Health Check
   async function checkDhtHealth(notify = false) {
     isCheckingDhtHealth = true;
@@ -353,6 +484,7 @@
       if (peerId) {
         localPeerId = peerId;
       }
+      await loadAdvertisedHosts();
       toasts.notify('networkStatus', 'Connected to P2P network', 'success');
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -361,6 +493,7 @@
         networkConnected.set(true);
         const peerId = await dhtService.getPeerId();
         if (peerId) localPeerId = peerId;
+        await loadAdvertisedHosts();
         toasts.notify('networkStatus', 'Reconnected to P2P network', 'info');
       } else {
         error = errMsg;
@@ -376,6 +509,8 @@
     try {
       await dhtService.stop();
       localPeerId = '';
+      advertisedHosts = [];
+      advertisedHostsError = '';
       toasts.notify('networkStatus', 'Disconnected from P2P network', 'info');
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to disconnect';
@@ -883,18 +1018,33 @@
 
     <!-- Connected Peers -->
     <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <div class="flex items-center gap-2 mb-3">
-        <Radio class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-        <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Connected Peers</span>
-        <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
-          {filteredPeers.length}
-        </span>
+      <div class="flex items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2">
+          <Radio class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Connected Peers</span>
+          <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+            {visiblePeers.length}
+          </span>
+        </div>
+        <label class="inline-flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 select-none">
+          <input
+            type="checkbox"
+            bind:checked={showBootstrapPeers}
+            class="h-3.5 w-3.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          Show bootstrap peers
+        </label>
       </div>
 
-      {#if filteredPeers.length === 0}
+      {#if visiblePeers.length === 0}
         <div class="text-center py-4 text-gray-500 dark:text-gray-400">
-          <p class="text-sm">No peers connected</p>
-          <p class="text-xs">Connect to the P2P network to discover peers</p>
+          {#if !showBootstrapPeers && $peers.length > 0}
+            <p class="text-sm">Only bootstrap peers are connected</p>
+            <p class="text-xs">Enable "Show bootstrap peers" to include them here</p>
+          {:else}
+            <p class="text-sm">No peers connected</p>
+            <p class="text-xs">Connect to the P2P network to discover peers</p>
+          {/if}
         </div>
       {:else}
         <div class="space-y-2">
@@ -927,7 +1077,7 @@
         {#if peerTotalPages > 1}
           <div class="flex items-center justify-between mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
             <span class="text-xs text-gray-500 dark:text-gray-400">
-              Showing {peerPage * PEERS_PER_PAGE + 1}–{Math.min((peerPage + 1) * PEERS_PER_PAGE, filteredPeers.length)} of {filteredPeers.length}
+              Showing {peerPage * PEERS_PER_PAGE + 1}–{Math.min((peerPage + 1) * PEERS_PER_PAGE, visiblePeers.length)} of {visiblePeers.length}
             </span>
             <div class="flex items-center gap-1">
               <button
@@ -956,6 +1106,83 @@
             </div>
           </div>
         {/if}
+      {/if}
+    </div>
+
+    <!-- Advertised Hosts -->
+    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-2">
+          <Server class="w-4 h-4 text-gray-500 dark:text-gray-400" />
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Advertised Hosts</span>
+          <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+            {advertisedHostsWithStatus.length}
+          </span>
+        </div>
+        <button
+          onclick={() => loadAdvertisedHosts(true)}
+          disabled={isLoadingAdvertisedHosts}
+          class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+        >
+          {#if isLoadingAdvertisedHosts}
+            <Loader2 class="w-3 h-3 animate-spin" />
+          {:else}
+            <RefreshCw class="w-3 h-3" />
+          {/if}
+          Refresh
+        </button>
+      </div>
+
+      {#if advertisedHostsError}
+        <div class="mb-2 p-2 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p class="text-xs text-red-700 dark:text-red-300">{advertisedHostsError}</p>
+        </div>
+      {/if}
+
+      {#if isLoadingAdvertisedHosts && advertisedHostsWithStatus.length === 0}
+        <div class="text-center py-4 text-gray-500 dark:text-gray-400">
+          <p class="text-sm">Loading host advertisements...</p>
+        </div>
+      {:else if advertisedHostsWithStatus.length === 0}
+        <div class="text-center py-4 text-gray-500 dark:text-gray-400">
+          <p class="text-sm">No host advertisements found</p>
+          <p class="text-xs">Published hosts appear here with peer ID and wallet address</p>
+        </div>
+      {:else}
+        <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
+          {#each advertisedHostsWithStatus as host}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full {host.isOnline ? 'bg-green-500' : 'bg-gray-400'} shrink-0"></span>
+                    <button
+                      class="font-mono text-xs break-all dark:text-gray-200 text-left hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+                      title="Click to copy peer ID"
+                      onclick={() => { navigator.clipboard.writeText(host.peerId); toasts.show('Peer ID copied', 'success'); }}
+                    >
+                      {host.peerId}
+                    </button>
+                  </div>
+                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-1 break-all">Wallet: {host.walletAddress}</p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Updated: {formatUnixDateTime(host.updatedAt)}
+                  </p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">
+                    Heartbeat: {formatUnixDateTime(host.lastHeartbeatAt)} | Published: {formatUnixDateTime(host.publishedAt)}
+                  </p>
+                </div>
+                <span
+                  class="px-2 py-0.5 text-xs rounded-full shrink-0 {host.isOnline
+                    ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                    : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}"
+                >
+                  {host.isOnline ? 'Online' : 'Offline'}
+                </span>
+              </div>
+            </div>
+          {/each}
+        </div>
       {/if}
     </div>
   </div>
