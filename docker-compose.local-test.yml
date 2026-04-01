@@ -11,6 +11,7 @@ services:
       dockerfile: Dockerfile.local
     container_name: chiral-relay
     init: true
+    privileged: true
     security_opt:
       - seccomp:unconfined
     entrypoint: ["relay_server"]
@@ -18,6 +19,11 @@ services:
     ports:
       - "4001:4001"
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     volumes:
       - relay-data:/data
     networks:
@@ -31,6 +37,7 @@ services:
       context: .
       dockerfile: Dockerfile.local
     init: true
+    privileged: true
     security_opt:
       - seccomp:unconfined
     command: ["--port", "9419", "--auto-start-dht"]
@@ -41,8 +48,6 @@ services:
     expose:
       - "9419"
       - "30303"
-    volumes:
-      - node-data:/data
     networks:
       - chiral-net
     depends_on:
@@ -56,4 +61,3 @@ networks:
 
 volumes:
   relay-data:
-  node-data:
