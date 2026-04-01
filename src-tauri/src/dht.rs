@@ -1568,6 +1568,11 @@ async fn event_loop(
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
     let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    // Ping requests deferred until a connection exists to the target peer.
+    // send_request() may race dialing and fail with DialFailure when only relay
+    // circuit paths are viable. We explicitly dial relay addresses first, then
+    // send ping on ConnectionEstablished.
+    let mut pending_ping_requests: HashMap<libp2p::PeerId, usize> = HashMap::new();
     // request_id -> number of in-flight FileInfo seeder attempts.
     // Used to avoid failing the download early when one candidate seeder is down.
     let mut pending_file_attempts: HashMap<String, usize> = HashMap::new();
@@ -1693,6 +1698,21 @@ async fn event_loop(
                             }
                         }
 
+                        if let Some(pending_count) = pending_ping_requests.remove(&peer_id) {
+                            println!(
+                                "📤 Sending {} deferred ping request(s) to {}",
+                                pending_count, peer_id
+                            );
+                            for _ in 0..pending_count {
+                                let request = PingRequest("PING".to_string());
+                                let request_id = swarm
+                                    .behaviour_mut()
+                                    .ping_protocol
+                                    .send_request(&peer_id, request);
+                                println!("Deferred ping request sent with ID: {:?}", request_id);
+                            }
+                        }
+
                         let bootstrap_peer_ids = get_bootstrap_peer_ids();
                         if bootstrap_peer_ids.contains(&peer_id.to_string()) {
                             println!("✅ Connected to bootstrap/relay node: {}", peer_id);
@@ -1776,6 +1796,13 @@ async fn event_loop(
                                     }
                                 }
                             }
+
+                            if pending_ping_requests.remove(&peer).is_some() {
+                                println!(
+                                    "❌ Deferred ping request(s) failed: peer {} unreachable",
+                                    peer
+                                );
+                            }
                         }
                     }
                     SwarmEvent::IncomingConnection { local_addr, send_back_addr, .. } => {
@@ -1824,9 +1851,61 @@ async fn event_loop(
                 match cmd {
                     SwarmCommand::SendPing(peer_id) => {
                         println!("Sending custom ping request to: {}", peer_id);
-                        let request = PingRequest("PING".to_string());
-                        let request_id = swarm.behaviour_mut().ping_protocol.send_request(&peer_id, request);
-                        println!("Ping request sent with ID: {:?}", request_id);
+                        if swarm.is_connected(&peer_id) {
+                            let request = PingRequest("PING".to_string());
+                            let request_id = swarm
+                                .behaviour_mut()
+                                .ping_protocol
+                                .send_request(&peer_id, request);
+                            println!("Ping request sent with ID: {:?}", request_id);
+                        } else {
+                            // Peer not connected — explicitly dial relay circuit paths first.
+                            let mut dial_addrs: Vec<Multiaddr> = Vec::new();
+                            let mut seen_addrs = std::collections::HashSet::new();
+                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
+
+                            for relay_addr_str in get_relay_nodes() {
+                                if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
+                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
+                                        if !relay_peer_ids_tried.insert(relay_pid) {
+                                            continue;
+                                        }
+                                    }
+                                    let circuit_addr = relay_addr
+                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
+                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id.clone()));
+                                    let key = circuit_addr.to_string();
+                                    if seen_addrs.insert(key) {
+                                        dial_addrs.push(circuit_addr);
+                                    }
+                                }
+                            }
+
+                            if dial_addrs.is_empty() {
+                                println!("Ping dial skipped: no relay addresses available");
+                            } else {
+                                println!(
+                                    "📡 Ping dialing {} relay address(es) for {}",
+                                    dial_addrs.len(),
+                                    peer_id
+                                );
+                                let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id.clone())
+                                    .addresses(dial_addrs)
+                                    .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
+                                    .build();
+                                match swarm.dial(opts) {
+                                    Ok(_) => {
+                                        let pending =
+                                            pending_ping_requests.entry(peer_id.clone()).or_insert(0);
+                                        *pending += 1;
+                                        println!("📋 Ping queued, waiting for connection to {}", peer_id);
+                                    }
+                                    Err(e) => {
+                                        println!("Ping dial setup failed for {}: {:?}", peer_id, e);
+                                    }
+                                }
+                            }
+                        }
                     }
                     SwarmCommand::SendFile { peer_id, transfer_id, file_name, file_data, price_wei, sender_wallet, file_hash, file_size } => {
                         println!("Sending file '{}' to peer {} (price: {} wei, size: {} bytes)", file_name, peer_id, price_wei, file_size);
