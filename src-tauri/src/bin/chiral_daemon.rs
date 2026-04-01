@@ -63,6 +63,14 @@ struct WalletInfo {
     private_key: String,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HostRegistryEntry {
+    peer_id: String,
+    wallet_address: String,
+    updated_at: u64,
+}
+
 #[derive(Clone)]
 struct HeadlessRuntimeState {
     dht: Arc<Mutex<Option<Arc<dht::DhtService>>>>,
@@ -119,6 +127,71 @@ fn remove_pid_file(path: &Path) {
 
 fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Publish a lightweight host advertisement so wallet identity is discoverable by peers.
+async fn auto_publish_wallet_advertisement(
+    state: &HeadlessRuntimeState,
+    wallet_address: &str,
+) -> Result<(), String> {
+    let Some(dht) = state.dht_service().await else {
+        return Err("DHT not running".to_string());
+    };
+
+    // Give the swarm a short moment to expose peer ID after start.
+    let mut peer_id: Option<String> = None;
+    for _ in 0..10 {
+        peer_id = dht.get_peer_id().await;
+        if peer_id.as_deref().is_some_and(|v| !v.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let peer_id = peer_id.ok_or("Peer ID not available".to_string())?;
+
+    let now = now_secs();
+    // Match marketplace advertisement shape so existing browse/discovery code can consume it.
+    let ad = json!({
+        "peerId": peer_id,
+        "walletAddress": wallet_address,
+        "maxStorageBytes": 10_u64 * 1024 * 1024 * 1024, // 10 GB default
+        "usedStorageBytes": 0_u64,
+        "pricePerMbPerDayWei": "1000000000000000", // 0.001 CHI/MB/day
+        "minDepositWei": "100000000000000000", // 0.1 CHI
+        "uptimePercent": 100_u64,
+        "publishedAt": now,
+        "lastHeartbeatAt": now,
+        "autoAdvertisedWallet": true
+    });
+
+    let ad_json = serde_json::to_string(&ad)
+        .map_err(|e| format!("Failed to serialize wallet advertisement: {}", e))?;
+    let host_key = format!("chiral_host_{}", peer_id);
+    dht.put_dht_value(host_key, ad_json).await?;
+
+    // Update host registry so other peers discover this wallet->peer mapping.
+    let registry_key = "chiral_host_registry".to_string();
+    let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
+        Ok(Some(raw)) => serde_json::from_str(&raw).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    registry.retain(|e| e.peer_id != peer_id);
+    registry.push(HostRegistryEntry {
+        peer_id,
+        wallet_address: wallet_address.to_string(),
+        updated_at: now,
+    });
+
+    let registry_json = serde_json::to_string(&registry)
+        .map_err(|e| format!("Failed to serialize host registry: {}", e))?;
+    dht.put_dht_value(registry_key, registry_json).await
 }
 
 fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
@@ -315,6 +388,21 @@ async fn dht_start(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
     match svc.start_headless().await {
         Ok(message) => {
             *guard = Some(svc);
+            drop(guard);
+
+            let wallet_address = {
+                let wallet = state.wallet.lock().await;
+                wallet.as_ref().map(|w| w.address.clone())
+            };
+            if let Some(addr) = wallet_address {
+                if let Err(err) = auto_publish_wallet_advertisement(state.as_ref(), &addr).await {
+                    eprintln!(
+                        "[AUTO] Wallet advertisement after DHT start failed: {}",
+                        err
+                    );
+                }
+            }
+
             Json(json!({ "status": "started", "message": message })).into_response()
         }
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
@@ -673,9 +761,16 @@ async fn wallet_create(State(state): State<Arc<HeadlessRuntimeState>>) -> Respon
     // Generate a random 32-byte private key
     let mut rng_bytes = [0u8; 32];
     use std::io::Read;
-    match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut rng_bytes).map(|_| ())) {
+    match std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut rng_bytes).map(|_| ()))
+    {
         Ok(()) => {}
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("RNG failed: {}", e)),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("RNG failed: {}", e),
+            )
+        }
     }
     let private_key_hex = hex::encode(rng_bytes);
 
@@ -683,7 +778,12 @@ async fn wallet_create(State(state): State<Arc<HeadlessRuntimeState>>) -> Respon
     let secp = secp256k1::Secp256k1::new();
     let secret_key = match secp256k1::SecretKey::from_slice(&rng_bytes) {
         Ok(k) => k,
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid key: {}", e)),
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Invalid key: {}", e),
+            )
+        }
     };
     let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
     let pub_bytes = public_key.serialize_uncompressed();
@@ -701,9 +801,23 @@ async fn wallet_create(State(state): State<Arc<HeadlessRuntimeState>>) -> Respon
     };
     *state.wallet.lock().await = Some(wallet.clone());
 
+    let (wallet_advertised, wallet_advertise_error) =
+        match auto_publish_wallet_advertisement(state.as_ref(), &wallet.address).await {
+            Ok(()) => (true, None),
+            Err(err) => {
+                eprintln!(
+                    "[AUTO] Wallet advertisement after wallet create failed: {}",
+                    err
+                );
+                (false, Some(err))
+            }
+        };
+
     Json(json!({
         "address": wallet.address,
         "privateKey": wallet.private_key,
+        "walletAdvertised": wallet_advertised,
+        "walletAdvertiseError": wallet_advertise_error,
     }))
     .into_response()
 }
@@ -716,13 +830,23 @@ async fn wallet_import(
     let pk_hex = req.private_key.trim().trim_start_matches("0x");
     let pk_bytes = match hex::decode(pk_hex) {
         Ok(b) if b.len() == 32 => b,
-        _ => return json_error(StatusCode::BAD_REQUEST, "Invalid private key (must be 32 bytes hex)"),
+        _ => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                "Invalid private key (must be 32 bytes hex)",
+            )
+        }
     };
 
     let secp = secp256k1::Secp256k1::new();
     let secret_key = match secp256k1::SecretKey::from_slice(&pk_bytes) {
         Ok(k) => k,
-        Err(e) => return json_error(StatusCode::BAD_REQUEST, format!("Invalid private key: {}", e)),
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid private key: {}", e),
+            )
+        }
     };
     let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
     let pub_bytes = public_key.serialize_uncompressed();
@@ -739,9 +863,23 @@ async fn wallet_import(
     };
     *state.wallet.lock().await = Some(wallet.clone());
 
+    let (wallet_advertised, wallet_advertise_error) =
+        match auto_publish_wallet_advertisement(state.as_ref(), &wallet.address).await {
+            Ok(()) => (true, None),
+            Err(err) => {
+                eprintln!(
+                    "[AUTO] Wallet advertisement after wallet import failed: {}",
+                    err
+                );
+                (false, Some(err))
+            }
+        };
+
     Json(json!({
         "address": wallet.address,
         "privateKey": wallet.private_key,
+        "walletAdvertised": wallet_advertised,
+        "walletAdvertiseError": wallet_advertise_error,
     }))
     .into_response()
 }
@@ -753,7 +891,8 @@ async fn wallet_show(State(state): State<Arc<HeadlessRuntimeState>>) -> Response
         Some(w) => Json(json!({
             "address": w.address,
             "privateKey": w.private_key,
-        })).into_response(),
+        }))
+        .into_response(),
         None => json_error(StatusCode::NOT_FOUND, "No wallet loaded"),
     }
 }
@@ -899,6 +1038,18 @@ async fn main() {
                     }
                 }
                 drop(guard);
+
+                let wallet_address = {
+                    let wallet = rt.wallet.lock().await;
+                    wallet.as_ref().map(|w| w.address.clone())
+                };
+                if let Some(addr) = wallet_address {
+                    match auto_publish_wallet_advertisement(rt.as_ref(), &addr).await {
+                        Ok(()) => println!("[AUTO] Wallet advertisement published for {}", addr),
+                        Err(e) => eprintln!("[AUTO] Wallet advertisement publish failed: {}", e),
+                    }
+                }
+
                 // Wait for DHT bootstrap
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
@@ -925,7 +1076,10 @@ async fn main() {
                     drop(geth);
                 }
 
-                println!("[AUTO] Starting mining with {} thread(s)...", mining_threads);
+                println!(
+                    "[AUTO] Starting mining with {} thread(s)...",
+                    mining_threads
+                );
                 let mut geth = rt.geth.lock().await;
                 match geth.start_mining(mining_threads).await {
                     Ok(()) => println!("[AUTO] Mining started successfully"),
