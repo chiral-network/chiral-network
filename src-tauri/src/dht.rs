@@ -1764,6 +1764,17 @@ async fn event_loop(
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, .. } => {
                         if let Some(peer) = peer_id {
+                            // Multiple addresses can be dialed for the same peer (direct + relay).
+                            // A single failed path should not mark a peer as failed if another path
+                            // is already connected.
+                            if swarm.is_connected(&peer) {
+                                println!(
+                                    "⚠️ Outgoing dial path failed for {}, but peer is already connected; ignoring",
+                                    peer
+                                );
+                                continue;
+                            }
+
                             // Only log the first failure per peer (suppress repeated noise)
                             let is_new_failure = failed_peers.insert(peer);
                             if is_new_failure {
