@@ -1814,6 +1814,12 @@ async fn event_loop(
     auto_host_registry_refresh
         .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // Periodically sync Kademlia routing table entries into the peer list
+    // so newly discovered peers become visible in the UI.
+    let mut kad_peer_sync_interval =
+        tokio::time::interval(tokio::time::Duration::from_secs(30));
+    kad_peer_sync_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
     loop {
         let running = *is_running.lock().await;
         if !running {
@@ -1852,6 +1858,48 @@ async fn event_loop(
                     .kad
                     .get_record(kad::RecordKey::new(&HOST_REGISTRY_KEY));
                 pending_auto_host_registry_queries.insert(query_id);
+            }
+            // Periodically sync Kademlia routing table peers into the visible peer list
+            _ = kad_peer_sync_interval.tick(), if kad_bootstrapped => {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                let mut new_peers = 0;
+                let mut kad_entries: Vec<(String, Vec<String>)> = Vec::new();
+                for bucket in swarm.behaviour_mut().kad.kbuckets() {
+                    for entry in bucket.iter() {
+                        let pid = entry.node.key.preimage().to_string();
+                        let addrs: Vec<String> = entry.node.value.iter()
+                            .map(|a| a.to_string())
+                            .collect();
+                        kad_entries.push((pid, addrs));
+                    }
+                }
+                // Also include currently connected peers (may not be in Kademlia table)
+                for pid in swarm.connected_peers() {
+                    let pid_str = pid.to_string();
+                    if !kad_entries.iter().any(|(p, _)| p == &pid_str) {
+                        kad_entries.push((pid_str, vec![]));
+                    }
+                }
+                if !kad_entries.is_empty() {
+                    let mut peers_guard = peers.lock().await;
+                    for (pid, addrs) in &kad_entries {
+                        if !peers_guard.iter().any(|p| &p.id == pid) {
+                            peers_guard.push(PeerInfo {
+                                id: pid.clone(),
+                                address: pid.clone(),
+                                multiaddrs: addrs.clone(),
+                                last_seen: now,
+                            });
+                            new_peers += 1;
+                        }
+                    }
+                    if new_peers > 0 {
+                        let _ = events.emit("peer-discovered", peers_guard.clone());
+                    }
+                }
             }
             event = swarm.select_next_some() => {
                 match event {
