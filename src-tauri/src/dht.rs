@@ -13,7 +13,7 @@ use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 
 /// Custom CBOR codec with appropriate size limits for chunked file transfers.
@@ -244,6 +244,28 @@ const CHUNK_SIZE: usize = 256 * 1024;
 const MAX_CHUNK_RETRIES: u8 = 3;
 /// Retry delay schedule for chunk failures (attempt 1..=3), plus jitter.
 const CHUNK_RETRY_BASE_MS: [u64; 3] = [150, 400, 900];
+/// How often to refresh the host registry from DHT for auto peer discovery.
+const AUTO_HOST_REGISTRY_REFRESH_SECS: u64 = 20;
+/// Minimum delay between automatic dial attempts to the same discovered peer.
+const AUTO_PEER_DIAL_COOLDOWN_SECS: u64 = 20;
+/// DHT key used for host advertisement registry.
+const HOST_REGISTRY_KEY: &str = "chiral_host_registry";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutoHostRegistryEntry {
+    peer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HostRegistryMergeEntry {
+    peer_id: String,
+    #[serde(default)]
+    wallet_address: String,
+    #[serde(default)]
+    updated_at: u64,
+}
 
 // Chunked file request protocol messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1523,6 +1545,51 @@ fn merge_file_metadata_records(records: &[String]) -> Option<String> {
     serde_json::to_string(&base).ok()
 }
 
+fn merge_host_registry_records(records: &[String]) -> Option<String> {
+    let mut merged_by_peer: HashMap<String, HostRegistryMergeEntry> = HashMap::new();
+    let mut saw_registry_record = false;
+
+    for raw in records {
+        let Ok(entries) = serde_json::from_str::<Vec<HostRegistryMergeEntry>>(raw) else {
+            continue;
+        };
+        saw_registry_record = true;
+
+        for mut entry in entries {
+            let peer_id = entry.peer_id.trim().to_string();
+            if peer_id.is_empty() || PeerId::from_str(&peer_id).is_err() {
+                continue;
+            }
+            entry.peer_id = peer_id.clone();
+
+            merged_by_peer
+                .entry(peer_id)
+                .and_modify(|existing| {
+                    if entry.updated_at > existing.updated_at {
+                        *existing = entry.clone();
+                    } else if existing.wallet_address.is_empty() && !entry.wallet_address.is_empty()
+                    {
+                        existing.wallet_address = entry.wallet_address.clone();
+                    }
+                })
+                .or_insert(entry);
+        }
+    }
+
+    if !saw_registry_record || merged_by_peer.is_empty() {
+        return None;
+    }
+
+    let mut merged_entries: Vec<HostRegistryMergeEntry> = merged_by_peer.into_values().collect();
+    merged_entries.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.peer_id.cmp(&b.peer_id))
+    });
+
+    serde_json::to_string(&merged_entries).ok()
+}
+
 fn select_best_get_record_value(results: Vec<String>) -> Option<String> {
     if results.is_empty() {
         return None;
@@ -1534,8 +1601,147 @@ fn select_best_get_record_value(results: Vec<String>) -> Option<String> {
         return Some(merged);
     }
 
+    // For host registry values, merge per-peer entries so concurrent publishers
+    // do not clobber each other when records are fetched from multiple peers.
+    if let Some(merged) = merge_host_registry_records(&results) {
+        return Some(merged);
+    }
+
     // Generic fallback for non-file records.
     results.into_iter().max_by_key(|record| record.len())
+}
+
+fn build_relay_circuit_dial_addrs(target_peer_id: &PeerId) -> Vec<Multiaddr> {
+    let mut dial_addrs: Vec<Multiaddr> = Vec::new();
+    let mut seen_addrs: HashSet<String> = HashSet::new();
+    let mut relay_peer_ids_tried: HashSet<PeerId> = HashSet::new();
+
+    for relay_addr_str in get_relay_nodes() {
+        if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
+            if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
+                if !relay_peer_ids_tried.insert(relay_pid) {
+                    continue;
+                }
+            }
+            let circuit_addr = relay_addr
+                .with(libp2p::multiaddr::Protocol::P2pCircuit)
+                .with(libp2p::multiaddr::Protocol::P2p(target_peer_id.clone()));
+            let key = circuit_addr.to_string();
+            if seen_addrs.insert(key) {
+                dial_addrs.push(circuit_addr);
+            }
+        }
+    }
+
+    dial_addrs
+}
+
+fn parse_host_registry_peer_ids(raw_registry_json: &str) -> Vec<PeerId> {
+    let entries: Vec<AutoHostRegistryEntry> = match serde_json::from_str(raw_registry_json) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("Failed to parse host registry JSON: {:?}", e);
+            return Vec::new();
+        }
+    };
+
+    let mut peer_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let peer_id_str = entry.peer_id.trim();
+        if peer_id_str.is_empty() {
+            continue;
+        }
+        match PeerId::from_str(peer_id_str) {
+            Ok(peer_id) => {
+                if seen.insert(peer_id.clone()) {
+                    peer_ids.push(peer_id);
+                }
+            }
+            Err(e) => {
+                println!(
+                    "Ignoring invalid host registry peer ID '{}': {:?}",
+                    peer_id_str, e
+                );
+            }
+        }
+    }
+
+    peer_ids
+}
+
+fn auto_dial_discovered_hosts_from_registry(
+    registry_json: Option<String>,
+    swarm: &mut Swarm<DhtBehaviour>,
+    failed_peers: &HashSet<PeerId>,
+    auto_peer_dial_attempts: &mut HashMap<PeerId, Instant>,
+) {
+    let Some(registry_json) = registry_json else {
+        return;
+    };
+
+    let discovered_peer_ids = parse_host_registry_peer_ids(&registry_json);
+    if discovered_peer_ids.is_empty() {
+        return;
+    }
+
+    let local_peer_id = swarm.local_peer_id().clone();
+    let bootstrap_peer_ids: HashSet<String> = get_bootstrap_peer_ids().into_iter().collect();
+    let cooldown = Duration::from_secs(AUTO_PEER_DIAL_COOLDOWN_SECS);
+    let now = Instant::now();
+    let mut started = 0usize;
+
+    for peer_id in discovered_peer_ids {
+        if peer_id == local_peer_id {
+            continue;
+        }
+        if bootstrap_peer_ids.contains(&peer_id.to_string()) {
+            continue;
+        }
+        if failed_peers.contains(&peer_id) {
+            continue;
+        }
+        if swarm.is_connected(&peer_id) {
+            continue;
+        }
+        if auto_peer_dial_attempts
+            .get(&peer_id)
+            .is_some_and(|last| now.duration_since(*last) < cooldown)
+        {
+            continue;
+        }
+
+        let dial_addrs = build_relay_circuit_dial_addrs(&peer_id);
+        if dial_addrs.is_empty() {
+            continue;
+        }
+
+        let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id.clone())
+            .addresses(dial_addrs)
+            .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
+            .build();
+        match swarm.dial(opts) {
+            Ok(_) => {
+                auto_peer_dial_attempts.insert(peer_id.clone(), now);
+                started += 1;
+                println!("🤝 Auto-dialing discovered host peer {}", peer_id);
+            }
+            Err(e) => {
+                auto_peer_dial_attempts.insert(peer_id.clone(), now);
+                println!(
+                    "Auto-dial setup failed for discovered host {}: {:?}",
+                    peer_id, e
+                );
+            }
+        }
+    }
+
+    if started > 0 {
+        println!(
+            "🤝 Auto-discovery dialed {} peer(s) from DHT host registry",
+            started
+        );
+    }
 }
 
 async fn event_loop(
@@ -1559,6 +1765,8 @@ async fn event_loop(
     // Without this, the first FoundRecord (often from local stale MemoryStore)
     // would resolve the query, ignoring more up-to-date remote records.
     let mut pending_get_results: HashMap<kad::QueryId, Vec<String>> = HashMap::new();
+    // Periodic auto-discovery query IDs for host registry refresh.
+    let mut pending_auto_host_registry_queries: HashSet<kad::QueryId> = HashSet::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
     let mut outbound_request_map: HashMap<request_response::OutboundRequestId, String> =
         HashMap::new();
@@ -1599,6 +1807,12 @@ async fn event_loop(
     let kad_bootstrap_deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(10);
     let kad_bootstrap_timer = tokio::time::sleep_until(kad_bootstrap_deadline);
     let mut kad_bootstrap_timer = std::pin::pin!(kad_bootstrap_timer);
+    let mut auto_peer_dial_attempts: HashMap<PeerId, Instant> = HashMap::new();
+    let mut auto_host_registry_refresh = tokio::time::interval(tokio::time::Duration::from_secs(
+        AUTO_HOST_REGISTRY_REFRESH_SECS,
+    ));
+    auto_host_registry_refresh
+        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         let running = *is_running.lock().await;
@@ -1632,6 +1846,13 @@ async fn event_loop(
                     println!("✅ Kademlia bootstrap triggered via timer fallback");
                 }
             }
+            _ = auto_host_registry_refresh.tick(), if kad_bootstrapped => {
+                let query_id = swarm
+                    .behaviour_mut()
+                    .kad
+                    .get_record(kad::RecordKey::new(&HOST_REGISTRY_KEY));
+                pending_auto_host_registry_queries.insert(query_id);
+            }
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::Behaviour(event) => {
@@ -1643,6 +1864,7 @@ async fn event_loop(
                             &file_transfer_service,
                             &mut pending_get_queries,
                             &mut pending_get_results,
+                            &mut pending_auto_host_registry_queries,
                             &shared_files,
                             &download_directory,
                             &active_downloads,
@@ -1651,6 +1873,7 @@ async fn event_loop(
                             &mut pending_file_hashes,
                             &download_credentials,
                             &failed_peers,
+                            &mut auto_peer_dial_attempts,
                             &mut pending_echo,
                         )
                         .await;
@@ -1684,6 +1907,7 @@ async fn event_loop(
                         if failed_peers.remove(&peer_id) {
                             save_failed_peers(&failed_peers);
                         }
+                        auto_peer_dial_attempts.remove(&peer_id);
 
                         // Send any file requests that were waiting for this connection
                         if let Some(pending) = pending_file_requests.remove(&peer_id) {
@@ -1762,7 +1986,7 @@ async fn event_loop(
                             let _ = events.emit("peer-discovered", peers_guard.clone());
                         }
                     }
-                    SwarmEvent::OutgoingConnectionError { peer_id, .. } => {
+                    SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                         if let Some(peer) = peer_id {
                             // Multiple addresses can be dialed for the same peer (direct + relay).
                             // A single failed path should not mark a peer as failed if another path
@@ -1775,12 +1999,24 @@ async fn event_loop(
                                 continue;
                             }
 
-                            // Only log the first failure per peer (suppress repeated noise)
-                            let is_new_failure = failed_peers.insert(peer);
-                            if is_new_failure {
-                                println!("Failed to connect to {:?} — evicting from routing table", peer);
-                                swarm.behaviour_mut().kad.remove_peer(&peer);
-                                save_failed_peers(&failed_peers);
+                            let peer_id_str = peer.to_string();
+                            let bootstrap_peer_ids = get_bootstrap_peer_ids();
+                            let is_bootstrap_peer = bootstrap_peer_ids.contains(&peer_id_str);
+
+                            if is_bootstrap_peer {
+                                // Bootstrap peers are long-lived infra nodes; keep noise low if one
+                                // is down while still allowing reconnect when it comes back.
+                                let is_new_failure = failed_peers.insert(peer.clone());
+                                if is_new_failure {
+                                    println!(
+                                        "Failed to connect to bootstrap peer {:?}: {:?}",
+                                        peer, error
+                                    );
+                                    swarm.behaviour_mut().kad.remove_peer(&peer);
+                                    save_failed_peers(&failed_peers);
+                                }
+                            } else {
+                                println!("⚠️ Outgoing connection error to {}: {:?}", peer, error);
                             }
 
                             // Fail any deferred file requests for this peer
@@ -1871,26 +2107,7 @@ async fn event_loop(
                             println!("Ping request sent with ID: {:?}", request_id);
                         } else {
                             // Peer not connected — explicitly dial relay circuit paths first.
-                            let mut dial_addrs: Vec<Multiaddr> = Vec::new();
-                            let mut seen_addrs = std::collections::HashSet::new();
-                            let mut relay_peer_ids_tried = std::collections::HashSet::new();
-
-                            for relay_addr_str in get_relay_nodes() {
-                                if let Ok(relay_addr) = relay_addr_str.parse::<Multiaddr>() {
-                                    if let Some(relay_pid) = extract_peer_id_from_multiaddr(&relay_addr) {
-                                        if !relay_peer_ids_tried.insert(relay_pid) {
-                                            continue;
-                                        }
-                                    }
-                                    let circuit_addr = relay_addr
-                                        .with(libp2p::multiaddr::Protocol::P2pCircuit)
-                                        .with(libp2p::multiaddr::Protocol::P2p(peer_id.clone()));
-                                    let key = circuit_addr.to_string();
-                                    if seen_addrs.insert(key) {
-                                        dial_addrs.push(circuit_addr);
-                                    }
-                                }
-                            }
+                            let dial_addrs = build_relay_circuit_dial_addrs(&peer_id);
 
                             if dial_addrs.is_empty() {
                                 println!("Ping dial skipped: no relay addresses available");
@@ -2186,6 +2403,7 @@ async fn handle_behaviour_event(
         tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
     >,
     pending_get_results: &mut HashMap<kad::QueryId, Vec<String>>,
+    pending_auto_host_registry_queries: &mut HashSet<kad::QueryId>,
     shared_files: &SharedFilesMap,
     download_directory: &DownloadDirectoryRef,
     active_downloads: &Arc<Mutex<ActiveDownloadsMap>>,
@@ -2194,6 +2412,7 @@ async fn handle_behaviour_event(
     pending_file_hashes: &mut HashMap<String, String>,
     download_credentials: &DownloadCredentialsMap,
     failed_peers: &HashSet<PeerId>,
+    auto_peer_dial_attempts: &mut HashMap<PeerId, Instant>,
     pending_echo: &mut HashMap<
         request_response::OutboundRequestId,
         tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
@@ -2599,21 +2818,35 @@ async fn handle_behaviour_event(
                     kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. },
                 )) => {
                     println!("DHT get finished for query {:?}", id);
-                    if let Some(tx) = pending_get_queries.remove(&id) {
-                        let results = pending_get_results.remove(&id).unwrap_or_default();
-                        let _ = tx.send(Ok(select_best_get_record_value(results)));
-                    } else {
-                        pending_get_results.remove(&id);
+                    let results = pending_get_results.remove(&id).unwrap_or_default();
+                    let selected_value = select_best_get_record_value(results);
+
+                    if pending_auto_host_registry_queries.remove(&id) {
+                        auto_dial_discovered_hosts_from_registry(
+                            selected_value,
+                            swarm,
+                            failed_peers,
+                            auto_peer_dial_attempts,
+                        );
+                    } else if let Some(tx) = pending_get_queries.remove(&id) {
+                        let _ = tx.send(Ok(selected_value));
                     }
                 }
                 kad::QueryResult::GetRecord(Err(err)) => {
                     println!("DHT get failed for query {:?}: {:?}", id, err);
-                    if let Some(tx) = pending_get_queries.remove(&id) {
-                        // Some records may have been found before the error (e.g. QuorumFailed)
-                        let results = pending_get_results.remove(&id).unwrap_or_default();
-                        let _ = tx.send(Ok(select_best_get_record_value(results)));
-                    } else {
-                        pending_get_results.remove(&id);
+                    // Some records may have been found before the error (e.g. QuorumFailed)
+                    let results = pending_get_results.remove(&id).unwrap_or_default();
+                    let selected_value = select_best_get_record_value(results);
+
+                    if pending_auto_host_registry_queries.remove(&id) {
+                        auto_dial_discovered_hosts_from_registry(
+                            selected_value,
+                            swarm,
+                            failed_peers,
+                            auto_peer_dial_attempts,
+                        );
+                    } else if let Some(tx) = pending_get_queries.remove(&id) {
+                        let _ = tx.send(Ok(selected_value));
                     }
                 }
                 kad::QueryResult::PutRecord(Ok(ok)) => {
@@ -2633,6 +2866,39 @@ async fn handle_behaviour_event(
                     );
                     if result.num_remaining == 0 {
                         println!("✅ Kademlia bootstrap fully complete — DHT ready");
+
+                        // Populate peers list with all Kademlia routing table entries
+                        // so the Network page and ChiralDrop can see discovered peers.
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        let mut kad_discovered: Vec<(String, Vec<String>)> = Vec::new();
+                        for bucket in swarm.behaviour_mut().kad.kbuckets() {
+                            for entry in bucket.iter() {
+                                let pid = entry.node.key.preimage().to_string();
+                                let addrs: Vec<String> = entry.node.value.iter()
+                                    .map(|a| a.to_string())
+                                    .collect();
+                                kad_discovered.push((pid, addrs));
+                            }
+                        }
+                        if !kad_discovered.is_empty() {
+                            let mut peers_guard = peers.lock().await;
+                            for (pid, addrs) in &kad_discovered {
+                                if !peers_guard.iter().any(|p| &p.id == pid) {
+                                    peers_guard.push(PeerInfo {
+                                        id: pid.clone(),
+                                        address: pid.clone(),
+                                        multiaddrs: addrs.clone(),
+                                        last_seen: now,
+                                    });
+                                }
+                            }
+                            println!("📡 Added {} Kademlia peers to visible peer list", kad_discovered.len());
+                            let _ = events.emit("peer-discovered", peers_guard.clone());
+                        }
+
                         let _ = events.emit("dht-bootstrap-complete", ());
                     }
                 }
