@@ -2029,6 +2029,48 @@ async fn event_loop(
                             let mut peers_guard = peers.lock().await;
                             peers_guard.retain(|p| p.id != peer_id_str);
                             let _ = events.emit("peer-discovered", peers_guard.clone());
+
+                            // Auto-reconnect to bootstrap/relay nodes when connection drops.
+                            // macOS WiFi aggressively kills idle TCP connections; without
+                            // reconnection, the node loses relay access and can't discover
+                            // remote peers.
+                            let bootstrap_ids = get_bootstrap_peer_ids();
+                            if bootstrap_ids.contains(&peer_id_str) {
+                                println!("🔄 Bootstrap connection lost to {}, scheduling reconnect...", peer_id_str);
+                                for addr_str in get_bootstrap_nodes() {
+                                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                                        if let Some(pid) = extract_peer_id_from_multiaddr(&addr) {
+                                            if pid == peer_id {
+                                                let transport_addr = remove_peer_id_from_multiaddr(&addr);
+                                                swarm.behaviour_mut().kad.add_address(&pid, transport_addr.clone());
+                                                let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(pid)
+                                                    .addresses(vec![transport_addr])
+                                                    .condition(libp2p::swarm::dial_opts::PeerCondition::DisconnectedAndNotDialing)
+                                                    .build();
+                                                match swarm.dial(opts) {
+                                                    Ok(_) => println!("🔄 Reconnect dial initiated to bootstrap {}", peer_id),
+                                                    Err(e) => println!("🔄 Reconnect dial failed: {:?}", e),
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Also re-request relay reservation
+                                for addr_str in get_relay_nodes() {
+                                    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                                        if let Some(pid) = extract_peer_id_from_multiaddr(&addr) {
+                                            if pid == peer_id {
+                                                let relay_addr = addr.clone()
+                                                    .with(libp2p::multiaddr::Protocol::P2pCircuit);
+                                                match swarm.listen_on(relay_addr.clone()) {
+                                                    Ok(_) => println!("🔄 Re-requested relay reservation via {}", addr),
+                                                    Err(e) => println!("🔄 Relay re-listen failed: {:?}", e),
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
@@ -2049,17 +2091,13 @@ async fn event_loop(
                             let is_bootstrap_peer = bootstrap_peer_ids.contains(&peer_id_str);
 
                             if is_bootstrap_peer {
-                                // Bootstrap peers are long-lived infra nodes; keep noise low if one
-                                // is down while still allowing reconnect when it comes back.
-                                let is_new_failure = failed_peers.insert(peer.clone());
-                                if is_new_failure {
-                                    println!(
-                                        "Failed to connect to bootstrap peer {:?}: {:?}",
-                                        peer, error
-                                    );
-                                    swarm.behaviour_mut().kad.remove_peer(&peer);
-                                    save_failed_peers(&failed_peers);
-                                }
+                                // Bootstrap peers are long-lived infra nodes; don't permanently
+                                // evict on transient failures — they'll be redialed on the next
+                                // ConnectionClosed reconnect cycle or Kademlia bootstrap timer.
+                                println!(
+                                    "⚠️ Outgoing connection error to bootstrap {:?}: {:?}",
+                                    peer, error
+                                );
                             } else {
                                 println!("⚠️ Outgoing connection error to {}: {:?}", peer, error);
                             }
