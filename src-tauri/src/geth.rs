@@ -562,6 +562,32 @@ impl GethProcess {
         self.downloader.is_geth_installed()
     }
 
+    fn configured_sync_mode() -> String {
+        let mode = std::env::var("CHIRAL_GETH_SYNCMODE")
+            .unwrap_or_else(|_| "snap".to_string())
+            .trim()
+            .to_ascii_lowercase();
+
+        match mode.as_str() {
+            "snap" | "full" => mode,
+            other => {
+                println!(
+                    "⚠️ Unsupported CHIRAL_GETH_SYNCMODE '{}', falling back to snap",
+                    other
+                );
+                "snap".to_string()
+            }
+        }
+    }
+
+    fn configured_cache_mb() -> u32 {
+        let parsed = std::env::var("CHIRAL_GETH_CACHE_MB")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u32>().ok())
+            .unwrap_or(2048);
+        parsed.clamp(512, 4096)
+    }
+
     pub fn is_running(&self) -> bool {
         self.child.is_some()
     }
@@ -1270,6 +1296,9 @@ impl GethProcess {
             }
         );
 
+        let sync_mode = Self::configured_sync_mode();
+        let cache_mb = Self::configured_cache_mb();
+
         let mut cmd = Command::new(&geth_path);
         cmd.arg("--datadir")
             .arg(&self.data_dir)
@@ -1285,11 +1314,11 @@ impl GethProcess {
             .arg("--http.corsdomain")
             .arg("*")
             .arg("--syncmode")
-            .arg("full") // Use full sync for local/private chain
+            .arg(&sync_mode) // Prefer snap sync for faster catch-up; overridable via env
             .arg("--gcmode")
             .arg("full") // Prune old state to speed up sync and reduce disk usage
             .arg("--cache")
-            .arg("1024")
+            .arg(cache_mb.to_string())
             .arg("--maxpeers")
             .arg("50")
             .arg("--port")

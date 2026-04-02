@@ -1,4 +1,4 @@
-# No custom linker flags — use default MSVC settings.
-# Previous /DEBUG:NONE caused WDAC blocks (os error 4551).
-# /DEBUG:FULL caused E0463 compilation failures.
-# Default MSVC behavior produces valid PE binaries without issues.
+# MSVC debug linking is currently hitting LNK1318 PDB failures in this repo.
+# Disabling linker-generated PDB output keeps local debug builds working.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/DEBUG:NONE"]
