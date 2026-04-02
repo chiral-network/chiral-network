@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:dev": "node scripts/tauri-runner.mjs dev",
+    "tauri:build": "node scripts/tauri-runner.mjs build",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
