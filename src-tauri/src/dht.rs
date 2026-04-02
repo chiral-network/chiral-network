@@ -143,9 +143,6 @@ pub fn get_bootstrap_nodes() -> Vec<String> {
             .to_string(),
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
             .to_string(),
-        // Additional bootstrap node
-        "/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE"
-            .to_string(),
     ]
 }
 
@@ -4396,7 +4393,7 @@ mod tests {
     fn test_bootstrap_nodes_not_empty() {
         let nodes = get_bootstrap_nodes();
         assert!(!nodes.is_empty());
-        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes.len(), 2);
     }
 
     #[test]
@@ -4424,8 +4421,8 @@ mod tests {
             assert!(!seen.contains(id), "Duplicate peer ID: {}", id);
             seen.push(id.clone());
         }
-        // Should have 2 unique nodes (one has both IPv4 and IPv6)
-        assert_eq!(peer_ids.len(), 2);
+        // One unique peer (primary bootstrap with IPv4 + IPv6)
+        assert_eq!(peer_ids.len(), 1);
     }
 
     #[test]

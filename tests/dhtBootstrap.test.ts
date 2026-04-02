@@ -10,10 +10,8 @@ import { describe, it, expect } from 'vitest';
 // without requiring Rust backend. This ensures the frontend has access
 // to the same bootstrap configuration.
 const BOOTSTRAP_NODES = [
-  '/ip4/134.199.240.145/tcp/4001/p2p/12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE',
-  '/ip4/34.44.149.113/tcp/4001/p2p/12D3KooWETLNJUVLbkAbenbSPPdwN9ZLkBU3TLfyAeEUW2dsVptr',
-  '/ip4/34.44.149.113/tcp/4002/p2p/12D3KooWGV5BUSYMhNMrhdPh9EUbuLrvAiDsMXEMRpGGvt4LQneA',
-  '/ip4/130.245.173.105/tcp/4001/p2p/12D3KooWSDDA2jyo6Cynr7SHPfhdQoQazu1jdUEAp7rLKKKLqqTr',
+  '/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1',
+  '/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1',
 ];
 
 // Geth bootstrap enodes from geth_bootstrap.rs
@@ -24,13 +22,13 @@ const GETH_BOOTSTRAP_ENODES = [
 
 describe('DHT Bootstrap Configuration', () => {
   describe('libp2p multiaddr format', () => {
-    it('should have exactly 4 bootstrap nodes', () => {
-      expect(BOOTSTRAP_NODES).toHaveLength(4);
+    it('should have exactly 2 bootstrap nodes (IPv4 + IPv6)', () => {
+      expect(BOOTSTRAP_NODES).toHaveLength(2);
     });
 
-    it('should all start with /ip4/', () => {
+    it('should start with /ip4/ or /ip6/', () => {
       for (const node of BOOTSTRAP_NODES) {
-        expect(node).toMatch(/^\/ip4\//);
+        expect(node).toMatch(/^\/(ip4|ip6)\//);
       }
     });
 
@@ -50,31 +48,30 @@ describe('DHT Bootstrap Configuration', () => {
       }
     });
 
-    it('should have valid IPv4 addresses', () => {
-      const ipv4Regex = /\/ip4\/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/;
-      for (const node of BOOTSTRAP_NODES) {
-        const match = node.match(ipv4Regex);
-        expect(match).not.toBeNull();
-        const parts = match![1].split('.').map(Number);
-        expect(parts).toHaveLength(4);
-        parts.forEach(p => {
-          expect(p).toBeGreaterThanOrEqual(0);
-          expect(p).toBeLessThanOrEqual(255);
-        });
-      }
+    it('should have valid IP addresses', () => {
+      const ipv4Node = BOOTSTRAP_NODES.find(n => n.startsWith('/ip4/'));
+      expect(ipv4Node).toBeDefined();
+      const match = ipv4Node!.match(/\/ip4\/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+      expect(match).not.toBeNull();
+      const parts = match![1].split('.').map(Number);
+      expect(parts).toHaveLength(4);
+      parts.forEach(p => {
+        expect(p).toBeGreaterThanOrEqual(0);
+        expect(p).toBeLessThanOrEqual(255);
+      });
     });
 
-    it('should have unique peer IDs', () => {
+    it('should all reference the same bootstrap peer', () => {
       const peerIds = BOOTSTRAP_NODES.map(n => n.split('/p2p/')[1]);
       const unique = new Set(peerIds);
-      expect(unique.size).toBe(peerIds.length);
+      expect(unique.size).toBe(1);
+      expect(peerIds[0]).toBe('12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1');
     });
 
-    it('should use ports in expected range (4001-4002)', () => {
+    it('should use port 4001', () => {
       for (const node of BOOTSTRAP_NODES) {
         const port = parseInt(node.match(/\/tcp\/(\d+)/)![1]);
-        expect(port).toBeGreaterThanOrEqual(4001);
-        expect(port).toBeLessThanOrEqual(4002);
+        expect(port).toBe(4001);
       }
     });
   });
@@ -134,21 +131,15 @@ describe('DHT Bootstrap Configuration', () => {
 
     it('should parse all multiaddr components correctly', () => {
       const parsed = parseMultiaddr(BOOTSTRAP_NODES[0]);
-      expect(parsed.ip4).toBe('134.199.240.145');
+      expect(parsed.ip4).toBe('130.245.173.73');
       expect(parsed.tcp).toBe('4001');
-      expect(parsed.p2p).toBe('12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE');
+      expect(parsed.p2p).toBe('12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1');
     });
 
     it('should extract peer IDs from all nodes', () => {
-      const expectedPeerIds = [
-        '12D3KooWFYTuQ2FY8tXRtFKfpXkTSipTF55mZkLntwtN1nHu83qE',
-        '12D3KooWETLNJUVLbkAbenbSPPdwN9ZLkBU3TLfyAeEUW2dsVptr',
-        '12D3KooWGV5BUSYMhNMrhdPh9EUbuLrvAiDsMXEMRpGGvt4LQneA',
-        '12D3KooWSDDA2jyo6Cynr7SHPfhdQoQazu1jdUEAp7rLKKKLqqTr',
-      ];
-      BOOTSTRAP_NODES.forEach((node, i) => {
+      BOOTSTRAP_NODES.forEach((node) => {
         const parsed = parseMultiaddr(node);
-        expect(parsed.p2p).toBe(expectedPeerIds[i]);
+        expect(parsed.p2p).toBe('12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1');
       });
     });
   });
