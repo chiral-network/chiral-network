@@ -17,9 +17,6 @@
     Coins,
     Clock,
     Cpu,
-    History,
-    ChevronDown,
-    ChevronUp,
     Monitor
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
@@ -67,14 +64,6 @@
     lastError: string | null;
   }
 
-  interface MinedBlock {
-    blockNumber: number;
-    timestamp: number;
-    rewardWei: string;
-    rewardChi: number;
-    difficulty: number;
-  }
-
   type MiningMode = 'cpu' | 'gpu';
   const MIN_UTILIZATION_PERCENT = 10;
   const MAX_UTILIZATION_PERCENT = 100;
@@ -112,9 +101,6 @@
   let miningMode = $state<MiningMode>(savedMode === 'gpu' ? 'gpu' : 'cpu');
   let selectedGpuDevices = $state<string[]>(initialGpuDevices);
 
-  let minedBlocks = $state<MinedBlock[]>([]);
-  let isLoadingHistory = $state(false);
-  let showHistory = $state(true);
   let isLoading = $state(true);
   let isStartingMining = $state(false);
   let maxThreads = $state(hardwareThreads);
@@ -221,7 +207,6 @@
   onMount(async () => {
     if (isTauri()) {
       await Promise.all([loadStatus(), loadGpuCapabilities()]);
-      loadMinedBlocks();
       refreshInterval = setInterval(() => {
         loadStatus();
       }, 10000);
@@ -374,32 +359,6 @@
     toasts.show('Mining status refreshed', 'success');
   }
 
-  async function loadMinedBlocks(notify = false) {
-    if (!isTauri()) return;
-    isLoadingHistory = true;
-    try {
-      minedBlocks = await invoke<MinedBlock[]>('get_mined_blocks', { maxBlocks: 500 });
-      if (notify) {
-        toasts.show('Mining history refreshed', 'success');
-      }
-    } catch (error) {
-      log.error('Failed to load mined blocks:', error);
-      minedBlocks = [];
-      if (notify) {
-        toasts.detail('Failed to refresh mining history', String(error), 'error');
-      }
-    } finally {
-      isLoadingHistory = false;
-    }
-  }
-
-  let totalHistoryReward = $derived(minedBlocks.reduce((sum, b) => sum + b.rewardChi, 0));
-
-  function formatTimestamp(ts: number): string {
-    if (ts === 0) return 'Unknown';
-    return new Date(ts * 1000).toLocaleString();
-  }
-
   function formatHashRate(rate: number): string {
     if (rate >= 1e9) return `${(rate / 1e9).toFixed(2)} GH/s`;
     if (rate >= 1e6) return `${(rate / 1e6).toFixed(2)} MH/s`;
@@ -407,12 +366,6 @@
     return `${rate} H/s`;
   }
 
-  function formatDifficulty(d: number): string {
-    if (d >= 1e9) return (d / 1e9).toFixed(1) + 'G';
-    if (d >= 1e6) return (d / 1e6).toFixed(1) + 'M';
-    if (d >= 1e3) return (d / 1e3).toFixed(1) + 'K';
-    return d.toString();
-  }
 </script>
 
 <svelte:head><title>Mining | Chiral Network</title></svelte:head>
@@ -761,111 +714,5 @@
       {/if}
     </div>
 
-    <!-- Mining History -->
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700">
-      <button
-        onclick={() => showHistory = !showHistory}
-        class="w-full flex items-center justify-between p-6 text-left"
-      >
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
-            <History class="w-6 h-6 text-emerald-600 dark:text-emerald-400" />
-          </div>
-          <div>
-            <h2 class="font-semibold dark:text-white">Mining History</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">
-              {minedBlocks.length} block{minedBlocks.length !== 1 ? 's' : ''} mined
-              {#if totalHistoryReward > 0}
-                — {totalHistoryReward.toFixed(2)} CHI earned
-              {/if}
-            </p>
-          </div>
-        </div>
-        {#if showHistory}
-          <ChevronUp class="w-5 h-5 text-gray-400" />
-        {:else}
-          <ChevronDown class="w-5 h-5 text-gray-400" />
-        {/if}
-      </button>
-
-      {#if showHistory}
-        <div class="px-6 pb-6">
-          <div class="flex justify-end mb-4">
-            <button
-              onclick={() => loadMinedBlocks(true)}
-              disabled={isLoadingHistory}
-              class="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
-            >
-              {#if isLoadingHistory}
-                <Loader2 class="w-3 h-3 animate-spin" />
-              {:else}
-                <RefreshCw class="w-3 h-3" />
-              {/if}
-              Refresh
-            </button>
-          </div>
-          {#if isLoadingHistory && minedBlocks.length === 0}
-            <div class="flex items-center justify-center py-8">
-              <Loader2 class="w-6 h-6 animate-spin text-gray-400" />
-              <span class="ml-2 text-sm text-gray-500 dark:text-gray-400">Scanning blockchain...</span>
-            </div>
-          {:else if minedBlocks.length === 0}
-            <div class="text-center py-8">
-              <Pickaxe class="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
-              <p class="text-sm text-gray-500 dark:text-gray-400">No blocks mined yet.</p>
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Start mining to earn CHI block rewards.</p>
-            </div>
-          {:else}
-            <!-- Summary Stats -->
-            <div class="grid grid-cols-3 gap-3 mb-4">
-              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">Blocks Mined</p>
-                <p class="text-lg font-bold dark:text-white">{minedBlocks.length}</p>
-              </div>
-              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">Total Earned</p>
-                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{totalHistoryReward.toFixed(2)} CHI</p>
-              </div>
-              <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">Reward per Block</p>
-                <p class="text-lg font-bold dark:text-white">{minedBlocks[0]?.rewardChi ?? 0} CHI</p>
-              </div>
-            </div>
-
-            <!-- Block Table -->
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead>
-                  <tr class="border-b border-gray-200 dark:border-gray-700">
-                    <th class="text-left py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Block #</th>
-                    <th class="text-left py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Time</th>
-                    <th class="text-right py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Reward</th>
-                    <th class="text-right py-2 px-3 text-xs font-medium text-gray-500 dark:text-gray-400">Difficulty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each minedBlocks as block (block.blockNumber)}
-                    <tr class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                      <td class="py-2 px-3 font-mono text-xs tabular-nums dark:text-gray-300">
-                        #{block.blockNumber.toLocaleString()}
-                      </td>
-                      <td class="py-2 px-3 text-xs text-gray-600 dark:text-gray-400">
-                        {formatTimestamp(block.timestamp)}
-                      </td>
-                      <td class="py-2 px-3 text-right text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">
-                        +{block.rewardChi} CHI
-                      </td>
-                      <td class="py-2 px-3 text-right text-xs tabular-nums text-gray-500 dark:text-gray-400 font-mono" title={block.difficulty.toLocaleString()}>
-                        {formatDifficulty(block.difficulty)}
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
   {/if}
 </div>
