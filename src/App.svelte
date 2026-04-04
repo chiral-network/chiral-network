@@ -418,15 +418,19 @@
     }
   });
 
-  // Auto-connect DHT once on app launch.
-  let dhtAutoConnected = false;
+  // Auto-connect DHT whenever the user is authenticated.
+  // On logout dhtService.stop() is called, so on next login we need to restart.
+  let dhtStartedForSession = $state(false);
   $effect(() => {
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
-    if (!dhtAutoConnected) {
-      dhtAutoConnected = true;
+    if ($isAuthenticated && !dhtStartedForSession) {
+      dhtStartedForSession = true;
       dhtService.start().catch((err) => {
         console.warn('DHT auto-start failed:', err);
       });
+    }
+    if (!$isAuthenticated) {
+      dhtStartedForSession = false;
     }
   });
 
