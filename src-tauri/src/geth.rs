@@ -31,6 +31,16 @@ pub const NETWORK_ID: u64 = 98765;
 /// Tracks whether a local Geth process is running (set by GethProcess start/stop)
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
 
+/// Returns the effective RPC endpoint without requiring a lock on GethProcess.
+/// Uses the atomic LOCAL_GETH_RUNNING flag set by start/stop.
+pub fn effective_rpc_endpoint() -> String {
+    if LOCAL_GETH_RUNNING.load(Ordering::Relaxed) {
+        "http://127.0.0.1:8545".to_string()
+    } else {
+        rpc_endpoint()
+    }
+}
+
 fn diagnostics_geth_log_path() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))

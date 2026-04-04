@@ -3592,7 +3592,7 @@ async fn handle_behaviour_event(
                                                 crate::speed_tiers::format_wei_as_chi(price);
 
                                             // Send payment transaction
-                                            match crate::send_payment_transaction(
+                                            match crate::wallet::send_payment(
                                                 &creds.wallet_address,
                                                 &wallet_address,
                                                 &cost_chi,
