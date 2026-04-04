@@ -1884,7 +1884,11 @@ async fn event_loop(
                 for pid in swarm.connected_peers() {
                     let pid_str = pid.to_string();
                     if !kad_entries.iter().any(|(p, _)| p == &pid_str) {
-                        kad_entries.push((pid_str, vec![]));
+                        // Get external addresses from the swarm's address book
+                        let ext_addrs: Vec<String> = swarm.external_addresses()
+                            .map(|a| a.to_string())
+                            .collect();
+                        kad_entries.push((pid_str, ext_addrs));
                     }
                 }
                 if !kad_entries.is_empty() {
@@ -3026,33 +3030,13 @@ async fn handle_behaviour_event(
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
             // Skip peers that previously failed to connect
             if !failed_peers.contains(&peer_id) {
-                // Only add routable addresses to Kademlia:
-                // - Relay circuit addresses (always routable via relay)
-                // - Public IPs (not 127.x, 10.x, 172.16-31.x, 192.168.x, fe80::, ::1)
+                // Add all listen addresses to Kademlia for routing.
+                // Kademlia needs addresses to function for inter-node communication.
                 for addr in &info.listen_addrs {
-                    let addr_str = addr.to_string();
-                    let is_circuit = addr_str.contains("p2p-circuit");
-                    let is_private =
-                        addr_str.starts_with("/ip4/127.")
-                        || addr_str.starts_with("/ip4/10.")
-                        || addr_str.starts_with("/ip4/192.168.")
-                        || addr_str.starts_with("/ip4/172.") && {
-                            // Check 172.16.0.0 - 172.31.255.255 range
-                            addr_str.strip_prefix("/ip4/172.")
-                                .and_then(|rest| rest.split('.').next())
-                                .and_then(|octet| octet.parse::<u8>().ok())
-                                .map(|o| (16..=31).contains(&o))
-                                .unwrap_or(true)
-                        }
-                        || addr_str.starts_with("/ip6/::1/")
-                        || addr_str.starts_with("/ip6/fe80:");
-
-                    if is_circuit || !is_private {
-                        swarm
-                            .behaviour_mut()
-                            .kad
-                            .add_address(&peer_id, addr.clone());
-                    }
+                    swarm
+                        .behaviour_mut()
+                        .kad
+                        .add_address(&peer_id, addr.clone());
                 }
             }
         }
