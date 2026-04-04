@@ -1955,6 +1955,12 @@ async fn event_loop(
                             // Add as external address so Identify advertises it to other peers
                             swarm.add_external_address(address.clone());
 
+                            // Also add our own relay circuit address to our Kademlia record
+                            // so other peers can find us via relay when direct connection fails
+                            let our_peer = *swarm.local_peer_id();
+                            swarm.behaviour_mut().kad.add_address(&our_peer, address.clone());
+                            println!("  → Added relay circuit address to own Kademlia record");
+
                             // Now that relay is established, bootstrap Kademlia (deferred from startup
                             // to prevent Kademlia from racing the relay client for the bootstrap connection)
                             if !kad_bootstrapped {
@@ -3018,18 +3024,35 @@ async fn handle_behaviour_event(
             }
         }
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-            println!(
-                "Identified peer {}: protocol={}, addrs={:?}",
-                peer_id, info.protocol_version, info.listen_addrs
-            );
             // Skip peers that previously failed to connect
             if !failed_peers.contains(&peer_id) {
-                // Add all listen addresses to Kademlia so peers can discover each other
+                // Only add routable addresses to Kademlia:
+                // - Relay circuit addresses (always routable via relay)
+                // - Public IPs (not 127.x, 10.x, 172.16-31.x, 192.168.x, fe80::, ::1)
                 for addr in &info.listen_addrs {
-                    swarm
-                        .behaviour_mut()
-                        .kad
-                        .add_address(&peer_id, addr.clone());
+                    let addr_str = addr.to_string();
+                    let is_circuit = addr_str.contains("p2p-circuit");
+                    let is_private =
+                        addr_str.starts_with("/ip4/127.")
+                        || addr_str.starts_with("/ip4/10.")
+                        || addr_str.starts_with("/ip4/192.168.")
+                        || addr_str.starts_with("/ip4/172.") && {
+                            // Check 172.16.0.0 - 172.31.255.255 range
+                            addr_str.strip_prefix("/ip4/172.")
+                                .and_then(|rest| rest.split('.').next())
+                                .and_then(|octet| octet.parse::<u8>().ok())
+                                .map(|o| (16..=31).contains(&o))
+                                .unwrap_or(true)
+                        }
+                        || addr_str.starts_with("/ip6/::1/")
+                        || addr_str.starts_with("/ip6/fe80:");
+
+                    if is_circuit || !is_private {
+                        swarm
+                            .behaviour_mut()
+                            .kad
+                            .add_address(&peer_id, addr.clone());
+                    }
                 }
             }
         }
