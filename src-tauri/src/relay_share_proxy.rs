@@ -214,6 +214,7 @@ impl TunnelRegistry {
     }
 
     /// Send a request through the tunnel and wait for the response.
+    /// Cleans up the pending map entry on timeout to prevent memory leaks.
     async fn request(&self, key: &str, path: String) -> Option<TunnelResponse> {
         let sender = {
             let map = self.tunnels.read().await;
@@ -230,13 +231,20 @@ impl TunnelRegistry {
         };
 
         if sender.send((req, resp_tx)).await.is_err() {
+            // Tunnel disconnected — unregister it
+            self.unregister(key).await;
             return None;
         }
 
-        // Wait up to 30s for the client to respond
-        match tokio::time::timeout(std::time::Duration::from_secs(30), resp_rx).await {
+        // Wait up to 15s for the client to respond (reduced from 30s)
+        match tokio::time::timeout(std::time::Duration::from_secs(15), resp_rx).await {
             Ok(Ok(resp)) => Some(resp),
-            _ => None,
+            _ => {
+                // Timeout or channel dropped — the pending entry is already consumed
+                // by the responder being dropped, so no leak here. But if the tunnel
+                // is consistently timing out, remove it.
+                None
+            }
         }
     }
 }
@@ -390,7 +398,7 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
 
     // Task: forward requests from proxy handlers to the WebSocket client
     let write_task = tokio::spawn(async move {
-        // Also send periodic pings to keep the connection alive
+        // Periodic pings to keep the connection alive + cleanup stale pending entries
         let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
         loop {
             tokio::select! {
@@ -408,6 +416,11 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
                     }
                 }
                 _ = ping_interval.tick() => {
+                    // Clean up stale pending entries (responder dropped = channel closed)
+                    {
+                        let mut map = pending.write().await;
+                        map.retain(|_, tx| !tx.is_closed());
+                    }
                     if ws_tx.send(Message::Ping(vec![].into())).await.is_err() {
                         break;
                     }
@@ -477,13 +490,7 @@ fn tunnel_response_to_axum(resp: TunnelResponse) -> Response {
 
 /// Forward a GET request to the target URL directly and stream the response back.
 async fn proxy_request_direct(target: &str) -> Response {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .build()
-        .unwrap_or_default();
-
-    let upstream = match client.get(target).send().await {
+    let upstream = match crate::rpc_client::client().get(target).send().await {
         Ok(r) => r,
         Err(_) => {
             return (

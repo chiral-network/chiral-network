@@ -944,17 +944,36 @@ async fn store_hosting_agreement(
     Ok(())
 }
 
+/// Enforce agreement expiration: if active and past expiresAt, mark as expired.
+fn enforce_agreement_expiration(json: &str, path: &std::path::Path) -> String {
+    if let Ok(mut agreement) = serde_json::from_str::<serde_json::Value>(json) {
+        let status = agreement.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        let expires_at = agreement.get("expiresAt").and_then(|e| e.as_u64()).unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if status == "active" && expires_at > 0 && now > expires_at {
+            agreement["status"] = serde_json::Value::String("expired".to_string());
+            let updated = serde_json::to_string(&agreement).unwrap_or_else(|_| json.to_string());
+            let _ = std::fs::write(path, &updated);
+            return updated;
+        }
+    }
+    json.to_string()
+}
+
 #[tauri::command]
 async fn get_hosting_agreement(
     state: tauri::State<'_, AppState>,
     agreement_id: String,
 ) -> Result<Option<String>, String> {
-    // Try local disk first
     let path = agreements_dir()?.join(format!("{}.json", agreement_id));
     if path.exists() {
         let json =
             std::fs::read_to_string(&path).map_err(|e| format!("Failed to read agreement: {e}"))?;
-        return Ok(Some(json));
+        return Ok(Some(enforce_agreement_expiration(&json, &path)));
     }
 
     // Fall back to DHT
@@ -962,9 +981,9 @@ async fn get_hosting_agreement(
     if let Some(dht) = dht_guard.as_ref() {
         let key = format!("chiral_agreement_{}", agreement_id);
         let result = dht.get_dht_value(key).await?;
-        // If found in DHT, cache locally
         if let Some(ref json) = result {
             let _ = std::fs::write(&path, json);
+            return Ok(Some(enforce_agreement_expiration(json, &path)));
         }
         Ok(result)
     } else {
@@ -3792,15 +3811,13 @@ async fn publish_site_to_relay(
     let relay_base = relay_url.trim_end_matches('/');
     let url = format!("{}/api/sites/relay-register", relay_base);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = rpc_client::client()
         .post(&url)
         .json(&serde_json::json!({
             "site_id": site_id,
             "origin_url": origin,
             "owner_wallet": "",
         }))
-        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("Failed to register site with relay: {}", e))?;
@@ -3811,17 +3828,7 @@ async fn publish_site_to_relay(
         return Err(format!("Relay returned {}: {}", status, text));
     }
 
-    // Build the public URL
-    let public_url = format!("{}/sites/{}/", relay_base, site_id);
-
-    // Update local metadata with the relay URL
-    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
-        s.relay_url = Some(public_url.clone());
-    }
-    hosting::save_sites(&all_sites);
-
-    // Start WebSocket tunnel to relay for NAT traversal
-    // Use localhost for the tunnel's local fetch (origin may be 0.0.0.0 which isn't routable)
+    // Start WebSocket tunnel BEFORE updating metadata — if tunnel fails, site stays unpublished
     let local_for_tunnel = state
         .hosting_server_addr
         .lock()
@@ -3840,6 +3847,13 @@ async fn publish_site_to_relay(
         .lock()
         .await
         .insert(tunnel_key, abort_handle);
+
+    // Only update metadata AFTER relay registration + tunnel are established
+    let public_url = format!("{}/sites/{}/", relay_base, site_id);
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.relay_url = Some(public_url.clone());
+    }
+    hosting::save_sites(&all_sites);
 
     println!(
         "[HOSTING] Published site {} to relay: {}",
@@ -3874,10 +3888,8 @@ async fn unpublish_site_from_relay(
 
     let url = format!("{}/api/sites/relay-register/{}", relay_base, site_id);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = rpc_client::client()
         .delete(&url)
-        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("Failed to connect to relay: {}", e))?;

@@ -49,6 +49,21 @@ function addToIndex(id: string): void {
   }
 }
 
+/** Send an echo message with retry (best-effort, 2 attempts) */
+async function echoWithRetry(peerId: string, message: string): Promise<void> {
+  const payload = Array.from(new TextEncoder().encode(message));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await invoke('echo_peer', { peerId, payload });
+      return;
+    } catch {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+  }
+}
+
 class HostingService {
   /** Publish this node's host advertisement to DHT */
   async publishHostAdvertisement(config: HostingConfig, walletAddress: string): Promise<void> {
@@ -101,27 +116,28 @@ class HostingService {
       myPeerId = await invoke<string | null>('get_peer_id');
     } catch { /* peer ID unavailable — don't filter self */ }
 
-    // Fetch advertisements
-    const ads: { entry: typeof registry[0]; ad: HostAdvertisement }[] = [];
-    for (const entry of registry) {
-      // Skip self
-      if (entry.peerId === myPeerId) continue;
-      // Skip offline peers
-      if (!connectedIds.has(entry.peerId)) continue;
-      try {
+    // Fetch advertisements concurrently (not sequentially)
+    const candidates = registry.filter(
+      (entry) => entry.peerId !== myPeerId && connectedIds.has(entry.peerId)
+    );
+
+    const adResults = await Promise.allSettled(
+      candidates.map(async (entry) => {
         const adJson = await invoke<string | null>('get_host_advertisement', {
           peerId: entry.peerId,
         });
-        if (!adJson) continue;
-
+        if (!adJson) return null;
         const ad: HostAdvertisement = JSON.parse(adJson);
-        if (ad.lastHeartbeatAt < oneHourAgo) continue;
+        if (ad.lastHeartbeatAt < oneHourAgo) return null;
+        return { entry, ad };
+      })
+    );
 
-        ads.push({ entry, ad });
-      } catch {
-        continue;
-      }
-    }
+    const ads = adResults
+      .filter((r): r is PromiseFulfilledResult<{ entry: typeof registry[0]; ad: HostAdvertisement } | null> =>
+        r.status === 'fulfilled' && r.value !== null
+      )
+      .map((r) => r.value!);
 
     // Batch fetch Elo reputation scores via wallet addresses
     const wallets = ads.map((a) => a.ad.walletAddress).filter(Boolean);
@@ -191,16 +207,12 @@ class HostingService {
 
     addToIndex(agreementId);
 
-    // Send the proposal directly to the host peer via echo protocol
+    // Send the proposal directly to the host peer via echo protocol (with retry)
     if (isTauri()) {
-      const message = JSON.stringify({
+      await echoWithRetry(hostPeerId, JSON.stringify({
         type: 'hosting_proposal',
         agreement,
-      });
-      await invoke('echo_peer', {
-        peerId: hostPeerId,
-        payload: Array.from(new TextEncoder().encode(message)),
-      });
+      }));
     }
 
     return agreement;
@@ -220,20 +232,12 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the proposer of the response via echo protocol (best-effort)
-      const message = JSON.stringify({
+      // Notify the proposer of the response via echo protocol (with retry)
+      await echoWithRetry(agreement.clientPeerId, JSON.stringify({
         type: 'hosting_response',
         agreementId,
         status: agreement.status,
-      });
-      try {
-        await invoke('echo_peer', {
-          peerId: agreement.clientPeerId,
-          payload: Array.from(new TextEncoder().encode(message)),
-        });
-      } catch {
-        // Proposer is offline — they'll see the updated status when they load agreements from DHT
-      }
+      }));
     }
 
     return agreement;
@@ -344,22 +348,14 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the other party via echo
+      // Notify the other party via echo (with retry)
       const otherPeerId = myPeerId === agreement.clientPeerId
         ? agreement.hostPeerId
         : agreement.clientPeerId;
-      const message = JSON.stringify({
+      await echoWithRetry(otherPeerId, JSON.stringify({
         type: 'hosting_cancel_request',
         agreementId,
-      });
-      try {
-        await invoke('echo_peer', {
-          peerId: otherPeerId,
-          payload: Array.from(new TextEncoder().encode(message)),
-        });
-      } catch {
-        // Other party is offline — they'll see the change when they load agreements
-      }
+      }));
     }
 
     return isProposed ? 'cancelled' : 'pending';
@@ -381,23 +377,15 @@ class HostingService {
         agreementJson: JSON.stringify(agreement),
       });
 
-      // Notify the requester of the decision (best-effort)
+      // Notify the requester of the decision (with retry)
       const otherPeerId = myPeerId === agreement.clientPeerId
         ? agreement.hostPeerId
         : agreement.clientPeerId;
-      const message = JSON.stringify({
+      await echoWithRetry(otherPeerId, JSON.stringify({
         type: 'hosting_cancel_response',
         agreementId,
         approved: approve,
-      });
-      try {
-        await invoke('echo_peer', {
-          peerId: otherPeerId,
-          payload: Array.from(new TextEncoder().encode(message)),
-        });
-      } catch {
-        // Other party is offline — they'll see the updated status when they load agreements from DHT
-      }
+      }));
     }
   }
 
