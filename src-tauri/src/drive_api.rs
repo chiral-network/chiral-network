@@ -583,7 +583,7 @@ async fn delete_item(
 async fn view_file(
     Extension(state): Extension<Arc<DriveState>>,
     headers: HeaderMap,
-    Path((item_id, filename)): Path<(String, String)>,
+    Path((item_id, _filename)): Path<(String, String)>,
 ) -> Response {
     let m = state.manifest.read().await;
     let owner = get_owner(&headers);
