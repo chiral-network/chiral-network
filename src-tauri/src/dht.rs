@@ -2181,17 +2181,20 @@ async fn event_loop(
                         });
                         if was_relay {
                             println!("⚠️ Relay listener {:?} closed (addrs: {:?}): {:?}", listener_id, addresses, reason);
-                            println!("🔄 Re-requesting relay reservation...");
-                            // Re-request relay reservation on all relay nodes
+                            // Delay before retrying to avoid hammering a resource-limited relay
+                            let relay_nodes = get_relay_nodes();
+                            let swarm_ref = &mut swarm;
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            println!("🔄 Re-requesting relay reservation after delay...");
                             let mut relay_peer_ids_seen = std::collections::HashSet::new();
-                            for addr_str in get_relay_nodes() {
+                            for addr_str in &relay_nodes {
                                 if let Ok(addr) = addr_str.parse::<Multiaddr>() {
                                     if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
                                         if !relay_peer_ids_seen.insert(peer_id) {
                                             continue;
                                         }
                                         let relay_addr = addr.with(libp2p::multiaddr::Protocol::P2pCircuit);
-                                        match swarm.listen_on(relay_addr.clone()) {
+                                        match swarm_ref.listen_on(relay_addr.clone()) {
                                             Ok(id) => println!("✅ Relay re-listen requested: {} (listener {:?})", relay_addr, id),
                                             Err(e) => println!("❌ Relay re-listen failed for {}: {:?}", relay_addr, e),
                                         }
