@@ -224,7 +224,7 @@
       loadMinedBlocks();
       refreshInterval = setInterval(() => {
         loadStatus();
-      }, 5000);
+      }, 10000);
     }
     isLoading = false;
   });

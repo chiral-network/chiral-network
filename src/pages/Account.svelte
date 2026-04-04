@@ -201,7 +201,7 @@
   // Load balance on mount and when wallet changes
   onMount(() => {
     checkGethStatus();
-    gethCheckInterval = setInterval(checkGethStatus, 5000);
+    gethCheckInterval = setInterval(checkGethStatus, 10000);
     loadSavedRecipients();
   });
 
