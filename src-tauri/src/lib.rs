@@ -14,6 +14,7 @@ pub mod rating_storage;
 pub mod relay_share_proxy;
 pub mod rpc_client;
 mod speed_tiers;
+pub mod wallet;
 pub mod wallet_backup_api;
 
 use dht::DhtService;
@@ -21,18 +22,15 @@ use encryption::EncryptionKeypair;
 use file_transfer::FileTransferService;
 use geth::{
     GethDownloader, GethProcess, GethStatus, GpuDevice, GpuMiningCapabilities, GpuMiningStatus,
-    MinedBlock, MiningStatus,
+    MiningStatus,
 };
 use geth_bootstrap::BootstrapHealthReport;
-use rlp::RlpStream;
-use secp256k1::{Message, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
-use tiny_keccak::{Hasher, Keccak};
 use tokio::sync::Mutex;
 
 pub struct AppState {
@@ -322,7 +320,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
 
         let price_wei = match price_chi.as_deref() {
             Some(price) if !price.trim().is_empty() && price.trim() != "0" => {
-                match parse_chi_to_wei(price) {
+                match wallet::parse_chi_to_wei(price) {
                     Ok(wei) => wei,
                     Err(e) => {
                         println!(
@@ -1200,7 +1198,7 @@ async fn publish_file(
             if price.is_empty() || price == "0" {
                 0u128
             } else {
-                parse_chi_to_wei(price)?
+                wallet::parse_chi_to_wei(price)?
             }
         } else {
             0u128
@@ -1342,7 +1340,7 @@ async fn publish_file_data(
             if price.is_empty() || price == "0" {
                 0u128
             } else {
-                parse_chi_to_wei(price)?
+                wallet::parse_chi_to_wei(price)?
             }
         } else {
             0u128
@@ -1549,7 +1547,7 @@ async fn try_repair_local_drive_seed(
 
     let price_wei = match candidate.price_chi.as_deref() {
         Some(price) if !price.trim().is_empty() && price.trim() != "0" => {
-            parse_chi_to_wei(price).unwrap_or(0)
+            wallet::parse_chi_to_wei(price).unwrap_or(0)
         }
         _ => 0u128,
     };
@@ -1831,8 +1829,6 @@ struct DownloadStartResult {
     status: String,
 }
 
-/// Burn address for download payments (deflationary)
-const BURN_ADDRESS: &str = "0x000000000000000000000000000000000000dEaD";
 
 #[tauri::command]
 async fn start_download(
@@ -1872,12 +1868,14 @@ async fn start_download(
         );
 
         // Process payment to burn address
-        let payment_result = send_transaction_to_rpc(
-            default_rpc_endpoint(),
-            wallet_addr.to_string(),
-            BURN_ADDRESS.to_string(),
-            cost_chi.clone(),
-            priv_key.to_string(),
+        let burn_addr = "0x000000000000000000000000000000000000dEaD";
+        let endpoint = geth::effective_rpc_endpoint();
+        let payment_result = wallet::send_transaction(
+            &endpoint,
+            wallet_addr,
+            burn_addr,
+            &cost_chi,
+            priv_key,
         )
         .await;
 
@@ -1897,8 +1895,7 @@ async fn start_download(
                     balance_after: Some(result.balance_after.clone()),
                 };
                 let mut metadata = state.tx_metadata.lock().await;
-                metadata.insert(result.hash.clone(), meta);
-                save_tx_metadata(&metadata);
+                wallet::record_meta(&mut metadata, meta);
 
                 // Emit event so Download page can show balance change
                 let _ = app.emit(
@@ -2300,7 +2297,7 @@ async fn register_shared_file(
         if price.is_empty() || price == "0" {
             0u128
         } else {
-            parse_chi_to_wei(price)?
+            wallet::parse_chi_to_wei(price)?
         }
     } else {
         0u128
@@ -2352,7 +2349,7 @@ async fn republish_shared_file(
         if price.is_empty() || price == "0" {
             0u128
         } else {
-            parse_chi_to_wei(price)?
+            wallet::parse_chi_to_wei(price)?
         }
     } else {
         0u128
@@ -2796,1010 +2793,53 @@ struct ExportTorrentResult {
     path: String,
 }
 
-// Wallet balance tracking - queries blockchain via Geth RPC
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WalletBalanceResult {
-    balance: String,
-    balance_wei: String,
-}
-
-// Transaction metadata for enriching blockchain data with local context
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct TransactionMeta {
-    tx_hash: String,
-    tx_type: String,            // "send", "receive", "speed_tier_payment", "faucet"
-    description: String,        // Human-readable description
-    file_name: Option<String>,  // For download payments
-    file_hash: Option<String>,  // For download payments
-    speed_tier: Option<String>, // For speed tier payments
-    recipient_label: Option<String>, // User-provided label for recipient
-    balance_before: Option<String>, // Balance before tx (CHI)
-    balance_after: Option<String>, // Balance after tx (CHI)
-}
-
-// Transaction types
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct Transaction {
-    hash: String,
-    from: String,
-    to: String,
-    value: String,
-    value_wei: String,
-    block_number: u64,
-    timestamp: u64,
-    status: String, // "confirmed", "pending", "failed"
-    gas_used: u64,
-    // Enriched metadata fields
-    tx_type: String,     // "send", "receive", "speed_tier_payment", "unknown"
-    description: String, // Human-readable description
-    file_name: Option<String>,
-    file_hash: Option<String>,
-    speed_tier: Option<String>,
-    recipient_label: Option<String>,
-    balance_before: Option<String>,
-    balance_after: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SendTransactionResult {
-    hash: String,
-    status: String,
-    balance_before: String,
-    balance_after: String,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TransactionHistoryResult {
-    transactions: Vec<Transaction>,
-}
-
-// Use the shared RPC endpoint from geth module
-fn default_rpc_endpoint() -> String {
-    crate::geth::rpc_endpoint()
-}
+// Re-export wallet types used by AppState and Tauri commands
+use wallet::TransactionMeta;
 
 #[tauri::command]
 async fn get_wallet_balance(
-    state: tauri::State<'_, AppState>,
     address: String,
-) -> Result<WalletBalanceResult, String> {
-    let rpc_endpoint = {
-        let geth = state.geth.lock().await;
-        geth.effective_rpc_endpoint()
-    };
-
-    let result = rpc_client::call(
-        &rpc_endpoint,
-        "eth_getBalance",
-        serde_json::json!([address, "latest"]),
-    )
-    .await?;
-
-    let balance_hex = result.as_str().unwrap_or("0x0");
-    let balance_wei = rpc_client::hex_to_u128(balance_hex);
-
-    Ok(WalletBalanceResult {
-        balance: rpc_client::wei_to_chi_string(balance_wei),
-        balance_wei: balance_wei.to_string(),
-    })
+) -> Result<wallet::WalletBalanceResult, String> {
+    let endpoint = geth::effective_rpc_endpoint();
+    wallet::get_balance(&endpoint, &address).await
 }
 
-/// Keccak256 hash helper
-fn keccak256(data: &[u8]) -> [u8; 32] {
-    let mut hasher = Keccak::v256();
-    let mut output = [0u8; 32];
-    hasher.update(data);
-    hasher.finalize(&mut output);
-    output
-}
 
-/// Parse hex string to u64
-fn parse_hex_u64(hex: &str) -> u64 {
-    let hex = hex.trim_start_matches("0x");
-    u64::from_str_radix(hex, 16).unwrap_or(0)
-}
-
-#[cfg(test)]
-mod chi_to_wei_tests {
-    use super::parse_chi_to_wei;
-
-    #[test]
-    fn test_whole_number() {
-        assert_eq!(parse_chi_to_wei("1").unwrap(), 1_000_000_000_000_000_000);
-    }
-
-    #[test]
-    fn test_zero() {
-        assert_eq!(parse_chi_to_wei("0").unwrap(), 0);
-    }
-
-    #[test]
-    fn test_standard_tier_cost() {
-        // 0.001 CHI = 10^15 wei
-        assert_eq!(parse_chi_to_wei("0.001").unwrap(), 1_000_000_000_000_000);
-    }
-
-    #[test]
-    fn test_premium_tier_cost() {
-        // 0.005 CHI = 5 * 10^15 wei
-        assert_eq!(parse_chi_to_wei("0.005").unwrap(), 5_000_000_000_000_000);
-    }
-
-    #[test]
-    fn test_leading_dot() {
-        // .5 CHI = 0.5 CHI = 5 * 10^17 wei
-        assert_eq!(parse_chi_to_wei(".5").unwrap(), 500_000_000_000_000_000);
-    }
-
-    #[test]
-    fn test_exact_18_decimals() {
-        assert_eq!(
-            parse_chi_to_wei("1.123456789012345678").unwrap(),
-            1_123_456_789_012_345_678
-        );
-    }
-
-    #[test]
-    fn test_more_than_18_decimals_truncates() {
-        // 19 digits after dot: truncated to 18
-        let result = parse_chi_to_wei("1.1234567890123456789").unwrap();
-        assert_eq!(result, 1_123_456_789_012_345_678);
-    }
-
-    #[test]
-    fn test_large_whole_number() {
-        assert_eq!(
-            parse_chi_to_wei("100").unwrap(),
-            100_000_000_000_000_000_000
-        );
-    }
-
-    #[test]
-    fn test_trims_whitespace() {
-        assert_eq!(
-            parse_chi_to_wei(" 1.5 ").unwrap(),
-            1_500_000_000_000_000_000
-        );
-    }
-
-    #[test]
-    fn test_empty_string_is_zero() {
-        // Empty string trims to "", which parses whole part as 0
-        assert_eq!(parse_chi_to_wei("").unwrap(), 0);
-    }
-
-    #[test]
-    fn test_non_numeric_errors() {
-        assert!(parse_chi_to_wei("abc").is_err());
-    }
-
-    #[test]
-    fn test_multiple_dots_errors() {
-        assert!(parse_chi_to_wei("1.2.3").is_err());
-    }
-
-    #[test]
-    fn test_smallest_wei_unit() {
-        // 0.000000000000000001 CHI = 1 wei
-        assert_eq!(parse_chi_to_wei("0.000000000000000001").unwrap(), 1);
-    }
-
-    #[test]
-    fn test_fractional_only() {
-        assert_eq!(parse_chi_to_wei("0.5").unwrap(), 500_000_000_000_000_000);
-    }
-
-    #[test]
-    fn test_very_large_overflows() {
-        // u128 max is ~3.4 * 10^38, so 10^21 CHI = 10^39 wei would overflow
-        assert!(parse_chi_to_wei("1000000000000000000000").is_err());
-    }
-}
-
-/// Convert CHI amount string to wei using string math (avoids f64 precision loss)
-fn parse_chi_to_wei(amount: &str) -> Result<u128, String> {
-    let amount = amount.trim();
-    let parts: Vec<&str> = amount.split('.').collect();
-    if parts.len() > 2 {
-        return Err("Invalid amount format".to_string());
-    }
-
-    let whole: u128 = if parts[0].is_empty() {
-        0
-    } else {
-        parts[0].parse().map_err(|_| "Invalid amount".to_string())?
-    };
-
-    let frac_wei = if parts.len() == 2 {
-        let frac_str = parts[1];
-        if frac_str.len() > 18 {
-            // Truncate to 18 decimal places
-            frac_str[..18]
-                .parse::<u128>()
-                .map_err(|_| "Invalid amount".to_string())?
-        } else {
-            let padded = format!("{:0<18}", frac_str);
-            padded
-                .parse::<u128>()
-                .map_err(|_| "Invalid amount".to_string())?
-        }
-    } else {
-        0u128
-    };
-
-    let wei = whole
-        .checked_mul(1_000_000_000_000_000_000u128)
-        .and_then(|w| w.checked_add(frac_wei))
-        .ok_or("Amount overflow".to_string())?;
-
-    Ok(wei)
-}
-
-/// Encode unsigned transaction for signing (EIP-155)
-fn encode_unsigned_tx(
-    nonce: u64,
-    gas_price: u128,
-    gas_limit: u64,
-    to: &[u8],
-    value: u128,
-    data: &[u8],
-    chain_id: u64,
-) -> Vec<u8> {
-    let mut stream = RlpStream::new_list(9);
-    stream.append(&nonce);
-    stream.append(&gas_price);
-    stream.append(&gas_limit);
-    stream.append(&to.to_vec());
-    stream.append(&value);
-    stream.append(&data.to_vec());
-    stream.append(&chain_id);
-    stream.append(&0u8); // empty for EIP-155
-    stream.append(&0u8); // empty for EIP-155
-    stream.out().to_vec()
-}
-
-/// Strip leading zero bytes from a byte slice (for RLP integer encoding)
-fn strip_leading_zeros(bytes: &[u8]) -> &[u8] {
-    let first_nonzero = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
-    &bytes[first_nonzero..]
-}
-
-/// Append raw big-endian bytes as an RLP integer (stripping leading zeros)
-fn rlp_append_bytes_as_uint(stream: &mut RlpStream, bytes: &[u8]) {
-    let stripped = strip_leading_zeros(bytes);
-    if stripped.is_empty() {
-        stream.append(&0u8);
-    } else {
-        stream.append(&stripped.to_vec());
-    }
-}
-
-/// Encode signed transaction
-fn encode_signed_tx(
-    nonce: u64,
-    gas_price: u128,
-    gas_limit: u64,
-    to: &[u8],
-    value: u128,
-    data: &[u8],
-    v: u64,
-    r: &[u8],
-    s: &[u8],
-) -> Vec<u8> {
-    let mut stream = RlpStream::new_list(9);
-    stream.append(&nonce);
-    stream.append(&gas_price);
-    stream.append(&gas_limit);
-    stream.append(&to.to_vec());
-    stream.append(&value);
-    stream.append(&data.to_vec());
-    stream.append(&v);
-    // r and s must be encoded as integers (leading zeros stripped)
-    rlp_append_bytes_as_uint(&mut stream, r);
-    rlp_append_bytes_as_uint(&mut stream, s);
-    stream.out().to_vec()
-}
 
 /// Send a transaction from one address to another (signs locally)
 #[tauri::command]
 async fn send_transaction(
-    state: tauri::State<'_, AppState>,
     from_address: String,
     to_address: String,
     amount: String,
     private_key: String,
-) -> Result<SendTransactionResult, String> {
-    let rpc_endpoint = {
-        let geth = state.geth.lock().await;
-        geth.effective_rpc_endpoint()
-    };
-    send_transaction_to_rpc(rpc_endpoint, from_address, to_address, amount, private_key).await
+) -> Result<wallet::SendTransactionResult, String> {
+    let endpoint = geth::effective_rpc_endpoint();
+    wallet::send_transaction(&endpoint, &from_address, &to_address, &amount, &private_key).await
 }
 
-/// Core transaction sending logic — takes an explicit RPC endpoint
-async fn send_transaction_to_rpc(
-    rpc_endpoint: String,
-    from_address: String,
-    to_address: String,
-    amount: String,
-    private_key: String,
-) -> Result<SendTransactionResult, String> {
-    // Parse private key
-    let pk_hex = private_key.trim_start_matches("0x");
-    let pk_bytes = hex::decode(pk_hex).map_err(|e| format!("Invalid private key hex: {}", e))?;
-
-    let secp = Secp256k1::new();
-    let secret_key =
-        SecretKey::from_slice(&pk_bytes).map_err(|e| format!("Invalid private key: {}", e))?;
-
-    // Convert amount from CHI to wei (1 CHI = 10^18 wei)
-    let amount_wei = parse_chi_to_wei(&amount)?;
-
-    // Batch fetch nonce + balance + gas price in a single HTTP request
-    let mut batch = rpc_client::batch();
-    let nonce_idx = batch.add("eth_getTransactionCount", serde_json::json!([&from_address, "pending"]));
-    let bal_idx = batch.add("eth_getBalance", serde_json::json!([&from_address, "pending"]));
-    let gas_idx = batch.add("eth_gasPrice", serde_json::json!([]));
-
-    let results = batch.execute(&rpc_endpoint).await?;
-
-    let nonce = rpc_client::hex_to_u64(
-        results[nonce_idx].as_ref().map_err(|e| e.clone())?
-            .as_str().unwrap_or("0x0"),
-    );
-    let balance_wei = rpc_client::hex_to_u128(
-        results[bal_idx].as_ref().map_err(|e| e.clone())?
-            .as_str().unwrap_or("0x0"),
-    );
-    let gas_price = {
-        let raw = rpc_client::hex_to_u64(
-            results[gas_idx].as_ref().map_err(|e| e.clone())?
-                .as_str().unwrap_or("0x0"),
-        );
-        // Use at least 1 gwei if gas price is 0
-        if raw == 0 { 1_000_000_000 } else { raw }
-    };
-
-    let gas_limit: u64 = 21000; // Standard transfer
-    let chain_id: u64 = geth::CHAIN_ID;
-    let gas_price_u128 = gas_price as u128;
-
-    // Check total cost (amount + gas)
-    let gas_cost = gas_price_u128 * gas_limit as u128;
-    let total_cost = amount_wei
-        .checked_add(gas_cost)
-        .ok_or("Amount overflow".to_string())?;
-
-    // Capture balance before/after for transaction history
-    let balance_before_chi = format!("{:.6}", balance_wei as f64 / 1e18);
-    let balance_after_wei = balance_wei.saturating_sub(total_cost);
-    let balance_after_chi = format!("{:.6}", balance_after_wei as f64 / 1e18);
-
-    if balance_wei < total_cost {
-        return Err(format!(
-            "Insufficient balance: have {:.6} CHI, need {:.6} CHI (amount) + {:.6} CHI (gas)",
-            balance_wei as f64 / 1e18,
-            amount_wei as f64 / 1e18,
-            gas_cost as f64 / 1e18
-        ));
-    }
-
-    // Parse to address
-    let to_bytes = hex::decode(to_address.trim_start_matches("0x"))
-        .map_err(|e| format!("Invalid to address: {}", e))?;
-
-    // RLP encode for signing (EIP-155)
-    let unsigned_tx = encode_unsigned_tx(
-        nonce,
-        gas_price_u128,
-        gas_limit,
-        &to_bytes,
-        amount_wei,
-        &[], // empty data for simple transfer
-        chain_id,
-    );
-
-    // Hash the unsigned transaction
-    let tx_hash = keccak256(&unsigned_tx);
-
-    // Sign the hash
-    let message = Message::from_digest_slice(&tx_hash)
-        .map_err(|e| format!("Failed to create message: {}", e))?;
-
-    let (recovery_id, signature) = secp
-        .sign_ecdsa_recoverable(&message, &secret_key)
-        .serialize_compact();
-
-    // Calculate v value (EIP-155)
-    let v = chain_id * 2 + 35 + recovery_id.to_i32() as u64;
-
-    // Extract r and s from signature
-    let r = &signature[0..32];
-    let s = &signature[32..64];
-
-    // RLP encode signed transaction
-    let signed_tx = encode_signed_tx(
-        nonce,
-        gas_price_u128,
-        gas_limit,
-        &to_bytes,
-        amount_wei,
-        &[], // data
-        v,
-        r,
-        s,
-    );
-
-    let signed_tx_hex = format!("0x{}", hex::encode(&signed_tx));
-
-    println!("📤 Sending transaction:");
-    println!("   From: {}", from_address);
-    println!("   To: {}", to_address);
-    println!("   Amount: {} CHI ({} wei)", amount, amount_wei);
-    println!("   Nonce: {}", nonce);
-    println!("   Gas Price: {}", gas_price);
-    println!("   Chain ID: {}", chain_id);
-    println!("   V: {}", v);
-    println!(
-        "   Signed TX: {}...",
-        &signed_tx_hex[..66.min(signed_tx_hex.len())]
-    );
-
-    // Send the raw transaction
-    let send_result = rpc_client::call(
-        &rpc_endpoint,
-        "eth_sendRawTransaction",
-        serde_json::json!([signed_tx_hex]),
-    )
-    .await;
-
-    // Build a JSON structure matching the old format for error handling below
-    let send_json = match &send_result {
-        Ok(val) => serde_json::json!({"result": val}),
-        Err(e) => {
-            // Parse RPC error format
-            if e.starts_with("RPC error:") {
-                serde_json::json!({"error": {"message": e.trim_start_matches("RPC error: ")}})
-            } else {
-                return Err(format!("Failed to send transaction: {}", e));
-            }
-        }
-    };
-
-    println!("📥 RPC Response: {}", send_json);
-
-    // Handle RPC errors with retry for transient conditions
-    if let Some(error) = send_json.get("error") {
-        let error_msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("");
-
-        if error_msg == "already known" {
-            // Transaction is already in the mempool — treat as success
-            println!("⚠️ Transaction already in mempool, proceeding");
-        } else if error_msg.contains("overdraft") {
-            // Pending transactions consuming balance — wait for them to clear and retry
-            println!("⚠️ Overdraft due to pending txs, waiting for confirmation...");
-            for attempt in 1..=15 {
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                println!("⏳ Retry attempt {}/15...", attempt);
-
-                // Re-send the same signed transaction
-                let retry_result = rpc_client::call(
-                    &rpc_endpoint,
-                    "eth_sendRawTransaction",
-                    serde_json::json!([signed_tx_hex]),
-                )
-                .await;
-                let retry_json = match &retry_result {
-                    Ok(val) => serde_json::json!({"result": val}),
-                    Err(e) => {
-                        if e.starts_with("RPC error:") {
-                            serde_json::json!({"error": {"message": e.trim_start_matches("RPC error: ")}})
-                        } else {
-                            return Err(format!("Retry failed: {}", e));
-                        }
-                    }
-                };
-
-                if retry_json.get("result").is_some() && !retry_json["result"].is_null() {
-                    println!("✅ Transaction accepted on retry {}", attempt);
-                    let tx_hash = retry_json["result"]
-                        .as_str()
-                        .unwrap_or("0x0")
-                        .to_string();
-                    println!("✅ Transaction submitted: {}", tx_hash);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    return Ok(SendTransactionResult {
-                        hash: tx_hash,
-                        status: "pending".to_string(),
-                        balance_before: balance_before_chi.clone(),
-                        balance_after: balance_after_chi.clone(),
-                    });
-                }
-
-                let retry_msg = retry_json
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("");
-
-                if retry_msg == "already known" {
-                    println!("⚠️ Transaction now in mempool on retry {}", attempt);
-                    break;
-                }
-                if !retry_msg.contains("overdraft") {
-                    let err_detail = retry_json
-                        .get("error")
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "Unknown error".to_string());
-                    return Err(format!("Transaction failed on retry: {}", err_detail));
-                }
-            }
-        } else {
-            return Err(format!("Transaction failed: {}", error));
-        }
-    }
-
-    // Compute tx hash from the signed transaction bytes
-    // If RPC returned it, use that; otherwise compute from our signed tx
-    let tx_hash = if let Some(hash) = send_json["result"].as_str() {
-        hash.to_string()
-    } else {
-        // Compute hash from signed transaction for "already known" / overdraft-retry case
-        let tx_bytes = hex::decode(signed_tx_hex.trim_start_matches("0x"))
-            .map_err(|e| format!("Failed to decode signed tx: {}", e))?;
-        format!("0x{}", hex::encode(keccak256(&tx_bytes)))
-    };
-
-    println!("✅ Transaction submitted: {}", tx_hash);
-
-    // Wait a moment and check if transaction is pending
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    // Check transaction status
-    let receipt_result = rpc_client::call(
-        &rpc_endpoint,
-        "eth_getTransactionReceipt",
-        serde_json::json!([&tx_hash]),
-    )
-    .await;
-
-    if let Ok(receipt_val) = receipt_result {
-        {
-            let receipt_json = serde_json::json!({"result": receipt_val});
-            if receipt_json["result"].is_null() {
-                println!("⏳ Transaction pending (not yet mined). Make sure mining is running!");
-            } else {
-                let status = receipt_json["result"]["status"]
-                    .as_str()
-                    .unwrap_or("unknown");
-                let block = receipt_json["result"]["blockNumber"]
-                    .as_str()
-                    .unwrap_or("unknown");
-                println!(
-                    "📦 Transaction mined in block {} with status {}",
-                    block, status
-                );
-            }
-        }
-    }
-
-    Ok(SendTransactionResult {
-        hash: tx_hash,
-        status: "pending".to_string(),
-        balance_before: balance_before_chi,
-        balance_after: balance_after_chi,
-    })
-}
-
-/// Result of a payment transaction, including balance snapshots.
-pub struct PaymentResult {
-    pub tx_hash: String,
-    pub balance_before: String,
-    pub balance_after: String,
-}
-
-/// Public wrapper for sending payment transactions from dht.rs event loop.
-/// Takes CHI amount string, returns tx hash and balance info on success.
-pub async fn send_payment_transaction(
-    from_address: &str,
-    to_address: &str,
-    amount_chi: &str,
-    private_key: &str,
-) -> Result<PaymentResult, String> {
-    let result = send_transaction_to_rpc(
-        default_rpc_endpoint(),
-        from_address.to_string(),
-        to_address.to_string(),
-        amount_chi.to_string(),
-        private_key.to_string(),
-    )
-    .await?;
-    Ok(PaymentResult {
-        tx_hash: result.hash,
-        balance_before: result.balance_before,
-        balance_after: result.balance_after,
-    })
-}
-
-/// Get a transaction receipt to check if it has been mined
 #[tauri::command]
-async fn get_transaction_receipt(
-    state: tauri::State<'_, AppState>,
-    tx_hash: String,
-) -> Result<Option<serde_json::Value>, String> {
-    let rpc_endpoint = {
-        let geth = state.geth.lock().await;
-        geth.effective_rpc_endpoint()
-    };
-
-    let result = rpc_client::call(
-        &rpc_endpoint,
-        "eth_getTransactionReceipt",
-        serde_json::json!([&tx_hash]),
-    )
-    .await?;
-
-    if result.is_null() {
-        Ok(None)
-    } else {
-        Ok(Some(result))
-    }
+async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
+    let endpoint = geth::effective_rpc_endpoint();
+    wallet::get_receipt(&endpoint, &tx_hash).await
 }
 
-/// Dev faucet - gives 1 CHI to an address for testing
-/// Only works if there's CHI in the faucet address
 #[tauri::command]
-async fn request_faucet(address: String) -> Result<SendTransactionResult, String> {
-    let rpc = default_rpc_endpoint();
-    let faucet_address = "0x0000000000000000000000000000000000001337";
-    let amount_hex = "0xde0b6b3a7640000"; // 1 CHI
-
-    let nonce_result = rpc_client::call(
-        &rpc,
-        "eth_getTransactionCount",
-        serde_json::json!([faucet_address, "latest"]),
-    )
-    .await?;
-    let nonce = nonce_result.as_str().unwrap_or("0x0");
-
-    let tx = serde_json::json!({
-        "from": faucet_address,
-        "to": address,
-        "value": amount_hex,
-        "gas": "0x5208",
-        "gasPrice": "0x0",
-        "nonce": nonce
-    });
-
-    // Try to unlock faucet (empty password for dev)
-    let _ = rpc_client::call(
-        &rpc,
-        "personal_unlockAccount",
-        serde_json::json!([faucet_address, "", 60]),
-    )
-    .await;
-
-    let send_result = rpc_client::call(
-        &rpc,
-        "eth_sendTransaction",
-        serde_json::json!([tx]),
-    )
-    .await
-    .map_err(|e| format!("Faucet unavailable. Please mine some blocks to get CHI. Error: {}", e))?;
-
-    let tx_hash = send_result
-        .as_str()
-        .ok_or("No transaction hash in faucet response")?
-        .to_string();
-
-    Ok(SendTransactionResult {
-        hash: tx_hash,
-        status: "pending".to_string(),
-        balance_before: String::new(),
-        balance_after: String::new(),
-    })
+async fn request_faucet(address: String) -> Result<wallet::SendTransactionResult, String> {
+    wallet::request_faucet(&address).await
 }
 
-/// Classify a transaction based on known addresses and local metadata
-fn classify_transaction(
-    tx_hash: &str,
-    from: &str,
-    to: &str,
-    address: &str,
-    metadata: &HashMap<String, TransactionMeta>,
-) -> (
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
-    let address_lower = address.to_lowercase();
-    let to_lower = to.to_lowercase();
-    let from_lower = from.to_lowercase();
-    let burn_lower = BURN_ADDRESS.to_lowercase();
 
-    // Check local metadata first (most accurate)
-    if let Some(meta) = metadata.get(tx_hash) {
-        return (
-            meta.tx_type.clone(),
-            meta.description.clone(),
-            meta.file_name.clone(),
-            meta.file_hash.clone(),
-            meta.speed_tier.clone(),
-            meta.recipient_label.clone(),
-            meta.balance_before.clone(),
-            meta.balance_after.clone(),
-        );
-    }
-
-    // Auto-detect based on addresses
-    if to_lower == burn_lower && from_lower == address_lower {
-        // Payment to burn address — likely a download payment
-        return (
-            "download_payment".to_string(),
-            "⚡ Download payment".to_string(),
-            None,
-            None,
-            None,
-            Some("Burn Address (Download)".to_string()),
-            None,
-            None,
-        );
-    }
-
-    if from_lower == address_lower && to_lower != burn_lower {
-        return (
-            "send".to_string(),
-            format!("💸 Sent to {}", &to[..std::cmp::min(10, to.len())]),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-    }
-
-    if to_lower == address_lower {
-        return (
-            "receive".to_string(),
-            format!("📥 Received from {}", &from[..10]),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        );
-    }
-
-    (
-        "unknown".to_string(),
-        "Transaction".to_string(),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    )
-}
-
-/// Get transaction history for an address.
-/// Scans only a recent block window using JSON-RPC batch requests for efficiency.
 #[tauri::command]
 async fn get_transaction_history(
     state: tauri::State<'_, AppState>,
     address: String,
-) -> Result<TransactionHistoryResult, String> {
-    let rpc = {
-        let geth = state.geth.lock().await;
-        geth.effective_rpc_endpoint()
-    };
-
-    // Get the latest block number via shared client
-    let result = rpc_client::call(&rpc, "eth_blockNumber", serde_json::json!([])).await?;
-    let latest_block = rpc_client::hex_to_u64(result.as_str().unwrap_or("0x0"));
-
-    // Load local metadata for enrichment
-    let metadata = {
-        let metadata = state.tx_metadata.lock().await;
-        metadata.clone()
-    };
-
-    let mut transactions = Vec::new();
-    let address_lower = address.to_lowercase();
-
-    // Bound the history request so Account page refreshes stay responsive.
-    const MAX_BLOCKS_TO_SCAN: u64 = 3000;
-    const BATCH_SIZE: u64 = 50;
-    const MAX_BATCHES: u64 = 20;
-    const MAX_SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(4);
-    let first_block_to_scan = latest_block.saturating_sub(MAX_BLOCKS_TO_SCAN.saturating_sub(1));
-    let mut cursor = latest_block;
-    let scan_started_at = std::time::Instant::now();
-    let mut batches_scanned = 0;
-
-    'outer: loop {
-        if batches_scanned >= MAX_BATCHES || scan_started_at.elapsed() >= MAX_SCAN_DURATION {
-            break;
-        }
-
-        let batch_start = cursor
-            .saturating_sub(BATCH_SIZE - 1)
-            .max(first_block_to_scan);
-        // Build a JSON-RPC batch request
-        let batch: Vec<serde_json::Value> = (batch_start..=cursor)
-            .rev()
-            .enumerate()
-            .map(|(i, block_num)| {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBlockByNumber",
-                    "params": [format!("0x{:x}", block_num), true],
-                    "id": i + 1
-                })
-            })
-            .collect();
-
-        let batch_response = rpc_client::client().post(&rpc).json(&batch).send().await;
-        batches_scanned += 1;
-
-        if let Ok(response) = batch_response {
-            if let Ok(results) = response.json::<Vec<serde_json::Value>>().await {
-                for item in &results {
-                    if let Some(result) = item.get("result") {
-                        if let Some(txs) = result.get("transactions").and_then(|t| t.as_array()) {
-                            if txs.is_empty() {
-                                continue;
-                            }
-                            let block_timestamp = result
-                                .get("timestamp")
-                                .and_then(|t| t.as_str())
-                                .map(|s| {
-                                    u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0)
-                                })
-                                .unwrap_or(0);
-                            let block_number_hex = result
-                                .get("number")
-                                .and_then(|n| n.as_str())
-                                .unwrap_or("0x0");
-                            let block_num =
-                                u64::from_str_radix(block_number_hex.trim_start_matches("0x"), 16)
-                                    .unwrap_or(0);
-
-                            for tx in txs {
-                                let from = tx
-                                    .get("from")
-                                    .and_then(|f| f.as_str())
-                                    .unwrap_or("")
-                                    .to_lowercase();
-                                let to = tx
-                                    .get("to")
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or("")
-                                    .to_lowercase();
-
-                                if from == address_lower || to == address_lower {
-                                    let value_hex =
-                                        tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
-                                    let value_wei = u128::from_str_radix(
-                                        value_hex.trim_start_matches("0x"),
-                                        16,
-                                    )
-                                    .unwrap_or(0);
-                                    let value_chi = value_wei as f64 / 1e18;
-
-                                    let gas_hex =
-                                        tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
-                                    let gas_used =
-                                        u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16)
-                                            .unwrap_or(0);
-
-                                    let tx_hash =
-                                        tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
-                                    let tx_from =
-                                        tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
-                                    let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
-
-                                    let (
-                                        tx_type,
-                                        description,
-                                        file_name,
-                                        file_hash,
-                                        speed_tier,
-                                        recipient_label,
-                                        balance_before,
-                                        balance_after,
-                                    ) = classify_transaction(
-                                        tx_hash, tx_from, tx_to, &address, &metadata,
-                                    );
-
-                                    transactions.push(Transaction {
-                                        hash: tx_hash.to_string(),
-                                        from: tx_from.to_string(),
-                                        to: tx_to.to_string(),
-                                        value: format!("{:.6}", value_chi),
-                                        value_wei: value_wei.to_string(),
-                                        block_number: block_num,
-                                        timestamp: block_timestamp,
-                                        status: "confirmed".to_string(),
-                                        gas_used,
-                                        tx_type,
-                                        description,
-                                        file_name,
-                                        file_hash,
-                                        speed_tier,
-                                        recipient_label,
-                                        balance_before,
-                                        balance_after,
-                                    });
-
-                                    if transactions.len() >= 50 {
-                                        break 'outer;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // If batch request fails, stop scanning
-            break;
-        }
-
-        if batch_start <= first_block_to_scan {
-            break;
-        }
-        cursor = batch_start - 1;
-    }
-
-    // Sort newest first
-    transactions.sort_by(|a, b| b.block_number.cmp(&a.block_number));
-
-    Ok(TransactionHistoryResult { transactions })
+) -> Result<wallet::TransactionHistoryResult, String> {
+    let endpoint = geth::effective_rpc_endpoint();
+    let metadata = { state.tx_metadata.lock().await.clone() };
+    wallet::get_transaction_history(&endpoint, &address, &metadata).await
 }
 
-/// Path to persisted transaction metadata.
-fn tx_metadata_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("chiral-network")
-        .join("tx_metadata.json")
-}
-
-/// Load persisted transaction metadata from disk.
-fn load_tx_metadata() -> HashMap<String, TransactionMeta> {
-    let path = tx_metadata_path();
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        HashMap::new()
-    }
-}
-
-/// Persist transaction metadata to disk (best-effort, non-blocking).
-fn save_tx_metadata(metadata: &HashMap<String, TransactionMeta>) {
-    let path = tx_metadata_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string(metadata) {
-        let _ = std::fs::write(&path, json);
-    }
-}
-
-/// Record transaction metadata for enriching transaction history
 #[tauri::command]
 async fn record_transaction_meta(
     state: tauri::State<'_, AppState>,
@@ -3811,21 +2851,15 @@ async fn record_transaction_meta(
     balance_after: Option<String>,
 ) -> Result<(), String> {
     let meta = TransactionMeta {
-        tx_hash: tx_hash.clone(),
-        tx_type,
-        description,
-        file_name: None,
-        file_hash: None,
-        speed_tier: None,
-        recipient_label,
-        balance_before,
-        balance_after,
+        tx_hash: tx_hash.clone(), tx_type, description,
+        file_name: None, file_hash: None, speed_tier: None,
+        recipient_label, balance_before, balance_after,
     };
     let mut metadata = state.tx_metadata.lock().await;
-    metadata.insert(tx_hash, meta);
-    save_tx_metadata(&metadata);
+    wallet::record_meta(&mut metadata, meta);
     Ok(())
 }
+
 
 #[tauri::command]
 async fn export_torrent_file(
@@ -4146,14 +3180,7 @@ async fn get_gpu_mining_status(
     geth.get_gpu_mining_status().await
 }
 
-#[tauri::command]
-async fn get_mined_blocks(
-    state: tauri::State<'_, AppState>,
-    max_blocks: Option<u64>,
-) -> Result<Vec<MinedBlock>, String> {
-    let geth = state.geth.lock().await;
-    geth.get_mined_blocks(max_blocks.unwrap_or(500)).await
-}
+
 
 #[tauri::command]
 async fn set_miner_address(
@@ -5208,7 +4235,7 @@ async fn drive_create_share(
         .or_else(|| item.price_chi.clone())
         .unwrap_or_default();
     let normalized_price = requested_price.trim().to_string();
-    let price_wei = parse_chi_to_wei(&normalized_price)?;
+    let price_wei = wallet::parse_chi_to_wei(&normalized_price)?;
     if price_wei == 0 {
         return Err("Share price must be greater than 0 CHI".into());
     }
@@ -5391,7 +4418,7 @@ async fn publish_drive_file(
         if price.is_empty() || price == "0" {
             0u128
         } else {
-            parse_chi_to_wei(price)?
+            wallet::parse_chi_to_wei(price)?
         }
     } else {
         0u128
@@ -5788,7 +4815,7 @@ pub fn run() {
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth,
             encryption_keypair: Arc::new(Mutex::new(None)),
-            tx_metadata: Arc::new(Mutex::new(load_tx_metadata())),
+            tx_metadata: Arc::new(Mutex::new(wallet::load_tx_metadata())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
             // Hosting & Drive
@@ -5924,7 +4951,6 @@ pub fn run() {
             start_gpu_mining,
             stop_gpu_mining,
             get_gpu_mining_status,
-            get_mined_blocks,
             set_miner_address,
             // Diagnostics commands
             read_geth_log,
