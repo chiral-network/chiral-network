@@ -1,0 +1,119 @@
+# Docker Compose — nodes connect to the PRODUCTION relay at 130.245.173.73:4001
+# No local relay needed. Uses host networking so nodes reach the real relay directly.
+#
+# Usage:
+#   docker compose -f docker-compose.production-net.yml up -d
+#   docker compose -f docker-compose.production-net.yml logs -f
+#   docker compose -f docker-compose.production-net.yml down
+
+x-node: &node-defaults
+  image: chiral-network-node
+  network_mode: host
+  init: true
+  privileged: true
+  security_opt:
+    - seccomp:unconfined
+  environment:
+    - CHIRAL_AUTO_START_DHT=true
+  restart: unless-stopped
+
+services:
+  node-1:
+    <<: *node-defaults
+    container_name: chiral-prod-node-1
+    command: ["--port", "9501", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9501/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-2:
+    <<: *node-defaults
+    container_name: chiral-prod-node-2
+    command: ["--port", "9502", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9502/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-3:
+    <<: *node-defaults
+    container_name: chiral-prod-node-3
+    command: ["--port", "9503", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9503/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-4:
+    <<: *node-defaults
+    container_name: chiral-prod-node-4
+    command: ["--port", "9504", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9504/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-5:
+    <<: *node-defaults
+    container_name: chiral-prod-node-5
+    command: ["--port", "9505", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9505/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-6:
+    <<: *node-defaults
+    container_name: chiral-prod-node-6
+    command: ["--port", "9506", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9506/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-7:
+    <<: *node-defaults
+    container_name: chiral-prod-node-7
+    command: ["--port", "9507", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9507/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-8:
+    <<: *node-defaults
+    container_name: chiral-prod-node-8
+    command: ["--port", "9508", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9508/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-9:
+    <<: *node-defaults
+    container_name: chiral-prod-node-9
+    command: ["--port", "9509", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9509/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  node-10:
+    <<: *node-defaults
+    container_name: chiral-prod-node-10
+    command: ["--port", "9510", "--auto-start-dht"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9510/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3

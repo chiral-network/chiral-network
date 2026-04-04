@@ -12,6 +12,7 @@ pub mod hosting_server;
 pub mod rating_api;
 pub mod rating_storage;
 pub mod relay_share_proxy;
+pub mod rpc_client;
 mod speed_tiers;
 pub mod wallet_backup_api;
 
@@ -513,34 +514,40 @@ async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
     if let Some(dht) = dht_guard.take() {
         // Best-effort cleanup: remove our seeder entries so DHT reflects that
         // we're no longer actively seeding when users disconnect.
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
-        if !peer_id.is_empty() {
-            let shared = dht.get_shared_files();
-            let file_hashes: Vec<String> = {
-                let map = shared.lock().await;
-                map.keys().cloned().collect()
-            };
-            for file_hash in &file_hashes {
-                let dht_key = format!("chiral_file_{}", file_hash);
-                if let Ok(Some(json)) = dht.get_dht_value(dht_key.clone()).await {
-                    if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
-                        metadata.seeders.retain(|s| s.peer_id != peer_id);
-                        if metadata.peer_id == peer_id {
-                            metadata.peer_id = String::new();
-                        }
-                        if metadata.wallet_address.is_empty() {
-                            metadata.wallet_address = metadata
-                                .seeders
-                                .first()
-                                .map(|s| s.wallet_address.clone())
-                                .unwrap_or_default();
-                        }
-                        if let Ok(updated_json) = serde_json::to_string(&metadata) {
-                            let _ = dht.put_dht_value(dht_key, updated_json).await;
+        // Timeout after 3 seconds so logout never hangs on slow/unreachable DHT.
+        let cleanup_result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            let peer_id = dht.get_peer_id().await.unwrap_or_default();
+            if !peer_id.is_empty() {
+                let shared = dht.get_shared_files();
+                let file_hashes: Vec<String> = {
+                    let map = shared.lock().await;
+                    map.keys().cloned().collect()
+                };
+                for file_hash in &file_hashes {
+                    let dht_key = format!("chiral_file_{}", file_hash);
+                    if let Ok(Some(json)) = dht.get_dht_value(dht_key.clone()).await {
+                        if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
+                            metadata.seeders.retain(|s| s.peer_id != peer_id);
+                            if metadata.peer_id == peer_id {
+                                metadata.peer_id = String::new();
+                            }
+                            if metadata.wallet_address.is_empty() {
+                                metadata.wallet_address = metadata
+                                    .seeders
+                                    .first()
+                                    .map(|s| s.wallet_address.clone())
+                                    .unwrap_or_default();
+                            }
+                            if let Ok(updated_json) = serde_json::to_string(&metadata) {
+                                let _ = dht.put_dht_value(dht_key, updated_json).await;
+                            }
                         }
                     }
                 }
             }
+        }).await;
+        if cleanup_result.is_err() {
+            eprintln!("[DHT] Seeder cleanup timed out during stop — skipping");
         }
 
         dht.stop().await?;
@@ -1891,6 +1898,7 @@ async fn start_download(
                 };
                 let mut metadata = state.tx_metadata.lock().await;
                 metadata.insert(result.hash.clone(), meta);
+                save_tx_metadata(&metadata);
 
                 // Emit event so Download page can show balance change
                 let _ = app.emit(
@@ -2860,79 +2868,23 @@ async fn get_wallet_balance(
     state: tauri::State<'_, AppState>,
     address: String,
 ) -> Result<WalletBalanceResult, String> {
-    // Use local Geth if running (where mining rewards live), fall back to remote
     let rpc_endpoint = {
         let geth = state.geth.lock().await;
         geth.effective_rpc_endpoint()
     };
-    println!(
-        "[get_wallet_balance] Querying balance for {} from RPC: {}",
-        address, rpc_endpoint
-    );
 
-    // Query balance from blockchain via JSON-RPC
-    let client = reqwest::Client::new();
+    let result = rpc_client::call(
+        &rpc_endpoint,
+        "eth_getBalance",
+        serde_json::json!([address, "latest"]),
+    )
+    .await?;
 
-    let payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_getBalance",
-        "params": [address, "latest"],
-        "id": 1
-    });
-
-    let response = client
-        .post(&rpc_endpoint)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| {
-            println!(
-                "[get_wallet_balance] Failed to connect to {}: {}",
-                rpc_endpoint, e
-            );
-            format!(
-                "Failed to connect to blockchain node at {}: {}",
-                rpc_endpoint, e
-            )
-        })?;
-
-    let status = response.status();
-    println!("[get_wallet_balance] RPC response status: {}", status);
-
-    let json_response: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse blockchain response: {}", e))?;
-
-    // Check for RPC errors
-    if let Some(error) = json_response.get("error") {
-        println!("[get_wallet_balance] RPC error: {}", error);
-        return Err(format!("Blockchain RPC error: {}", error));
-    }
-
-    let balance_hex = json_response["result"]
-        .as_str()
-        .ok_or("Invalid balance response from blockchain")?;
-
-    // Convert hex to decimal (wei) - handle "0x" prefix
-    let hex_str = balance_hex.trim_start_matches("0x");
-    let balance_wei = if hex_str.is_empty() {
-        0u128
-    } else {
-        u128::from_str_radix(hex_str, 16)
-            .map_err(|e| format!("Failed to parse balance hex '{}': {}", balance_hex, e))?
-    };
-
-    // Convert wei to CHI (1 CHI = 10^18 wei)
-    let balance_chi = balance_wei as f64 / 1e18;
-
-    println!(
-        "[get_wallet_balance] Balance for {}: {} CHI (hex: {}, wei: {})",
-        address, balance_chi, balance_hex, balance_wei
-    );
+    let balance_hex = result.as_str().unwrap_or("0x0");
+    let balance_wei = rpc_client::hex_to_u128(balance_hex);
 
     Ok(WalletBalanceResult {
-        balance: format!("{:.6}", balance_chi),
+        balance: rpc_client::wei_to_chi_string(balance_wei),
         balance_wei: balance_wei.to_string(),
     })
 }
@@ -3177,8 +3129,6 @@ async fn send_transaction_to_rpc(
     amount: String,
     private_key: String,
 ) -> Result<SendTransactionResult, String> {
-    let client = reqwest::Client::new();
-
     // Parse private key
     let pk_hex = private_key.trim_start_matches("0x");
     let pk_bytes = hex::decode(pk_hex).map_err(|e| format!("Invalid private key hex: {}", e))?;
@@ -3188,92 +3138,31 @@ async fn send_transaction_to_rpc(
         SecretKey::from_slice(&pk_bytes).map_err(|e| format!("Invalid private key: {}", e))?;
 
     // Convert amount from CHI to wei (1 CHI = 10^18 wei)
-    // Use string-based conversion to avoid f64 precision loss
     let amount_wei = parse_chi_to_wei(&amount)?;
 
-    // Get the nonce for the sender address
-    // Use "pending" to account for transactions still in the mempool
-    let nonce_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_getTransactionCount",
-        "params": [&from_address, "pending"],
-        "id": 1
-    });
+    // Batch fetch nonce + balance + gas price in a single HTTP request
+    let mut batch = rpc_client::batch();
+    let nonce_idx = batch.add("eth_getTransactionCount", serde_json::json!([&from_address, "pending"]));
+    let bal_idx = batch.add("eth_getBalance", serde_json::json!([&from_address, "pending"]));
+    let gas_idx = batch.add("eth_gasPrice", serde_json::json!([]));
 
-    let nonce_response = client
-        .post(&rpc_endpoint)
-        .json(&nonce_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to get nonce: {}", e))?;
+    let results = batch.execute(&rpc_endpoint).await?;
 
-    let nonce_json: serde_json::Value = nonce_response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse nonce response: {}", e))?;
-
-    if let Some(error) = nonce_json.get("error") {
-        return Err(format!("RPC error getting nonce: {}", error));
-    }
-
-    let nonce = parse_hex_u64(nonce_json["result"].as_str().unwrap_or("0x0"));
-
-    // Get sender balance to verify they have enough
-    // Use "pending" to account for in-flight transactions consuming funds
-    let balance_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_getBalance",
-        "params": [&from_address, "pending"],
-        "id": 1
-    });
-
-    let balance_response = client
-        .post(&rpc_endpoint)
-        .json(&balance_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to get balance: {}", e))?;
-
-    let balance_json: serde_json::Value = balance_response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse balance response: {}", e))?;
-
-    let balance_hex = balance_json["result"].as_str().unwrap_or("0x0");
-    let balance_wei = u128::from_str_radix(balance_hex.trim_start_matches("0x"), 16).unwrap_or(0);
-
-    println!(
-        "💰 Sender balance: {} wei ({} CHI)",
-        balance_wei,
-        balance_wei as f64 / 1e18
+    let nonce = rpc_client::hex_to_u64(
+        results[nonce_idx].as_ref().map_err(|e| e.clone())?
+            .as_str().unwrap_or("0x0"),
     );
-
-    // Get gas price
-    let gas_price_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_gasPrice",
-        "params": [],
-        "id": 1
-    });
-
-    let gas_price_response = client
-        .post(&rpc_endpoint)
-        .json(&gas_price_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to get gas price: {}", e))?;
-
-    let gas_price_json: serde_json::Value = gas_price_response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse gas price response: {}", e))?;
-
-    let gas_price = parse_hex_u64(gas_price_json["result"].as_str().unwrap_or("0x0"));
-    // Use at least 1 gwei if gas price is 0
-    let gas_price = if gas_price == 0 {
-        1_000_000_000
-    } else {
-        gas_price
+    let balance_wei = rpc_client::hex_to_u128(
+        results[bal_idx].as_ref().map_err(|e| e.clone())?
+            .as_str().unwrap_or("0x0"),
+    );
+    let gas_price = {
+        let raw = rpc_client::hex_to_u64(
+            results[gas_idx].as_ref().map_err(|e| e.clone())?
+                .as_str().unwrap_or("0x0"),
+        );
+        // Use at least 1 gwei if gas price is 0
+        if raw == 0 { 1_000_000_000 } else { raw }
     };
 
     let gas_limit: u64 = 21000; // Standard transfer
@@ -3362,24 +3251,25 @@ async fn send_transaction_to_rpc(
     );
 
     // Send the raw transaction
-    let send_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_sendRawTransaction",
-        "params": [signed_tx_hex],
-        "id": 1
-    });
+    let send_result = rpc_client::call(
+        &rpc_endpoint,
+        "eth_sendRawTransaction",
+        serde_json::json!([signed_tx_hex]),
+    )
+    .await;
 
-    let send_response = client
-        .post(&rpc_endpoint)
-        .json(&send_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send transaction: {}", e))?;
-
-    let send_json: serde_json::Value = send_response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse send response: {}", e))?;
+    // Build a JSON structure matching the old format for error handling below
+    let send_json = match &send_result {
+        Ok(val) => serde_json::json!({"result": val}),
+        Err(e) => {
+            // Parse RPC error format
+            if e.starts_with("RPC error:") {
+                serde_json::json!({"error": {"message": e.trim_start_matches("RPC error: ")}})
+            } else {
+                return Err(format!("Failed to send transaction: {}", e));
+            }
+        }
+    };
 
     println!("📥 RPC Response: {}", send_json);
 
@@ -3398,17 +3288,22 @@ async fn send_transaction_to_rpc(
                 println!("⏳ Retry attempt {}/15...", attempt);
 
                 // Re-send the same signed transaction
-                let retry_resp = client
-                    .post(&rpc_endpoint)
-                    .json(&send_payload)
-                    .send()
-                    .await
-                    .map_err(|e| format!("Retry failed: {}", e))?;
-
-                let retry_json: serde_json::Value = retry_resp
-                    .json()
-                    .await
-                    .map_err(|e| format!("Failed to parse retry response: {}", e))?;
+                let retry_result = rpc_client::call(
+                    &rpc_endpoint,
+                    "eth_sendRawTransaction",
+                    serde_json::json!([signed_tx_hex]),
+                )
+                .await;
+                let retry_json = match &retry_result {
+                    Ok(val) => serde_json::json!({"result": val}),
+                    Err(e) => {
+                        if e.starts_with("RPC error:") {
+                            serde_json::json!({"error": {"message": e.trim_start_matches("RPC error: ")}})
+                        } else {
+                            return Err(format!("Retry failed: {}", e));
+                        }
+                    }
+                };
 
                 if retry_json.get("result").is_some() && !retry_json["result"].is_null() {
                     println!("✅ Transaction accepted on retry {}", attempt);
@@ -3466,21 +3361,16 @@ async fn send_transaction_to_rpc(
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Check transaction status
-    let receipt_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_getTransactionReceipt",
-        "params": [&tx_hash],
-        "id": 1
-    });
+    let receipt_result = rpc_client::call(
+        &rpc_endpoint,
+        "eth_getTransactionReceipt",
+        serde_json::json!([&tx_hash]),
+    )
+    .await;
 
-    let receipt_response = client
-        .post(&rpc_endpoint)
-        .json(&receipt_payload)
-        .send()
-        .await;
-
-    if let Ok(resp) = receipt_response {
-        if let Ok(receipt_json) = resp.json::<serde_json::Value>().await {
+    if let Ok(receipt_val) = receipt_result {
+        {
+            let receipt_json = serde_json::json!({"result": receipt_val});
             if receipt_json["result"].is_null() {
                 println!("⏳ Transaction pending (not yet mined). Make sure mining is running!");
             } else {
@@ -3546,36 +3436,18 @@ async fn get_transaction_receipt(
         let geth = state.geth.lock().await;
         geth.effective_rpc_endpoint()
     };
-    let client = reqwest::Client::new();
 
-    let payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_getTransactionReceipt",
-        "params": [&tx_hash],
-        "id": 1
-    });
+    let result = rpc_client::call(
+        &rpc_endpoint,
+        "eth_getTransactionReceipt",
+        serde_json::json!([&tx_hash]),
+    )
+    .await?;
 
-    let response = client
-        .post(&rpc_endpoint)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to get receipt: {}", e))?;
-
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse receipt: {}", e))?;
-
-    if let Some(error) = json.get("error") {
-        return Err(format!("RPC error: {}", error));
-    }
-
-    let result = json.get("result").cloned();
-    if result.as_ref().map_or(true, |v| v.is_null()) {
+    if result.is_null() {
         Ok(None)
     } else {
-        Ok(result)
+        Ok(Some(result))
     }
 }
 
@@ -3583,91 +3455,44 @@ async fn get_transaction_receipt(
 /// Only works if there's CHI in the faucet address
 #[tauri::command]
 async fn request_faucet(address: String) -> Result<SendTransactionResult, String> {
-    let client = reqwest::Client::new();
-
-    // Faucet address - this is a known test address with pre-allocated balance
+    let rpc = default_rpc_endpoint();
     let faucet_address = "0x0000000000000000000000000000000000001337";
+    let amount_hex = "0xde0b6b3a7640000"; // 1 CHI
 
-    // Amount: 1 CHI = 1e18 wei = 0xde0b6b3a7640000
-    let amount_hex = "0xde0b6b3a7640000";
+    let nonce_result = rpc_client::call(
+        &rpc,
+        "eth_getTransactionCount",
+        serde_json::json!([faucet_address, "latest"]),
+    )
+    .await?;
+    let nonce = nonce_result.as_str().unwrap_or("0x0");
 
-    // Get the nonce for the faucet address
-    let nonce_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_getTransactionCount",
-        "params": [faucet_address, "latest"],
-        "id": 1
-    });
-
-    let nonce_response = client
-        .post(&default_rpc_endpoint())
-        .json(&nonce_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to get faucet nonce: {}", e))?;
-
-    let nonce_json: serde_json::Value = nonce_response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse nonce response: {}", e))?;
-
-    let nonce = nonce_json["result"].as_str().unwrap_or("0x0");
-
-    // Build transaction object
     let tx = serde_json::json!({
         "from": faucet_address,
         "to": address,
         "value": amount_hex,
-        "gas": "0x5208", // 21000 gas for simple transfer
+        "gas": "0x5208",
         "gasPrice": "0x0",
         "nonce": nonce
     });
 
-    // The faucet address is a special address that doesn't need unlocking
-    // in development mode (it's pre-unlocked or uses a null key)
-    // Try to unlock it first (password is empty for dev)
-    let unlock_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "personal_unlockAccount",
-        "params": [faucet_address, "", 60],
-        "id": 1
-    });
+    // Try to unlock faucet (empty password for dev)
+    let _ = rpc_client::call(
+        &rpc,
+        "personal_unlockAccount",
+        serde_json::json!([faucet_address, "", 60]),
+    )
+    .await;
 
-    let _ = client
-        .post(&default_rpc_endpoint())
-        .json(&unlock_payload)
-        .send()
-        .await;
+    let send_result = rpc_client::call(
+        &rpc,
+        "eth_sendTransaction",
+        serde_json::json!([tx]),
+    )
+    .await
+    .map_err(|e| format!("Faucet unavailable. Please mine some blocks to get CHI. Error: {}", e))?;
 
-    // Send the transaction
-    let send_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_sendTransaction",
-        "params": [tx],
-        "id": 1
-    });
-
-    let send_response = client
-        .post(&default_rpc_endpoint())
-        .json(&send_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Faucet request failed: {}", e))?;
-
-    let send_json: serde_json::Value = send_response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse faucet response: {}", e))?;
-
-    if let Some(error) = send_json.get("error") {
-        // If faucet fails, suggest mining instead
-        return Err(format!(
-            "Faucet unavailable. Please mine some blocks to get CHI. Error: {}",
-            error
-        ));
-    }
-
-    let tx_hash = send_json["result"]
+    let tx_hash = send_result
         .as_str()
         .ok_or("No transaction hash in faucet response")?
         .to_string();
@@ -3776,38 +3601,14 @@ async fn get_transaction_history(
     state: tauri::State<'_, AppState>,
     address: String,
 ) -> Result<TransactionHistoryResult, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
     let rpc = {
         let geth = state.geth.lock().await;
         geth.effective_rpc_endpoint()
     };
 
-    // Get the latest block number
-    let block_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_blockNumber",
-        "params": [],
-        "id": 1
-    });
-
-    let block_response = client
-        .post(&rpc)
-        .json(&block_payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to get block number: {}", e))?;
-
-    let block_json: serde_json::Value = block_response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse block response: {}", e))?;
-
-    let latest_block_hex = block_json["result"].as_str().unwrap_or("0x0");
-    let latest_block =
-        u64::from_str_radix(latest_block_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+    // Get the latest block number via shared client
+    let result = rpc_client::call(&rpc, "eth_blockNumber", serde_json::json!([])).await?;
+    let latest_block = rpc_client::hex_to_u64(result.as_str().unwrap_or("0x0"));
 
     // Load local metadata for enrichment
     let metadata = {
@@ -3850,7 +3651,7 @@ async fn get_transaction_history(
             })
             .collect();
 
-        let batch_response = client.post(&rpc).json(&batch).send().await;
+        let batch_response = rpc_client::client().post(&rpc).json(&batch).send().await;
         batches_scanned += 1;
 
         if let Ok(response) = batch_response {
@@ -3969,6 +3770,35 @@ async fn get_transaction_history(
     Ok(TransactionHistoryResult { transactions })
 }
 
+/// Path to persisted transaction metadata.
+fn tx_metadata_path() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("chiral-network")
+        .join("tx_metadata.json")
+}
+
+/// Load persisted transaction metadata from disk.
+fn load_tx_metadata() -> HashMap<String, TransactionMeta> {
+    let path = tx_metadata_path();
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        HashMap::new()
+    }
+}
+
+/// Persist transaction metadata to disk (best-effort, non-blocking).
+fn save_tx_metadata(metadata: &HashMap<String, TransactionMeta>) {
+    let path = tx_metadata_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(metadata) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 /// Record transaction metadata for enriching transaction history
 #[tauri::command]
 async fn record_transaction_meta(
@@ -3993,6 +3823,7 @@ async fn record_transaction_meta(
     };
     let mut metadata = state.tx_metadata.lock().await;
     metadata.insert(tx_hash, meta);
+    save_tx_metadata(&metadata);
     Ok(())
 }
 
@@ -5957,7 +5788,7 @@ pub fn run() {
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth,
             encryption_keypair: Arc::new(Mutex::new(None)),
-            tx_metadata: Arc::new(Mutex::new(HashMap::new())),
+            tx_metadata: Arc::new(Mutex::new(load_tx_metadata())),
             download_directory: Arc::new(Mutex::new(None)),
             download_credentials: Arc::new(Mutex::new(HashMap::new())),
             // Hosting & Drive

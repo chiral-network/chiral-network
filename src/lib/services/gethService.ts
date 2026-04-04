@@ -230,22 +230,23 @@ class GethService {
   }
 
   /**
-   * Start polling for status updates
+   * Start polling for status updates.
+   * Uses 10s interval to reduce RPC load — backend now batches calls.
    */
-  startStatusPolling(intervalMs: number = 5000): void {
+  startStatusPolling(intervalMs: number = 10000): void {
     this.stopStatusPolling();
 
-    // Initial fetch
-    this.getStatus().catch((e: unknown) => log.error(e));
-    this.getMiningStatus().catch((e: unknown) => log.error(e));
+    // Initial fetch (parallel)
+    Promise.all([
+      this.getStatus().catch((e: unknown) => log.error(e)),
+      this.getMiningStatus().catch((e: unknown) => log.error(e)),
+    ]);
 
-    // Poll every intervalMs
+    // Poll at interval
     this.statusInterval = setInterval(async () => {
       try {
-        await this.getStatus();
-        await this.getMiningStatus();
+        await Promise.all([this.getStatus(), this.getMiningStatus()]);
       } catch (error) {
-        // Geth might not be running
         log.debug('Status poll failed:', error);
       }
     }, intervalMs);

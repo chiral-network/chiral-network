@@ -10,7 +10,7 @@
   import Sidebar from '$lib/components/Sidebar.svelte';
   import Toast from '$lib/components/Toast.svelte';
   import { AlertTriangle } from 'lucide-svelte';
-  import { cancelLogout, confirmLogout, logoutModalOpen } from '$lib/logout';
+  import { cancelLogout, confirmLogout, logoutModalOpen, loggingOut } from '$lib/logout';
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
   import ChiralDropPage from './pages/ChiralDrop.svelte';
@@ -561,15 +561,21 @@
     <div class="flex gap-3">
       <button
         onclick={cancelLogout}
-        class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+        disabled={$loggingOut}
+        class="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Cancel
       </button>
       <button
         onclick={confirmLogout}
-        class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+        disabled={$loggingOut}
+        class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        Logout
+        {#if $loggingOut}
+          Logging out...
+        {:else}
+          Logout
+        {/if}
       </button>
     </div>
   </div>

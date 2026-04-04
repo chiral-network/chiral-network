@@ -501,9 +501,9 @@ impl GethProcess {
             println!("⚠️  Killing orphaned Geth (PID {}), sending SIGTERM", pid);
             let _ = Command::new("kill").arg(&pid_s).output();
 
-            // Wait up to 5s for graceful exit
+            // Wait up to 1.5s for graceful exit (3 × 500ms instead of 10 × 500ms)
             let mut exited = false;
-            for i in 0..10 {
+            for i in 0..3 {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 if !is_alive() {
                     println!(
@@ -519,27 +519,14 @@ impl GethProcess {
             if !exited {
                 println!("⚠️  SIGTERM failed, sending SIGKILL to PID {}", pid);
                 let _ = Command::new("kill").args(["-9", &pid_s]).output();
-                for _ in 0..10 {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    if !is_alive() {
-                        break;
-                    }
-                }
+                // Brief wait for SIGKILL to take effect
+                std::thread::sleep(std::time::Duration::from_millis(500));
             }
         }
 
-        // Wait for geth.ipc to disappear (confirms full resource release)
+        // Clean up geth.ipc — just remove it directly instead of polling
         if ipc_path.exists() {
-            println!("⏳ Waiting for geth.ipc cleanup...");
-            for _ in 0..10 {
-                if !ipc_path.exists() {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-            if ipc_path.exists() {
-                let _ = fs::remove_file(&ipc_path);
-            }
+            let _ = fs::remove_file(&ipc_path);
         }
     }
 
@@ -1411,9 +1398,9 @@ impl GethProcess {
             // Send SIGTERM first for graceful shutdown (releases LOCK files properly)
             let _ = Command::new("kill").arg(pid.to_string()).output();
 
-            // Wait up to 5 seconds for graceful exit
+            // Wait up to 2 seconds for graceful exit
             let mut exited = false;
-            for _ in 0..10 {
+            for _ in 0..4 {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 match child.try_wait() {
                     Ok(Some(_)) => {
@@ -1499,94 +1486,72 @@ impl GethProcess {
             }
         }
 
-        let client = reqwest::Client::new();
+        let endpoint = self.effective_rpc_endpoint();
 
-        // Check if syncing
-        let syncing_result = self
-            .rpc_call(&client, "eth_syncing", serde_json::json!([]))
-            .await;
-        let (syncing, current_block, highest_block) = match syncing_result {
-            Ok(result) => {
+        // Batch: eth_syncing + eth_blockNumber + net_peerCount + eth_chainId in one request
+        let mut batch = crate::rpc_client::batch();
+        let sync_idx = batch.add("eth_syncing", serde_json::json!([]));
+        let block_idx = batch.add("eth_blockNumber", serde_json::json!([]));
+        let peers_idx = batch.add("net_peerCount", serde_json::json!([]));
+        let chain_idx = batch.add("eth_chainId", serde_json::json!([]));
+
+        let results = batch.execute(&endpoint).await?;
+
+        // Parse syncing
+        let (syncing, sync_current, sync_highest) = match results[sync_idx].as_ref().ok() {
+            Some(result) => {
                 if result.is_boolean() && !result.as_bool().unwrap_or(false) {
                     (false, 0u64, 0u64)
                 } else if result.is_null() {
-                    // null means not syncing (some Geth versions)
                     (false, 0, 0)
                 } else if let Some(obj) = result.as_object() {
-                    let current = u64::from_str_radix(
+                    let current = crate::rpc_client::hex_to_u64(
                         obj.get("currentBlock")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("0x0")
-                            .trim_start_matches("0x"),
-                        16,
-                    )
-                    .unwrap_or(0);
-                    let highest = u64::from_str_radix(
+                            .unwrap_or("0x0"),
+                    );
+                    let highest = crate::rpc_client::hex_to_u64(
                         obj.get("highestBlock")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("0x0")
-                            .trim_start_matches("0x"),
-                        16,
-                    )
-                    .unwrap_or(0);
-                    // Not really syncing if both are 0 (node just started, no sync
-                    // info yet) or if current has caught up to highest.
+                            .unwrap_or("0x0"),
+                    );
                     let actually_syncing = highest > 0 && current < highest;
                     (actually_syncing, current, highest)
                 } else {
                     (false, 0, 0)
                 }
             }
-            Err(_) => (false, 0, 0),
+            None => (false, 0, 0),
         };
 
-        // Get block number if not syncing
-        let block_number = if !syncing {
-            match self
-                .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
-                .await
-            {
-                Ok(result) => {
-                    let hex = result.as_str().unwrap_or("0x0");
-                    u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-                }
-                Err(_) => 0,
-            }
-        } else {
-            current_block
-        };
+        let block_number = results[block_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_str())
+            .map(crate::rpc_client::hex_to_u64)
+            .unwrap_or(0);
 
-        // Get peer count
-        let peer_count = match self
-            .rpc_call(&client, "net_peerCount", serde_json::json!([]))
-            .await
-        {
-            Ok(result) => {
-                let hex = result.as_str().unwrap_or("0x0");
-                u32::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-            }
-            Err(_) => 0,
-        };
+        let peer_count = results[peers_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_str())
+            .map(|h| crate::rpc_client::hex_to_u64(h) as u32)
+            .unwrap_or(0);
 
-        // Get chain ID
-        let chain_id = match self
-            .rpc_call(&client, "eth_chainId", serde_json::json!([]))
-            .await
-        {
-            Ok(result) => {
-                let hex = result.as_str().unwrap_or("0x0");
-                u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-            }
-            Err(_) => 0,
-        };
+        let chain_id = results[chain_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_str())
+            .map(crate::rpc_client::hex_to_u64)
+            .unwrap_or(0);
 
         Ok(GethStatus {
             installed: self.is_installed(),
             running: self.child.is_some(),
             local_running: self.child.is_some(),
             syncing,
-            current_block: if syncing { current_block } else { block_number },
-            highest_block: if syncing { highest_block } else { block_number },
+            current_block: if syncing { sync_current } else { block_number },
+            highest_block: if syncing { sync_highest } else { block_number },
             peer_count,
             chain_id,
         })
@@ -1616,11 +1581,10 @@ impl GethProcess {
         // CPU and GPU mining modes are mutually exclusive.
         self.stop_gpu_miner_sync()?;
 
-        let client = reqwest::Client::new();
+        let endpoint = self.effective_rpc_endpoint();
 
         // Ensure etherbase is set — miner_start won't mine without a coinbase
-        let coinbase = self
-            .rpc_call(&client, "eth_coinbase", serde_json::json!([]))
+        let coinbase = crate::rpc_client::call(&endpoint, "eth_coinbase", serde_json::json!([]))
             .await;
         match coinbase {
             Ok(ref val) => {
@@ -1638,18 +1602,16 @@ impl GethProcess {
         }
 
         // Stop then start to ensure thread count takes effect
-        let _ = self
-            .rpc_call(&client, "miner_stop", serde_json::json!([]))
-            .await;
-        self.rpc_call(&client, "miner_start", serde_json::json!([threads]))
+        let _ = crate::rpc_client::call(&endpoint, "miner_stop", serde_json::json!([])).await;
+        crate::rpc_client::call(&endpoint, "miner_start", serde_json::json!([threads]))
             .await
             .map(|_| ())
     }
 
     /// Stop mining
     pub async fn stop_mining(&mut self) -> Result<(), String> {
-        let client = reqwest::Client::new();
-        self.rpc_call(&client, "miner_stop", serde_json::json!([]))
+        let endpoint = self.effective_rpc_endpoint();
+        crate::rpc_client::call(&endpoint, "miner_stop", serde_json::json!([]))
             .await
             .map(|_| ())
     }
@@ -1752,8 +1714,8 @@ impl GethProcess {
         }
 
         // Ensure geth serves fresh work packages for external miners.
-        let client = reqwest::Client::new();
-        self.rpc_call(&client, "miner_start", serde_json::json!([1]))
+        let endpoint = self.effective_rpc_endpoint();
+        crate::rpc_client::call(&endpoint, "miner_start", serde_json::json!([1]))
             .await
             .map_err(|e| {
                 format!(
@@ -1979,77 +1941,74 @@ impl GethProcess {
     pub async fn get_mining_status(&mut self) -> Result<MiningStatus, String> {
         self.refresh_gpu_runtime();
         let gpu_running = self.gpu_miner_child.is_some();
+        let endpoint = self.effective_rpc_endpoint();
 
-        let client = reqwest::Client::new();
+        // Batch: eth_mining + eth_hashrate + eth_coinbase + eth_blockNumber in one request
+        let mut batch = crate::rpc_client::batch();
+        let mining_idx = batch.add("eth_mining", serde_json::json!([]));
+        let hashrate_idx = batch.add("eth_hashrate", serde_json::json!([]));
+        let coinbase_idx = batch.add("eth_coinbase", serde_json::json!([]));
+        let blocknum_idx = batch.add("eth_blockNumber", serde_json::json!([]));
 
-        let cpu_mining = match self
-            .rpc_call(&client, "eth_mining", serde_json::json!([]))
-            .await
-        {
-            Ok(result) => result.as_bool().unwrap_or(false),
-            Err(_) => false,
+        let results = batch.execute(&endpoint).await?;
+
+        let cpu_mining = results[mining_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let mut hash_rate: u64 = if cpu_mining {
+            results[hashrate_idx]
+                .as_ref()
+                .ok()
+                .and_then(|v| v.as_str())
+                .map(crate::rpc_client::hex_to_u64)
+                .unwrap_or(0)
+        } else {
+            0
         };
 
-        // Get actual hashrate from Geth via eth_hashrate RPC
-        let mut hash_rate: u64 = 0;
+        let miner_address = results[coinbase_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-        if cpu_mining {
-            // Primary: use eth_hashrate RPC for actual mining speed
-            match self
-                .rpc_call(&client, "eth_hashrate", serde_json::json!([]))
-                .await
+        let current_block = results[blocknum_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_str())
+            .map(crate::rpc_client::hex_to_u64)
+            .unwrap_or(0);
+
+        // Fallback hash rate estimation from block production
+        if cpu_mining && hash_rate == 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            if current_block > 0
+                && self.last_block > 0
+                && current_block > self.last_block
+                && self.last_block_time > 0
             {
-                Ok(result) => {
-                    let hex = result.as_str().unwrap_or("0x0");
-                    hash_rate =
-                        u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                }
-                Err(_) => {}
-            }
-
-            // Fallback: estimate from block production if eth_hashrate returns 0
-            if hash_rate == 0 {
-                let current_block = match self
-                    .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
+                let blocks_mined = current_block - self.last_block;
+                let elapsed = now.saturating_sub(self.last_block_time);
+                if elapsed > 0 {
+                    if let Ok(block) = crate::rpc_client::call(
+                        &endpoint,
+                        "eth_getBlockByNumber",
+                        serde_json::json!(["latest", false]),
+                    )
                     .await
-                {
-                    Ok(result) => {
-                        let hex = result.as_str().unwrap_or("0x0");
-                        u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-                    }
-                    Err(_) => 0,
-                };
-
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-
-                if current_block > 0
-                    && self.last_block > 0
-                    && current_block > self.last_block
-                    && self.last_block_time > 0
-                {
-                    let blocks_mined = current_block - self.last_block;
-                    let elapsed = now.saturating_sub(self.last_block_time);
-                    if elapsed > 0 {
-                        let difficulty = match self
-                            .rpc_call(
-                                &client,
-                                "eth_getBlockByNumber",
-                                serde_json::json!(["latest", false]),
-                            )
-                            .await
-                        {
-                            Ok(result) => result
-                                .get("difficulty")
-                                .and_then(|d| d.as_str())
-                                .and_then(|hex| {
-                                    u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
-                                })
-                                .unwrap_or(0),
-                            Err(_) => 0,
-                        };
+                    {
+                        let difficulty = block
+                            .get("difficulty")
+                            .and_then(|d| d.as_str())
+                            .map(crate::rpc_client::hex_to_u64)
+                            .unwrap_or(0);
                         if difficulty > 0 {
                             hash_rate = (blocks_mined as u128 * difficulty as u128
                                 / elapsed as u128)
@@ -2057,14 +2016,13 @@ impl GethProcess {
                         }
                     }
                 }
-
-                if current_block > 0 {
-                    self.last_block = current_block;
-                    self.last_block_time = now;
-                }
             }
-        } else {
-            // Not mining — reset tracking
+
+            if current_block > 0 {
+                self.last_block = current_block;
+                self.last_block_time = now;
+            }
+        } else if !cpu_mining {
             self.last_block = 0;
             self.last_block_time = 0;
         }
@@ -2074,38 +2032,18 @@ impl GethProcess {
             hash_rate = self.gpu_hash_rate;
         }
 
-        let miner_address = match self
-            .rpc_call(&client, "eth_coinbase", serde_json::json!([]))
-            .await
-        {
-            Ok(result) => result.as_str().map(|s| s.to_string()),
-            Err(_) => None,
-        };
-
-        // Query the miner's balance from local Geth (where mining rewards live)
+        // Get miner balance — single call using shared client
         let (total_mined_wei, total_mined_chi) = if let Some(ref addr) = miner_address {
-            let balance_payload = serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "eth_getBalance",
-                "params": [addr, "latest"],
-                "id": 1
-            });
-            match client
-                .post(&self.effective_rpc_endpoint())
-                .json(&balance_payload)
-                .send()
-                .await
+            match crate::rpc_client::call(
+                &endpoint,
+                "eth_getBalance",
+                serde_json::json!([addr, "latest"]),
+            )
+            .await
             {
-                Ok(resp) => {
-                    if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        let hex = json["result"].as_str().unwrap_or("0x0");
-                        let wei =
-                            u128::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0);
-                        let chi = wei as f64 / 1e18;
-                        (wei.to_string(), chi)
-                    } else {
-                        ("0".to_string(), 0.0)
-                    }
+                Ok(val) => {
+                    let wei = crate::rpc_client::hex_to_u128(val.as_str().unwrap_or("0x0"));
+                    (wei.to_string(), crate::rpc_client::wei_to_chi(wei))
                 }
                 Err(_) => ("0".to_string(), 0.0),
             }
@@ -2125,33 +2063,30 @@ impl GethProcess {
     /// Get blocks mined by the current miner address.
     /// Scans the last `max_blocks` blocks and returns those where the miner matches.
     pub async fn get_mined_blocks(&self, max_blocks: u64) -> Result<Vec<MinedBlock>, String> {
-        let client = reqwest::Client::new();
+        let endpoint = self.effective_rpc_endpoint();
 
-        // Get current block number
-        let current_block = match self
-            .rpc_call(&client, "eth_blockNumber", serde_json::json!([]))
-            .await
-        {
-            Ok(result) => {
-                let hex = result.as_str().unwrap_or("0x0");
-                u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
-            }
-            Err(_) => return Ok(Vec::new()),
-        };
+        // Batch: get current block + coinbase in one request
+        let mut init_batch = crate::rpc_client::batch();
+        let block_idx = init_batch.add("eth_blockNumber", serde_json::json!([]));
+        let coinbase_idx = init_batch.add("eth_coinbase", serde_json::json!([]));
+        let init_results = init_batch.execute(&endpoint).await?;
 
+        let current_block = init_results[block_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_str())
+            .map(crate::rpc_client::hex_to_u64)
+            .unwrap_or(0);
         if current_block == 0 {
             return Ok(Vec::new());
         }
 
-        // Get miner address
-        let miner_address = match self
-            .rpc_call(&client, "eth_coinbase", serde_json::json!([]))
-            .await
-        {
-            Ok(result) => result.as_str().unwrap_or("").to_lowercase(),
-            Err(_) => return Ok(Vec::new()),
-        };
-
+        let miner_address = init_results[coinbase_idx]
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
         if miner_address.is_empty() {
             return Ok(Vec::new());
         }
@@ -2159,57 +2094,81 @@ impl GethProcess {
         let start_block = current_block.saturating_sub(max_blocks);
         let mut mined_blocks = Vec::new();
 
-        // Scan blocks from newest to oldest
-        for block_num in (start_block..=current_block).rev() {
-            let hex_num = format!("0x{:x}", block_num);
-            let block = match self
-                .rpc_call(
-                    &client,
-                    "eth_getBlockByNumber",
-                    serde_json::json!([hex_num, false]),
-                )
-                .await
-            {
-                Ok(result) => result,
-                Err(_) => continue,
-            };
+        // Scan blocks in batches of 50 using JSON-RPC batch requests
+        const BATCH_SIZE: u64 = 50;
+        let mut cursor = current_block;
 
-            let block_miner = block
-                .get("miner")
-                .and_then(|m| m.as_str())
-                .unwrap_or("")
-                .to_lowercase();
+        while cursor >= start_block && mined_blocks.len() < 50 {
+            let batch_start = cursor.saturating_sub(BATCH_SIZE - 1).max(start_block);
+            let block_range: Vec<u64> = (batch_start..=cursor).rev().collect();
 
-            if block_miner == miner_address {
-                let timestamp = block
-                    .get("timestamp")
-                    .and_then(|t| t.as_str())
-                    .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
-                    .unwrap_or(0);
+            // Build batch request for all blocks in this range
+            let payloads: Vec<serde_json::Value> = block_range
+                .iter()
+                .enumerate()
+                .map(|(i, &num)| {
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "eth_getBlockByNumber",
+                        "params": [format!("0x{:x}", num), false],
+                        "id": i + 1
+                    })
+                })
+                .collect();
 
-                let difficulty = block
-                    .get("difficulty")
-                    .and_then(|d| d.as_str())
-                    .and_then(|hex| u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok())
-                    .unwrap_or(0);
+            let resp = crate::rpc_client::client()
+                .post(&endpoint)
+                .json(&payloads)
+                .send()
+                .await;
 
-                // Block reward is 5 ETH (5e18 wei) for ethash genesis configs
-                let reward_wei: u128 = 5_000_000_000_000_000_000;
-                let reward_chi = reward_wei as f64 / 1e18;
+            if let Ok(response) = resp {
+                if let Ok(results) = response.json::<Vec<serde_json::Value>>().await {
+                    for (i, item) in results.iter().enumerate() {
+                        if let Some(block) = item.get("result") {
+                            let block_miner = block
+                                .get("miner")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("")
+                                .to_lowercase();
 
-                mined_blocks.push(MinedBlock {
-                    block_number: block_num,
-                    timestamp,
-                    reward_wei: reward_wei.to_string(),
-                    reward_chi,
-                    difficulty,
-                });
-            }
+                            if block_miner == miner_address {
+                                let block_num = block_range.get(i).copied().unwrap_or(0);
+                                let timestamp = block
+                                    .get("timestamp")
+                                    .and_then(|t| t.as_str())
+                                    .map(crate::rpc_client::hex_to_u64)
+                                    .unwrap_or(0);
+                                let difficulty = block
+                                    .get("difficulty")
+                                    .and_then(|d| d.as_str())
+                                    .map(crate::rpc_client::hex_to_u64)
+                                    .unwrap_or(0);
 
-            // Cap results to avoid too much data
-            if mined_blocks.len() >= 50 {
+                                let reward_wei: u128 = 5_000_000_000_000_000_000;
+                                mined_blocks.push(MinedBlock {
+                                    block_number: block_num,
+                                    timestamp,
+                                    reward_wei: reward_wei.to_string(),
+                                    reward_chi: crate::rpc_client::wei_to_chi(reward_wei),
+                                    difficulty,
+                                });
+
+                                if mined_blocks.len() >= 50 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
                 break;
             }
+
+            if batch_start <= start_block {
+                break;
+            }
+            cursor = batch_start - 1;
         }
 
         Ok(mined_blocks)
@@ -2220,8 +2179,8 @@ impl GethProcess {
         if self.child.is_none() {
             return Err("Cannot set miner address: local Geth node is not running".to_string());
         }
-        let client = reqwest::Client::new();
-        self.rpc_call(&client, "miner_setEtherbase", serde_json::json!([address]))
+        let endpoint = self.effective_rpc_endpoint();
+        crate::rpc_client::call(&endpoint, "miner_setEtherbase", serde_json::json!([address]))
             .await
             .map(|_| ())
     }

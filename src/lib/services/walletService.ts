@@ -56,7 +56,7 @@ export interface WalletBalance {
  */
 class WalletService {
   private balanceCache: Map<string, { balance: string; timestamp: number }> = new Map();
-  private readonly CACHE_TTL = 30000; // 30 seconds cache
+  private readonly CACHE_TTL = 10000; // 10 seconds cache (backend uses pooled connections)
 
   /**
    * Get wallet balance from backend
