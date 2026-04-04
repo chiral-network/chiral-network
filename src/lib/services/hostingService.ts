@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type {
   HostAdvertisement,
   HostingAgreement,
@@ -243,8 +244,50 @@ class HostingService {
     return agreement;
   }
 
-  /** Download files from proposer after accepting an agreement (called by host) */
+  /** Download files from proposer after accepting, then auto-seed each one.
+   *  The host receives files for free, adds them to Drive, and starts seeding. */
   async fulfillAgreement(agreement: HostingAgreement): Promise<void> {
+    if (!isTauri()) return;
+
+    const pendingHashes = new Set(agreement.fileHashes);
+
+    // Listen for download completions to auto-seed each file
+    const unlisten = await listen<{
+      fileHash: string;
+      fileName: string;
+      filePath: string;
+      fileSize: number;
+    }>('file-download-complete', async (event) => {
+      const { fileHash, filePath } = event.payload;
+      if (!pendingHashes.has(fileHash)) return;
+      pendingHashes.delete(fileHash);
+
+      try {
+        // Add to Drive
+        await invoke('drive_upload_file', {
+          owner: agreement.hostWalletAddress,
+          filePath,
+          parentId: null,
+          merkleRoot: fileHash,
+        });
+
+        // Register as seeder in DHT so downloaders can find us
+        await invoke('seed_hosted_file', {
+          fileHash,
+          priceChi: null, // host can change price later from Drive page
+          walletAddress: agreement.hostWalletAddress,
+        });
+      } catch (err) {
+        console.error(`Failed to seed hosted file ${fileHash}:`, err);
+      }
+
+      // Clean up listener when all files are done
+      if (pendingHashes.size === 0) {
+        unlisten();
+      }
+    });
+
+    // Start downloading all files from the client (free transfer)
     for (const fileHash of agreement.fileHashes) {
       await invoke('start_download', {
         fileHash,
@@ -257,6 +300,13 @@ class HostingService {
         _seederWalletAddress: null,
       });
     }
+
+    // Safety: clean up listener after 10 minutes if some downloads never complete
+    setTimeout(() => {
+      if (pendingHashes.size > 0) {
+        unlisten();
+      }
+    }, 10 * 60 * 1000);
   }
 
   /** Get an agreement by ID (local disk first, DHT fallback) */

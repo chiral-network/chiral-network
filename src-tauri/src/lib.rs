@@ -2627,33 +2627,45 @@ async fn cleanup_agreement_files(
 
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
         let shared = dht.get_shared_files();
         for file_hash in &file_hashes {
-            // Remove from SharedFilesMap
+            // Remove from SharedFilesMap (stops serving chunks)
             {
                 let mut map = shared.lock().await;
                 map.remove(file_hash);
             }
 
-            // Clear peer_id in DHT record
+            // Remove ourselves from the seeder list in DHT
             let dht_key = format!("chiral_file_{}", file_hash);
             if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
-                if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
-                    if let Some(obj) = metadata.as_object_mut() {
-                        obj.insert(
-                            "peerId".to_string(),
-                            serde_json::Value::String(String::new()),
-                        );
-                        if let Ok(updated) = serde_json::to_string(&metadata) {
-                            let _ = dht.put_dht_value(dht_key, updated).await;
-                        }
+                if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&meta_json) {
+                    metadata.seeders.retain(|s| s.peer_id != peer_id);
+                    if metadata.peer_id == peer_id {
+                        metadata.peer_id = String::new();
                     }
+                    if let Ok(updated) = serde_json::to_string(&metadata) {
+                        let _ = dht.put_dht_value(dht_key, updated).await;
+                    }
+                }
+            }
+
+            // Also disable seeding in Drive manifest
+            {
+                let mut m = state.drive_state.manifest.write().await;
+                if let Some(item) = m.items.iter_mut().find(|i| {
+                    i.item_type == "file"
+                        && i.merkle_root.as_ref().map(|h| h == file_hash).unwrap_or(false)
+                }) {
+                    item.seed_enabled = false;
+                    item.seeding = false;
                 }
             }
 
             println!("🗑️ Cleaned up hosted file: {}", file_hash);
         }
     }
+    state.drive_state.persist().await;
 
     // Remove from in-memory file storage
     {
@@ -4548,6 +4560,126 @@ async fn publish_drive_file(
     Ok(updated_item)
 }
 
+/// Auto-seed a file after a hosting agreement download completes.
+/// Finds the Drive item by merkle_root, enables seeding, and publishes to DHT.
+#[tauri::command]
+async fn seed_hosted_file(
+    state: tauri::State<'_, AppState>,
+    file_hash: String,
+    price_chi: Option<String>,
+    wallet_address: String,
+) -> Result<(), String> {
+    if file_hash.is_empty() {
+        return Err("file_hash required".into());
+    }
+
+    // Find Drive item by merkle_root matching file_hash
+    let (item_id, file_name, storage_path, file_size) = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m
+            .items
+            .iter()
+            .find(|i| {
+                i.item_type == "file"
+                    && i.merkle_root
+                        .as_ref()
+                        .map(|h| h == &file_hash)
+                        .unwrap_or(false)
+            })
+            .ok_or_else(|| format!("No Drive file with hash {}", file_hash))?;
+        (
+            item.id.clone(),
+            item.name.clone(),
+            item.storage_path.clone().ok_or("No storage path")?,
+            item.size.unwrap_or(0),
+        )
+    };
+
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
+    let full_path = files_dir.join(&storage_path);
+    if !full_path.exists() {
+        return Err("File not found on disk".into());
+    }
+    let full_path_str = full_path.to_string_lossy().to_string();
+
+    let price_wei_val = if let Some(ref p) = price_chi {
+        if p.is_empty() || p == "0" { 0u128 } else { wallet::parse_chi_to_wei(p)? }
+    } else {
+        0u128
+    };
+
+    let dht = {
+        let guard = state.dht.lock().await;
+        guard.as_ref().cloned().ok_or("DHT not running")?
+    };
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return Err("Peer ID unavailable".into());
+    }
+
+    // Register locally so we can serve chunks
+    dht.register_shared_file(
+        file_hash.clone(), full_path_str, file_name.clone(),
+        file_size, price_wei_val, wallet_address.clone(),
+    ).await;
+
+    // Update DHT record to add ourselves as a seeder
+    let our_addrs = dht.get_listening_addresses().await;
+    let our_seeder = SeederInfo {
+        peer_id: peer_id.clone(),
+        price_wei: price_wei_val.to_string(),
+        wallet_address: wallet_address.clone(),
+        multiaddrs: our_addrs,
+    };
+
+    let dht_key = format!("chiral_file_{}", file_hash);
+    let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
+        Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
+            hash: file_hash.clone(), file_name: file_name.clone(), file_size,
+            protocol: "WebRTC".into(),
+            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
+            seeders: Vec::new(),
+        }),
+        _ => FileMetadata {
+            hash: file_hash.clone(), file_name: file_name.clone(), file_size,
+            protocol: "WebRTC".into(),
+            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
+            seeders: Vec::new(),
+        },
+    };
+
+    // Add or update our seeder entry
+    if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
+        existing.price_wei = our_seeder.price_wei.clone();
+        existing.wallet_address = our_seeder.wallet_address.clone();
+        existing.multiaddrs = our_seeder.multiaddrs.clone();
+    } else {
+        metadata.seeders.push(our_seeder);
+    }
+
+    let metadata_json = serde_json::to_string(&metadata)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    dht.put_dht_value(dht_key, metadata_json).await?;
+
+    // Enable seeding in Drive manifest
+    {
+        let mut m = state.drive_state.manifest.write().await;
+        if let Some(item) = m.items.iter_mut().find(|i| i.id == item_id) {
+            item.seed_enabled = true;
+            item.seeding = true;
+            item.price_chi = price_chi;
+            item.modified_at = ds::now_secs();
+        }
+    }
+    state.drive_state.persist().await;
+
+    println!("[HOSTING] Now seeding hosted file: {} (hash: {})", file_name, file_hash);
+    Ok(())
+}
+
 #[tauri::command]
 async fn drive_stop_seeding(
     state: tauri::State<'_, AppState>,
@@ -5001,6 +5133,7 @@ pub fn run() {
             drive_list_shares,
             drive_toggle_visibility,
             publish_drive_file,
+            seed_hosted_file,
             drive_stop_seeding,
             drive_export_torrent,
             // Hosting marketplace commands
