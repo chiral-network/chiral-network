@@ -1856,13 +1856,20 @@ async fn event_loop(
                     .get_record(kad::RecordKey::new(&HOST_REGISTRY_KEY));
                 pending_auto_host_registry_queries.insert(query_id);
             }
-            // Periodically sync Kademlia routing table peers into the visible peer list
+            // Periodically re-bootstrap Kademlia to actively discover new peers,
+            // then sync the routing table into the visible peer list.
+            // kad.bootstrap() sends GET_CLOSEST_PEERS queries to random keys —
+            // this is the standard Kademlia mechanism for discovering peers that
+            // joined the DHT since our last lookup.
             _ = kad_peer_sync_interval.tick(), if kad_bootstrapped => {
+                // Active discovery: random walk to find new peers on the network
+                let _ = swarm.behaviour_mut().kad.bootstrap();
+
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
-                let mut new_peers = 0;
+                let mut changed = false;
                 let mut kad_entries: Vec<(String, Vec<String>)> = Vec::new();
                 for bucket in swarm.behaviour_mut().kad.kbuckets() {
                     for entry in bucket.iter() {
@@ -1883,17 +1890,34 @@ async fn event_loop(
                 if !kad_entries.is_empty() {
                     let mut peers_guard = peers.lock().await;
                     for (pid, addrs) in &kad_entries {
-                        if !peers_guard.iter().any(|p| &p.id == pid) {
+                        if let Some(existing) = peers_guard.iter_mut().find(|p| &p.id == pid) {
+                            // Update last_seen and addresses for existing peers
+                            existing.last_seen = now;
+                            if !addrs.is_empty() {
+                                existing.multiaddrs = addrs.clone();
+                            }
+                        } else {
+                            // New peer discovered
                             peers_guard.push(PeerInfo {
                                 id: pid.clone(),
                                 address: pid.clone(),
                                 multiaddrs: addrs.clone(),
                                 last_seen: now,
                             });
-                            new_peers += 1;
+                            changed = true;
                         }
                     }
-                    if new_peers > 0 {
+                    // Remove stale peers not in Kademlia or connections for 5 minutes
+                    let stale_cutoff = now - 300;
+                    let before = peers_guard.len();
+                    peers_guard.retain(|p| {
+                        kad_entries.iter().any(|(pid, _)| pid == &p.id)
+                            || p.last_seen > stale_cutoff
+                    });
+                    if peers_guard.len() != before {
+                        changed = true;
+                    }
+                    if changed {
                         let _ = events.emit("peer-discovered", peers_guard.clone());
                     }
                 }
