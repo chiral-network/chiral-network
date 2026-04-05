@@ -72,7 +72,14 @@ describe('DhtService', () => {
     });
 
     it('should throw on start failure without setting networkConnected', async () => {
-      mockInvoke.mockRejectedValueOnce('Failed to bind port');
+      // ensureRuntimeWiring runs first and triggers polling (get_dht_peers, get_network_stats).
+      // Only start_dht should reject — other invoke calls should resolve normally.
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'start_dht') return Promise.reject('Failed to bind port');
+        if (cmd === 'get_dht_peers') return Promise.resolve([]);
+        if (cmd === 'get_network_stats') return Promise.resolve({ connectedPeers: 0, totalPeers: 0 });
+        return Promise.resolve(null);
+      });
 
       const { dhtService } = await import('$lib/dhtService');
       const { networkConnected } = await import('$lib/stores');
@@ -82,11 +89,15 @@ describe('DhtService', () => {
     });
 
     it('should call get_peer_id after starting', async () => {
-      mockInvoke
-        .mockResolvedValueOnce('ok') // start_dht
-        .mockResolvedValueOnce([])   // get_dht_peers (from polling)
-        .mockResolvedValueOnce({ connectedPeers: 0, totalPeers: 0 }) // get_network_stats (from polling)
-        .mockResolvedValueOnce('12D3KooWTestPeerId'); // get_peer_id
+      // ensureRuntimeWiring runs first (triggers polling), then start_dht, then get_peer_id
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'start_dht') return Promise.resolve('ok');
+        if (cmd === 'get_dht_peers') return Promise.resolve([]);
+        if (cmd === 'get_network_stats') return Promise.resolve({ connectedPeers: 0, totalPeers: 0 });
+        if (cmd === 'get_peer_id') return Promise.resolve('12D3KooWTestPeerId');
+        if (cmd === 'reseed_drive_files') return Promise.resolve(null);
+        return Promise.resolve(null);
+      });
 
       const { dhtService } = await import('$lib/dhtService');
       await dhtService.start();
