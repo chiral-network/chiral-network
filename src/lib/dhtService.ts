@@ -66,9 +66,10 @@ class DhtService {
     }
 
     // Kademlia bootstrap runs async after start_dht returns and discovers
-    // the bulk of peers. Do a catch-up fetch after a short delay to ensure
-    // the full peer list is populated even if the event was slightly delayed.
-    setTimeout(() => this.updateNetworkInfo(), 3000);
+    // the bulk of peers. Do staggered catch-up fetches to populate ASAP.
+    setTimeout(() => this.updateNetworkInfo(), 2000);
+    setTimeout(() => this.updateNetworkInfo(), 5000);
+    setTimeout(() => this.updateNetworkInfo(), 10000);
   }
 
   async stop(): Promise<void> {
@@ -144,7 +145,7 @@ class DhtService {
   private async ensureRuntimeWiring(): Promise<void> {
     if (!this.peerDiscoveryUnlisten) {
       this.peerDiscoveryUnlisten = await listen<PeerInfo[]>('peer-discovered', (event) => {
-        log.info('Peers discovered:', event.payload);
+        log.info(`[peer-discovered event] Received ${event.payload.length} peers from backend`);
         peers.set(event.payload);
       });
     }
@@ -203,6 +204,8 @@ class DhtService {
         invoke<PeerInfo[]>('get_dht_peers'),
         invoke<{ connectedPeers: number; totalPeers: number }>('get_network_stats')
       ]);
+
+      log.info(`[updateNetworkInfo] Backend returned ${peerList.length} peers, stats: connected=${stats.connectedPeers} total=${stats.totalPeers}`);
 
       const formattedPeers = peerList.map(peer => ({
         ...peer,

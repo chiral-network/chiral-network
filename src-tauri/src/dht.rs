@@ -2044,7 +2044,9 @@ async fn event_loop(
                                     last_seen: now,
                                 });
                             }
-                            let _ = events.emit("peer-discovered", peers_guard.clone());
+                            // Don't emit peer-discovered on every connection — the 5s
+                            // polling and 30s Kademlia sync handle UI updates. Emitting
+                            // on every ConnectionEstablished floods the frontend at startup.
                         }
 
                         let _ = events.emit("connection-established", peer_id_str);

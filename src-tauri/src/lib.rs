@@ -582,8 +582,13 @@ async fn get_dht_peers(state: tauri::State<'_, AppState>) -> Result<Vec<dht::Pee
     let dht_guard = state.dht.lock().await;
 
     if let Some(dht) = dht_guard.as_ref() {
-        Ok(dht.get_peers().await)
+        let peers = dht.get_peers().await;
+        if peers.is_empty() {
+            eprintln!("[get_dht_peers] WARNING: returning 0 peers (DHT is running but peer list is empty)");
+        }
+        Ok(peers)
     } else {
+        eprintln!("[get_dht_peers] DHT not running, returning empty list");
         Ok(Vec::new())
     }
 }
