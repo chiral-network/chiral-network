@@ -32,6 +32,9 @@ class DhtService {
   private bootstrapCompleteUnlisten: (() => void) | null = null;
 
   async start(): Promise<void> {
+    // Wire up event listeners BEFORE starting DHT so no events are missed
+    await this.ensureRuntimeWiring();
+
     try {
       const result = await invoke<string>('start_dht');
       log.ok('DHT started:', result);
@@ -45,21 +48,27 @@ class DhtService {
     }
 
     networkConnected.set(true);
-    await this.ensureRuntimeWiring();
 
-    // Ensure persisted Drive files are re-registered after restart, even when
-    // DHT was auto-started before the UI attached.
+    // Immediately fetch current peer list (DHT may already have connections
+    // from a previous session or from auto-start before UI attached)
+    await this.updateNetworkInfo();
+
+    // Ensure persisted Drive files are re-registered after restart
     try {
       await invoke('reseed_drive_files');
     } catch (error) {
       log.warn('Drive reseed refresh failed:', error);
     }
 
-    // Get and log our peer ID
     const peerId = await this.getPeerId();
     if (peerId) {
       log.info('Our Peer ID:', peerId);
     }
+
+    // Kademlia bootstrap runs async after start_dht returns and discovers
+    // the bulk of peers. Do a catch-up fetch after a short delay to ensure
+    // the full peer list is populated even if the event was slightly delayed.
+    setTimeout(() => this.updateNetworkInfo(), 3000);
   }
 
   async stop(): Promise<void> {
