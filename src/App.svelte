@@ -480,14 +480,27 @@
           const installed = await gethService.isInstalled();
           if (!installed) return;
           const status = await gethService.getStatus();
+          const addr = $walletAccount?.address;
+          const shouldAutoStartMining = $settings.autoStartMining && !!addr;
+
           if (status.running) {
             // Already running — just start polling
             gethService.startStatusPolling();
+            if (addr) {
+              await gethService.setMinerAddress(addr);
+            }
+            if (shouldAutoStartMining) {
+              const miningStatus = await gethService.getMiningStatus();
+              if (!miningStatus.mining) {
+                await gethService.startMining(1);
+              }
+            }
             return;
           }
-          // Start Geth with wallet address as miner
-          const addr = $walletAccount?.address;
-          await gethService.start(addr || undefined);
+          await gethService.start(shouldAutoStartMining ? addr : undefined);
+          if (addr && !shouldAutoStartMining) {
+            await gethService.setMinerAddress(addr);
+          }
         } catch (err) {
           // Silently handle — user can start manually from Network page
           console.warn('Geth auto-start failed:', err);

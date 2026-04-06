@@ -50,6 +50,7 @@ export interface AppSettings {
   colorTheme: ColorTheme;
   navStyle: NavStyle;
   reducedMotion: boolean;
+  autoStartMining: boolean;
   downloadDirectory: string; // empty string = system default Downloads folder
   notifications: NotificationSettings;
   hostingConfig: HostingConfig;
@@ -71,6 +72,7 @@ const defaultSettings: AppSettings = {
   colorTheme: 'blue',
   navStyle: 'navbar',
   reducedMotion: false,
+  autoStartMining: false,
   downloadDirectory: '',
   notifications: { ...defaultNotifications },
   hostingConfig: {
