@@ -2233,43 +2233,6 @@ impl GethProcess {
         }
     }
 
-    /// Make an RPC call to Geth
-    async fn rpc_call(
-        &self,
-        _client: &reqwest::Client,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
-        let payload = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-            "id": 1
-        });
-
-        let endpoint = self.effective_rpc_endpoint();
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-        let response = client
-            .post(&endpoint)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| format!("RPC request failed: {}", e))?;
-
-        let json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
-
-        if let Some(error) = json.get("error") {
-            return Err(format!("RPC error: {}", error));
-        }
-
-        Ok(json["result"].clone())
-    }
 }
 
 impl Drop for GethProcess {

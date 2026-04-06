@@ -206,8 +206,8 @@ pub async fn send_transaction(
 async fn broadcast_signed_tx(
     endpoint: &str,
     signed_tx_hex: &str,
-    balance_before: &str,
-    balance_after: &str,
+    _balance_before: &str,
+    _balance_after: &str,
 ) -> Result<String, String> {
     let send_result = rpc_client::call(endpoint, "eth_sendRawTransaction", serde_json::json!([signed_tx_hex])).await;
 

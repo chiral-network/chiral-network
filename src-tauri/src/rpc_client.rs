@@ -40,6 +40,7 @@ pub fn client() -> &'static reqwest::Client {
 // ============================================================================
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct RpcRequest {
     jsonrpc: &'static str,
     method: String,
