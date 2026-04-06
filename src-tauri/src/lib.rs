@@ -4894,6 +4894,10 @@ pub fn run() {
     #[cfg(unix)]
     let geth_for_signal = geth.clone();
     let geth_for_exit = geth.clone();
+    let hosting_shutdown_for_exit: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> =
+        Arc::new(Mutex::new(None));
+    let tunnel_handles_for_exit: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     // Create DHT Arc before signal handler so it can be shared
     let dht_arc: Arc<Mutex<Option<Arc<DhtService>>>> = Arc::new(Mutex::new(None));
@@ -4970,9 +4974,9 @@ pub fn run() {
             // Hosting & Drive
             hosting_server_state: Arc::new(hosting_server::HostingServerState::new()),
             hosting_server_addr: Arc::new(Mutex::new(None)),
-            hosting_server_shutdown: Arc::new(Mutex::new(None)),
+            hosting_server_shutdown: Arc::clone(&hosting_shutdown_for_exit),
             drive_state: Arc::new(drive_api::DriveState::new()),
-            tunnel_handles: Arc::new(Mutex::new(HashMap::new())),
+            tunnel_handles: Arc::clone(&tunnel_handles_for_exit),
         })
         .setup(|app| {
             use tauri::Manager;
@@ -5164,6 +5168,23 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(move |_app, event| {
             if let tauri::RunEvent::Exit = event {
+                println!("🛑 App exiting — stopping gateway server and relay tunnels");
+                if let Ok(mut shutdown_store) = hosting_shutdown_for_exit.try_lock() {
+                    if let Some(tx) = shutdown_store.take() {
+                        let _ = tx.send(());
+                    }
+                } else {
+                    println!("⚠️  Could not acquire hosting shutdown lock on exit");
+                }
+
+                if let Ok(mut tunnel_store) = tunnel_handles_for_exit.try_lock() {
+                    for (_, handle) in tunnel_store.drain() {
+                        handle.abort();
+                    }
+                } else {
+                    println!("⚠️  Could not acquire tunnel handle lock on exit");
+                }
+
                 // Stop Geth cleanly when the app exits (window close, quit, etc.)
                 // Use try_lock to avoid deadlock — if the mutex is held by another
                 // task (e.g. mining status poll), force-kill via PID file instead.

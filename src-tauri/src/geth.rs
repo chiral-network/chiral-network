@@ -1122,6 +1122,16 @@ impl GethProcess {
         Ok(())
     }
 
+    fn stop_gpu_miner_fast_sync(&mut self) {
+        if let Some(mut child) = self.gpu_miner_child.take() {
+            let _ = child.kill();
+        }
+        self.gpu_backend = None;
+        self.gpu_hash_rate = 0;
+        self.gpu_active_devices.clear();
+        self.gpu_utilization_percent = 100;
+    }
+
     /// Get the genesis.json content for Chiral Network.
     /// Must match V1 and the remote bootstrap node exactly so that
     /// all nodes produce the same genesis hash and can peer together.
@@ -1471,7 +1481,7 @@ impl GethProcess {
     /// Fast stop used during app shutdown.
     /// Prioritizes quick process termination over graceful wait loops.
     pub fn stop_fast(&mut self) -> Result<(), String> {
-        let _ = self.stop_gpu_miner_sync();
+        self.stop_gpu_miner_fast_sync();
 
         if let Some(mut child) = self.child.take() {
             LOCAL_GETH_RUNNING.store(false, Ordering::Relaxed);
