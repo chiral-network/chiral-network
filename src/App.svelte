@@ -60,12 +60,13 @@
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const { invoke } = await import('@tauri-apps/api/core');
       const { listen } = await import('@tauri-apps/api/event');
+      const currentWindow = getCurrentWindow();
 
       // --- Graceful close: confirm with user, cleanup DHT, then force-close ---
       let isClosing = false;
-      getCurrentWindow().onCloseRequested(async (event) => {
-        event.preventDefault();
+      currentWindow.onCloseRequested(async (event) => {
         if (isClosing) return;
+        event.preventDefault();
 
         // Ask the user to confirm
         const confirmed = await new Promise<boolean>((resolve) => {
@@ -78,17 +79,17 @@
         if (!confirmed) return;
 
         isClosing = true;
-        // Keep close responsive: run cleanup best-effort with a short cap.
-        await Promise.race([
-          Promise.allSettled([
-            invoke('unpublish_all_shared_files'),
-            invoke('unpublish_host_advertisement'),
-          ]),
-          new Promise((resolve) => setTimeout(resolve, 800)),
+        // Kick off DHT cleanup, but don't hold the UI open for long.
+        const shutdownCleanup = Promise.allSettled([
+          invoke('unpublish_all_shared_files'),
+          invoke('unpublish_host_advertisement'),
         ]);
-        // Use backend exit_app command which calls AppHandle::exit(0)
-        // This triggers RunEvent::Exit for Geth cleanup and fully terminates the process.
-        await invoke('exit_app');
+        await Promise.race([
+          shutdownCleanup,
+          new Promise((resolve) => setTimeout(resolve, 150)),
+        ]);
+        // Force-close the native window without emitting another close request.
+        void currentWindow.destroy();
       });
 
       // Global listener: when a file download completes, check if it belongs
