@@ -561,7 +561,7 @@ impl GethProcess {
 
     fn configured_sync_mode() -> String {
         let mode = std::env::var("CHIRAL_GETH_SYNCMODE")
-            .unwrap_or_else(|_| "snap".to_string())
+            .unwrap_or_else(|_| "full".to_string())
             .trim()
             .to_ascii_lowercase();
 
@@ -569,10 +569,10 @@ impl GethProcess {
             "snap" | "full" => mode,
             other => {
                 println!(
-                    "⚠️ Unsupported CHIRAL_GETH_SYNCMODE '{}', falling back to snap",
+                    "⚠️ Unsupported CHIRAL_GETH_SYNCMODE '{}', falling back to full",
                     other
                 );
-                "snap".to_string()
+                "full".to_string()
             }
         }
     }
@@ -1261,24 +1261,37 @@ impl GethProcess {
             println!("⚠️  geth.pid still exists after cleanup!");
         }
 
-        // Check if blockchain needs initialization or re-initialization
-        // Use a version marker to detect genesis config changes
+        // Check if blockchain needs initialization or re-initialization.
+        // Use a version marker to detect genesis config changes.
         let genesis_version = "5"; // Bump this when genesis config changes
         let version_file = self.data_dir.join(".genesis_version");
         let chaindata_path = self.data_dir.join("geth").join("chaindata");
+
         let needs_init = if !chaindata_path.exists() {
+            println!("No chaindata found — need genesis init");
             true
         } else {
-            // Check if genesis version matches
             match fs::read_to_string(&version_file) {
-                Ok(v) => v.trim() != genesis_version,
-                Err(_) => true, // No version file = old genesis
+                Ok(v) if v.trim() == genesis_version => false, // Version matches, chain data is good
+                Ok(v) => {
+                    // Version mismatch — genesis config changed, must re-init
+                    println!("Genesis version mismatch (have '{}', need '{}') — re-initializing", v.trim(), genesis_version);
+                    true
+                }
+                Err(_) => {
+                    // No version file but chaindata exists — write the version file
+                    // without wiping chain data (assume it's compatible).
+                    // This prevents accidental chain wipes when the version file
+                    // is missing due to migration or filesystem issues.
+                    println!("No .genesis_version file but chaindata exists — assuming compatible, writing version marker");
+                    let _ = fs::write(&version_file, genesis_version);
+                    false
+                }
             }
         };
 
         if needs_init {
             println!("Initializing blockchain (genesis v{})...", genesis_version);
-            // Remove old chain data if it exists
             if chaindata_path.exists() {
                 println!("Removing old chain data for genesis update...");
                 let geth_dir = self.data_dir.join("geth");
@@ -1323,7 +1336,7 @@ impl GethProcess {
             .arg("--syncmode")
             .arg(&sync_mode) // Prefer snap sync for faster catch-up; overridable via env
             .arg("--gcmode")
-            .arg("full") // Prune old state to speed up sync and reduce disk usage
+            .arg("archive") // Keep all state to prevent block height regression on restart
             .arg("--cache")
             .arg(cache_mb.to_string())
             .arg("--maxpeers")
