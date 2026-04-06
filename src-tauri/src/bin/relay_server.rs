@@ -280,13 +280,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                     RelayServerBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-                        println!("[IDENTIFY] Peer {}: protocol={}, agent={}, addrs={:?}",
-                            peer_id, info.protocol_version, info.agent_version, info.listen_addrs);
-
-                        // Add peer's listen addresses to Kademlia
+                        // Only add routable addresses to Kademlia:
+                        // - Relay circuit addresses (always reachable)
+                        // - Public IPs (not private/link-local/loopback)
+                        // This ensures remote peers get usable addresses from FindNode queries.
+                        let mut added = 0usize;
                         for addr in &info.listen_addrs {
-                            swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                            let s = addr.to_string();
+                            let is_circuit = s.contains("p2p-circuit");
+                            let is_private =
+                                s.starts_with("/ip4/127.")
+                                || s.starts_with("/ip4/10.")
+                                || s.starts_with("/ip4/192.168.")
+                                || s.starts_with("/ip6/::1/")
+                                || s.starts_with("/ip6/fe80:")
+                                || (s.starts_with("/ip4/172.") && {
+                                    s.strip_prefix("/ip4/172.")
+                                        .and_then(|r| r.split('.').next())
+                                        .and_then(|o| o.parse::<u8>().ok())
+                                        .map(|o| (16..=31).contains(&o))
+                                        .unwrap_or(true)
+                                });
+
+                            if is_circuit || !is_private {
+                                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                                added += 1;
+                            }
                         }
+                        println!("[IDENTIFY] Peer {}: added {}/{} routable addrs to Kademlia",
+                            peer_id, added, info.listen_addrs.len());
                     }
                     RelayServerBehaviourEvent::Identify(_) => {}
                     RelayServerBehaviourEvent::Ping(_) => {}
