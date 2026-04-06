@@ -897,6 +897,181 @@ async fn wallet_show(State(state): State<Arc<HeadlessRuntimeState>>) -> Response
     }
 }
 
+// ---- Wallet balance/transaction endpoints ----
+
+async fn wallet_balance(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let address = body["address"].as_str().unwrap_or("").to_string();
+    if address.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "address required");
+    }
+    let endpoint = chiral_network::geth::effective_rpc_endpoint();
+    match chiral_network::wallet::get_balance(&endpoint, &address).await {
+        Ok(result) => Json(json!(result)).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn wallet_send(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let from = body["from"].as_str().unwrap_or("").to_string();
+    let to = body["to"].as_str().unwrap_or("").to_string();
+    let amount = body["amount"].as_str().unwrap_or("").to_string();
+    let private_key = body["privateKey"].as_str().unwrap_or("").to_string();
+
+    if from.is_empty() || to.is_empty() || amount.is_empty() || private_key.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "from, to, amount, privateKey required");
+    }
+
+    let endpoint = chiral_network::geth::effective_rpc_endpoint();
+    match chiral_network::wallet::send_transaction(&endpoint, &from, &to, &amount, &private_key).await {
+        Ok(result) => Json(json!(result)).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn wallet_receipt(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let tx_hash = body["txHash"].as_str().unwrap_or("").to_string();
+    if tx_hash.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "txHash required");
+    }
+    let endpoint = chiral_network::geth::effective_rpc_endpoint();
+    match chiral_network::wallet::get_receipt(&endpoint, &tx_hash).await {
+        Ok(Some(receipt)) => Json(json!({"receipt": receipt})).into_response(),
+        Ok(None) => Json(json!({"receipt": null})).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn wallet_history(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let address = body["address"].as_str().unwrap_or("").to_string();
+    if address.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "address required");
+    }
+    let endpoint = chiral_network::geth::effective_rpc_endpoint();
+    let metadata = chiral_network::wallet::load_tx_metadata();
+    match chiral_network::wallet::get_transaction_history(&endpoint, &address, &metadata).await {
+        Ok(result) => Json(json!(result)).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn wallet_faucet(
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let address = body["address"].as_str().unwrap_or("").to_string();
+    if address.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "address required");
+    }
+    match chiral_network::wallet::request_faucet(&address).await {
+        Ok(result) => Json(json!(result)).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn wallet_chain_id() -> Response {
+    Json(json!({"chainId": chiral_network::geth::CHAIN_ID})).into_response()
+}
+
+// ---- File search endpoint ----
+
+async fn file_search(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let file_hash = body["fileHash"].as_str().unwrap_or("").to_string();
+    if file_hash.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "fileHash required");
+    }
+    let dht = match state.dht_service().await {
+        Some(d) => d,
+        None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
+    };
+    let dht_key = format!("chiral_file_{}", file_hash);
+    match dht.get_dht_value(dht_key).await {
+        Ok(Some(json_str)) => {
+            match serde_json::from_str::<serde_json::Value>(&json_str) {
+                Ok(metadata) => Json(json!({"found": true, "metadata": metadata})).into_response(),
+                Err(_) => Json(json!({"found": true, "raw": json_str})).into_response(),
+            }
+        }
+        Ok(None) => Json(json!({"found": false})).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+// ---- Hosting advertisement endpoints ----
+
+async fn hosting_publish_ad(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let dht = match state.dht_service().await {
+        Some(d) => d,
+        None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
+    };
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Peer ID not available");
+    }
+    let mut ad = body.clone();
+    ad["peerId"] = serde_json::Value::String(peer_id.clone());
+    let ad_json = serde_json::to_string(&ad).unwrap_or_default();
+    let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
+
+    // Store individual ad
+    let host_key = format!("chiral_host_{}", peer_id);
+    if let Err(e) = dht.put_dht_value(host_key, ad_json).await {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e);
+    }
+
+    // Update registry
+    let registry_key = "chiral_host_registry".to_string();
+    let mut registry: Vec<serde_json::Value> = match dht.get_dht_value(registry_key.clone()).await {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    registry.retain(|e| e["peerId"].as_str() != Some(&peer_id));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    registry.push(json!({"peerId": peer_id, "walletAddress": wallet_address, "updatedAt": now}));
+    let registry_json = serde_json::to_string(&registry).unwrap_or_default();
+    match dht.put_dht_value(registry_key, registry_json).await {
+        Ok(_) => Json(json!({"status": "published"})).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn hosting_get_registry(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+) -> Response {
+    let dht = match state.dht_service().await {
+        Some(d) => d,
+        None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
+    };
+    match dht.get_dht_value("chiral_host_registry".to_string()).await {
+        Ok(Some(json)) => Json(json!({"registry": serde_json::from_str::<serde_json::Value>(&json).unwrap_or(json!([]))})).into_response(),
+        Ok(None) => Json(json!({"registry": []})).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+async fn bootstrap_health(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+) -> Response {
+    let report = chiral_network::geth_bootstrap::check_all_nodes().await;
+    Json(json!(report)).into_response()
+}
+
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
         // Health/readiness probes
@@ -906,7 +1081,16 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         .route("/api/headless/wallet", get(wallet_show))
         .route("/api/headless/wallet/create", post(wallet_create))
         .route("/api/headless/wallet/import", post(wallet_import))
+        // Wallet transactions
+        .route("/api/headless/wallet/balance", post(wallet_balance))
+        .route("/api/headless/wallet/send", post(wallet_send))
+        .route("/api/headless/wallet/receipt", post(wallet_receipt))
+        .route("/api/headless/wallet/history", post(wallet_history))
+        .route("/api/headless/wallet/faucet", post(wallet_faucet))
+        .route("/api/headless/wallet/chain-id", get(wallet_chain_id))
+        // Runtime
         .route("/api/headless/runtime", get(runtime_status))
+        // DHT
         .route("/api/headless/dht/start", post(dht_start))
         .route("/api/headless/dht/stop", post(dht_stop))
         .route("/api/headless/dht/health", get(dht_health))
@@ -930,15 +1114,20 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
             "/api/headless/dht/unregister-shared-file",
             post(dht_unregister_shared_file),
         )
+        // File search
+        .route("/api/headless/file/search", post(file_search))
+        // ChiralDrop
         .route("/api/headless/drop/inbox", get(drop_inbox))
         .route("/api/headless/drop/outgoing", get(drop_outgoing))
         .route("/api/headless/drop/accept", post(drop_accept))
         .route("/api/headless/drop/decline", post(drop_decline))
+        // Geth
         .route("/api/headless/geth/install", post(geth_install))
         .route("/api/headless/geth/start", post(geth_start))
         .route("/api/headless/geth/stop", post(geth_stop))
         .route("/api/headless/geth/status", get(geth_status))
         .route("/api/headless/geth/logs", get(geth_logs))
+        // Mining
         .route("/api/headless/mining/start", post(mining_start))
         .route("/api/headless/mining/stop", post(mining_stop))
         .route("/api/headless/mining/status", get(mining_status))
@@ -947,6 +1136,11 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
             "/api/headless/mining/miner-address",
             post(set_miner_address),
         )
+        // Hosting
+        .route("/api/headless/hosting/publish-ad", post(hosting_publish_ad))
+        .route("/api/headless/hosting/registry", get(hosting_get_registry))
+        // Diagnostics
+        .route("/api/headless/bootstrap-health", get(bootstrap_health))
         .with_state(state)
 }
 
