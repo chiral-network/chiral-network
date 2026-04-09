@@ -117,8 +117,9 @@ The application consists of three layers:
 |  | (libp2p)  |  | Process |  | API    |  | Transfer    |  |
 |  +----------+  +---------+  +--------+  +-------------+  |
 |  +----------+  +---------+  +--------+  +-------------+  |
-|  | Rating   |  | Hosting |  | Wallet |  | Encryption  |  |
-|  | Storage  |  | Server  |  | Backup |  | Keypair     |  |
+|  | Wallet   |  | RPC     |  | Hosting|  | Encryption  |  |
+|  | (wallet. |  | Client  |  | Server |  | Keypair     |  |
+|  |  rs)     |  | (pooled)|  |        |  |             |  |
 |  +----------+  +---------+  +--------+  +-------------+  |
 +-----------------------------------------------------------+
             |                           |
@@ -133,9 +134,14 @@ The application consists of three layers:
             v
 +-------------------------+
 |   Relay Server           |
-|   130.245.173.73:8080    |
+|   130.245.173.73         |
+|   :4001 libp2p relay     |
+|   :8080 HTTP API         |
+|   - Circuit relay v2     |
+|   - Kademlia routing     |
 |   - Reputation API       |
 |   - Drive share proxy    |
+|   - WebSocket tunnels    |
 |   - Email backup relay   |
 +-------------------------+
 ```
@@ -217,7 +223,7 @@ cargo run --manifest-path src-tauri/Cargo.toml --bin chiral -- dht start --port 
 | `/drive` | Drive | Local file manager with folders. Upload, rename, star, delete files. Seed files to the P2P network. |
 | `/chiraldrop` | ChiralDrop | Direct peer-to-peer file transfers. Discover nearby peers and send/receive files. |
 | `/hosts` | Hosts | Hosting marketplace. Publish storage offers, browse hosts, manage agreements. |
-| `/mining` | Mining | CPU and GPU mining controls. View hash rate, block height, total mined CHI, and mined block history. |
+| `/mining` | Mining | CPU and GPU mining controls. View hash rate, block height, and total mined CHI. |
 | `/settings` | Settings | Appearance (dark mode, color theme, nav style), notification preferences, download directory. |
 | `/diagnostics` | Diagnostics | System event log, DHT health, bootstrap status, Geth status, mining diagnostics, Geth log viewer. |
 
@@ -229,21 +235,27 @@ The Rust backend is organized into the following modules under `src-tauri/src/`:
 
 | Module | File | Responsibility |
 |--------|------|---------------|
+| Command Layer | `lib.rs` | Thin Tauri command wrappers, AppState management (103 commands) |
+| Wallet | `wallet.rs` | Balance queries, transaction signing (EIP-155), history, metadata persistence, CHI/Wei conversion |
+| RPC Client | `rpc_client.rs` | Connection-pooled HTTP client, batch JSON-RPC, response cache with TTL |
 | DHT Service | `dht.rs` | libp2p Kademlia DHT, peer management, file publishing/searching, chunk transfer protocol |
 | File Transfer | `file_transfer.rs` | Chunked file sending/receiving, SHA-256 verification, retry logic |
-| Geth Process | `geth.rs` | Manages the Core-Geth blockchain client, mining, RPC communication |
+| Geth Process | `geth.rs` | Manages Core-Geth lifecycle, mining, batch RPC status queries |
 | Drive API | `drive_api.rs` | HTTP routes for file CRUD, share links, preview pages |
 | Drive Storage | `drive_storage.rs` | On-disk manifest and file storage management |
 | Hosting Server | `hosting_server.rs` | Axum gateway server combining Drive, Rating, and Hosting routes |
+| Hosting Types | `hosting.rs` | Site metadata, MIME detection, persistence |
 | Rating API | `rating_api.rs` | Elo reputation calculation and HTTP endpoints |
 | Rating Storage | `rating_storage.rs` | Persistent storage for reputation events |
-| Relay Share Proxy | `relay_share_proxy.rs` | Reverse proxy for Drive share links through the relay |
+| Relay Share Proxy | `relay_share_proxy.rs` | Reverse proxy + WebSocket tunnel for NAT traversal |
 | Wallet Backup | `wallet_backup_api.rs` | SMTP email sending for wallet credential backup |
 | Encryption | `encryption.rs` | X25519 key exchange and AES-GCM file encryption |
-| Chain RPC | `chain_rpc_api.rs` | Blockchain RPC helpers |
+| Chain RPC | `chain_rpc_api.rs` | Blockchain RPC proxy |
 | Speed Tiers | `speed_tiers.rs` | Download cost calculation (0.001 CHI/MB) |
 | Event Sink | `event_sink.rs` | Frontend event emission abstraction |
 | Geth Bootstrap | `geth_bootstrap.rs` | Bootstrap node health checking and selection |
+
+Total: 23 Rust source files, 3 binary targets.
 
 ### Binary Targets
 
@@ -273,14 +285,23 @@ Chiral Network runs a private Ethereum-compatible blockchain using the Ethash pr
 | Gas price | 0 (free transactions) |
 | Client | Core-Geth v1.12.20 |
 
+### Geth Configuration
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| Sync mode | `full` | Replays all blocks from genesis; preserves full history on restart |
+| GC mode | `archive` | Keeps all state; prevents block height regression on restart |
+| Cache | 1024 MB | RAM cache for blockchain state |
+| Max peers | 50 | Maximum Geth P2P connections |
+
 ### How Mining Works
 
 1. The application auto-starts Geth with the wallet address as the coinbase (miner.etherbase).
 2. On the Mining page, users can start CPU mining with a configurable number of threads.
 3. Geth communicates via JSON-RPC on `localhost:8545`.
-4. Mining status is polled every 5 seconds. Hash rate comes from `eth_hashrate`.
-5. Mined blocks are queried by scanning recent blocks where the miner field matches the user's address.
-6. The "Total Mined" display and wallet balance both query the local Geth node using `eth_getBalance`.
+4. Mining status is polled every 10 seconds using batch RPC (eth_mining + eth_hashrate + eth_coinbase + eth_blockNumber in one request).
+5. Balance and total mined both query the local Geth node via `eth_getBalance` through the shared `rpc_client.rs` connection pool.
+6. All wallet queries route through `effective_rpc_endpoint()`: local Geth if running, otherwise remote fallback at `130.245.173.73:8545`.
 
 ### Bootstrap Node
 
@@ -359,25 +380,22 @@ chiral_daemon --port 9419 --auto-start-dht --auto-mine --miner-address 0xABC
 | `--miner-address` | `CHIRAL_MINER_ADDRESS` | none | Wallet for mining rewards |
 | `--mining-threads` | `CHIRAL_MINING_THREADS` | 1 | CPU mining threads |
 
-### Daemon API Endpoints
+### Daemon API Endpoints (44 routes)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Liveness probe (always 200) |
-| `/api/ready` | GET | Readiness probe (checks DHT + Geth) |
-| `/api/headless/runtime` | GET | Runtime status (DHT, peer ID, Geth) |
-| `/api/headless/dht/start` | POST | Start DHT service |
-| `/api/headless/dht/stop` | POST | Stop DHT service |
-| `/api/headless/dht/health` | GET | DHT health details |
-| `/api/headless/dht/peers` | GET | Connected peer list |
-| `/api/headless/dht/put` | POST | Store a key-value pair in DHT |
-| `/api/headless/dht/get` | POST | Retrieve a value from DHT |
-| `/api/headless/geth/start` | POST | Start Geth node |
-| `/api/headless/geth/stop` | POST | Stop Geth node |
-| `/api/headless/geth/status` | GET | Geth status |
-| `/api/headless/mining/start` | POST | Start CPU mining |
-| `/api/headless/mining/stop` | POST | Stop mining |
-| `/api/headless/mining/status` | GET | Mining status |
+All headless paths prefixed with `/api/headless/` except health, ready, and drive routes.
+
+| Category | Endpoints |
+|----------|-----------|
+| Health | `GET /api/health`, `GET /api/ready`, `GET runtime` |
+| Wallet | `GET wallet`, `POST wallet/create`, `wallet/import`, `wallet/balance`, `wallet/send`, `wallet/receipt`, `wallet/history`, `wallet/faucet`; `GET wallet/chain-id` |
+| DHT | `POST dht/start`, `dht/stop`, `dht/put`, `dht/get`, `dht/ping`, `dht/echo`; `GET dht/health`, `dht/peers`, `dht/peer-id`, `dht/listening-addresses` |
+| Files | `POST file/search`, `dht/register-shared-file`, `dht/unregister-shared-file`, `dht/request-file`, `dht/send-file` |
+| ChiralDrop | `GET drop/inbox`, `drop/outgoing`; `POST drop/accept`, `drop/decline` |
+| Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
+| Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status`, `mining/blocks` |
+| Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
+| Drive | Full CRUD via `/api/drive/*` (requires `X-Owner` header) |
+| Diagnostics | `GET bootstrap-health` |
 
 ### CLI
 
@@ -412,53 +430,60 @@ The project includes a multi-stage Dockerfile that produces four image targets:
 | `cli` | `chiral` | -- | Command-line tool |
 | `test-node` | `chiral_daemon` + `chiral` | 9419, 30303 | Testing with healthcheck |
 
-### Docker Compose
+### Docker Compose Files
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.yml` | General test network (relay + scalable nodes) |
+| `docker-compose.local-test.yml` | Local isolated testing with relay |
+| `docker-compose.production-net.yml` | 30 nodes on host networking, connected to production relay |
+| `docker-compose.scaled-test.yml` | Scaled integration test overlay |
 
 ```bash
-# Start a 3-node test network
-docker compose up -d
+# 30 production-connected nodes (host networking)
+docker compose -f docker-compose.production-net.yml up -d
 
-# Scale to 20 nodes
-docker compose up -d --scale node=20
+# Local isolated testing
+docker compose -f docker-compose.local-test.yml up -d --scale node=10
 
 # Tear down
-docker compose down -v
+docker compose -f docker-compose.production-net.yml down
 ```
 
-### Scaled Integration Testing
+### Kubernetes Deployment (k3s/Rancher)
 
-A 17-phase automated test harness exercises every feature with configurable node counts (10-100).
+Test nodes can also be deployed to the k3s cluster at `130.245.173.231`:
 
 ```bash
-./scripts/scaled-test.sh           # 10 nodes
-./scripts/scaled-test.sh 50        # 50 nodes
-./scripts/scaled-test.sh 100       # 100 nodes
-./scripts/scaled-test.sh 20 --keep # Keep containers for debugging
+export KUBECONFIG=~/.kube/config-k3s
+kubectl apply -f k8s/chiral-30-pods.yaml
+kubectl get pods -n chiral-test
 ```
 
-#### Test Phases
+### Stress Testing
+
+A 12-phase, 35-test stress suite exercises every feature across 30 nodes:
+
+```bash
+bash scripts/stress-test-30-nodes.sh
+```
+
+#### Stress Test Phases (stress-test-30-nodes.sh)
 
 | Phase | Name | What It Tests |
 |-------|------|--------------|
-| 01 | Health | All nodes up, DHT running, peer discovery |
-| 02 | Wallets | Wallet address generation for each node |
-| 03 | Mining | Geth startup, mining, block production |
-| 04 | Drive Upload | File uploads (1KB, 100KB, 1MB) on seeder nodes |
-| 05 | File Publish | Register shared files on the DHT |
-| 06 | Search and Download | Search DHT, request and complete file downloads |
-| 07 | ChiralDrop | P2P file transfers between random node pairs |
-| 08 | Payments | CHI balance verification on mining nodes |
-| 09 | Reputation | Batch Elo lookup and score validation |
-| 10 | Drive CRUD | Folder create, upload, rename, delete cycle |
-| 11 | Concurrent Downloads | All consumers download the same file simultaneously |
-| 12 | Rapid Publish-Search | DHT propagation delay measurement |
-| 13 | Network Partition | Stop 20% of nodes, verify recovery |
-| 14 | Large File Transfer | 10MB file transfer to multiple consumers |
-| 15 | Rapid Wallet Ops | Simultaneous balance queries across all nodes |
-| 16 | DHT Flood | Each node stores and retrieves 10 key-value pairs |
-| 17 | Long-Running Stability | 2-minute health monitoring with anomaly detection |
-
-Node roles are assigned automatically: 20% miners, 30% seeders, 50% consumers.
+| 1 | Health & Connectivity | All 30 health/readiness endpoints |
+| 2 | DHT Network | Unique peer IDs, peer counts, relay circuits, cross-node ping |
+| 3 | DHT Storage | Cross-node put/get, 10 concurrent writes |
+| 4 | Wallet | Create (10 nodes), import, balance query, chain ID |
+| 5 | File Registration | Publish file, search from publisher + 5 remote nodes |
+| 6 | Echo Protocol | Direct echo + fan-out to 10 nodes |
+| 7 | Hosting Ads | Publish advertisement, query registry from remote node |
+| 8 | Concurrent Stress | 30 simultaneous DHT puts, peer queries, health checks |
+| 9 | Ping Mesh | 10 random node pairs |
+| 10 | Drive Operations | List items, create folder |
+| 11 | Bootstrap Health | Diagnostics report |
+| 12 | DHT Reconnect | Stop DHT, restart, verify peer recovery |
 
 ---
 
@@ -471,7 +496,7 @@ npm test                    # Run all frontend tests
 npm test -- tests/load/     # Run load tests only
 ```
 
-The test suite contains 586 tests across 35 files:
+The test suite contains 585+ tests across 35 files:
 
 | Category | Files | Tests | Coverage |
 |----------|-------|-------|----------|
@@ -485,11 +510,11 @@ The test suite contains 586 tests across 35 files:
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-276 Rust tests covering: genesis validation, syncing logic, mining status, serialization, GPU error detection, DHT configuration, encryption, hosting server, and drive API.
+251+ Rust tests across 13 modules covering: wallet CHI/Wei conversion, genesis validation, syncing logic, mining status, serialization, GPU error detection, Kademlia peer filtering, encryption, hosting server, rating storage, relay share proxy, and drive API.
 
 ### Scaled Integration Tests
 
-17 bash-based test phases running against real Docker containers. See the [Docker and Scaled Testing](#docker-and-scaled-testing) section.
+12-phase stress test running against 30 Docker/k8s containers. See the [Docker and Scaled Testing](#docker-and-scaled-testing) section.
 
 ---
 
@@ -498,52 +523,75 @@ cargo test --manifest-path src-tauri/Cargo.toml
 ```
 chiral-network/
   src/                          # Frontend (Svelte 5 + TypeScript)
-    App.svelte                  # Main app shell, routing, auto-start logic
-    pages/                      # Page components (Account, Download, Mining, etc.)
+    App.svelte                  # Main app shell, routing, DHT auto-start on login
+    pages/                      # 11 page components
+      Account.svelte            # Wallet balance, transactions, reputation
+      Download.svelte           # File search, download with CHI payments
+      Drive.svelte              # Local file manager, seeding, sharing
+      Mining.svelte             # CPU/GPU mining controls
+      Network.svelte            # Peer list, DHT health, bootstrap status
+      Hosts.svelte              # Hosting marketplace, agreements
+      ChiralDrop.svelte         # Direct P2P file transfers
+      Wallet.svelte             # Wallet creation, import, backup
+      Settings.svelte           # Appearance, notifications, download dir
+      Diagnostics.svelte        # Event log, system info
     lib/
       stores.ts                 # Svelte stores (wallet, settings, peers)
-      stores/                   # Complex stores (driveStore)
-      services/                 # Service modules (walletService, gethService, etc.)
+      dhtService.ts             # Frontend DHT service (event listeners before start)
+      services/                 # 8 service modules
+        walletService.ts        # Balance caching (10s TTL), chain ID
+        gethService.ts          # Geth/mining status polling (10s interval)
+        hostingService.ts       # Host discovery, agreements, echo retry
+        driveApiService.ts      # Drive CRUD operations
+        ratingApiService.ts     # Reputation batch lookups
+        encryptionService.ts    # File encryption helpers
+        walletBackupService.ts  # Email backup
+        colorThemeService.ts    # Theme management
       components/               # Reusable UI components
-      chiralDropStore.ts        # ChiralDrop transfer history
-      encryptedHistoryService.ts # Encrypted DHT history sync
-      dhtService.ts             # Frontend DHT service wrapper
-      speedTiers.ts             # Download cost calculation
+      chiralDropStore.ts        # Wallet-specific ChiralDrop history
       toastStore.ts             # Toast notification system
-      logger.ts                 # Structured logging
+      logout.ts                 # Logout with 5s DHT timeout + loading state
 
-  src-tauri/                    # Backend (Rust)
+  src-tauri/                    # Backend (Rust, 23 source files)
     src/
-      lib.rs                    # Tauri command registration, AppState
-      dht.rs                    # DHT service (libp2p Kademlia)
-      file_transfer.rs          # Chunked file transfer protocol
-      geth.rs                   # Geth process management, mining
-      drive_api.rs              # Drive HTTP routes and file serving
+      lib.rs                    # Thin Tauri command wrappers (103 commands)
+      wallet.rs                 # All wallet logic (balance, tx, history, signing)
+      rpc_client.rs             # Connection-pooled HTTP, batch RPC, cache
+      dht.rs                    # libp2p Kademlia DHT, peer discovery, file transfer
+      geth.rs                   # Geth lifecycle, mining, batch status queries
+      geth_bootstrap.rs         # Bootstrap node health checking
+      file_transfer.rs          # Chunked protocol (256KB, SHA-256)
+      drive_api.rs              # Drive HTTP routes, preview pages
       drive_storage.rs          # Drive manifest and file storage
-      hosting_server.rs         # Gateway server (Axum)
-      rating_api.rs             # Reputation Elo calculation
-      rating_storage.rs         # Reputation persistence
-      relay_share_proxy.rs      # Relay share registry
-      wallet_backup_api.rs      # Email backup endpoint
+      hosting.rs                # Hosting types, MIME detection, persistence
+      hosting_server.rs         # Axum gateway server
+      relay_share_proxy.rs      # Reverse proxy + WebSocket tunnel
+      rating_api.rs             # Reputation HTTP endpoints
+      rating_storage.rs         # Elo computation
       encryption.rs             # AES-GCM + X25519 encryption
-      geth_bootstrap.rs         # Bootstrap node management
-      speed_tiers.rs            # Download cost logic
+      wallet_backup_api.rs      # Email backup endpoint
+      chain_rpc_api.rs          # Blockchain RPC proxy
+      speed_tiers.rs            # Download cost (0.001 CHI/MB)
+      event_sink.rs             # Frontend event emission
       bin/
-        chiral.rs               # CLI binary
-        chiral_daemon.rs        # Headless daemon binary
-        relay_server.rs         # Relay server binary
+        chiral.rs               # CLI client
+        chiral_daemon.rs        # Headless daemon (44 API routes)
+        relay_server.rs         # Production relay server
 
-  tests/                        # Frontend tests (vitest)
-    load/                       # Load and stress tests
-    scaled/                     # Scaled integration test phases (bash)
-
+  tests/                        # Frontend tests (vitest, 585+ tests)
   scripts/
+    stress-test-30-nodes.sh     # 12-phase, 35-test stress suite
+    local-test-cluster.sh       # Local process-based test cluster
+    full-feature-test.sh        # Feature validation suite
+    extended-feature-test.sh    # Extended feature tests
     scaled-test.sh              # Scaled test orchestrator
-    docker-test.sh              # Basic Docker test script
+    docker-test.sh              # Basic Docker test
 
   Dockerfile                    # Multi-stage build (daemon, relay, cli, test-node)
-  docker-compose.yml            # Docker Compose for test networks
-  docker-compose.scaled-test.yml # Compose override for scaled testing
+  Dockerfile.local              # Pre-built binary image
+  docker-compose.yml            # General test network
+  docker-compose.local-test.yml # Local isolated testing
+  docker-compose.production-net.yml # 30 nodes, host networking, production relay
 ```
 
 ---
@@ -554,7 +602,8 @@ chiral-network/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHIRAL_RPC_ENDPOINT` | `http://130.245.173.73:8545` | Blockchain RPC endpoint |
+| `CHIRAL_RPC_ENDPOINT` | `http://130.245.173.73:8545` | Remote blockchain RPC fallback |
+| `CHIRAL_GETH_SYNCMODE` | `full` | Geth sync mode (`full` or `snap`) |
 | `CHIRAL_BOOTSTRAP_NODES` | Built-in bootstrap list | Comma-separated enode URLs |
 | `CHIRAL_DAEMON_PORT` | `9419` | Daemon HTTP port |
 | `CHIRAL_AUTO_START_DHT` | `false` | Auto-start DHT on daemon boot |
@@ -586,5 +635,9 @@ User data is stored in localStorage with wallet-specific keys to prevent data le
 
 Subdirectories:
 - `chiral-drive/` -- Drive file storage
-- `geth/` -- Blockchain data and logs
+- `geth/` -- Blockchain data and logs (archive mode)
+- `agreements/` -- Hosting agreement JSON files
+- `sites/` -- Hosted site files
 - `headless/` -- Daemon PID file
+- `tx_metadata.json` -- Persisted transaction metadata
+- `hosted_sites.json` -- Hosted site registry
