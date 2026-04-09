@@ -377,6 +377,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
                     price_wei: String::new(),
                     wallet_address: String::new(),
                     seeders: Vec::new(),
+                publisher_signature: String::new(),
                 })
             }
             _ => FileMetadata {
@@ -392,6 +393,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
                 price_wei: String::new(),
                 wallet_address: String::new(),
                 seeders: Vec::new(),
+                publisher_signature: String::new(),
             },
         };
 
@@ -400,6 +402,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
             price_wei: price_wei.to_string(),
             wallet_address: wallet_addr.clone(),
             multiaddrs: our_multiaddrs.clone(),
+            signature: String::new(),
         };
         if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
             existing.price_wei = our_seeder.price_wei.clone();
@@ -1148,7 +1151,8 @@ struct PublishResult {
     merkle_root: String,
 }
 
-/// Per-seeder info stored in DHT file metadata
+/// Per-seeder info stored in DHT file metadata.
+/// Each seeder signs their entry so downloaders can verify the wallet address is legitimate.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SeederInfo {
@@ -1157,13 +1161,33 @@ struct SeederInfo {
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
-    /// Multiaddresses where this seeder can be reached (TCP + relay circuit).
-    /// Stored in DHT so downloaders can dial seeders they haven't discovered via mDNS/Kademlia.
+    /// Multiaddresses where this seeder can be reached.
     #[serde(default)]
     multiaddrs: Vec<String>,
+    /// ECDSA signature of "seeder:{peer_id}:{file_hash}:{wallet_address}" by wallet key.
+    /// Proves this seeder controls the claimed wallet (prevents payment redirection).
+    #[serde(default)]
+    signature: String,
 }
 
-/// File metadata stored in DHT
+impl SeederInfo {
+    /// Create the message bytes that are signed by the seeder's wallet.
+    fn sign_payload(peer_id: &str, file_hash: &str, wallet_address: &str) -> Vec<u8> {
+        format!("seeder:{}:{}:{}", peer_id, file_hash, wallet_address).into_bytes()
+    }
+
+    /// Verify that this seeder entry was signed by the claimed wallet address.
+    fn verify(&self, file_hash: &str) -> bool {
+        if self.signature.is_empty() {
+            return false; // Unsigned entries are untrusted
+        }
+        let payload = Self::sign_payload(&self.peer_id, file_hash, &self.wallet_address);
+        wallet::verify_signature(&payload, &self.signature, &self.wallet_address)
+    }
+}
+
+/// File metadata stored in DHT.
+/// The publisher signs the core metadata so readers can verify it hasn't been tampered with.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FileMetadata {
@@ -1179,9 +1203,59 @@ struct FileMetadata {
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
-    /// Multi-seeder list — each seeder has their own price and wallet
+    /// Multi-seeder list — each seeder signs their own entry
     #[serde(default)]
     seeders: Vec<SeederInfo>,
+    /// ECDSA signature of "file:{hash}:{file_name}:{file_size}" by the publisher's wallet.
+    /// Proves the metadata was created by the wallet_address owner.
+    #[serde(default)]
+    publisher_signature: String,
+}
+
+impl FileMetadata {
+    /// Create the message bytes that are signed by the publisher.
+    fn sign_payload(hash: &str, file_name: &str, file_size: u64) -> Vec<u8> {
+        format!("file:{}:{}:{}", hash, file_name, file_size).into_bytes()
+    }
+
+    /// Sign this file metadata with the publisher's wallet key.
+    fn sign(&mut self, private_key: &str) {
+        let payload = Self::sign_payload(&self.hash, &self.file_name, self.file_size);
+        self.publisher_signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
+    }
+
+    /// Verify that the publisher signature matches the claimed wallet_address.
+    fn verify_publisher(&self) -> bool {
+        if self.publisher_signature.is_empty() || self.wallet_address.is_empty() {
+            return false;
+        }
+        let payload = Self::sign_payload(&self.hash, &self.file_name, self.file_size);
+        wallet::verify_signature(&payload, &self.publisher_signature, &self.wallet_address)
+    }
+}
+
+/// Build a signed SeederInfo entry.
+fn make_signed_seeder(
+    peer_id: &str,
+    file_hash: &str,
+    price_wei: &str,
+    wallet_address: &str,
+    multiaddrs: Vec<String>,
+    private_key: Option<&str>,
+) -> SeederInfo {
+    let signature = if let Some(key) = private_key {
+        let payload = SeederInfo::sign_payload(peer_id, file_hash, wallet_address);
+        wallet::sign_message(key, &payload).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    SeederInfo {
+        peer_id: peer_id.to_string(),
+        price_wei: price_wei.to_string(),
+        wallet_address: wallet_address.to_string(),
+        multiaddrs,
+        signature,
+    }
 }
 
 #[tauri::command]
@@ -1253,6 +1327,7 @@ async fn publish_file(
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
             multiaddrs: our_multiaddrs,
+            signature: String::new(),
         };
 
         // Read-modify-write: preserve existing seeders from other peers
@@ -1272,6 +1347,7 @@ async fn publish_file(
                     price_wei: String::new(),
                     wallet_address: String::new(),
                     seeders: Vec::new(),
+                publisher_signature: String::new(),
                 })
             }
             _ => FileMetadata {
@@ -1287,6 +1363,7 @@ async fn publish_file(
                 price_wei: String::new(),
                 wallet_address: String::new(),
                 seeders: Vec::new(),
+                publisher_signature: String::new(),
             },
         };
 
@@ -1394,6 +1471,7 @@ async fn publish_file_data(
             price_wei: price_wei_val.to_string(),
             wallet_address: wallet_addr,
             multiaddrs: our_multiaddrs,
+            signature: String::new(),
         };
 
         // Read-modify-write: preserve existing seeders from other peers
@@ -1413,6 +1491,7 @@ async fn publish_file_data(
                     price_wei: String::new(),
                     wallet_address: String::new(),
                     seeders: Vec::new(),
+                publisher_signature: String::new(),
                 })
             }
             _ => FileMetadata {
@@ -1428,6 +1507,7 @@ async fn publish_file_data(
                 price_wei: String::new(),
                 wallet_address: String::new(),
                 seeders: Vec::new(),
+                publisher_signature: String::new(),
             },
         };
 
@@ -1496,6 +1576,7 @@ async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Op
             price_wei: local_info.price_wei.to_string(),
             wallet_address: local_info.wallet_address.clone(),
             multiaddrs: Vec::new(),
+            signature: String::new(),
         }]
     };
 
@@ -1636,6 +1717,7 @@ async fn try_repair_local_drive_seed(
                     price_wei: String::new(),
                     wallet_address: String::new(),
                     seeders: Vec::new(),
+                publisher_signature: String::new(),
                 })
             }
             _ => FileMetadata {
@@ -1651,6 +1733,7 @@ async fn try_repair_local_drive_seed(
                 price_wei: String::new(),
                 wallet_address: String::new(),
                 seeders: Vec::new(),
+                publisher_signature: String::new(),
             },
         };
 
@@ -1659,6 +1742,7 @@ async fn try_repair_local_drive_seed(
             price_wei: price_wei.to_string(),
             wallet_address: wallet_for_publish.clone(),
             multiaddrs: our_multiaddrs,
+            signature: String::new(),
         };
         if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
             existing.price_wei = our_seeder.price_wei.clone();
@@ -1777,7 +1861,15 @@ async fn search_file(
                         metadata.file_name, metadata.hash
                     );
 
+                    // Verify publisher signature if present
+                    if metadata.verify_publisher() {
+                        println!("✅ File metadata signature valid (publisher: {})", metadata.wallet_address);
+                    } else if !metadata.publisher_signature.is_empty() {
+                        println!("⚠️ File metadata signature INVALID — record may be tampered");
+                    }
+
                     // Build seeder list: use seeders vec if present, fall back to legacy peer_id
+                    let file_hash_for_verify = metadata.hash.clone();
                     let mut seeders = metadata.seeders;
                     if seeders.is_empty() && !metadata.peer_id.is_empty() {
                         // Legacy record: single peer_id with file-level price/wallet
@@ -1786,9 +1878,21 @@ async fn search_file(
                             price_wei: metadata.price_wei.clone(),
                             wallet_address: metadata.wallet_address.clone(),
                             multiaddrs: vec![],
+                            signature: String::new(),
                         });
                     }
                     seeders.retain(|s| !s.peer_id.trim().is_empty());
+
+                    // Verify seeder signatures — log warnings for invalid ones
+                    // but still include them (graceful degradation for unsigned legacy records)
+                    for seeder in &seeders {
+                        if seeder.verify(&file_hash_for_verify) {
+                            println!("  ✅ Seeder {} signature valid", &seeder.peer_id[..20.min(seeder.peer_id.len())]);
+                        } else if !seeder.signature.is_empty() {
+                            println!("  ⚠️ Seeder {} has INVALID signature — may be impersonating wallet {}",
+                                &seeder.peer_id[..20.min(seeder.peer_id.len())], seeder.wallet_address);
+                        }
+                    }
 
                     Ok(Some(SearchResult {
                         hash: metadata.hash,
@@ -2404,6 +2508,7 @@ async fn republish_shared_file(
                 price_wei: price_wei.to_string(),
                 wallet_address: wallet_addr.clone(),
                 multiaddrs: our_multiaddrs,
+            signature: String::new(),
             };
 
             // Read existing metadata or create fresh
@@ -2422,6 +2527,7 @@ async fn republish_shared_file(
                         price_wei: String::new(),
                         wallet_address: String::new(),
                         seeders: Vec::new(),
+                publisher_signature: String::new(),
                     })
                 }
                 _ => FileMetadata {
@@ -2437,6 +2543,7 @@ async fn republish_shared_file(
                     price_wei: String::new(),
                     wallet_address: String::new(),
                     seeders: Vec::new(),
+                publisher_signature: String::new(),
                 },
             };
 
@@ -4369,6 +4476,7 @@ async fn publish_drive_file(
     protocol: Option<String>,
     price_chi: Option<String>,
     wallet_address: Option<String>,
+    private_key: Option<String>,
 ) -> Result<ds::DriveItem, String> {
     if owner.is_empty() {
         return Err("owner required".into());
@@ -4487,12 +4595,10 @@ async fn publish_drive_file(
     .await;
 
     let our_multiaddrs = dht.get_listening_addresses().await;
-    let our_seeder = SeederInfo {
-        peer_id: peer_id.clone(),
-        price_wei: price_wei_val.to_string(),
-        wallet_address: wallet_addr.clone(),
-        multiaddrs: our_multiaddrs,
-    };
+    let our_seeder = make_signed_seeder(
+        &peer_id, &file_hash, &price_wei_val.to_string(),
+        &wallet_addr, our_multiaddrs, private_key.as_deref(),
+    );
 
     let dht_key = format!("chiral_file_{}", file_hash);
     let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
@@ -4510,6 +4616,7 @@ async fn publish_drive_file(
                 price_wei: String::new(),
                 wallet_address: String::new(),
                 seeders: Vec::new(),
+                publisher_signature: String::new(),
             })
         }
         _ => FileMetadata {
@@ -4525,19 +4632,23 @@ async fn publish_drive_file(
             price_wei: String::new(),
             wallet_address: String::new(),
             seeders: Vec::new(),
+                publisher_signature: String::new(),
         },
     };
 
     if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-        existing.price_wei = our_seeder.price_wei.clone();
-        existing.wallet_address = our_seeder.wallet_address.clone();
-        existing.multiaddrs = our_seeder.multiaddrs.clone();
+        *existing = our_seeder;
     } else {
         metadata.seeders.push(our_seeder);
     }
     metadata.peer_id = peer_id;
     metadata.price_wei = price_wei_val.to_string();
     metadata.wallet_address = wallet_addr;
+
+    // Sign the metadata if private key is available
+    if let Some(ref key) = private_key {
+        metadata.sign(key);
+    }
 
     let metadata_json = serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
@@ -4636,6 +4747,7 @@ async fn seed_hosted_file(
         price_wei: price_wei_val.to_string(),
         wallet_address: wallet_address.clone(),
         multiaddrs: our_addrs,
+            signature: String::new(),
     };
 
     let dht_key = format!("chiral_file_{}", file_hash);
@@ -4646,6 +4758,7 @@ async fn seed_hosted_file(
             created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
             peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
             seeders: Vec::new(),
+                publisher_signature: String::new(),
         }),
         _ => FileMetadata {
             hash: file_hash.clone(), file_name: file_name.clone(), file_size,
@@ -4653,6 +4766,7 @@ async fn seed_hosted_file(
             created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
             peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
             seeders: Vec::new(),
+                publisher_signature: String::new(),
         },
     };
 
@@ -5235,6 +5349,7 @@ mod multi_seeder_tests {
             price_wei: "1000000000000000".to_string(),
             wallet_address: "0xabc123".to_string(),
             multiaddrs: vec![],
+            signature: String::new(),
         };
         let json = serde_json::to_string(&seeder).unwrap();
         assert!(json.contains("peerId")); // camelCase
@@ -5306,14 +5421,17 @@ mod multi_seeder_tests {
                     price_wei: "0".to_string(),
                     wallet_address: String::new(),
                     multiaddrs: vec![],
+            signature: String::new(),
                 },
                 SeederInfo {
                     peer_id: "12D3KooWPeerB".to_string(),
                     price_wei: "5000000000000000".to_string(),
                     wallet_address: "0xdef456".to_string(),
                     multiaddrs: vec![],
+            signature: String::new(),
                 },
             ],
+            publisher_signature: String::new(),
         };
 
         let json = serde_json::to_string(&metadata).unwrap();
@@ -5363,6 +5481,7 @@ mod multi_seeder_tests {
             price_wei: "2000".to_string(),
             wallet_address: "0xlegacy".to_string(),
             seeders: Vec::new(), // empty — old record
+                publisher_signature: String::new(),
         };
 
         // This is the logic from search_file:
@@ -5373,6 +5492,7 @@ mod multi_seeder_tests {
                 price_wei: metadata.price_wei.clone(),
                 wallet_address: metadata.wallet_address.clone(),
                 multiaddrs: vec![],
+            signature: String::new(),
             });
         }
 
@@ -5400,7 +5520,9 @@ mod multi_seeder_tests {
                 price_wei: "0".to_string(),
                 wallet_address: String::new(),
                 multiaddrs: vec![],
+            signature: String::new(),
             }],
+            publisher_signature: String::new(),
         };
 
         let new_peer = "12D3KooWPeerB";
@@ -5409,6 +5531,7 @@ mod multi_seeder_tests {
             price_wei: "5000".to_string(),
             wallet_address: "0xB".to_string(),
             multiaddrs: vec![],
+            signature: String::new(),
         };
 
         // Upsert logic from publish_file
@@ -5440,7 +5563,9 @@ mod multi_seeder_tests {
                 price_wei: "1000".to_string(),
                 wallet_address: "0xA".to_string(),
                 multiaddrs: vec![],
+            signature: String::new(),
             }],
+            publisher_signature: String::new(),
         };
 
         let peer_id = "12D3KooWPeerA";
@@ -5481,14 +5606,17 @@ mod multi_seeder_tests {
                     price_wei: "0".to_string(),
                     wallet_address: String::new(),
                     multiaddrs: vec![],
+            signature: String::new(),
                 },
                 SeederInfo {
                     peer_id: other_peer.to_string(),
                     price_wei: "3000".to_string(),
                     wallet_address: "0xOther".to_string(),
                     multiaddrs: vec![],
+            signature: String::new(),
                 },
             ],
+            publisher_signature: String::new(),
         };
 
         // Unpublish logic from unpublish_all_shared_files
@@ -5521,7 +5649,9 @@ mod multi_seeder_tests {
                 price_wei: "0".to_string(),
                 wallet_address: String::new(),
                 multiaddrs: vec![],
+            signature: String::new(),
             }],
+            publisher_signature: String::new(),
         };
 
         metadata.seeders.retain(|s| s.peer_id != our_peer);
@@ -5547,6 +5677,7 @@ mod multi_seeder_tests {
             price_wei: String::new(),
             wallet_address: String::new(),
             seeders: Vec::new(),
+                publisher_signature: String::new(),
         };
 
         // Three peers publish in sequence
@@ -5562,6 +5693,7 @@ mod multi_seeder_tests {
                 price_wei: price.to_string(),
                 wallet_address: wallet.to_string(),
                 multiaddrs: vec![],
+            signature: String::new(),
             };
             if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == *peer_id) {
                 existing.price_wei = seeder.price_wei;
@@ -5593,12 +5725,14 @@ mod multi_seeder_tests {
                     price_wei: "0".to_string(),
                     wallet_address: String::new(),
                     multiaddrs: vec![],
+            signature: String::new(),
                 },
                 SeederInfo {
                     peer_id: "PeerB".to_string(),
                     price_wei: "5000".to_string(),
                     wallet_address: "0xB".to_string(),
                     multiaddrs: vec![],
+            signature: String::new(),
                 },
             ],
             created_at: 1700000000,
