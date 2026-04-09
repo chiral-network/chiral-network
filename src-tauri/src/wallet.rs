@@ -534,12 +534,132 @@ fn rlp_append_bytes_as_uint(stream: &mut RlpStream, bytes: &[u8]) {
 }
 
 // ============================================================================
+// ECDSA signing & verification (for signed DHT records)
+// ============================================================================
+
+/// Sign arbitrary data with a wallet private key.
+/// Returns a hex-encoded recoverable signature (65 bytes: r[32] + s[32] + v[1]).
+pub fn sign_message(private_key_hex: &str, data: &[u8]) -> Result<String, String> {
+    let pk_hex = private_key_hex.trim_start_matches("0x");
+    let pk_bytes = hex::decode(pk_hex).map_err(|e| format!("Invalid key: {}", e))?;
+    let secp = Secp256k1::new();
+    let secret = SecretKey::from_slice(&pk_bytes).map_err(|e| format!("Invalid key: {}", e))?;
+
+    // Ethereum personal_sign style: keccak256("\x19Ethereum Signed Message:\n" + len + data)
+    let prefix = format!("\x19Ethereum Signed Message:\n{}", data.len());
+    let mut prefixed = prefix.as_bytes().to_vec();
+    prefixed.extend_from_slice(data);
+    let hash = keccak256(&prefixed);
+
+    let message = Message::from_digest_slice(&hash).map_err(|e| format!("Hash error: {}", e))?;
+    let (recovery_id, signature) = secp.sign_ecdsa_recoverable(&message, &secret).serialize_compact();
+
+    let mut sig_bytes = [0u8; 65];
+    sig_bytes[..64].copy_from_slice(&signature);
+    sig_bytes[64] = recovery_id.to_i32() as u8 + 27; // Ethereum v value
+    Ok(hex::encode(sig_bytes))
+}
+
+/// Verify a signature and recover the signer's Ethereum address.
+/// Returns the lowercase 0x-prefixed address if valid, or an error.
+pub fn recover_signer(data: &[u8], signature_hex: &str) -> Result<String, String> {
+    let sig_bytes = hex::decode(signature_hex.trim_start_matches("0x"))
+        .map_err(|e| format!("Invalid signature hex: {}", e))?;
+    if sig_bytes.len() != 65 {
+        return Err(format!("Signature must be 65 bytes, got {}", sig_bytes.len()));
+    }
+
+    let prefix = format!("\x19Ethereum Signed Message:\n{}", data.len());
+    let mut prefixed = prefix.as_bytes().to_vec();
+    prefixed.extend_from_slice(data);
+    let hash = keccak256(&prefixed);
+
+    let recovery_id = secp256k1::ecdsa::RecoveryId::from_i32((sig_bytes[64] as i32) - 27)
+        .map_err(|_| "Invalid recovery ID")?;
+    let recoverable = secp256k1::ecdsa::RecoverableSignature::from_compact(&sig_bytes[..64], recovery_id)
+        .map_err(|e| format!("Invalid signature: {}", e))?;
+
+    let secp = Secp256k1::new();
+    let message = Message::from_digest_slice(&hash).map_err(|e| format!("Hash error: {}", e))?;
+    let pubkey = secp.recover_ecdsa(&message, &recoverable)
+        .map_err(|e| format!("Recovery failed: {}", e))?;
+
+    // Derive Ethereum address: keccak256(uncompressed_pubkey[1..65])[12..32]
+    let pubkey_bytes = pubkey.serialize_uncompressed();
+    let addr_hash = keccak256(&pubkey_bytes[1..]);
+    let address = format!("0x{}", hex::encode(&addr_hash[12..]));
+    Ok(address.to_lowercase())
+}
+
+/// Verify that a signature was produced by the claimed wallet address.
+pub fn verify_signature(data: &[u8], signature_hex: &str, expected_address: &str) -> bool {
+    match recover_signer(data, signature_hex) {
+        Ok(recovered) => recovered == expected_address.to_lowercase(),
+        Err(_) => false,
+    }
+}
+
+// ============================================================================
+// On-chain payment verification
+// ============================================================================
+
+/// Verify a payment transaction on-chain.
+/// Checks that the tx exists, is confirmed, sent the correct amount, and went to the correct recipient.
+pub async fn verify_payment(
+    tx_hash: &str,
+    expected_from: &str,
+    expected_to: &str,
+    expected_amount_wei: u128,
+) -> Result<bool, String> {
+    let endpoint = crate::geth::effective_rpc_endpoint();
+
+    let receipt = rpc_client::call(
+        &endpoint,
+        "eth_getTransactionReceipt",
+        serde_json::json!([tx_hash]),
+    ).await?;
+
+    if receipt.is_null() {
+        return Ok(false); // Not yet mined
+    }
+
+    // Check status (0x1 = success)
+    let status = receipt.get("status").and_then(|s| s.as_str()).unwrap_or("0x0");
+    if status != "0x1" {
+        return Ok(false); // Transaction failed
+    }
+
+    // Get the full transaction to check from/to/value
+    let tx = rpc_client::call(
+        &endpoint,
+        "eth_getTransactionByHash",
+        serde_json::json!([tx_hash]),
+    ).await?;
+
+    if tx.is_null() {
+        return Ok(false);
+    }
+
+    let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
+    let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
+    let tx_value = tx.get("value").and_then(|v| v.as_str()).map(rpc_client::hex_to_u128).unwrap_or(0);
+
+    // Skip from-check if expected_from is empty (caller doesn't know the sender)
+    let from_match = expected_from.is_empty() || tx_from == expected_from.to_lowercase();
+    let to_match = tx_to == expected_to.to_lowercase();
+    // Allow slight overpayment (gas rounding) but not underpayment
+    let amount_match = tx_value >= expected_amount_wei;
+
+    Ok(from_match && to_match && amount_match)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
-    use super::parse_chi_to_wei;
+    use super::*;
 
     #[test] fn test_whole() { assert_eq!(parse_chi_to_wei("1").unwrap(), 1_000_000_000_000_000_000); }
     #[test] fn test_zero() { assert_eq!(parse_chi_to_wei("0").unwrap(), 0); }
@@ -551,4 +671,52 @@ mod tests {
     #[test] fn test_multiple_dots() { assert!(parse_chi_to_wei("1.2.3").is_err()); }
     #[test] fn test_empty() { assert_eq!(parse_chi_to_wei("").unwrap(), 0); }
     #[test] fn test_whitespace() { assert_eq!(parse_chi_to_wei(" 1.5 ").unwrap(), 1_500_000_000_000_000_000); }
+
+    // Signing tests
+    const TEST_PRIVATE_KEY: &str = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn test_sign_and_recover() {
+        let data = b"hello chiral network";
+        let sig = sign_message(TEST_PRIVATE_KEY, data).unwrap();
+        assert_eq!(sig.len(), 130); // 65 bytes = 130 hex chars
+
+        let recovered = recover_signer(data, &sig).unwrap();
+        assert!(recovered.starts_with("0x"));
+        assert_eq!(recovered.len(), 42);
+    }
+
+    #[test]
+    fn test_verify_correct_signer() {
+        let data = b"file metadata payload";
+        let sig = sign_message(TEST_PRIVATE_KEY, data).unwrap();
+        let signer = recover_signer(data, &sig).unwrap();
+
+        assert!(verify_signature(data, &sig, &signer));
+    }
+
+    #[test]
+    fn test_verify_wrong_signer() {
+        let data = b"file metadata payload";
+        let sig = sign_message(TEST_PRIVATE_KEY, data).unwrap();
+
+        assert!(!verify_signature(data, &sig, "0x0000000000000000000000000000000000000000"));
+    }
+
+    #[test]
+    fn test_verify_tampered_data() {
+        let data = b"original data";
+        let sig = sign_message(TEST_PRIVATE_KEY, data).unwrap();
+        let signer = recover_signer(data, &sig).unwrap();
+
+        // Tampered data should not verify
+        assert!(!verify_signature(b"tampered data", &sig, &signer));
+    }
+
+    #[test]
+    fn test_sign_empty_data() {
+        let sig = sign_message(TEST_PRIVATE_KEY, b"").unwrap();
+        let recovered = recover_signer(b"", &sig).unwrap();
+        assert!(recovered.starts_with("0x"));
+    }
 }

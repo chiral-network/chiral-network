@@ -942,100 +942,17 @@ async fn verify_payment_on_chain(
     expected_recipient: &str,
     expected_min_wei: u128,
 ) -> Result<bool, String> {
-    let rpc_url = crate::geth::rpc_endpoint();
-    let client = reqwest::Client::new();
-
-    // Get transaction by hash
-    let tx_resp = client
-        .post(&rpc_url)
-        .json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "eth_getTransactionByHash",
-            "params": [tx_hash],
-            "id": 1
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("RPC request failed: {}", e))?;
-
-    let tx_json: serde_json::Value = tx_resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
-
-    let tx = tx_json.get("result").ok_or("Transaction not found")?;
-    if tx.is_null() {
-        return Err("Transaction not found on-chain".to_string());
-    }
-
-    // Check recipient
-    let to = tx
-        .get("to")
-        .and_then(|v| v.as_str())
-        .ok_or("Transaction has no recipient")?;
-
-    if to.to_lowercase() != expected_recipient.to_lowercase() {
-        return Ok(false);
-    }
-
-    // Check value
-    let value_hex = tx
-        .get("value")
-        .and_then(|v| v.as_str())
-        .ok_or("Transaction has no value")?;
-    let value_hex = value_hex.strip_prefix("0x").unwrap_or(value_hex);
-    let value =
-        u128::from_str_radix(value_hex, 16).map_err(|e| format!("Failed to parse value: {}", e))?;
-
-    if value < expected_min_wei {
-        return Ok(false);
-    }
-
-    // Verify transaction receipt (confirmed). Keep this bounded so download setup
-    // doesn't stall for long periods waiting on slow blocks.
-    let max_retries = 20;
-    let retry_delay = std::time::Duration::from_millis(500);
-    for attempt in 0..max_retries {
-        let receipt_resp = client
-            .post(&rpc_url)
-            .json(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "eth_getTransactionReceipt",
-                "params": [tx_hash],
-                "id": 2
-            }))
-            .send()
-            .await
-            .map_err(|e| format!("RPC receipt request failed: {}", e))?;
-
-        let receipt_json: serde_json::Value = receipt_resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse receipt: {}", e))?;
-
-        let receipt = receipt_json.get("result");
-        if receipt.is_some() && !receipt.unwrap().is_null() {
-            let status = receipt
-                .unwrap()
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("0x0");
-            return Ok(status == "0x1");
-        }
-
-        if attempt < max_retries - 1 {
-            println!(
-                "⏳ Payment tx {} not confirmed yet, retrying ({}/{})",
-                tx_hash,
-                attempt + 1,
-                max_retries
-            );
-            tokio::time::sleep(retry_delay).await;
-        }
-    }
-
-    Err("Transaction not confirmed after 10 seconds".to_string())
+    // Use the wallet module's verify_payment which uses the shared RPC client
+    // and checks both the transaction details and the receipt status
+    crate::wallet::verify_payment(
+        tx_hash,
+        "", // we don't know the sender, skip from-check
+        expected_recipient,
+        expected_min_wei,
+    ).await
 }
+
+// Legacy verify function kept for reference but replaced by wallet::verify_payment above
 
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
     let local_key = load_or_generate_keypair();
