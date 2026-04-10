@@ -173,6 +173,16 @@ body {
   color: var(--text-primary);
 }
 
+.nav-github {
+  display: flex;
+  align-items: center;
+}
+
+.nav-github svg {
+  width: 22px;
+  height: 22px;
+}
+
 /* ============================================
    Hero
    ============================================ */
