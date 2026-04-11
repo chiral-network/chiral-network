@@ -2,12 +2,12 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use base64::Engine;
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -1072,6 +1072,269 @@ async fn bootstrap_health(
     Json(json!(report)).into_response()
 }
 
+// ============================================================================
+// CDN endpoints — always-on file hosting service
+// ============================================================================
+
+/// CDN storage directory.
+fn cdn_storage_dir() -> PathBuf {
+    default_data_dir().join("cdn")
+}
+
+/// CDN metadata file (tracks all hosted files and their owners).
+fn cdn_metadata_path() -> PathBuf {
+    default_data_dir().join("cdn_registry.json")
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CdnFileEntry {
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    owner_wallet: String,
+    price_chi_per_month: String,
+    payment_tx: String,
+    uploaded_at: u64,
+    expires_at: u64,
+}
+
+fn load_cdn_registry() -> Vec<CdnFileEntry> {
+    let path = cdn_metadata_path();
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
+fn save_cdn_registry(entries: &[CdnFileEntry]) {
+    let path = cdn_metadata_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(entries) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+
+/// POST /api/cdn/upload — Upload a file to the CDN.
+/// Body: { "fileName", "fileData" (base64), "ownerWallet", "paymentTx", "durationDays" }
+async fn cdn_upload(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let file_name = body["fileName"].as_str().unwrap_or("").to_string();
+    let file_data_b64 = body["fileData"].as_str().unwrap_or("");
+    let owner_wallet = body["ownerWallet"].as_str().unwrap_or("").to_string();
+    let payment_tx = body["paymentTx"].as_str().unwrap_or("").to_string();
+    let duration_days = body["durationDays"].as_u64().unwrap_or(30);
+
+    if file_name.is_empty() || file_data_b64.is_empty() || owner_wallet.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "fileName, fileData (base64), ownerWallet required");
+    }
+
+    // Decode file data
+    use base64::Engine;
+    let file_data = match base64::engine::general_purpose::STANDARD.decode(file_data_b64) {
+        Ok(d) => d,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Invalid base64: {}", e)),
+    };
+
+    if file_data.len() > 500 * 1024 * 1024 {
+        return json_error(StatusCode::BAD_REQUEST, "File exceeds 500MB limit");
+    }
+
+    // Verify payment on-chain if payment_tx is provided
+    if !payment_tx.is_empty() {
+        let cdn_wallet = state.wallet.lock().await;
+        let cdn_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
+        drop(cdn_wallet);
+
+        if !cdn_address.is_empty() {
+            match chiral_network::wallet::verify_payment(&payment_tx, &owner_wallet, &cdn_address, 0).await {
+                Ok(true) => {} // Payment verified
+                Ok(false) => return json_error(StatusCode::PAYMENT_REQUIRED, "Payment not confirmed or invalid"),
+                Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Payment verification failed: {}", e)),
+            }
+        }
+    }
+
+    // Compute SHA-256 hash
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(&file_data);
+    let file_hash = hex::encode(hasher.finalize());
+
+    // Store file on disk
+    let storage_dir = cdn_storage_dir();
+    let _ = std::fs::create_dir_all(&storage_dir);
+    let file_path = storage_dir.join(&file_hash);
+    if let Err(e) = std::fs::write(&file_path, &file_data) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to store file: {}", e));
+    }
+
+    let file_size = file_data.len() as u64;
+    let now = now_secs();
+    let expires = now + duration_days * 86400;
+
+    // Register as seeder in DHT
+    let dht = match state.dht_service().await {
+        Some(d) => d,
+        None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
+    };
+
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    dht.register_shared_file(
+        file_hash.clone(),
+        file_path.to_string_lossy().to_string(),
+        file_name.clone(),
+        file_size,
+        0, // CDN serves for free — the owner paid for hosting
+        owner_wallet.clone(),
+    ).await;
+
+    // Publish file metadata to DHT
+    let our_addrs = dht.get_listening_addresses().await;
+    let metadata = json!({
+        "hash": file_hash,
+        "fileName": file_name,
+        "fileSize": file_size,
+        "protocol": "WebRTC",
+        "createdAt": now,
+        "peerId": peer_id,
+        "priceWei": "0",
+        "walletAddress": owner_wallet,
+        "seeders": [{
+            "peerId": peer_id,
+            "priceWei": "0",
+            "walletAddress": owner_wallet,
+            "multiaddrs": our_addrs,
+            "signature": ""
+        }],
+        "publisherSignature": ""
+    });
+
+    let dht_key = format!("chiral_file_{}", file_hash);
+    if let Err(e) = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("DHT publish failed: {}", e));
+    }
+
+    // Save to CDN registry
+    let mut registry = load_cdn_registry();
+    registry.retain(|e| e.file_hash != file_hash);
+    registry.push(CdnFileEntry {
+        file_hash: file_hash.clone(),
+        file_name: file_name.clone(),
+        file_size,
+        owner_wallet: owner_wallet.clone(),
+        price_chi_per_month: "0".to_string(),
+        payment_tx: payment_tx.clone(),
+        uploaded_at: now,
+        expires_at: expires,
+    });
+    save_cdn_registry(&registry);
+
+    println!("[CDN] Uploaded: {} ({} bytes, hash: {}, owner: {}, expires: {})",
+        file_name, file_size, file_hash, owner_wallet, expires);
+
+    Json(json!({
+        "status": "uploaded",
+        "fileHash": file_hash,
+        "fileName": file_name,
+        "fileSize": file_size,
+        "expiresAt": expires,
+        "cdnPeerId": peer_id,
+    })).into_response()
+}
+
+/// GET /api/cdn/files?owner=0xABC — List CDN files, optionally filtered by owner.
+async fn cdn_list(
+    State(_state): State<Arc<HeadlessRuntimeState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
+    let now = now_secs();
+    let registry = load_cdn_registry();
+
+    let files: Vec<&CdnFileEntry> = registry.iter()
+        .filter(|e| {
+            let not_expired = e.expires_at > now;
+            let owner_match = owner_filter.is_empty() || e.owner_wallet.to_lowercase() == owner_filter;
+            not_expired && owner_match
+        })
+        .collect();
+
+    Json(json!({
+        "files": files,
+        "totalFiles": files.len(),
+        "storageUsedBytes": files.iter().map(|f| f.file_size).sum::<u64>(),
+    })).into_response()
+}
+
+/// DELETE /api/cdn/files/:fileHash?owner=0xABC — Remove a file from CDN.
+async fn cdn_delete(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    axum::extract::Path(file_hash): axum::extract::Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let owner = params.get("owner").cloned().unwrap_or_default().to_lowercase();
+    if owner.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "owner query param required");
+    }
+
+    let mut registry = load_cdn_registry();
+    let before = registry.len();
+    registry.retain(|e| !(e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner));
+
+    if registry.len() == before {
+        return json_error(StatusCode::NOT_FOUND, "File not found or not owned by this wallet");
+    }
+
+    save_cdn_registry(&registry);
+
+    // Remove from disk
+    let file_path = cdn_storage_dir().join(&file_hash);
+    let _ = std::fs::remove_file(&file_path);
+
+    // Unregister from DHT
+    if let Some(dht) = state.dht_service().await {
+        dht.unregister_shared_file(&file_hash).await;
+        // Remove from DHT metadata
+        let dht_key = format!("chiral_file_{}", file_hash);
+        let _ = dht.put_dht_value(dht_key, "{}".to_string()).await;
+    }
+
+    println!("[CDN] Deleted: {} (owner: {})", file_hash, owner);
+    Json(json!({"status": "deleted", "fileHash": file_hash})).into_response()
+}
+
+/// GET /api/cdn/status — CDN service status.
+async fn cdn_status(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+) -> Response {
+    let registry = load_cdn_registry();
+    let now = now_secs();
+    let active: Vec<&CdnFileEntry> = registry.iter().filter(|e| e.expires_at > now).collect();
+    let peer_id = if let Some(dht) = state.dht_service().await {
+        dht.get_peer_id().await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let cdn_wallet = state.wallet.lock().await;
+    let wallet_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
+
+    Json(json!({
+        "status": "online",
+        "peerId": peer_id,
+        "walletAddress": wallet_address,
+        "activeFiles": active.len(),
+        "totalStorageBytes": active.iter().map(|f| f.file_size).sum::<u64>(),
+        "uniqueOwners": active.iter().map(|f| f.owner_wallet.to_lowercase()).collect::<std::collections::HashSet<_>>().len(),
+    })).into_response()
+}
+
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
         // Health/readiness probes
@@ -1139,6 +1402,11 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         // Hosting
         .route("/api/headless/hosting/publish-ad", post(hosting_publish_ad))
         .route("/api/headless/hosting/registry", get(hosting_get_registry))
+        // CDN — always-on file hosting service
+        .route("/api/cdn/upload", post(cdn_upload))
+        .route("/api/cdn/files", get(cdn_list))
+        .route("/api/cdn/files/:file_hash", delete(cdn_delete))
+        .route("/api/cdn/status", get(cdn_status))
         // Diagnostics
         .route("/api/headless/bootstrap-health", get(bootstrap_health))
         .with_state(state)
