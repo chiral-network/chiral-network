@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Server, Users, Shield, AlertCircle, FileText } from 'lucide-svelte';
+  import { Server, Users, Shield, AlertCircle, FileText, Cloud, Globe, Loader2, RefreshCw, Upload, Trash2, Copy, Check } from 'lucide-svelte';
   import { settings, walletAccount, networkConnected } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
@@ -45,7 +45,7 @@
   // ---------------------------------------------------------------------------
   // Tab state
   // ---------------------------------------------------------------------------
-  type Tab = 'sites' | 'marketplace' | 'agreements';
+  type Tab = 'sites' | 'cdn' | 'marketplace' | 'agreements';
   let activeTab = $state<Tab>('sites');
 
   // ---------------------------------------------------------------------------
@@ -91,6 +91,124 @@
   let proposalDriveFiles = $state<{ id: string; name: string; size: number }[]>([]);
   let showProposalDrivePicker = $state(false);
   let publishingDriveFile = $state<string | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // CDN state
+  // ---------------------------------------------------------------------------
+  const CDN_SERVERS = [
+    { url: 'http://130.245.173.73:9420', name: 'CDN Primary (US East)', region: 'New York' },
+  ];
+
+  interface CdnServerInfo {
+    url: string;
+    name: string;
+    region: string;
+    status: string;
+    peerId: string;
+    walletAddress: string;
+    activeFiles: number;
+    totalStorageBytes: number;
+    uniqueOwners: number;
+    myFiles: CdnFile[];
+  }
+
+  interface CdnFile {
+    fileHash: string;
+    fileName: string;
+    fileSize: number;
+    ownerWallet: string;
+    uploadedAt: number;
+    expiresAt: number;
+  }
+
+  let cdnServers = $state<CdnServerInfo[]>([]);
+  let loadingCdn = $state(false);
+  let copiedCdnHash = $state<string | null>(null);
+
+  async function loadCdnServers() {
+    loadingCdn = true;
+    const results: CdnServerInfo[] = [];
+
+    const myWallet = $walletAccount?.address || '';
+
+    for (const server of CDN_SERVERS) {
+      try {
+        const statusResp = await fetch(`${server.url}/api/cdn/status`);
+        const status = await statusResp.json();
+
+        let myFiles: CdnFile[] = [];
+        if (myWallet) {
+          const filesResp = await fetch(`${server.url}/api/cdn/files?owner=${myWallet}`);
+          const filesData = await filesResp.json();
+          myFiles = filesData.files || [];
+        }
+
+        results.push({
+          url: server.url,
+          name: server.name,
+          region: server.region,
+          status: status.status || 'unknown',
+          peerId: status.peerId || '',
+          walletAddress: status.walletAddress || '',
+          activeFiles: status.activeFiles || 0,
+          totalStorageBytes: status.totalStorageBytes || 0,
+          uniqueOwners: status.uniqueOwners || 0,
+          myFiles,
+        });
+      } catch {
+        results.push({
+          url: server.url,
+          name: server.name,
+          region: server.region,
+          status: 'offline',
+          peerId: '',
+          walletAddress: '',
+          activeFiles: 0,
+          totalStorageBytes: 0,
+          uniqueOwners: 0,
+          myFiles: [],
+        });
+      }
+    }
+
+    cdnServers = results;
+    loadingCdn = false;
+  }
+
+  async function deleteCdnFile(serverUrl: string, fileHash: string) {
+    const myWallet = $walletAccount?.address || '';
+    if (!myWallet) { toasts.show('No wallet connected', 'error'); return; }
+
+    try {
+      const resp = await fetch(`${serverUrl}/api/cdn/files/${fileHash}?owner=${myWallet}`, { method: 'DELETE' });
+      if (resp.ok) {
+        toasts.show('File removed from CDN', 'success');
+        await loadCdnServers();
+      } else {
+        const text = await resp.text();
+        toasts.show(`Failed to delete: ${text}`, 'error');
+      }
+    } catch (err) {
+      toasts.show(`Delete failed: ${err}`, 'error');
+    }
+  }
+
+  function copyCdnHash(hash: string) {
+    navigator.clipboard.writeText(hash);
+    copiedCdnHash = hash;
+    setTimeout(() => copiedCdnHash = null, 2000);
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+
+  function formatCdnDate(ts: number): string {
+    return new Date(ts * 1000).toLocaleDateString();
+  }
 
   // Auto-accept state
   let autoAcceptInFlight = $state<Record<string, boolean>>({});
@@ -684,6 +802,7 @@
     // Load marketplace data
     await loadAgreements();
     loadHosts();
+    loadCdnServers();
 
     if (isTauri) {
       // Drag-drop for site creation
@@ -900,6 +1019,18 @@
       <span class="hidden sm:inline">My Sites</span>
     </button>
     <button
+      onclick={() => { activeTab = 'cdn'; loadCdnServers(); }}
+      role="tab"
+      aria-selected={activeTab === 'cdn'}
+      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
+        {activeTab === 'cdn'
+          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+    >
+      <Cloud class="w-4 h-4" />
+      <span class="hidden sm:inline">CDN Servers</span>
+    </button>
+    <button
       onclick={() => activeTab = 'marketplace'}
       role="tab"
       aria-selected={activeTab === 'marketplace'}
@@ -909,7 +1040,7 @@
           : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
     >
       <Users class="w-4 h-4" />
-      <span class="hidden sm:inline">Marketplace</span>
+      <span class="hidden sm:inline">Peer Hosts</span>
     </button>
     <button
       onclick={() => activeTab = 'agreements'}
@@ -955,6 +1086,121 @@
       onOpenSite={openSite}
       onDeleteSite={deleteSite}
     />
+  {:else if activeTab === 'cdn'}
+    <!-- CDN Servers -->
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-semibold dark:text-white">CDN Servers</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Always-on servers that host your files so they stay available when you go offline</p>
+        </div>
+        <button
+          onclick={() => loadCdnServers()}
+          disabled={loadingCdn}
+          class="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300"
+        >
+          {#if loadingCdn}
+            <Loader2 class="w-3.5 h-3.5 animate-spin" />
+          {:else}
+            <RefreshCw class="w-3.5 h-3.5" />
+          {/if}
+          Refresh
+        </button>
+      </div>
+
+      {#each cdnServers as cdn}
+        <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <!-- Server header -->
+          <div class="p-5 border-b border-gray-100 dark:border-gray-700">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="p-2.5 rounded-xl {cdn.status === 'online' ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-red-100 dark:bg-red-900/30'}">
+                  <Globe class="w-5 h-5 {cdn.status === 'online' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}" />
+                </div>
+                <div>
+                  <h3 class="font-semibold dark:text-white">{cdn.name}</h3>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">{cdn.region}</p>
+                </div>
+              </div>
+              <span class="px-2.5 py-1 text-xs font-medium rounded-full {cdn.status === 'online' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}">
+                {cdn.status === 'online' ? 'Online' : 'Offline'}
+              </span>
+            </div>
+
+            {#if cdn.status === 'online'}
+              <div class="mt-3 grid grid-cols-3 gap-3">
+                <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5 text-center">
+                  <p class="text-lg font-bold dark:text-white">{cdn.activeFiles}</p>
+                  <p class="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Files Hosted</p>
+                </div>
+                <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5 text-center">
+                  <p class="text-lg font-bold dark:text-white">{formatBytes(cdn.totalStorageBytes)}</p>
+                  <p class="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Storage Used</p>
+                </div>
+                <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5 text-center">
+                  <p class="text-lg font-bold dark:text-white">{cdn.uniqueOwners}</p>
+                  <p class="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Users</p>
+                </div>
+              </div>
+            {/if}
+          </div>
+
+          <!-- My files on this CDN -->
+          {#if cdn.myFiles.length > 0}
+            <div class="p-5">
+              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Your Files on This CDN</h4>
+              <div class="space-y-2">
+                {#each cdn.myFiles as file}
+                  <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+                    <div class="flex-1 min-w-0">
+                      <p class="text-sm font-medium dark:text-white truncate">{file.fileName}</p>
+                      <div class="flex items-center gap-3 mt-0.5">
+                        <span class="text-xs text-gray-500 dark:text-gray-400">{formatBytes(file.fileSize)}</span>
+                        <span class="text-xs text-gray-400 dark:text-gray-500">Expires {formatCdnDate(file.expiresAt)}</span>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-1.5 ml-3">
+                      <button
+                        onclick={() => copyCdnHash(file.fileHash)}
+                        class="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                        title="Copy file hash"
+                      >
+                        {#if copiedCdnHash === file.fileHash}
+                          <Check class="w-3.5 h-3.5 text-emerald-500" />
+                        {:else}
+                          <Copy class="w-3.5 h-3.5" />
+                        {/if}
+                      </button>
+                      <button
+                        onclick={() => deleteCdnFile(cdn.url, file.fileHash)}
+                        class="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                        title="Remove from CDN"
+                      >
+                        <Trash2 class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {:else if cdn.status === 'online'}
+            <div class="p-5 text-center">
+              <Cloud class="w-8 h-8 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
+              <p class="text-sm text-gray-500 dark:text-gray-400">No files hosted on this CDN yet</p>
+              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Upload files from the Drive page to keep them available when you're offline</p>
+            </div>
+          {/if}
+        </div>
+      {/each}
+
+      {#if cdnServers.length === 0 && !loadingCdn}
+        <div class="text-center py-16">
+          <Cloud class="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+          <p class="text-gray-500 dark:text-gray-400">No CDN servers configured</p>
+        </div>
+      {/if}
+    </div>
+
   {:else if activeTab === 'marketplace'}
     {#if marketplaceError}
       <div class="text-center py-20">
