@@ -1099,6 +1099,76 @@ struct CdnFileEntry {
     expires_at: u64,
 }
 
+// ---- CDN dynamic pricing engine ----
+
+/// Minimum floor price: 0.001 CHI per MB per month.
+const CDN_FLOOR_PRICE_WEI_PER_MB_MONTH: u128 = 1_000_000_000_000_000; // 0.001 CHI
+
+/// CDN charges a 1.2x premium over median peer price for guaranteed uptime.
+const CDN_UPTIME_PREMIUM: f64 = 1.2;
+
+/// Calculate the current CDN storage price based on the peer hosting marketplace.
+/// Returns price in wei per MB per month.
+async fn calculate_cdn_price(state: &HeadlessRuntimeState) -> u128 {
+    let dht = match state.dht_service().await {
+        Some(d) => d,
+        None => return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH,
+    };
+
+    // Fetch the host registry from DHT
+    let registry_json = match dht.get_dht_value("chiral_host_registry".to_string()).await {
+        Ok(Some(json)) => json,
+        _ => return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH,
+    };
+
+    let registry: Vec<serde_json::Value> = serde_json::from_str(&registry_json).unwrap_or_default();
+    if registry.is_empty() {
+        return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
+    }
+
+    // Fetch each host's advertisement to get their price
+    let mut peer_prices: Vec<u128> = Vec::new();
+    for entry in &registry {
+        let peer_id = entry["peerId"].as_str().unwrap_or("");
+        if peer_id.is_empty() { continue; }
+
+        let host_key = format!("chiral_host_{}", peer_id);
+        if let Ok(Some(ad_json)) = dht.get_dht_value(host_key).await {
+            if let Ok(ad) = serde_json::from_str::<serde_json::Value>(&ad_json) {
+                let price_str = ad["pricePerMbPerDayWei"].as_str().unwrap_or("0");
+                if let Ok(price_per_day) = price_str.parse::<u128>() {
+                    if price_per_day > 0 {
+                        // Convert daily price to monthly (× 30)
+                        peer_prices.push(price_per_day * 30);
+                    }
+                }
+            }
+        }
+    }
+
+    if peer_prices.is_empty() {
+        return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
+    }
+
+    // Calculate median peer price
+    peer_prices.sort();
+    let median = peer_prices[peer_prices.len() / 2];
+
+    // CDN price = max(floor, median × premium)
+    let cdn_price = (median as f64 * CDN_UPTIME_PREMIUM) as u128;
+    std::cmp::max(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH, cdn_price)
+}
+
+/// Format wei to CHI string for display.
+fn wei_to_chi_display(wei: u128) -> String {
+    let chi = wei as f64 / 1e18;
+    if chi < 0.000001 {
+        format!("{:.18}", chi).trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        format!("{:.6}", chi)
+    }
+}
+
 fn load_cdn_registry() -> Vec<CdnFileEntry> {
     let path = cdn_metadata_path();
     if let Ok(data) = std::fs::read_to_string(&path) {
@@ -1179,6 +1249,17 @@ async fn cdn_upload(
     let now = now_secs();
     let expires = now + duration_days * 86400;
 
+    // Calculate dynamic CDN price based on peer marketplace
+    let price_per_mb_month_wei = calculate_cdn_price(&state).await;
+    let file_mb = (file_size as f64) / (1024.0 * 1024.0);
+    let months = (duration_days as f64) / 30.0;
+    let total_cost_wei = (price_per_mb_month_wei as f64 * file_mb * months) as u128;
+    let total_cost_chi = wei_to_chi_display(total_cost_wei);
+    let price_per_mb_chi = wei_to_chi_display(price_per_mb_month_wei);
+
+    println!("[CDN] Price: {} CHI/MB/month, total: {} CHI for {:.2} MB × {:.1} months",
+        price_per_mb_chi, total_cost_chi, file_mb, months);
+
     // Register as seeder in DHT
     let dht = match state.dht_service().await {
         Some(d) => d,
@@ -1229,15 +1310,15 @@ async fn cdn_upload(
         file_name: file_name.clone(),
         file_size,
         owner_wallet: owner_wallet.clone(),
-        price_chi_per_month: "0".to_string(),
+        price_chi_per_month: price_per_mb_chi.clone(),
         payment_tx: payment_tx.clone(),
         uploaded_at: now,
         expires_at: expires,
     });
     save_cdn_registry(&registry);
 
-    println!("[CDN] Uploaded: {} ({} bytes, hash: {}, owner: {}, expires: {})",
-        file_name, file_size, file_hash, owner_wallet, expires);
+    println!("[CDN] Uploaded: {} ({} bytes, hash: {}, owner: {}, cost: {} CHI, expires: {})",
+        file_name, file_size, file_hash, owner_wallet, total_cost_chi, expires);
 
     Json(json!({
         "status": "uploaded",
@@ -1246,6 +1327,14 @@ async fn cdn_upload(
         "fileSize": file_size,
         "expiresAt": expires,
         "cdnPeerId": peer_id,
+        "pricing": {
+            "pricePerMbMonthChi": price_per_mb_chi,
+            "pricePerMbMonthWei": price_per_mb_month_wei.to_string(),
+            "totalCostChi": total_cost_chi,
+            "totalCostWei": total_cost_wei.to_string(),
+            "durationDays": duration_days,
+            "source": "market_median_1.2x_premium",
+        }
     })).into_response()
 }
 
@@ -1310,6 +1399,31 @@ async fn cdn_delete(
     Json(json!({"status": "deleted", "fileHash": file_hash})).into_response()
 }
 
+/// GET /api/cdn/pricing?sizeMb=10&durationDays=30 — Calculate storage cost.
+async fn cdn_pricing(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let size_mb: f64 = params.get("sizeMb").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let duration_days: u64 = params.get("durationDays").and_then(|s| s.parse().ok()).unwrap_or(30);
+
+    let price_per_mb_month_wei = calculate_cdn_price(&state).await;
+    let months = (duration_days as f64) / 30.0;
+    let total_cost_wei = (price_per_mb_month_wei as f64 * size_mb * months) as u128;
+
+    Json(json!({
+        "pricePerMbMonthChi": wei_to_chi_display(price_per_mb_month_wei),
+        "pricePerMbMonthWei": price_per_mb_month_wei.to_string(),
+        "totalCostChi": wei_to_chi_display(total_cost_wei),
+        "totalCostWei": total_cost_wei.to_string(),
+        "sizeMb": size_mb,
+        "durationDays": duration_days,
+        "source": "market_median_1.2x_premium",
+        "floorPriceWei": CDN_FLOOR_PRICE_WEI_PER_MB_MONTH.to_string(),
+        "uptimePremium": CDN_UPTIME_PREMIUM,
+    })).into_response()
+}
+
 /// GET /api/cdn/status — CDN service status.
 async fn cdn_status(
     State(state): State<Arc<HeadlessRuntimeState>>,
@@ -1325,6 +1439,8 @@ async fn cdn_status(
     let cdn_wallet = state.wallet.lock().await;
     let wallet_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
 
+    let current_price_wei = calculate_cdn_price(&state).await;
+
     Json(json!({
         "status": "online",
         "peerId": peer_id,
@@ -1332,6 +1448,12 @@ async fn cdn_status(
         "activeFiles": active.len(),
         "totalStorageBytes": active.iter().map(|f| f.file_size).sum::<u64>(),
         "uniqueOwners": active.iter().map(|f| f.owner_wallet.to_lowercase()).collect::<std::collections::HashSet<_>>().len(),
+        "pricing": {
+            "pricePerMbMonthChi": wei_to_chi_display(current_price_wei),
+            "pricePerMbMonthWei": current_price_wei.to_string(),
+            "source": "market_median_1.2x_premium",
+            "floorPriceChi": wei_to_chi_display(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH),
+        }
     })).into_response()
 }
 
@@ -1406,6 +1528,7 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         .route("/api/cdn/upload", post(cdn_upload))
         .route("/api/cdn/files", get(cdn_list))
         .route("/api/cdn/files/:file_hash", delete(cdn_delete))
+        .route("/api/cdn/pricing", get(cdn_pricing))
         .route("/api/cdn/status", get(cdn_status))
         // Diagnostics
         .route("/api/headless/bootstrap-health", get(bootstrap_health))
