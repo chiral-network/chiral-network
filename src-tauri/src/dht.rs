@@ -3540,15 +3540,16 @@ async fn handle_behaviour_event(
                                         };
 
                                         if let Some(creds) = creds {
-                                            // Convert wei to CHI for send_transaction
-                                            let cost_chi =
-                                                crate::speed_tiers::format_wei_as_chi(price);
+                                            // Split: 99.5% to seeder, 0.5% platform fee
+                                            let (seller_wei, fee_wei) = crate::speed_tiers::split_payment(price);
+                                            let seller_chi = crate::speed_tiers::format_wei_as_chi(seller_wei);
+                                            let fee_chi = crate::speed_tiers::format_wei_as_chi(fee_wei);
 
-                                            // Send payment transaction
+                                            // Send seller payment
                                             match crate::wallet::send_payment(
                                                 &creds.wallet_address,
                                                 &wallet_address,
-                                                &cost_chi,
+                                                &seller_chi,
                                                 &creds.private_key,
                                             )
                                             .await
@@ -3558,6 +3559,15 @@ async fn handle_behaviour_event(
                                                         "💰 Payment sent: tx={}",
                                                         payment.tx_hash
                                                     );
+                                                    // Send platform fee (best-effort)
+                                                    if fee_wei > 0 {
+                                                        let _ = crate::wallet::send_payment(
+                                                            &creds.wallet_address,
+                                                            crate::speed_tiers::PLATFORM_WALLET,
+                                                            &fee_chi,
+                                                            &creds.private_key,
+                                                        ).await;
+                                                    }
                                                     // Emit event so frontend can track in transaction history
                                                     let _ = events.emit(
                                                         "chiraldrop-payment-sent",

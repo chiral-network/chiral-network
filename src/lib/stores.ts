@@ -78,8 +78,8 @@ const defaultSettings: AppSettings = {
   hostingConfig: {
     enabled: false,
     maxStorageBytes: 10 * 1024 * 1024 * 1024, // 10 GB
-    pricePerMbPerDayWei: '1000000000000000',   // 0.001 CHI per MB/day
-    minDepositWei: '100000000000000000',        // 0.1 CHI
+    pricePerMbPerDayWei: '10000000000000000',   // 0.01 CHI per MB/day
+    minDepositWei: '500000000000000000',        // 0.5 CHI
     autoAcceptByElo: false,
     minAutoAcceptElo: 60,
   }
