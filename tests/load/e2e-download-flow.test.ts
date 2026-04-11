@@ -494,8 +494,8 @@ describe('E2E Download Flow', () => {
         expect(costs[i]).toBeGreaterThan(costs[i - 1]);
       }
 
-      // Verify cost is roughly linear (1 GB = 1 CHI based on existing tests)
-      expect(costs[4]).toBeCloseTo(1.0, 1); // 1 GB ~= 1 CHI
+      // Verify cost is roughly linear (1 GB = 10 CHI at 0.01 CHI/MB)
+      expect(costs[4]).toBeCloseTo(10.0, 0); // 1 GB ~= 10 CHI
     });
 
     it('should handle payment timeout', async () => {

@@ -158,7 +158,8 @@ describe('hostingService', () => {
       );
 
       expect(agreement.status).toBe('proposed');
-      expect(agreement.totalCostWei).toBe('4000000000000000');
+      // Base: 4000000000000000 + 0.5% fee (20000000000000) = 4020000000000000
+      expect(agreement.totalCostWei).toBe('4020000000000000');
       expect(mockInvoke).toHaveBeenCalledWith(
         'store_hosting_agreement',
         expect.objectContaining({
@@ -257,7 +258,8 @@ describe('hostingService', () => {
         3 * 86400, // 3 days
         '1000000000000000',
       );
-      expect(cost).toBe('9000000000000000');
+      // Base: 9000000000000000 + 0.5% fee = 9045000000000000
+      expect(cost).toBe('9045000000000000');
     });
   });
 });

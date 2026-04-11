@@ -92,17 +92,17 @@ describe('uploadDownloadFlow', () => {
   describe('download cost calculation', () => {
     it('should calculate cost for 10 MB file', () => {
       const cost = calculateCost(10_000_000);
-      expect(cost).toBeCloseTo(0.01, 6);
+      expect(cost).toBeCloseTo(0.1, 6); // 10 MB * 0.01 CHI/MB
     });
 
     it('should calculate cost for 100 MB file', () => {
       const cost = calculateCost(100_000_000);
-      expect(cost).toBeCloseTo(0.1, 6);
+      expect(cost).toBeCloseTo(1.0, 6); // 100 MB * 0.01 CHI/MB
     });
 
     it('should calculate cost for 1 GB file', () => {
       const cost = calculateCost(1_000_000_000);
-      expect(cost).toBeCloseTo(1.0, 6);
+      expect(cost).toBeCloseTo(10.0, 6); // 1000 MB * 0.01 CHI/MB
     });
 
     it('should format cost correctly', () => {
