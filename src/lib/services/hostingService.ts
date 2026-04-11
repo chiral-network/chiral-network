@@ -177,10 +177,13 @@ class HostingService {
     const agreementId = generateAgreementId();
 
     // Calculate total cost: (totalSizeBytes / 1MB) * pricePerMbPerDay * (durationSecs / 86400)
+    // Plus 0.5% platform fee
     const sizeMb = totalSizeBytes / (1024 * 1024);
     const days = durationSecs / 86400;
     const pricePerMbPerDay = BigInt(pricePerMbPerDayWei);
-    const totalCostWei = (pricePerMbPerDay * BigInt(Math.ceil(sizeMb * days * 1000)) / 1000n).toString();
+    const baseCostWei = pricePerMbPerDay * BigInt(Math.ceil(sizeMb * days * 1000)) / 1000n;
+    const platformFeeWei = (baseCostWei * 50n + 9999n) / 10000n; // 0.5% rounded up
+    const totalCostWei = (baseCostWei + platformFeeWei).toString();
 
     const agreement: HostingAgreement = {
       agreementId,
@@ -459,7 +462,9 @@ class HostingService {
     const sizeMb = totalSizeBytes / (1024 * 1024);
     const days = durationSecs / 86400;
     const pricePerMbPerDay = BigInt(pricePerMbPerDayWei);
-    return (pricePerMbPerDay * BigInt(Math.ceil(sizeMb * days * 1000)) / 1000n).toString();
+    const baseCost = pricePerMbPerDay * BigInt(Math.ceil(sizeMb * days * 1000)) / 1000n;
+    const platformFee = (baseCost * 50n + 9999n) / 10000n; // 0.5%
+    return (baseCost + platformFee).toString();
   }
 }
 

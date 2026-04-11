@@ -1,16 +1,39 @@
 use std::path::Path;
 use tauri::Emitter;
 
-/// Fixed download cost: 0.001 CHI per MB (no speed tiers — always unlimited speed)
-const COST_PER_MB_WEI: u128 = 1_000_000_000_000_000; // 0.001 CHI = 10^15 wei
+/// Fixed download cost: 0.01 CHI per MB
+const COST_PER_MB_WEI: u128 = 10_000_000_000_000_000; // 0.01 CHI = 10^16 wei
 
-/// Calculate total download cost in wei for a given file size
+/// Platform fee: 0.5% of all transactions
+pub const PLATFORM_FEE_BPS: u128 = 50; // 50 basis points = 0.5%
+
+/// Platform wallet address (receives the 0.5% fee)
+pub const PLATFORM_WALLET: &str = "0x9ad90a2f8b72092154a5b5259295e33df3541ede";
+
+/// Calculate total download cost in wei for a given file size (before platform fee)
 pub fn calculate_cost(file_size_bytes: u64) -> u128 {
     if file_size_bytes == 0 {
         return 0;
     }
     let size = file_size_bytes as u128;
     (size * COST_PER_MB_WEI + 999_999) / 1_000_000 // Round up to nearest wei
+}
+
+/// Calculate the platform fee (0.5%) on a given amount in wei.
+pub fn calculate_platform_fee(amount_wei: u128) -> u128 {
+    (amount_wei * PLATFORM_FEE_BPS + 9999) / 10000 // Round up
+}
+
+/// Calculate total cost including platform fee.
+pub fn calculate_total_with_fee(base_cost_wei: u128) -> u128 {
+    base_cost_wei + calculate_platform_fee(base_cost_wei)
+}
+
+/// Split a payment amount into seller portion and platform fee.
+/// Returns (seller_amount, platform_fee).
+pub fn split_payment(total_wei: u128) -> (u128, u128) {
+    let fee = calculate_platform_fee(total_wei);
+    (total_wei.saturating_sub(fee), fee)
 }
 
 /// Format wei amount as CHI string for display
@@ -68,13 +91,12 @@ mod tests {
 
     #[test]
     fn test_cost_calculation() {
-        // 10 MB * 0.001 CHI/MB = 0.01 CHI = 10^16 wei
-        assert_eq!(calculate_cost(10_000_000), 10_000_000_000_000_000);
+        // 10 MB * 0.01 CHI/MB = 0.1 CHI = 10^17 wei
+        assert_eq!(calculate_cost(10_000_000), 100_000_000_000_000_000);
     }
 
     #[test]
     fn test_cost_calculation_small_file() {
-        // 1 byte should still have non-zero cost (rounds up)
         assert!(calculate_cost(1) > 0);
     }
 
@@ -85,8 +107,31 @@ mod tests {
 
     #[test]
     fn test_cost_calculation_1mb() {
-        // 1 MB = 0.001 CHI = 10^15 wei
-        assert_eq!(calculate_cost(1_000_000), 1_000_000_000_000_000);
+        // 1 MB = 0.01 CHI = 10^16 wei
+        assert_eq!(calculate_cost(1_000_000), 10_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_platform_fee() {
+        // 0.5% of 1 CHI (10^18 wei) = 0.005 CHI = 5*10^15 wei
+        let fee = calculate_platform_fee(1_000_000_000_000_000_000);
+        assert_eq!(fee, 5_000_000_000_000_000);
+    }
+
+    #[test]
+    fn test_split_payment() {
+        let total = 1_000_000_000_000_000_000u128; // 1 CHI
+        let (seller, fee) = split_payment(total);
+        assert_eq!(fee, 5_000_000_000_000_000); // 0.005 CHI
+        assert_eq!(seller + fee, total);
+    }
+
+    #[test]
+    fn test_total_with_fee() {
+        let base = 10_000_000_000_000_000u128; // 0.01 CHI
+        let total = calculate_total_with_fee(base);
+        assert!(total > base);
+        assert_eq!(total, base + calculate_platform_fee(base));
     }
 
     #[test]

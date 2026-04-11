@@ -1988,24 +1988,43 @@ async fn start_download(
             .as_deref()
             .ok_or("Private key required for paid download")?;
 
-        // Convert wei to CHI string for send_transaction
+        // Split payment: 99.5% to burn address, 0.5% platform fee
+        let (seller_wei, fee_wei) = speed_tiers::split_payment(cost_wei);
+        let seller_chi = speed_tiers::format_wei_as_chi(seller_wei);
+        let fee_chi = speed_tiers::format_wei_as_chi(fee_wei);
         let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
         println!(
-            "💰 Download payment: {} CHI ({} wei) to burn address",
-            cost_chi, cost_wei
+            "💰 Download payment: {} CHI total ({} seller + {} platform fee)",
+            cost_chi, seller_chi, fee_chi
         );
 
-        // Process payment to burn address
         let burn_addr = "0x000000000000000000000000000000000000dEaD";
         let endpoint = geth::effective_rpc_endpoint();
+
+        // Send main payment to burn address
         let payment_result = wallet::send_transaction(
             &endpoint,
             wallet_addr,
             burn_addr,
-            &cost_chi,
+            &seller_chi,
             priv_key,
         )
         .await;
+
+        // Send platform fee (best-effort, don't block download on fee failure)
+        if fee_wei > 0 {
+            let fee_result = wallet::send_transaction(
+                &endpoint,
+                wallet_addr,
+                speed_tiers::PLATFORM_WALLET,
+                &fee_chi,
+                priv_key,
+            )
+            .await;
+            if let Err(e) = fee_result {
+                eprintln!("[PLATFORM FEE] Failed to collect: {}", e);
+            }
+        }
 
         match payment_result {
             Ok(result) => {
