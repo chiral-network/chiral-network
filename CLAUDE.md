@@ -21,7 +21,7 @@ Primary domains:
 - `/download` — file search, download with CHI payments
 - `/drive` — local file management, seeding, sharing
 - `/chiraldrop` — direct peer-to-peer file transfers
-- `/hosts` — hosting marketplace (publish/browse/agreements)
+- `/hosts` — hosting marketplace: My Sites, CDN Servers, Peer Hosts, Agreements
 - `/mining` — CPU/GPU mining controls
 - `/account` — wallet info, reputation panel
 - `/settings` — appearance, notifications, download directory
@@ -128,6 +128,7 @@ Headless daemon API endpoints (port 9419 by default):
 - **Geth**: POST `geth/install`, `geth/start`, `geth/stop`; GET `geth/status`, `geth/logs`
 - **Mining**: POST `mining/start`, `mining/stop`, `mining/miner-address`; GET `mining/status`, `mining/blocks`
 - **Hosting**: POST `hosting/publish-ad`; GET `hosting/registry`
+- **CDN**: POST `cdn/upload`; GET `cdn/files`, `cdn/pricing`, `cdn/status`; DELETE `cdn/files/:hash`
 - **Drive**: Full CRUD via `/api/drive/*` routes (requires `X-Owner` header)
 - **Diagnostics**: GET `bootstrap-health`
 
@@ -208,3 +209,9 @@ SMTP env vars: `CHIRAL_WALLET_EMAIL_SMTP_HOST`, `CHIRAL_WALLET_EMAIL_FROM` (requ
 - App shows a close confirmation dialog before quitting (wired in `src/App.svelte`).
 - Wallet backup email step is optional (skip button) during wallet creation.
 - Logout has 5s timeout on DHT stop + loading state to prevent hanging.
+- Download cost: 0.01 CHI per MB. Platform fee: 0.5% on all transactions.
+- Platform fee split: 99.5% to seller/burn, 0.5% to platform wallet.
+- File metadata and seeder entries are ECDSA-signed (prevents DHT tampering).
+- Payment verification: on-chain tx receipt checked before serving file chunks.
+- CDN server at `130.245.173.73:9420` — always-on file hosting with market-based pricing.
+- CDN pricing: `max(floor, median_peer_price × 1.2)` — adapts to marketplace.
