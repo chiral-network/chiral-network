@@ -56,7 +56,8 @@ The application consists of three layers:
 - Publish files to the DHT so other peers can discover and download them.
 - Chunked file transfer protocol (256 KB chunks) with SHA-256 verification per chunk and full-file hash verification on completion.
 - Set a CHI price per file. Payments are processed on-chain before the download begins.
-- Unlimited download speed with a flat download fee of 0.001 CHI per MB.
+- Unlimited download speed with a flat download fee of 0.01 CHI per MB.
+- 0.5% platform fee on all transactions (split between seller and platform wallet).
 
 ### ChiralDrop
 - Direct peer-to-peer file transfer between two users, similar to AirDrop.
@@ -94,6 +95,20 @@ The application consists of three layers:
 - Publish a host advertisement to offer storage to the network.
 - Browse available hosts, propose hosting agreements, and track active agreements.
 - Hosted files are automatically seeded to the DHT.
+- CDN Servers tab: always-on infrastructure servers separated from peer hosts.
+
+### CDN Service
+- Always-on file hosting servers that keep files available when the uploader goes offline.
+- Market-based dynamic pricing: `max(floor_price, median_peer_price × 1.2)`.
+- Upload via HTTP API, manage files per wallet, automatic DHT seeder registration.
+- Deployed at `130.245.173.73:9420` with 227 GB capacity.
+
+### Security
+- ECDSA-signed file metadata (prevents seeder list poisoning and DHT tampering).
+- ECDSA-signed seeder entries (prevents payment address redirection).
+- On-chain payment verification before serving file chunks.
+- 0.5% platform fee on all transactions (99.5% to seller, 0.5% to platform).
+- Relay filters private IPs from Kademlia routing table.
 
 ---
 

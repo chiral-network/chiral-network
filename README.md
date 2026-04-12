@@ -18,8 +18,10 @@ Decentralized peer-to-peer file sharing, local Drive seeding, hosting marketplac
 - **Download** — search files by hash, download with CHI payments to burn address
 - **Drive** — local file management, seeding to P2P network, paid share links via relay
 - **ChiralDrop** — direct peer-to-peer file transfers with optional pricing
-- **Hosting** — marketplace for hosting agreements (advertise storage, propose/accept deals, auto-seed)
+- **Hosting** — marketplace: CDN servers (always-on), peer hosts, hosting agreements, auto-seed
+- **CDN** — always-on file hosting service with market-based dynamic pricing
 - **Mining** — CPU mining (GPU mining via ethminer on Linux/Windows, OpenCL on macOS)
+- **Security** — ECDSA-signed DHT records, on-chain payment verification, 0.5% platform fee
 - **Account** — wallet balance, transaction history, Elo reputation panel
 - **Settings** — appearance (dark/light/system), notification preferences, download directory
 - **Diagnostics** — structured event log, system info
@@ -85,6 +87,7 @@ All endpoints prefixed with `/api/headless/` unless noted.
 | Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status` |
 | Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
 | Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
+| CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash` |
 | Drive | Full CRUD via `/api/drive/*` (requires `X-Owner` header) |
 
 ### Environment Variables
@@ -122,6 +125,8 @@ docker compose -f docker-compose.local-test.yml up -d --scale node=10
 | Difficulty | 0x400000 (genesis) |
 | Sync mode | full (archive GC) |
 | Gas price | 0 (free transactions) |
+| Download cost | 0.01 CHI per MB |
+| Platform fee | 0.5% on all transactions |
 | Gas limit | 4,700,000 per block |
 | P2P port | 30303 |
 | RPC port | 8545 (local only) |
@@ -141,6 +146,37 @@ ssh root@130.245.173.73 'systemctl restart relay-server'
 ```
 
 The relay filters private IPs from its Kademlia routing table — only stores public and relay circuit addresses so remote peers get routable entries from DHT lookups.
+
+## CDN Service
+
+Always-on file hosting — users upload files to the CDN so they stay available when the user goes offline.
+
+- **Deployed at**: `130.245.173.73:9420` (systemd service: `cdn-server.service`)
+- **Capacity**: 227 GB available
+- **Pricing**: Market-based — `max(floor, median_peer_price × 1.2)`
+
+```bash
+# Upload a file
+curl -X POST http://130.245.173.73:9420/api/cdn/upload \
+  -H "Content-Type: application/json" \
+  -d '{"fileName":"file.pdf","fileData":"<base64>","ownerWallet":"0xYOU","durationDays":30}'
+
+# List your files
+curl http://130.245.173.73:9420/api/cdn/files?owner=0xYOU
+
+# Check pricing
+curl http://130.245.173.73:9420/api/cdn/pricing?sizeMb=100&durationDays=30
+
+# Delete
+curl -X DELETE http://130.245.173.73:9420/api/cdn/files/HASH?owner=0xYOU
+```
+
+## Security
+
+- **Signed DHT records**: File metadata and seeder entries are ECDSA-signed by the publisher/seeder wallet
+- **Payment verification**: Seeders verify on-chain tx receipt before serving file chunks
+- **Platform fee**: 0.5% of all transactions (split: 99.5% to seller, 0.5% to platform)
+- **Relay IP filtering**: Only public and relay circuit addresses stored in Kademlia
 
 ## Reputation System
 
