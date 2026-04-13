@@ -25,6 +25,7 @@ pub fn calculate_platform_fee(amount_wei: u128) -> u128 {
 }
 
 /// Calculate total cost including platform fee.
+#[allow(dead_code)]
 pub fn calculate_total_with_fee(base_cost_wei: u128) -> u128 {
     base_cost_wei + calculate_platform_fee(base_cost_wei)
 }
