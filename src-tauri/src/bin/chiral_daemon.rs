@@ -1200,6 +1200,7 @@ async fn cdn_upload(
     let owner_wallet = body["ownerWallet"].as_str().unwrap_or("").to_string();
     let payment_tx = body["paymentTx"].as_str().unwrap_or("").to_string();
     let duration_days = body["durationDays"].as_u64().unwrap_or(30);
+    let download_price_chi = body["downloadPriceChi"].as_str().unwrap_or("0").to_string();
 
     if file_name.is_empty() || file_data_b64.is_empty() || owner_wallet.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "fileName, fileData (base64), ownerWallet required");
@@ -1296,17 +1297,25 @@ async fn cdn_upload(
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
     };
 
+    // Parse download price (CHI → wei)
+    let download_price_wei = if download_price_chi.is_empty() || download_price_chi == "0" {
+        0u128
+    } else {
+        chiral_network::wallet::parse_chi_to_wei(&download_price_chi).unwrap_or(0)
+    };
+    let download_price_wei_str = download_price_wei.to_string();
+
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     dht.register_shared_file(
         file_hash.clone(),
         file_path.to_string_lossy().to_string(),
         file_name.clone(),
         file_size,
-        0, // CDN serves for free — the owner paid for hosting
+        download_price_wei,
         owner_wallet.clone(),
     ).await;
 
-    // Publish file metadata to DHT
+    // Publish file metadata to DHT with the download price
     let our_addrs = dht.get_listening_addresses().await;
     let metadata = json!({
         "hash": file_hash,
@@ -1315,11 +1324,11 @@ async fn cdn_upload(
         "protocol": "WebRTC",
         "createdAt": now,
         "peerId": peer_id,
-        "priceWei": "0",
+        "priceWei": download_price_wei_str,
         "walletAddress": owner_wallet,
         "seeders": [{
             "peerId": peer_id,
-            "priceWei": "0",
+            "priceWei": download_price_wei_str,
             "walletAddress": owner_wallet,
             "multiaddrs": our_addrs,
             "signature": ""

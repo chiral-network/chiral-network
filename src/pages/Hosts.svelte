@@ -203,7 +203,13 @@
   let showCdnUploadPicker = $state(false);
   let cdnUploadFiles = $state<{ id: string; name: string; size: number; merkleRoot?: string }[]>([]);
   let cdnUploadLoading = $state(false);
-  let cdnUploading = $state<string | null>(null); // file ID being uploaded
+  let cdnUploading = $state<string | null>(null);
+
+  // CDN upload confirmation modal
+  let cdnConfirmFile = $state<{ id: string; name: string; size: number } | null>(null);
+  let cdnConfirmServerUrl = $state('');
+  let cdnConfirmPricing = $state<{ totalCostChi: string; pricePerMbMonthChi: string } | null>(null);
+  let cdnFilePrice = $state('0'); // price in CHI that downloaders will pay
 
   async function loadCdnDriveFiles() {
     if (!isTauri) return;
@@ -223,6 +229,20 @@
     } finally {
       cdnUploadLoading = false;
     }
+  }
+
+  async function confirmCdnUpload(serverUrl: string, file: { id: string; name: string; size: number }) {
+    // Fetch pricing before showing confirmation
+    const sizeMb = Math.max((file.size || 1) / (1024 * 1024), 0.001);
+    try {
+      const resp = await fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`);
+      cdnConfirmPricing = await resp.json();
+    } catch {
+      cdnConfirmPricing = { totalCostChi: '?', pricePerMbMonthChi: '?' };
+    }
+    cdnConfirmFile = file;
+    cdnConfirmServerUrl = serverUrl;
+    cdnFilePrice = '0';
   }
 
   async function uploadToCdn(serverUrl: string, file: { id: string; name: string; size: number; merkleRoot?: string }) {
@@ -276,6 +296,7 @@
           ownerWallet: owner,
           paymentTx,
           durationDays: 30,
+          downloadPriceChi: cdnFilePrice || '0',
         }),
       });
 
@@ -1421,22 +1442,92 @@
               <p class="text-xs text-gray-500 dark:text-gray-400">{formatBytes(file.size)}</p>
             </div>
             <button
-              onclick={() => uploadToCdn(CDN_SERVERS[0].url, file)}
-              disabled={cdnUploading === file.id}
-              class="ml-3 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+              onclick={() => confirmCdnUpload(CDN_SERVERS[0].url, file)}
+              class="ml-3 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5"
             >
-              {#if cdnUploading === file.id}
-                <Loader2 class="w-3 h-3 animate-spin" />
-                Uploading...
-              {:else}
-                <Upload class="w-3 h-3" />
-                Upload
-              {/if}
+              <Upload class="w-3 h-3" />
+              Select
             </button>
           </div>
         {/each}
       </div>
     {/if}
+  </div>
+</div>
+{/if}
+
+<!-- CDN Upload Confirmation Modal -->
+{#if cdnConfirmFile}
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999]"
+  onclick={() => cdnConfirmFile = null}
+  onkeydown={(e) => { if (e.key === 'Escape') cdnConfirmFile = null; }}
+>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
+  >
+    <h3 class="text-lg font-semibold dark:text-white mb-4">Confirm CDN Upload</h3>
+
+    <div class="space-y-3 mb-5">
+      <div class="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-3">
+        <p class="text-sm font-medium dark:text-white truncate">{cdnConfirmFile.name}</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">{formatBytes(cdnConfirmFile.size)}</p>
+      </div>
+
+      <div class="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-3">
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Hosting Cost (30 days)</p>
+        <p class="text-lg font-bold text-blue-600 dark:text-blue-400">
+          {cdnConfirmPricing?.totalCostChi ?? '...'} CHI
+        </p>
+        <p class="text-[10px] text-gray-400">{cdnConfirmPricing?.pricePerMbMonthChi ?? '?'} CHI/MB/month</p>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+          Download Price (CHI per download)
+        </label>
+        <input
+          type="number"
+          step="0.001"
+          min="0"
+          bind:value={cdnFilePrice}
+          placeholder="0 = free"
+          class="w-full px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+        />
+        <p class="text-[10px] text-gray-400 mt-1">Set to 0 for free downloads, or set a price others will pay</p>
+      </div>
+    </div>
+
+    <div class="flex gap-3">
+      <button
+        onclick={() => cdnConfirmFile = null}
+        class="flex-1 px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors dark:text-gray-300"
+      >
+        Cancel
+      </button>
+      <button
+        onclick={async () => {
+          const file = cdnConfirmFile;
+          const serverUrl = cdnConfirmServerUrl;
+          cdnConfirmFile = null;
+          showCdnUploadPicker = false;
+          if (file) await uploadToCdn(serverUrl, file);
+        }}
+        disabled={cdnUploading !== null}
+        class="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+      >
+        {#if cdnUploading}
+          <Loader2 class="w-4 h-4 animate-spin" />
+          Uploading...
+        {:else}
+          Pay & Upload
+        {/if}
+      </button>
+    </div>
   </div>
 </div>
 {/if}
