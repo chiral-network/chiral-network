@@ -4858,11 +4858,29 @@ async fn drive_stop_seeding(
         item.merkle_root.clone()
     };
 
-    // Unregister from DHT shared files
+    // Unregister from DHT shared files and remove from seeder list
     if let Some(ref hash) = merkle_root {
         let dht_guard = state.dht.lock().await;
         if let Some(dht) = dht_guard.as_ref() {
+            // Stop serving chunks
             dht.unregister_shared_file(hash).await;
+
+            // Remove ourselves from the DHT seeder list so downloaders stop seeing us
+            let peer_id = dht.get_peer_id().await.unwrap_or_default();
+            if !peer_id.is_empty() {
+                let dht_key = format!("chiral_file_{}", hash);
+                if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
+                    if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&meta_json) {
+                        metadata.seeders.retain(|s| s.peer_id != peer_id);
+                        if metadata.peer_id == peer_id {
+                            metadata.peer_id = String::new();
+                        }
+                        if let Ok(updated) = serde_json::to_string(&metadata) {
+                            let _ = dht.put_dht_value(dht_key, updated).await;
+                        }
+                    }
+                }
+            }
         }
         // Remove from in-memory file storage
         let mut storage = state.file_storage.lock().await;
