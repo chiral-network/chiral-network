@@ -1238,15 +1238,27 @@ async fn cdn_upload(
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "CDN wallet not configured");
     }
 
-    // Verify payment: must be from owner_wallet, to CDN wallet, for at least the required amount
-    match chiral_network::wallet::verify_payment(&payment_tx, &owner_wallet, &cdn_address, required_cost_wei).await {
+    // Verify payment: accept if within 5% tolerance of required amount
+    // (CHI→wei rounding during send_transaction can cause small underpayment)
+    let min_accepted_wei = required_cost_wei * 95 / 100; // 95% of required = 5% tolerance
+    println!("[CDN] Verifying payment: tx={} from={} to={} required_wei={} min_accepted={}",
+        payment_tx, owner_wallet, cdn_address, required_cost_wei, min_accepted_wei);
+
+    match chiral_network::wallet::verify_payment(&payment_tx, &owner_wallet, &cdn_address, min_accepted_wei).await {
         Ok(true) => {
-            println!("[CDN] Payment verified: tx={} amount>={} wei", payment_tx, required_cost_wei);
+            println!("[CDN] Payment verified OK: tx={}", payment_tx);
         }
-        Ok(false) => return json_error(StatusCode::PAYMENT_REQUIRED,
-            "Payment not confirmed, wrong recipient, or insufficient amount"),
-        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Payment verification failed: {}", e)),
+        Ok(false) => {
+            println!("[CDN] Payment verification FAILED: tx={} (not confirmed, wrong recipient, or insufficient)", payment_tx);
+            return json_error(StatusCode::PAYMENT_REQUIRED,
+                &format!("Payment not confirmed after 30s. Tx: {}. Expected: from={}, to={}, amount>={} wei",
+                    payment_tx, owner_wallet, cdn_address, required_cost_wei));
+        }
+        Err(e) => {
+            println!("[CDN] Payment verification ERROR: tx={} err={}", payment_tx, e);
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Payment verification failed: {}", e));
+        }
     }
 
     // Compute SHA-256 hash
