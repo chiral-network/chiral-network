@@ -1827,7 +1827,7 @@ async fn search_file(
         println!("Looking up DHT key: {}", dht_key);
 
         let dht_lookup = tokio::time::timeout(
-            tokio::time::Duration::from_millis(3000),
+            tokio::time::Duration::from_millis(10000),
             dht.get_dht_value(dht_key.clone()),
         )
         .await;
