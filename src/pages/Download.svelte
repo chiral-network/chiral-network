@@ -515,11 +515,46 @@
 
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
-        const result = await withTimeout(
+
+        // Search DHT first (15s timeout to allow Kademlia to traverse the network)
+        let result = await withTimeout(
           invoke<SearchResult | null>('search_file', { fileHash }),
-          8000,
+          15000,
           'search'
-        );
+        ).catch(() => null);
+
+        // CDN fallback: if DHT didn't find it, check CDN servers directly
+        if (!result) {
+          const CDN_URLS = ['http://130.245.173.73:9420'];
+          for (const cdnUrl of CDN_URLS) {
+            try {
+              const resp = await fetch(`${cdnUrl}/api/headless/file/search`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fileHash }),
+              });
+              const data = await resp.json();
+              if (data.found && data.metadata) {
+                const meta = data.metadata;
+                result = {
+                  hash: meta.hash,
+                  fileName: meta.fileName,
+                  fileSize: meta.fileSize,
+                  seeders: (meta.seeders || []).map((s: { peerId: string; priceWei: string; walletAddress: string; multiaddrs: string[] }) => ({
+                    peerId: s.peerId,
+                    priceWei: s.priceWei || '0',
+                    walletAddress: s.walletAddress || '',
+                    multiaddrs: s.multiaddrs || [],
+                  })),
+                  createdAt: meta.createdAt || 0,
+                  priceWei: meta.priceWei || '0',
+                  walletAddress: meta.walletAddress || '',
+                };
+                break;
+              }
+            } catch { /* CDN unreachable, continue */ }
+          }
+        }
 
         if (result) {
           // For magnet links, use the name from the magnet link if available
