@@ -1713,6 +1713,69 @@ async fn main() {
         });
     }
 
+    // CDN re-seed: re-register all non-expired CDN files in the DHT on startup
+    {
+        let cdn_reseed_rt = Arc::clone(&runtime_state);
+        tokio::spawn(async move {
+            // Wait for DHT to be fully bootstrapped
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+
+            let now = now_secs();
+            let registry = load_cdn_registry();
+            let active: Vec<&CdnFileEntry> = registry.iter().filter(|e| e.expires_at > now).collect();
+
+            if active.is_empty() { return; }
+
+            let dht = match cdn_reseed_rt.dht_service().await {
+                Some(d) => d,
+                None => { eprintln!("[CDN] Cannot re-seed: DHT not running"); return; }
+            };
+
+            let peer_id = dht.get_peer_id().await.unwrap_or_default();
+            let our_addrs = dht.get_listening_addresses().await;
+
+            for entry in &active {
+                let file_path = cdn_storage_dir().join(&entry.file_hash);
+                if !file_path.exists() { continue; }
+
+                // Parse download price
+                let price_wei = chiral_network::wallet::parse_chi_to_wei(&entry.price_chi_per_month).unwrap_or(0);
+
+                dht.register_shared_file(
+                    entry.file_hash.clone(),
+                    file_path.to_string_lossy().to_string(),
+                    entry.file_name.clone(),
+                    entry.file_size,
+                    price_wei,
+                    entry.owner_wallet.clone(),
+                ).await;
+
+                // Re-publish to DHT
+                let metadata = serde_json::json!({
+                    "hash": entry.file_hash,
+                    "fileName": entry.file_name,
+                    "fileSize": entry.file_size,
+                    "protocol": "WebRTC",
+                    "createdAt": entry.uploaded_at,
+                    "peerId": peer_id,
+                    "priceWei": price_wei.to_string(),
+                    "walletAddress": entry.owner_wallet,
+                    "seeders": [{
+                        "peerId": peer_id,
+                        "priceWei": price_wei.to_string(),
+                        "walletAddress": entry.owner_wallet,
+                        "multiaddrs": our_addrs,
+                        "signature": ""
+                    }],
+                    "publisherSignature": ""
+                });
+                let dht_key = format!("chiral_file_{}", entry.file_hash);
+                let _ = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await;
+            }
+            println!("[CDN] Re-seeded {} files on startup", active.len());
+        });
+    }
+
     // CDN expiration cleanup — runs every 60 seconds, removes expired files
     {
         let cdn_rt = Arc::clone(&runtime_state);
