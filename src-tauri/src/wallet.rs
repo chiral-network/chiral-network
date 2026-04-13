@@ -613,14 +613,26 @@ pub async fn verify_payment(
 ) -> Result<bool, String> {
     let endpoint = crate::geth::effective_rpc_endpoint();
 
-    let receipt = rpc_client::call(
-        &endpoint,
-        "eth_getTransactionReceipt",
-        serde_json::json!([tx_hash]),
-    ).await?;
+    // Wait for the transaction to be mined (up to 30 seconds)
+    let mut receipt = serde_json::Value::Null;
+    for attempt in 0..15 {
+        receipt = rpc_client::call(
+            &endpoint,
+            "eth_getTransactionReceipt",
+            serde_json::json!([tx_hash]),
+        ).await?;
+
+        if !receipt.is_null() {
+            break;
+        }
+
+        if attempt < 14 {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
 
     if receipt.is_null() {
-        return Ok(false); // Not yet mined
+        return Ok(false); // Still not mined after 30s
     }
 
     // Check status (0x1 = success)
