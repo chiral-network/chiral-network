@@ -4154,6 +4154,25 @@ async fn drive_create_folder(
     Ok(item)
 }
 
+/// Read raw file bytes from Drive (for CDN upload).
+#[tauri::command]
+async fn drive_read_file_bytes(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    item_id: String,
+) -> Result<Vec<u8>, String> {
+    let storage_path = {
+        let m = state.drive_state.manifest.read().await;
+        let item = m.items.iter()
+            .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
+            .ok_or("Drive file not found")?;
+        item.storage_path.clone().ok_or("No storage path")?
+    };
+    let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
+    let path = files_dir.join(&storage_path);
+    std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
 #[tauri::command]
 async fn drive_upload_file(
     state: tauri::State<'_, AppState>,
@@ -5267,6 +5286,7 @@ pub fn run() {
             drive_list_items,
             drive_list_all_items,
             drive_create_folder,
+            drive_read_file_bytes,
             drive_upload_file,
             drive_update_item,
             drive_delete_item,
