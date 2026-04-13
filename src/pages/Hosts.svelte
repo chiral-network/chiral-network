@@ -226,12 +226,45 @@
   async function uploadToCdn(serverUrl: string, file: { id: string; name: string; size: number; merkleRoot?: string }) {
     if (!isTauri) return;
     const owner = $walletAccount?.address || '';
-    if (!owner) { toasts.show('No wallet connected', 'error'); return; }
+    const privateKey = $walletAccount?.privateKey || '';
+    if (!owner || !privateKey) { toasts.show('No wallet connected', 'error'); return; }
 
     cdnUploading = file.id;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      // Read the file data from Drive
+
+      // Step 1: Get pricing from CDN
+      const sizeMb = (file.size || 1) / (1024 * 1024);
+      const pricingResp = await fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`);
+      const pricing = await pricingResp.json();
+      const totalCostChi = pricing.totalCostChi || '0';
+      const totalCostWei = pricing.totalCostWei || '0';
+
+      // Step 2: Get CDN wallet address
+      const statusResp = await fetch(`${serverUrl}/api/cdn/status`);
+      const cdnStatus = await statusResp.json();
+      const cdnWallet = cdnStatus.walletAddress;
+
+      if (!cdnWallet) { toasts.show('CDN wallet not available', 'error'); cdnUploading = null; return; }
+
+      // Step 3: Send payment to CDN wallet
+      toasts.show(`Sending ${totalCostChi} CHI to CDN...`, 'info', 5000);
+      let paymentTx = '';
+      if (parseFloat(totalCostChi) > 0) {
+        const payResult = await invoke<{ hash: string }>('send_transaction', {
+          fromAddress: owner,
+          toAddress: cdnWallet,
+          amount: totalCostChi,
+          privateKey,
+        });
+        paymentTx = payResult.hash;
+        toasts.show(`Payment sent: ${paymentTx.slice(0, 12)}...`, 'success', 3000);
+
+        // Wait for confirmation
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      // Step 4: Read file and upload with payment proof
       const fileData = await invoke<number[]>('drive_read_file_bytes', { owner, itemId: file.id });
       const base64 = btoa(String.fromCharCode(...new Uint8Array(fileData)));
 
@@ -242,7 +275,7 @@
           fileName: file.name,
           fileData: base64,
           ownerWallet: owner,
-          paymentTx: '',
+          paymentTx,
           durationDays: 30,
         }),
       });
@@ -1367,7 +1400,7 @@
         &times;
       </button>
     </div>
-    <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Select a file from your Drive to upload to the CDN. It will stay available even when you're offline.</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Select a file from your Drive. You'll pay the CDN storage fee and the file stays available for 30 days even when you're offline.</p>
 
     {#if cdnUploadLoading}
       <div class="flex items-center justify-center py-8">

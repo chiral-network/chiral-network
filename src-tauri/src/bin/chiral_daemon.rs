@@ -1216,19 +1216,37 @@ async fn cdn_upload(
         return json_error(StatusCode::BAD_REQUEST, "File exceeds 500MB limit");
     }
 
-    // Verify payment on-chain if payment_tx is provided
-    if !payment_tx.is_empty() {
-        let cdn_wallet = state.wallet.lock().await;
-        let cdn_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
-        drop(cdn_wallet);
+    // Calculate the required payment amount
+    let price_per_mb_month_wei = calculate_cdn_price(&state).await;
+    let file_mb = (file_data.len() as f64) / (1024.0 * 1024.0);
+    let months = (duration_days as f64) / 30.0;
+    let required_cost_wei = (price_per_mb_month_wei as f64 * file_mb * months) as u128;
 
-        if !cdn_address.is_empty() {
-            match chiral_network::wallet::verify_payment(&payment_tx, &owner_wallet, &cdn_address, 0).await {
-                Ok(true) => {} // Payment verified
-                Ok(false) => return json_error(StatusCode::PAYMENT_REQUIRED, "Payment not confirmed or invalid"),
-                Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Payment verification failed: {}", e)),
-            }
+    // Payment is REQUIRED — verify on-chain before accepting the file
+    if payment_tx.is_empty() {
+        return json_error(StatusCode::PAYMENT_REQUIRED, &format!(
+            "Payment required. Cost: {} CHI ({} wei). Send payment to CDN wallet and include paymentTx.",
+            wei_to_chi_display(required_cost_wei), required_cost_wei
+        ));
+    }
+
+    let cdn_wallet = state.wallet.lock().await;
+    let cdn_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
+    drop(cdn_wallet);
+
+    if cdn_address.is_empty() {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "CDN wallet not configured");
+    }
+
+    // Verify payment: must be from owner_wallet, to CDN wallet, for at least the required amount
+    match chiral_network::wallet::verify_payment(&payment_tx, &owner_wallet, &cdn_address, required_cost_wei).await {
+        Ok(true) => {
+            println!("[CDN] Payment verified: tx={} amount>={} wei", payment_tx, required_cost_wei);
         }
+        Ok(false) => return json_error(StatusCode::PAYMENT_REQUIRED,
+            "Payment not confirmed, wrong recipient, or insufficient amount"),
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Payment verification failed: {}", e)),
     }
 
     // Compute SHA-256 hash
@@ -1670,6 +1688,44 @@ async fn main() {
                     Ok(()) => println!("[AUTO] Mining started successfully"),
                     Err(e) => eprintln!("[AUTO] Mining start failed: {}", e),
                 }
+            }
+        });
+    }
+
+    // CDN expiration cleanup — runs every 60 seconds, removes expired files
+    {
+        let cdn_rt = Arc::clone(&runtime_state);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let now = now_secs();
+                let mut registry = load_cdn_registry();
+                let before = registry.len();
+                let expired: Vec<CdnFileEntry> = registry.iter()
+                    .filter(|e| e.expires_at <= now)
+                    .cloned()
+                    .collect();
+
+                if expired.is_empty() { continue; }
+
+                registry.retain(|e| e.expires_at > now);
+                save_cdn_registry(&registry);
+
+                // Unregister expired files from DHT and delete from disk
+                for entry in &expired {
+                    let file_path = cdn_storage_dir().join(&entry.file_hash);
+                    let _ = std::fs::remove_file(&file_path);
+
+                    if let Some(dht) = cdn_rt.dht_service().await {
+                        dht.unregister_shared_file(&entry.file_hash).await;
+                    }
+
+                    println!("[CDN] Expired and removed: {} (owner: {}, hash: {})",
+                        entry.file_name, entry.owner_wallet, entry.file_hash);
+                }
+                println!("[CDN] Cleanup: removed {} expired files ({} remaining)",
+                    expired.len(), registry.len());
             }
         });
     }
