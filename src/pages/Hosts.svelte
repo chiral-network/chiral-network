@@ -212,10 +212,12 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const owner = $walletAccount?.address || '';
       if (!owner) { cdnUploadLoading = false; return; }
-      const result = await invoke<{ items: { id: string; name: string; size: number; itemType: string; storagePath?: string; merkleRoot?: string }[] }>('drive_list_items', { owner });
-      cdnUploadFiles = (result.items || [])
-        .filter((f: { itemType: string }) => f.itemType === 'file')
-        .map((f: { id: string; name: string; size: number; merkleRoot?: string }) => ({ id: f.id, name: f.name, size: f.size || 0, merkleRoot: f.merkleRoot }));
+      const items = await invoke<{ id: string; name: string; size: number; itemType: string; merkleRoot?: string }[]>(
+        'drive_list_items', { owner, parentId: null }
+      );
+      cdnUploadFiles = items
+        .filter((f) => f.itemType === 'file')
+        .map((f) => ({ id: f.id, name: f.name, size: f.size || 0, merkleRoot: f.merkleRoot }));
     } catch (err) {
       toasts.show(`Failed to load Drive files: ${err}`, 'error');
     } finally {
