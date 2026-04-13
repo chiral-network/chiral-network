@@ -199,6 +199,70 @@
     setTimeout(() => copiedCdnHash = null, 2000);
   }
 
+  // CDN upload state
+  let showCdnUploadPicker = $state(false);
+  let cdnUploadFiles = $state<{ id: string; name: string; size: number; merkleRoot?: string }[]>([]);
+  let cdnUploadLoading = $state(false);
+  let cdnUploading = $state<string | null>(null); // file ID being uploaded
+
+  async function loadCdnDriveFiles() {
+    if (!isTauri) return;
+    cdnUploadLoading = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const owner = $walletAccount?.address || '';
+      if (!owner) { cdnUploadLoading = false; return; }
+      const result = await invoke<{ items: { id: string; name: string; size: number; itemType: string; storagePath?: string; merkleRoot?: string }[] }>('drive_list_items', { owner });
+      cdnUploadFiles = (result.items || [])
+        .filter((f: { itemType: string }) => f.itemType === 'file')
+        .map((f: { id: string; name: string; size: number; merkleRoot?: string }) => ({ id: f.id, name: f.name, size: f.size || 0, merkleRoot: f.merkleRoot }));
+    } catch (err) {
+      toasts.show(`Failed to load Drive files: ${err}`, 'error');
+    } finally {
+      cdnUploadLoading = false;
+    }
+  }
+
+  async function uploadToCdn(serverUrl: string, file: { id: string; name: string; size: number; merkleRoot?: string }) {
+    if (!isTauri) return;
+    const owner = $walletAccount?.address || '';
+    if (!owner) { toasts.show('No wallet connected', 'error'); return; }
+
+    cdnUploading = file.id;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      // Read the file data from Drive
+      const fileData = await invoke<number[]>('drive_read_file_bytes', { owner, itemId: file.id });
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(fileData)));
+
+      const resp = await fetch(`${serverUrl}/api/cdn/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileData: base64,
+          ownerWallet: owner,
+          paymentTx: '',
+          durationDays: 30,
+        }),
+      });
+
+      if (resp.ok) {
+        const result = await resp.json();
+        toasts.show(`Uploaded ${file.name} to CDN (hash: ${result.fileHash?.slice(0, 12)}...)`, 'success');
+        showCdnUploadPicker = false;
+        await loadCdnServers();
+      } else {
+        const text = await resp.text();
+        toasts.show(`CDN upload failed: ${text}`, 'error');
+      }
+    } catch (err) {
+      toasts.show(`Upload failed: ${err}`, 'error');
+    } finally {
+      cdnUploading = null;
+    }
+  }
+
   function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -1148,7 +1212,16 @@
           <!-- My files on this CDN -->
           {#if cdn.myFiles.length > 0}
             <div class="p-5">
-              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Your Files on This CDN</h4>
+              <div class="flex items-center justify-between mb-3">
+                <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">Your Files on This CDN</h4>
+                <button
+                  onclick={() => { showCdnUploadPicker = true; loadCdnDriveFiles(); }}
+                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Upload class="w-3 h-3" />
+                  Upload
+                </button>
+              </div>
               <div class="space-y-2">
                 {#each cdn.myFiles as file}
                   <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
@@ -1187,7 +1260,13 @@
             <div class="p-5 text-center">
               <Cloud class="w-8 h-8 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
               <p class="text-sm text-gray-500 dark:text-gray-400">No files hosted on this CDN yet</p>
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">Upload files from the Drive page to keep them available when you're offline</p>
+              <button
+                onclick={() => { showCdnUploadPicker = true; loadCdnDriveFiles(); }}
+                class="mt-3 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
+              >
+                <Upload class="w-4 h-4" />
+                Upload from Drive
+              </button>
             </div>
           {/if}
         </div>
@@ -1266,6 +1345,68 @@
     onSelect={addDriveFilesToSite}
     onClose={() => showDrivePickerForSite = false}
   />
+{/if}
+
+<!-- CDN Upload File Picker -->
+{#if showCdnUploadPicker}
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="fixed inset-0 bg-black/50 flex items-center justify-center z-[9998]"
+  onclick={() => showCdnUploadPicker = false}
+  onkeydown={(e) => { if (e.key === 'Escape') showCdnUploadPicker = false; }}
+>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 max-h-[80vh] flex flex-col"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
+  >
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-lg font-semibold dark:text-white">Upload to CDN</h3>
+      <button onclick={() => showCdnUploadPicker = false} class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+        &times;
+      </button>
+    </div>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Select a file from your Drive to upload to the CDN. It will stay available even when you're offline.</p>
+
+    {#if cdnUploadLoading}
+      <div class="flex items-center justify-center py-8">
+        <Loader2 class="w-6 h-6 animate-spin text-gray-400" />
+        <span class="ml-2 text-sm text-gray-500">Loading Drive files...</span>
+      </div>
+    {:else if cdnUploadFiles.length === 0}
+      <div class="text-center py-8">
+        <Cloud class="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-2" />
+        <p class="text-sm text-gray-500 dark:text-gray-400">No files in your Drive</p>
+        <p class="text-xs text-gray-400 mt-1">Upload files to Drive first, then upload them to the CDN</p>
+      </div>
+    {:else}
+      <div class="overflow-y-auto flex-1 space-y-2">
+        {#each cdnUploadFiles as file}
+          <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium dark:text-white truncate">{file.name}</p>
+              <p class="text-xs text-gray-500 dark:text-gray-400">{formatBytes(file.size)}</p>
+            </div>
+            <button
+              onclick={() => uploadToCdn(CDN_SERVERS[0].url, file)}
+              disabled={cdnUploading === file.id}
+              class="ml-3 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {#if cdnUploading === file.id}
+                <Loader2 class="w-3 h-3 animate-spin" />
+                Uploading...
+              {:else}
+                <Upload class="w-3 h-3" />
+                Upload
+              {/if}
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+</div>
 {/if}
 
 <!-- Delete site confirmation -->
