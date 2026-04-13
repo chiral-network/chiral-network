@@ -1,0 +1,16 @@
+# Windows WDAC (Defender Application Control) workaround.
+#
+# WDAC blocks unsigned executables (error 4551). This flag strips the PE
+# debug directory so binaries are less likely to be flagged.
+#
+# If builds still fail with os error 4551, you MUST add a Windows Defender
+# exclusion for the Cargo target directory. Run in admin PowerShell:
+#
+#   Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\chiral-cargo-target"
+#
+# Then clean and rebuild:
+#   Remove-Item -Recurse -Force $env:LOCALAPPDATA\chiral-cargo-target
+#   npm run tauri:dev
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/DEBUG:NONE"]
