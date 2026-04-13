@@ -260,10 +260,7 @@
           privateKey,
         });
         paymentTx = payResult.hash;
-        toasts.show(`Payment sent: ${paymentTx.slice(0, 12)}...`, 'success', 3000);
-
-        // Wait for confirmation
-        await new Promise(r => setTimeout(r, 3000));
+        toasts.show(`Payment sent: ${paymentTx.slice(0, 12)}... Waiting for confirmation...`, 'info', 8000);
       }
 
       // Step 4: Read file and upload with payment proof
