@@ -39,6 +39,15 @@
   import { logger } from '$lib/logger';
   const log = logger('Download');
 
+  // Known CDN peer IDs — tagged as "(CDN)" in seeder list
+  const CDN_PEER_IDS = new Set([
+    '12D3KooWAWXmjHRqNG5Cphug9HihC1LvuMnpvMRcFHxtqMemL95h', // CDN Primary (US East)
+  ]);
+
+  function isCdnPeer(peerId: string): boolean {
+    return CDN_PEER_IDS.has(peerId);
+  }
+
   // Check if running in Tauri environment (reactive)
   let isTauri = $state(false);
   
@@ -1507,6 +1516,9 @@
                     <span class="font-mono text-xs truncate max-w-[180px]" title={seeder.peerId}>
                       {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
                     </span>
+                    {#if isCdnPeer(seeder.peerId)}
+                      <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">CDN</span>
+                    {/if}
                     <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 flex-shrink-0 tabular-nums">
                       Elo {seederElo.toFixed(1)}
                     </span>
@@ -1524,6 +1536,9 @@
           <div class="mt-3 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
             <span class="font-mono text-xs truncate" title={seeder.peerId}>
               Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
+              {#if isCdnPeer(seeder.peerId)}
+                <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">CDN</span>
+              {/if}
             </span>
             <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
               Elo {seederElo.toFixed(1)}
