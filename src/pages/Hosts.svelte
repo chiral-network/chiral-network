@@ -117,6 +117,7 @@
     fileName: string;
     fileSize: number;
     ownerWallet: string;
+    downloadPriceChi?: string;
     uploadedAt: number;
     expiresAt: number;
   }
@@ -190,6 +191,26 @@
       }
     } catch (err) {
       toasts.show(`Delete failed: ${err}`, 'error');
+    }
+  }
+
+  async function updateCdnPrice(serverUrl: string, fileHash: string, newPrice: string) {
+    const owner = $walletAccount?.address || '';
+    if (!owner) return;
+    try {
+      const resp = await fetch(`${serverUrl}/api/cdn/files/${fileHash}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ owner, downloadPriceChi: newPrice }),
+      });
+      if (resp.ok) {
+        toasts.show(`Price updated to ${newPrice} CHI`, 'success');
+        await loadCdnServers();
+      } else {
+        toasts.show(`Failed to update price`, 'error');
+      }
+    } catch (err) {
+      toasts.show(`Price update failed: ${err}`, 'error');
     }
   }
 
@@ -1280,9 +1301,19 @@
                   <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
                     <div class="flex-1 min-w-0">
                       <p class="text-sm font-medium dark:text-white truncate">{file.fileName}</p>
-                      <div class="flex items-center gap-3 mt-0.5">
+                      <div class="flex items-center gap-3 mt-0.5 flex-wrap">
                         <span class="text-xs text-gray-500 dark:text-gray-400">{formatBytes(file.fileSize)}</span>
                         <span class="text-xs text-gray-400 dark:text-gray-500">Expires {formatCdnDate(file.expiresAt)}</span>
+                        <span class="text-xs font-medium {file.downloadPriceChi && file.downloadPriceChi !== '0' ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}">
+                          {file.downloadPriceChi && file.downloadPriceChi !== '0' ? `${file.downloadPriceChi} CHI` : 'Free'}
+                        </span>
+                        <button
+                          onclick={() => {
+                            const price = prompt('Set download price (CHI):', file.downloadPriceChi || '0');
+                            if (price !== null) updateCdnPrice(cdn.url, file.fileHash, price);
+                          }}
+                          class="text-[10px] text-blue-500 hover:text-blue-700 dark:text-blue-400"
+                        >edit</button>
                       </div>
                     </div>
                     <div class="flex items-center gap-1.5 ml-3">
