@@ -1433,12 +1433,24 @@ async fn cdn_delete(
     let file_path = cdn_storage_dir().join(&file_hash);
     let _ = std::fs::remove_file(&file_path);
 
-    // Unregister from DHT
+    // Unregister from DHT — remove CDN's seeder entry from the metadata
     if let Some(dht) = state.dht_service().await {
         dht.unregister_shared_file(&file_hash).await;
-        // Remove from DHT metadata
+
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
         let dht_key = format!("chiral_file_{}", file_hash);
-        let _ = dht.put_dht_value(dht_key, "{}".to_string()).await;
+        if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
+            if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
+                // Remove CDN's peer from seeders array
+                if let Some(seeders) = metadata["seeders"].as_array_mut() {
+                    seeders.retain(|s| s["peerId"].as_str() != Some(&peer_id));
+                }
+                if metadata["peerId"].as_str() == Some(&peer_id) {
+                    metadata["peerId"] = serde_json::json!("");
+                }
+                let _ = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await;
+            }
+        }
     }
 
     println!("[CDN] Deleted: {} (owner: {})", file_hash, owner);
@@ -1556,7 +1568,8 @@ async fn cdn_status(
     let cdn_wallet = state.wallet.lock().await;
     let wallet_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
 
-    let current_price_wei = calculate_cdn_price(&state).await;
+    // Use floor price for fast response — full calculation is on /api/cdn/pricing
+    let floor_price = CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
 
     Json(json!({
         "status": "online",
@@ -1566,8 +1579,8 @@ async fn cdn_status(
         "totalStorageBytes": active.iter().map(|f| f.file_size).sum::<u64>(),
         "uniqueOwners": active.iter().map(|f| f.owner_wallet.to_lowercase()).collect::<std::collections::HashSet<_>>().len(),
         "pricing": {
-            "pricePerMbMonthChi": wei_to_chi_display(current_price_wei),
-            "pricePerMbMonthWei": current_price_wei.to_string(),
+            "pricePerMbMonthChi": wei_to_chi_display(floor_price),
+            "pricePerMbMonthWei": floor_price.to_string(),
             "source": "market_median_1.2x_premium",
             "floorPriceChi": wei_to_chi_display(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH),
         }
