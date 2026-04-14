@@ -215,3 +215,8 @@ SMTP env vars: `CHIRAL_WALLET_EMAIL_SMTP_HOST`, `CHIRAL_WALLET_EMAIL_FROM` (requ
 - Payment verification: on-chain tx receipt checked before serving file chunks.
 - CDN server at `130.245.173.73:9420` — always-on file hosting with market-based pricing.
 - CDN pricing: `max(floor, median_peer_price × 1.2)` — adapts to marketplace.
+- CDN upload requires on-chain payment verification (5% tolerance for rounding).
+- CDN files re-seed to DHT on startup (15s delay after bootstrap).
+- CDN expiration cleanup runs every 60s — removes expired files from disk + DHT.
+- Download page queries CDN servers as fallback when DHT search times out.
+- Stop seeding removes peer from DHT seeder list (not just local shared files).
