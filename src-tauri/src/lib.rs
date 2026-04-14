@@ -1804,22 +1804,18 @@ async fn search_file(
         // latest persisted Drive seeding intent.
         state.drive_state.load_from_disk_async().await;
 
-        // Fast path: if we are locally seeding this hash, return immediately.
-        // This avoids restart races where Kademlia lookups can time out while
-        // local seeding is already active.
-        if let Some(local) = build_local_search_result(dht, &file_hash).await {
-            println!("Returning immediate local seeding result for {}", file_hash);
-            return Ok(Some(local));
-        }
+        // Check if we are locally seeding this hash (used to merge with DHT results later)
+        let local_result = build_local_search_result(dht, &file_hash).await;
 
         // Self-heal path: if manifest says this file should be seeded but runtime
-        // shared-files map is missing it (restart race/crash), repair and return.
-        if let Some(repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
-            println!(
-                "Repaired missing local seed registration for {} from Drive manifest",
-                file_hash
-            );
-            return Ok(Some(repaired));
+        // shared-files map is missing it (restart race/crash), repair it.
+        if local_result.is_none() {
+            if let Some(_repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
+                println!(
+                    "Repaired missing local seed registration for {} from Drive manifest",
+                    file_hash
+                );
+            }
         }
 
         // Search for file metadata in DHT
@@ -1835,16 +1831,13 @@ async fn search_file(
         match dht_lookup {
             Err(_) => {
                 println!("DHT lookup timed out for key: {}", dht_key);
-                // Timeout should not fail search hard when local Drive state says
-                // this file should be seeded. Try a targeted self-heal before
-                // reporting not-found.
-                if let Some(repaired) =
+                // Return local result if we're seeding, otherwise not found
+                if let Some(local) = local_result {
+                    println!("Returning local seeding result after DHT timeout for {}", file_hash);
+                    Ok(Some(local))
+                } else if let Some(repaired) =
                     try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
                 {
-                    println!(
-                        "Recovered local seed registration for {} after DHT timeout",
-                        file_hash
-                    );
                     Ok(Some(repaired))
                 } else {
                     Ok(None)
@@ -1891,6 +1884,15 @@ async fn search_file(
                         } else if !seeder.signature.is_empty() {
                             println!("  ⚠️ Seeder {} has INVALID signature — may be impersonating wallet {}",
                                 &seeder.peer_id[..20.min(seeder.peer_id.len())], seeder.wallet_address);
+                        }
+                    }
+
+                    // Merge local seeder if we're seeding this file but not in the DHT list
+                    if let Some(ref local) = local_result {
+                        for local_seeder in &local.seeders {
+                            if !seeders.iter().any(|s| s.peer_id == local_seeder.peer_id) {
+                                seeders.push(local_seeder.clone());
+                            }
                         }
                     }
 
