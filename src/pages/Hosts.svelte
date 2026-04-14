@@ -317,7 +317,7 @@
           ownerWallet: owner,
           paymentTx,
           durationDays: 30,
-          downloadPriceChi: cdnFilePrice || '0',
+          downloadPriceChi: String(cdnFilePrice || '0'),
         }),
       });
 
