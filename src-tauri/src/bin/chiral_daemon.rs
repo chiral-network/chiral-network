@@ -1202,7 +1202,11 @@ async fn cdn_upload(
     let owner_wallet = body["ownerWallet"].as_str().unwrap_or("").to_string();
     let payment_tx = body["paymentTx"].as_str().unwrap_or("").to_string();
     let duration_days = body["durationDays"].as_u64().unwrap_or(30);
-    let download_price_chi = body["downloadPriceChi"].as_str().unwrap_or("0").to_string();
+    let download_price_chi = match &body["downloadPriceChi"] {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => "0".to_string(),
+    };
 
     if file_name.is_empty() || file_data_b64.is_empty() || owner_wallet.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "fileName, fileData (base64), ownerWallet required");
@@ -1448,7 +1452,11 @@ async fn cdn_update_price(
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     let owner = body["owner"].as_str().unwrap_or("").to_lowercase();
-    let new_price = body["downloadPriceChi"].as_str().unwrap_or("0").to_string();
+    let new_price = match &body["downloadPriceChi"] {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => "0".to_string(),
+    };
 
     if owner.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "owner required");
