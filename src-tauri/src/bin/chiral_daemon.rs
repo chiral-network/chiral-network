@@ -1094,6 +1094,8 @@ struct CdnFileEntry {
     file_size: u64,
     owner_wallet: String,
     price_chi_per_month: String,
+    #[serde(default)]
+    download_price_chi: String,
     payment_tx: String,
     uploaded_at: u64,
     expires_at: u64,
@@ -1350,6 +1352,7 @@ async fn cdn_upload(
         file_size,
         owner_wallet: owner_wallet.clone(),
         price_chi_per_month: price_per_mb_chi.clone(),
+        download_price_chi: download_price_chi.clone(),
         payment_tx: payment_tx.clone(),
         uploaded_at: now,
         expires_at: expires,
@@ -1436,6 +1439,73 @@ async fn cdn_delete(
 
     println!("[CDN] Deleted: {} (owner: {})", file_hash, owner);
     Json(json!({"status": "deleted", "fileHash": file_hash})).into_response()
+}
+
+/// PUT /api/cdn/files/:fileHash — Update download price for a CDN file.
+async fn cdn_update_price(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    axum::extract::Path(file_hash): axum::extract::Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let owner = body["owner"].as_str().unwrap_or("").to_lowercase();
+    let new_price = body["downloadPriceChi"].as_str().unwrap_or("0").to_string();
+
+    if owner.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "owner required");
+    }
+
+    let mut registry = load_cdn_registry();
+    let entry = registry.iter_mut().find(|e| e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner);
+
+    let entry = match entry {
+        Some(e) => e,
+        None => return json_error(StatusCode::NOT_FOUND, "File not found or not owned by this wallet"),
+    };
+
+    entry.download_price_chi = new_price.clone();
+    save_cdn_registry(&registry);
+
+    // Update DHT record with new price
+    let new_price_wei = if new_price.is_empty() || new_price == "0" {
+        0u128
+    } else {
+        chiral_network::wallet::parse_chi_to_wei(&new_price).unwrap_or(0)
+    };
+
+    if let Some(dht) = state.dht_service().await {
+        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        let dht_key = format!("chiral_file_{}", file_hash);
+        if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
+            if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
+                metadata["priceWei"] = serde_json::json!(new_price_wei.to_string());
+                if let Some(seeders) = metadata["seeders"].as_array_mut() {
+                    for s in seeders.iter_mut() {
+                        if s["peerId"].as_str() == Some(&peer_id) {
+                            s["priceWei"] = serde_json::json!(new_price_wei.to_string());
+                        }
+                    }
+                }
+                let _ = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await;
+            }
+        }
+
+        // Also update shared file registration
+        let file_path = cdn_storage_dir().join(&file_hash);
+        if file_path.exists() {
+            let entry = registry.iter().find(|e| e.file_hash == file_hash).unwrap();
+            dht.register_shared_file(
+                file_hash.clone(),
+                file_path.to_string_lossy().to_string(),
+                entry.file_name.clone(),
+                entry.file_size,
+                new_price_wei,
+                entry.owner_wallet.clone(),
+            ).await;
+        }
+    }
+
+    println!("[CDN] Updated price for {}: {} CHI", file_hash, new_price);
+    Json(json!({"status": "updated", "fileHash": file_hash, "downloadPriceChi": new_price})).into_response()
 }
 
 /// GET /api/cdn/pricing?sizeMb=10&durationDays=30 — Calculate storage cost.
@@ -1566,7 +1636,7 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         // CDN — always-on file hosting service
         .route("/api/cdn/upload", post(cdn_upload))
         .route("/api/cdn/files", get(cdn_list))
-        .route("/api/cdn/files/:file_hash", delete(cdn_delete))
+        .route("/api/cdn/files/:file_hash", delete(cdn_delete).put(cdn_update_price))
         .route("/api/cdn/pricing", get(cdn_pricing))
         .route("/api/cdn/status", get(cdn_status))
         // Diagnostics
@@ -1739,7 +1809,11 @@ async fn main() {
                 if !file_path.exists() { continue; }
 
                 // Parse download price
-                let price_wei = chiral_network::wallet::parse_chi_to_wei(&entry.price_chi_per_month).unwrap_or(0);
+                let price_wei = if entry.download_price_chi.is_empty() || entry.download_price_chi == "0" {
+                    0u128
+                } else {
+                    chiral_network::wallet::parse_chi_to_wei(&entry.download_price_chi).unwrap_or(0)
+                };
 
                 dht.register_shared_file(
                     entry.file_hash.clone(),

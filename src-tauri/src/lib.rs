@@ -4330,10 +4330,27 @@ async fn drive_delete_item(
         dht_guard.as_ref().cloned()
     };
 
-    // Remove from active seeding first so file deletion is not blocked by local serving.
+    // Remove from active seeding + DHT seeder list so the file is no longer discoverable.
     for (_, _, merkle_root) in &file_entries {
         if let (Some(dht), Some(hash)) = (dht.as_ref(), merkle_root.as_ref()) {
             dht.unregister_shared_file(hash).await;
+
+            // Remove ourselves from the DHT seeder list
+            let peer_id = dht.get_peer_id().await.unwrap_or_default();
+            if !peer_id.is_empty() {
+                let dht_key = format!("chiral_file_{}", hash);
+                if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
+                    if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&meta_json) {
+                        metadata.seeders.retain(|s| s.peer_id != peer_id);
+                        if metadata.peer_id == peer_id {
+                            metadata.peer_id = String::new();
+                        }
+                        if let Ok(updated) = serde_json::to_string(&metadata) {
+                            let _ = dht.put_dht_value(dht_key, updated).await;
+                        }
+                    }
+                }
+            }
         }
     }
     if !file_entries.is_empty() {
