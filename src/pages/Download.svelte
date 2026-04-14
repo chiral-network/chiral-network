@@ -1068,12 +1068,22 @@
             const { invoke: inv } = await import('@tauri-apps/api/core');
             const serverUrl = await inv<string | null>('get_drive_server_url');
             if (serverUrl && filePath && $walletAccount?.address) {
-              const driveItem = await inv<{ id: string; name: string }>('drive_upload_file', {
-                owner: $walletAccount.address,
-                filePath,
-                parentId: null,
-                merkleRoot: fileHash,
-              });
+              // Check if file already exists in Drive (avoid duplicates on re-download)
+              const existingItems = await inv<{ id: string; name: string; merkleRoot?: string }[]>(
+                'drive_list_items', { owner: $walletAccount.address, parentId: null }
+              );
+              let driveItem = existingItems.find(
+                (item: { merkleRoot?: string }) => item.merkleRoot === fileHash
+              );
+
+              if (!driveItem) {
+                driveItem = await inv<{ id: string; name: string }>('drive_upload_file', {
+                  owner: $walletAccount.address,
+                  filePath,
+                  parentId: null,
+                  merkleRoot: fileHash,
+                });
+              }
               if (driveItem?.id) {
                 const httpLink = `${serverUrl}/api/drive/view/${driveItem.id}/${encodeURIComponent(fileName)}`;
                 downloads = downloads.map(d => {
