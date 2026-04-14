@@ -149,27 +149,33 @@ The relay filters private IPs from its Kademlia routing table — only stores pu
 
 ## CDN Service
 
-Always-on file hosting — users upload files to the CDN so they stay available when the user goes offline.
+Always-on file hosting — users upload files to the CDN so they stay available when the user goes offline. Payment is required before upload and verified on-chain.
 
 - **Deployed at**: `130.245.173.73:9420` (systemd service: `cdn-server.service`)
 - **Capacity**: 227 GB available
 - **Pricing**: Market-based — `max(floor, median_peer_price × 1.2)`
+- **Payment**: Required before upload, verified on-chain (5% tolerance for rounding)
+- **Expiration**: Files auto-removed when paid duration expires (cleanup every 60s)
+- **Discovery**: CDN files appear on the Download page (DHT + CDN fallback search)
+- **Download price**: Uploader sets a per-download price that others pay
 
 ```bash
-# Upload a file
+# Check pricing
+curl http://130.245.173.73:9420/api/cdn/pricing?sizeMb=100&durationDays=30
+
+# Upload (requires paymentTx — send CHI to CDN wallet first)
 curl -X POST http://130.245.173.73:9420/api/cdn/upload \
   -H "Content-Type: application/json" \
-  -d '{"fileName":"file.pdf","fileData":"<base64>","ownerWallet":"0xYOU","durationDays":30}'
+  -d '{"fileName":"file.pdf","fileData":"<base64>","ownerWallet":"0xYOU","paymentTx":"0xTXHASH","durationDays":30,"downloadPriceChi":"0.5"}'
 
 # List your files
 curl http://130.245.173.73:9420/api/cdn/files?owner=0xYOU
 
-# Check pricing
-curl http://130.245.173.73:9420/api/cdn/pricing?sizeMb=100&durationDays=30
-
 # Delete
 curl -X DELETE http://130.245.173.73:9420/api/cdn/files/HASH?owner=0xYOU
 ```
+
+**Desktop app flow**: Hosts page → CDN Servers tab → Upload → select file from Drive → confirm price → pay → upload.
 
 ## Security
 

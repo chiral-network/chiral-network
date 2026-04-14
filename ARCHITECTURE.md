@@ -100,15 +100,22 @@ The application consists of three layers:
 ### CDN Service
 - Always-on file hosting servers that keep files available when the uploader goes offline.
 - Market-based dynamic pricing: `max(floor_price, median_peer_price × 1.2)`.
-- Upload via HTTP API, manage files per wallet, automatic DHT seeder registration.
+- Payment required before upload — verified on-chain with 5% tolerance for CHI rounding.
+- Uploader sets a download price that other users pay to download from the CDN.
+- Files auto-expire and are cleaned up when the paid hosting duration elapses.
+- CDN re-seeds all active files to DHT on startup (15s after bootstrap).
+- Download page queries CDN servers directly as fallback when DHT search is slow.
 - Deployed at `130.245.173.73:9420` with 227 GB capacity.
+- Desktop app: Hosts → CDN Servers tab → Upload from Drive with payment confirmation.
 
 ### Security
 - ECDSA-signed file metadata (prevents seeder list poisoning and DHT tampering).
 - ECDSA-signed seeder entries (prevents payment address redirection).
 - On-chain payment verification before serving file chunks.
+- On-chain payment verification for CDN uploads (with 5% rounding tolerance).
 - 0.5% platform fee on all transactions (99.5% to seller, 0.5% to platform).
 - Relay filters private IPs from Kademlia routing table.
+- Stop seeding removes peer from DHT seeder list (prevents ghost seeders).
 
 ---
 
