@@ -402,7 +402,7 @@ chiral_daemon --port 9419 --auto-start-dht --auto-mine --miner-address 0xABC
 | `--miner-address` | `CHIRAL_MINER_ADDRESS` | none | Wallet for mining rewards |
 | `--mining-threads` | `CHIRAL_MINING_THREADS` | 1 | CPU mining threads |
 
-### Daemon API Endpoints (44 routes)
+### Daemon API Endpoints (49 routes)
 
 All headless paths prefixed with `/api/headless/` except health, ready, and drive routes.
 
@@ -416,6 +416,7 @@ All headless paths prefixed with `/api/headless/` except health, ready, and driv
 | Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
 | Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status`, `mining/blocks` |
 | Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
+| CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash`; `PUT cdn/files/:hash` |
 | Drive | Full CRUD via `/api/drive/*` (requires `X-Owner` header) |
 | Diagnostics | `GET bootstrap-health` |
 

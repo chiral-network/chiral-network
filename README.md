@@ -87,7 +87,7 @@ All endpoints prefixed with `/api/headless/` unless noted.
 | Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status` |
 | Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
 | Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
-| CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash` |
+| CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash`; `PUT cdn/files/:hash` |
 | Drive | Full CRUD via `/api/drive/*` (requires `X-Owner` header) |
 
 ### Environment Variables
