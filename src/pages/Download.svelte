@@ -42,6 +42,7 @@
   // Known CDN peer IDs — tagged as "(CDN)" in seeder list
   const CDN_PEER_IDS = new Set([
     '12D3KooWAWXmjHRqNG5Cphug9HihC1LvuMnpvMRcFHxtqMemL95h', // CDN Primary (US East)
+    '12D3KooWHUwrCrqd3yTuZYZzr9zs4QBeLVkcpLYGJGZm8X4ShiZx', // CDN Secondary (Stony Brook)
   ]);
 
   function isCdnPeer(peerId: string): boolean {
@@ -534,7 +535,7 @@
 
         // CDN fallback: if DHT didn't find it, check CDN servers directly
         if (!result) {
-          const CDN_URLS = ['http://130.245.173.73:9420'];
+          const CDN_URLS = ['http://130.245.173.73:9420', 'http://130.245.173.231:9420'];
           for (const cdnUrl of CDN_URLS) {
             try {
               const resp = await fetch(`${cdnUrl}/api/headless/file/search`, {

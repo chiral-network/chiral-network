@@ -97,6 +97,7 @@
   // ---------------------------------------------------------------------------
   const CDN_SERVERS = [
     { url: 'http://130.245.173.73:9420', name: 'CDN Primary (US East)', region: 'New York' },
+    { url: 'http://130.245.173.231:9420', name: 'CDN Secondary (US East)', region: 'Stony Brook' },
   ];
 
   interface CdnServerInfo {
