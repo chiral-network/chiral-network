@@ -603,6 +603,63 @@ pub fn verify_signature(data: &[u8], signature_hex: &str, expected_address: &str
 // On-chain payment verification
 // ============================================================================
 
+/// Wait for a tx to be mined and return whether it succeeded.
+/// Polls more aggressively early, then backs off — most txs confirm in 1–2
+/// blocks (~15s). Ceiling ~28s, after which we give up. Returns Ok(false) if
+/// the tx never mines or mines with status != 0x1.
+pub async fn wait_for_tx_mined(tx_hash: &str) -> Result<bool, String> {
+    // 500ms × 4 (2s) + 1s × 6 (6s) + 2s × 10 (20s) ≈ 28s ceiling.
+    // Compared to the old 15 × 2s schedule, this lands within ~500ms of the
+    // block confirmation instead of within ~2s.
+    const DELAYS_MS: &[u64] = &[
+        500, 500, 500, 500,
+        1000, 1000, 1000, 1000, 1000, 1000,
+        2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000,
+    ];
+    let endpoint = crate::geth::effective_rpc_endpoint();
+    for (i, delay_ms) in DELAYS_MS.iter().enumerate() {
+        let receipt = rpc_client::call(
+            &endpoint,
+            "eth_getTransactionReceipt",
+            serde_json::json!([tx_hash]),
+        ).await?;
+        if !receipt.is_null() {
+            let status = receipt.get("status").and_then(|s| s.as_str()).unwrap_or("0x0");
+            return Ok(status == "0x1");
+        }
+        if i < DELAYS_MS.len() - 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+        }
+    }
+    Ok(false)
+}
+
+/// Check tx details (from/to/value) against expectations. One RPC call, no polling.
+/// Caller is responsible for ensuring the tx is already mined (use wait_for_tx_mined first).
+pub async fn verify_tx_details(
+    tx_hash: &str,
+    expected_from: &str,
+    expected_to: &str,
+    expected_amount_wei: u128,
+) -> Result<bool, String> {
+    let endpoint = crate::geth::effective_rpc_endpoint();
+    let tx = rpc_client::call(
+        &endpoint,
+        "eth_getTransactionByHash",
+        serde_json::json!([tx_hash]),
+    ).await?;
+    if tx.is_null() {
+        return Ok(false);
+    }
+    let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
+    let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
+    let tx_value = tx.get("value").and_then(|v| v.as_str()).map(rpc_client::hex_to_u128).unwrap_or(0);
+    let from_match = expected_from.is_empty() || tx_from == expected_from.to_lowercase();
+    let to_match = tx_to == expected_to.to_lowercase();
+    let amount_match = tx_value >= expected_amount_wei;
+    Ok(from_match && to_match && amount_match)
+}
+
 /// Verify a payment transaction on-chain.
 /// Checks that the tx exists, is confirmed, sent the correct amount, and went to the correct recipient.
 pub async fn verify_payment(
@@ -611,58 +668,10 @@ pub async fn verify_payment(
     expected_to: &str,
     expected_amount_wei: u128,
 ) -> Result<bool, String> {
-    let endpoint = crate::geth::effective_rpc_endpoint();
-
-    // Wait for the transaction to be mined (up to 30 seconds)
-    let mut receipt = serde_json::Value::Null;
-    for attempt in 0..15 {
-        receipt = rpc_client::call(
-            &endpoint,
-            "eth_getTransactionReceipt",
-            serde_json::json!([tx_hash]),
-        ).await?;
-
-        if !receipt.is_null() {
-            break;
-        }
-
-        if attempt < 14 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
-    }
-
-    if receipt.is_null() {
-        return Ok(false); // Still not mined after 30s
-    }
-
-    // Check status (0x1 = success)
-    let status = receipt.get("status").and_then(|s| s.as_str()).unwrap_or("0x0");
-    if status != "0x1" {
-        return Ok(false); // Transaction failed
-    }
-
-    // Get the full transaction to check from/to/value
-    let tx = rpc_client::call(
-        &endpoint,
-        "eth_getTransactionByHash",
-        serde_json::json!([tx_hash]),
-    ).await?;
-
-    if tx.is_null() {
+    if !wait_for_tx_mined(tx_hash).await? {
         return Ok(false);
     }
-
-    let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
-    let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
-    let tx_value = tx.get("value").and_then(|v| v.as_str()).map(rpc_client::hex_to_u128).unwrap_or(0);
-
-    // Skip from-check if expected_from is empty (caller doesn't know the sender)
-    let from_match = expected_from.is_empty() || tx_from == expected_from.to_lowercase();
-    let to_match = tx_to == expected_to.to_lowercase();
-    // Allow slight overpayment (gas rounding) but not underpayment
-    let amount_match = tx_value >= expected_amount_wei;
-
-    Ok(from_match && to_match && amount_match)
+    verify_tx_details(tx_hash, expected_from, expected_to, expected_amount_wei).await
 }
 
 // ============================================================================

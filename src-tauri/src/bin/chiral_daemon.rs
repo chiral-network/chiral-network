@@ -1,6 +1,6 @@
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
+    extract::{DefaultBodyLimit, Multipart, Query, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -1198,79 +1198,125 @@ fn save_cdn_registry(entries: &[CdnFileEntry]) {
 
 
 /// POST /api/cdn/upload — Upload a file to the CDN.
-/// Body: { "fileName", "fileData" (base64), "ownerWallet", "paymentTx", "durationDays" }
+/// `multipart/form-data` with a single "file" field (raw bytes + filename).
+/// Metadata is passed via headers:
+///   X-Payment-Tx        — payment tx hash (required)
+///   X-Owner-Wallet      — owner's wallet address (required)
+///   X-Duration-Days     — hosting duration in days (default: 30)
+///   X-Download-Price-Chi — price downloaders pay (CHI, default: "0")
+///
+/// Payment verification (wait for tx to mine, ~15s+ block time) runs in
+/// parallel with the multipart body upload, so the client doesn't pay for
+/// both serially.
 async fn cdn_upload(
     State(state): State<Arc<HeadlessRuntimeState>>,
-    Json(body): Json<serde_json::Value>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
 ) -> Response {
-    let file_name = body["fileName"].as_str().unwrap_or("").to_string();
-    let file_data_b64 = body["fileData"].as_str().unwrap_or("");
-    let owner_wallet = body["ownerWallet"].as_str().unwrap_or("").to_string();
-    let payment_tx = body["paymentTx"].as_str().unwrap_or("").to_string();
-    let duration_days = body["durationDays"].as_u64().unwrap_or(30);
-    let download_price_chi = match &body["downloadPriceChi"] {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        _ => "0".to_string(),
-    };
-
-    if file_name.is_empty() || file_data_b64.is_empty() || owner_wallet.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "fileName, fileData (base64), ownerWallet required");
+    fn header_str(h: &HeaderMap, key: &str) -> String {
+        h.get(key).and_then(|v| v.to_str().ok()).unwrap_or("").to_string()
     }
 
-    // Decode file data
-    use base64::Engine;
-    let file_data = match base64::engine::general_purpose::STANDARD.decode(file_data_b64) {
-        Ok(d) => d,
-        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Invalid base64: {}", e)),
+    let payment_tx = header_str(&headers, "X-Payment-Tx");
+    let owner_wallet = header_str(&headers, "X-Owner-Wallet");
+    let duration_days: u64 = header_str(&headers, "X-Duration-Days").parse().unwrap_or(30);
+    let download_price_chi = {
+        let s = header_str(&headers, "X-Download-Price-Chi");
+        if s.is_empty() { "0".to_string() } else { s }
+    };
+
+    if payment_tx.is_empty() || owner_wallet.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "X-Payment-Tx and X-Owner-Wallet headers required");
+    }
+
+    let cdn_address = {
+        let cdn_wallet = state.wallet.lock().await;
+        cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default()
+    };
+    if cdn_address.is_empty() {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "CDN wallet not configured");
+    }
+
+    // Kick off block-wait in parallel with body upload. The tx hash is known
+    // from the header, so we don't need to wait for the body to start polling.
+    let mined_task = {
+        let tx = payment_tx.clone();
+        tokio::spawn(async move { chiral_network::wallet::wait_for_tx_mined(&tx).await })
+    };
+
+    // Read the file field from the multipart body
+    let mut file_name: Option<String> = None;
+    let mut file_data: Option<Vec<u8>> = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Multipart error: {}", e)),
+        };
+        if field.name() == Some("file") {
+            file_name = field.file_name().map(|s| s.to_string());
+            match field.bytes().await {
+                Ok(b) => file_data = Some(b.to_vec()),
+                Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Failed to read file: {}", e)),
+            }
+        }
+    }
+
+    let file_name = match file_name.filter(|n| !n.is_empty()) {
+        Some(n) => n,
+        None => return json_error(StatusCode::BAD_REQUEST, "Multipart file field missing or unnamed"),
+    };
+    let file_data = match file_data {
+        Some(d) if !d.is_empty() => d,
+        _ => return json_error(StatusCode::BAD_REQUEST, "Empty file"),
     };
 
     if file_data.len() > 500 * 1024 * 1024 {
         return json_error(StatusCode::BAD_REQUEST, "File exceeds 500MB limit");
     }
 
-    // Calculate the required payment amount
+    // Now that we know file size, compute required cost.
     let price_per_mb_month_wei = calculate_cdn_price(&state).await;
     let file_mb = (file_data.len() as f64) / (1024.0 * 1024.0);
     let months = (duration_days as f64) / 30.0;
     let required_cost_wei = (price_per_mb_month_wei as f64 * file_mb * months) as u128;
+    // 5% tolerance for CHI→wei rounding during send_transaction
+    let min_accepted_wei = required_cost_wei * 95 / 100;
 
-    // Payment is REQUIRED — verify on-chain before accepting the file
-    if payment_tx.is_empty() {
-        return json_error(StatusCode::PAYMENT_REQUIRED, &format!(
-            "Payment required. Cost: {} CHI ({} wei). Send payment to CDN wallet and include paymentTx.",
-            wei_to_chi_display(required_cost_wei), required_cost_wei
-        ));
-    }
-
-    let cdn_wallet = state.wallet.lock().await;
-    let cdn_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
-    drop(cdn_wallet);
-
-    if cdn_address.is_empty() {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "CDN wallet not configured");
-    }
-
-    // Verify payment: accept if within 5% tolerance of required amount
-    // (CHI→wei rounding during send_transaction can cause small underpayment)
-    let min_accepted_wei = required_cost_wei * 95 / 100; // 95% of required = 5% tolerance
     println!("[CDN] Verifying payment: tx={} from={} to={} required_wei={} min_accepted={}",
         payment_tx, owner_wallet, cdn_address, required_cost_wei, min_accepted_wei);
 
-    match chiral_network::wallet::verify_payment(&payment_tx, &owner_wallet, &cdn_address, min_accepted_wei).await {
-        Ok(true) => {
-            println!("[CDN] Payment verified OK: tx={}", payment_tx);
-        }
-        Ok(false) => {
-            println!("[CDN] Payment verification FAILED: tx={} (not confirmed, wrong recipient, or insufficient)", payment_tx);
-            return json_error(StatusCode::PAYMENT_REQUIRED,
-                &format!("Payment not confirmed after 30s. Tx: {}. Expected: from={}, to={}, amount>={} wei",
-                    payment_tx, owner_wallet, cdn_address, required_cost_wei));
-        }
-        Err(e) => {
+    // Join the parallel mining wait
+    let mined = match mined_task.await {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
             println!("[CDN] Payment verification ERROR: tx={} err={}", payment_tx, e);
             return json_error(StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Payment verification failed: {}", e));
+        }
+        Err(e) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Payment verification task failed: {}", e));
+        }
+    };
+    if !mined {
+        println!("[CDN] Payment not mined in time: tx={}", payment_tx);
+        return json_error(StatusCode::PAYMENT_REQUIRED,
+            &format!("Payment not confirmed in time. Tx: {}", payment_tx));
+    }
+
+    // Tx is mined; now check from/to/amount with the actual required cost.
+    match chiral_network::wallet::verify_tx_details(&payment_tx, &owner_wallet, &cdn_address, min_accepted_wei).await {
+        Ok(true) => println!("[CDN] Payment verified OK: tx={}", payment_tx),
+        Ok(false) => {
+            println!("[CDN] Payment details mismatch: tx={} (wrong recipient or insufficient amount)", payment_tx);
+            return json_error(StatusCode::PAYMENT_REQUIRED,
+                &format!("Payment details mismatch. Tx: {}. Expected: from={}, to={}, amount>={} wei",
+                    payment_tx, owner_wallet, cdn_address, min_accepted_wei));
+        }
+        Err(e) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Payment detail check failed: {}", e));
         }
     }
 
@@ -1661,7 +1707,11 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         .route("/api/headless/hosting/publish-ad", post(hosting_publish_ad))
         .route("/api/headless/hosting/registry", get(hosting_get_registry))
         // CDN — always-on file hosting service
-        .route("/api/cdn/upload", post(cdn_upload))
+        // 500MB body limit matches the per-file cap enforced inside cdn_upload.
+        .route(
+            "/api/cdn/upload",
+            post(cdn_upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+        )
         .route("/api/cdn/files", get(cdn_list))
         .route("/api/cdn/files/:file_hash", delete(cdn_delete).put(cdn_update_price))
         .route("/api/cdn/pricing", get(cdn_pricing))

@@ -279,21 +279,20 @@
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
-      // Step 1: Get pricing from CDN
+      // Step 1: Pricing + CDN wallet, fetched in parallel
       const sizeMb = (file.size || 1) / (1024 * 1024);
-      const pricingResp = await fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`);
+      const [pricingResp, statusResp] = await Promise.all([
+        fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`),
+        fetch(`${serverUrl}/api/cdn/status`),
+      ]);
       const pricing = await pricingResp.json();
-      const totalCostChi = pricing.totalCostChi || '0';
-      const totalCostWei = pricing.totalCostWei || '0';
-
-      // Step 2: Get CDN wallet address
-      const statusResp = await fetch(`${serverUrl}/api/cdn/status`);
       const cdnStatus = await statusResp.json();
+      const totalCostChi = pricing.totalCostChi || '0';
       const cdnWallet = cdnStatus.walletAddress;
 
-      if (!cdnWallet) { toasts.show('CDN wallet not available', 'error'); cdnUploading = null; return; }
+      if (!cdnWallet) { toasts.show('CDN wallet not available', 'error'); return; }
 
-      // Step 3: Send payment to CDN wallet
+      // Step 2: Send payment (returns tx hash immediately; confirmation is async)
       toasts.show(`Sending ${totalCostChi} CHI to CDN...`, 'info', 5000);
       let paymentTx = '';
       if (parseFloat(totalCostChi) > 0) {
@@ -304,24 +303,26 @@
           privateKey,
         });
         paymentTx = payResult.hash;
-        toasts.show(`Payment sent: ${paymentTx.slice(0, 12)}... Waiting for confirmation...`, 'info', 8000);
+        toasts.show(`Payment sent: ${paymentTx.slice(0, 12)}... Uploading in parallel...`, 'info', 8000);
       }
 
-      // Step 4: Read file and upload with payment proof
-      const fileData = await invoke<number[]>('drive_read_file_bytes', { owner, itemId: file.id });
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(fileData)));
+      // Step 3: Read raw bytes via binary IPC (returns ArrayBuffer, not number[])
+      const fileBytes = await invoke<ArrayBuffer>('drive_read_file_bytes', { owner, itemId: file.id });
+
+      // Step 4: POST as multipart/form-data. Metadata travels in headers so the
+      // server can start waiting for tx confirmation before the body finishes.
+      const formData = new FormData();
+      formData.append('file', new Blob([fileBytes], { type: 'application/octet-stream' }), file.name);
 
       const resp = await fetch(`${serverUrl}/api/cdn/upload`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: file.name,
-          fileData: base64,
-          ownerWallet: owner,
-          paymentTx,
-          durationDays: 30,
-          downloadPriceChi: String(cdnFilePrice || '0'),
-        }),
+        headers: {
+          'X-Payment-Tx': paymentTx,
+          'X-Owner-Wallet': owner,
+          'X-Duration-Days': '30',
+          'X-Download-Price-Chi': String(cdnFilePrice || '0'),
+        },
+        body: formData,
       });
 
       if (resp.ok) {
