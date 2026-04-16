@@ -4157,12 +4157,15 @@ async fn drive_create_folder(
 }
 
 /// Read raw file bytes from Drive (for CDN upload).
+/// Returns a binary IPC response (Tauri 2 transfers `tauri::ipc::Response` as
+/// raw bytes, which is ~10× faster than the JSON `number[]` round-trip you'd
+/// get from returning `Vec<u8>` directly).
 #[tauri::command]
 async fn drive_read_file_bytes(
     state: tauri::State<'_, AppState>,
     owner: String,
     item_id: String,
-) -> Result<Vec<u8>, String> {
+) -> Result<tauri::ipc::Response, String> {
     let storage_path = {
         let m = state.drive_state.manifest.read().await;
         let item = m.items.iter()
@@ -4172,7 +4175,8 @@ async fn drive_read_file_bytes(
     };
     let files_dir = ds::drive_files_dir().ok_or("Cannot determine drive files directory")?;
     let path = files_dir.join(&storage_path);
-    std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))
+    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
