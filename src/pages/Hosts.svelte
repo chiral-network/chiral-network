@@ -254,7 +254,12 @@
   }
 
   async function confirmCdnUpload(serverUrl: string, file: { id: string; name: string; size: number }) {
-    // Fetch pricing before showing confirmation
+    cdnConfirmFile = file;
+    cdnConfirmServerUrl = serverUrl;
+    cdnFilePrice = '0';
+    cdnConfirmPricing = null;
+    showCdnUploadPicker = false;
+
     const sizeMb = Math.max((file.size || 1) / (1024 * 1024), 0.001);
     try {
       const resp = await fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`);
@@ -262,9 +267,6 @@
     } catch {
       cdnConfirmPricing = { totalCostChi: '?', pricePerMbMonthChi: '?' };
     }
-    cdnConfirmFile = file;
-    cdnConfirmServerUrl = serverUrl;
-    cdnFilePrice = '0';
   }
 
   async function uploadToCdn(serverUrl: string, file: { id: string; name: string; size: number; merkleRoot?: string }) {
