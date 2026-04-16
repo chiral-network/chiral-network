@@ -1049,9 +1049,17 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(3600)))
         .build();
 
-    // Listen on all interfaces (dual-stack: IPv4 + IPv6)
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
-    swarm.listen_on("/ip6/::/tcp/0".parse()?)?;
+    // Listen on all interfaces (dual-stack: IPv4 + IPv6).
+    // CHIRAL_P2P_PORT pins the libp2p TCP port — set this on containerized nodes
+    // (k3s/Docker) so the bound port matches the externally exposed NodePort.
+    // Without it, the OS picks a random ephemeral port that won't be reachable
+    // from outside the pod and will leave stale unreachable multiaddrs in the DHT.
+    let p2p_port: u16 = std::env::var("CHIRAL_P2P_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{}", p2p_port).parse()?)?;
+    swarm.listen_on(format!("/ip6/::/tcp/{}", p2p_port).parse()?)?;
 
     // Request relay reservations ONLY on nodes that run a relay server.
     // Using get_relay_nodes() (not get_bootstrap_nodes()) to avoid sending RESERVE to

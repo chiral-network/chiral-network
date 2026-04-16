@@ -55,6 +55,12 @@ struct DaemonArgs {
     /// Number of CPU mining threads (default: 1)
     #[arg(long, env = "CHIRAL_MINING_THREADS", default_value_t = 1)]
     mining_threads: u32,
+
+    /// Pin the libp2p TCP port. Default: OS-assigned (0). Set this on k3s/Docker
+    /// nodes to match the externally exposed NodePort, otherwise the random port
+    /// the daemon picks won't be reachable and stale multiaddrs end up in the DHT.
+    #[arg(long, env = "CHIRAL_P2P_PORT")]
+    p2p_port: Option<u16>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1668,6 +1674,9 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
 #[tokio::main]
 async fn main() {
     let args = DaemonArgs::parse();
+    if let Some(port) = args.p2p_port {
+        std::env::set_var("CHIRAL_P2P_PORT", port.to_string());
+    }
     let pid_file = args.pid_file.unwrap_or_else(default_pid_file);
 
     if let Err(e) = write_pid_file(&pid_file) {
