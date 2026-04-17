@@ -443,13 +443,20 @@
       const { invoke } = await import('@tauri-apps/api/core');
       const paths = await invoke<string[]>('open_file_dialog', { multiple: true });
       if (paths && paths.length > 0) {
-        for (const p of paths) {
-          const name = p.split(/[\\/]/).pop() || p;
-          const size = await invoke<number>('get_file_size', { filePath: p });
-          if (!selectedFiles.some(f => f.path === p)) {
-            selectedFiles = [...selectedFiles, { name, path: p, size }];
-          }
-        }
+        const newPaths = paths.filter((p) => !selectedFiles.some((f) => f.path === p));
+        const sizes = await Promise.all(
+          newPaths.map((p) =>
+            invoke<number>('get_file_size', { filePath: p }).catch(() => 0),
+          ),
+        );
+        selectedFiles = [
+          ...selectedFiles,
+          ...newPaths.map((p, i) => ({
+            name: p.split(/[\\/]/).pop() || p,
+            path: p,
+            size: sizes[i],
+          })),
+        ];
       }
     } catch (err) {
       log.error('File dialog error:', err);
@@ -867,11 +874,18 @@
         'drive_list_all_items', { owner: wallet.address },
       );
       const hashSet = new Set(agreement.fileHashes);
-      for (const item of allItems) {
-        if (item.itemType === 'file' && (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot)))) {
-          await invoke('drive_delete_item', { owner: wallet.address, itemId: item.id });
-        }
-      }
+      const toDelete = allItems.filter(
+        (item) =>
+          item.itemType === 'file' &&
+          (hashSet.has(item.name) || (item.merkleRoot && hashSet.has(item.merkleRoot))),
+      );
+      await Promise.all(
+        toDelete.map((item) =>
+          invoke('drive_delete_item', { owner: wallet.address, itemId: item.id }).catch(
+            (err) => console.warn(`delete_item ${item.id} failed:`, err),
+          ),
+        ),
+      );
     } catch (err) {
       console.warn('Failed to cleanup Drive shared files:', err);
     }
