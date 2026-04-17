@@ -426,7 +426,7 @@ async fn upload_file(
     }
 
     let dest = files_dir.join(&storage_name);
-    if let Err(e) = std::fs::write(&dest, &data) {
+    if let Err(e) = tokio::fs::write(&dest, &data).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to write file: {}", e),
@@ -681,14 +681,14 @@ async fn download_file(
         return (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response();
     };
     let path = files_dir.join(sp);
-    let metadata = match std::fs::metadata(&path) {
+    let metadata = match tokio::fs::metadata(&path).await {
         Ok(m) => m,
         Err(_) => return (StatusCode::NOT_FOUND, "File not found on disk").into_response(),
     };
     if metadata.len() > 500 * 1024 * 1024 {
         return (StatusCode::PAYLOAD_TOO_LARGE, "File too large").into_response();
     }
-    let data = match std::fs::read(&path) {
+    let data = match tokio::fs::read(&path).await {
         Ok(d) => d,
         Err(_) => return (StatusCode::NOT_FOUND, "File not found on disk").into_response(),
     };
@@ -977,7 +977,7 @@ async fn public_download(
     };
     let file_path = files_dir.join(&sp);
 
-    let data = match std::fs::read(&file_path) {
+    let data = match tokio::fs::read(&file_path).await {
         Ok(d) => d,
         Err(_) => return (StatusCode::NOT_FOUND, "File not found on disk").into_response(),
     };

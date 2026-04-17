@@ -544,7 +544,7 @@ async fn dht_send_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<SendFileRequest>,
 ) -> Response {
-    let data = match std::fs::read(&req.file_path) {
+    let data = match tokio::fs::read(&req.file_path).await {
         Ok(v) => v,
         Err(e) => {
             return json_error(
@@ -1323,9 +1323,9 @@ async fn cdn_upload(
 
     // Store file on disk
     let storage_dir = cdn_storage_dir();
-    let _ = std::fs::create_dir_all(&storage_dir);
+    let _ = tokio::fs::create_dir_all(&storage_dir).await;
     let file_path = storage_dir.join(&file_hash);
-    if let Err(e) = std::fs::write(&file_path, &file_data) {
+    if let Err(e) = tokio::fs::write(&file_path, &file_data).await {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to store file: {}", e));
     }
 
