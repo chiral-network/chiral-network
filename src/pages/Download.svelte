@@ -271,7 +271,42 @@
 
   // Seeder selection (for multi-seeder downloads)
   let selectedSeederIndex = $state<number>(0);
+  type SeederSort = 'best' | 'elo' | 'price';
+  let seederSort = $state<SeederSort>('best');
   const BASE_ELO = 50;
+
+  /// Sort seeders by the current mode. "Best" ranks by Elo descending and
+  /// breaks ties with cheaper price, which matches what the user is likely
+  /// optimizing for (highest reputation they can get at the lowest cost).
+  /// Returns a fresh array — does not mutate the input.
+  function sortSeeders(list: SeederInfo[], mode: SeederSort): SeederInfo[] {
+    const withElo = list.map((s) => ({ s, elo: getSeederElo(s), price: BigInt(s.priceWei || '0') }));
+    switch (mode) {
+      case 'elo':
+        withElo.sort((a, b) => b.elo - a.elo);
+        break;
+      case 'price':
+        withElo.sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : b.elo - a.elo));
+        break;
+      case 'best':
+      default:
+        withElo.sort((a, b) => (b.elo - a.elo) || (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
+    }
+    return withElo.map((x) => x.s);
+  }
+
+  /// Re-sort the current searchResult.seeders in place, preserving the
+  /// user's current selection by peer_id.
+  function applySeederSort(mode: SeederSort) {
+    seederSort = mode;
+    if (!searchResult || searchResult.seeders.length <= 1) return;
+    const selectedPeerId = searchResult.seeders[selectedSeederIndex]?.peerId;
+    searchResult.seeders = sortSeeders(searchResult.seeders, mode);
+    const newIdx = selectedPeerId
+      ? searchResult.seeders.findIndex((s) => s.peerId === selectedPeerId)
+      : 0;
+    selectedSeederIndex = newIdx >= 0 ? newIdx : 0;
+  }
 
   // Persistence keys (wallet-specific to isolate data between accounts)
   function getDownloadHistoryKey(): string {
@@ -579,11 +614,13 @@
           if (!result.fileName) {
             result.fileName = `file-${fileHash.slice(0, 8)}`;
           }
-          searchResult = result;
-          // Fetch seeder reputation ratings
+          // Pre-fetch reputations so sort-by-best uses real Elo, not BASE_ELO
           if (result.seeders.length > 0) {
-            fetchSeederRatings(result.seeders);
+            await fetchSeederRatings(result.seeders);
+            result.seeders = sortSeeders(result.seeders, seederSort);
           }
+          searchResult = result;
+          selectedSeederIndex = 0;
           if (result.seeders.length > 0) {
             toasts.detail('File found', `${result.fileName} — ${result.seeders.length} seeder${result.seeders.length !== 1 ? 's' : ''} available`, 'success');
           } else {
@@ -1507,56 +1544,82 @@
           </div>
         </div>
 
-        <!-- Seeder Selection (when multiple seeders available) -->
-        {#if searchResult.seeders.length > 1}
+        <!-- Seeder list — unified for 1+ seeders so the comparison surface
+             is always visible, even when only one seeder is currently online. -->
+        {#if searchResult.seeders.length >= 1}
           <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
-            <p class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Select Seeder</p>
-            <div class="space-y-2 max-h-48 overflow-y-auto">
+            <div class="flex items-center justify-between mb-3 gap-3">
+              <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {#if searchResult.seeders.length === 1}
+                  Seeder
+                {:else}
+                  Choose seeder <span class="text-gray-400 font-normal">({searchResult.seeders.length} available)</span>
+                {/if}
+              </p>
+              {#if searchResult.seeders.length > 1}
+                <div class="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden text-xs">
+                  {#each (['best', 'elo', 'price'] as const) as mode}
+                    <button
+                      onclick={() => applySeederSort(mode)}
+                      class="px-2.5 py-1 capitalize transition-colors
+                        {seederSort === mode
+                          ? 'bg-primary-500 text-white'
+                          : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'}"
+                    >
+                      {mode}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+            <div class="space-y-2 max-h-60 overflow-y-auto">
               {#each searchResult.seeders as seeder, i}
                 {@const seederElo = getSeederElo(seeder)}
+                {@const rep = getSeederReputation(seeder)}
+                {@const interactive = searchResult.seeders.length > 1}
                 <button
-                  onclick={() => selectedSeederIndex = i}
-                  class="w-full flex items-center justify-between p-2.5 rounded-lg border-2 text-left transition-all text-sm
+                  onclick={() => { if (interactive) selectedSeederIndex = i; }}
+                  disabled={!interactive}
+                  class="w-full flex items-center justify-between p-3 rounded-lg border-2 text-left transition-all text-sm
                     {selectedSeederIndex === i
                       ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
                       : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
                     }"
                 >
-                  <div class="flex items-center gap-2 min-w-0">
-                    <input type="radio" checked={selectedSeederIndex === i} class="accent-primary-500" />
-                    <span class="font-mono text-xs truncate max-w-[180px]" title={seeder.peerId}>
-                      {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
-                    </span>
-                    {#if isCdnPeer(seeder.peerId)}
-                      <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">CDN</span>
+                  <div class="flex items-center gap-2 min-w-0 flex-1">
+                    {#if interactive}
+                      <input type="radio" checked={selectedSeederIndex === i} class="accent-primary-500 flex-shrink-0" />
                     {/if}
-                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 flex-shrink-0 tabular-nums">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="font-mono text-xs text-gray-700 dark:text-gray-300 truncate" title={seeder.peerId}>
+                          {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
+                        </span>
+                        {#if isCdnPeer(seeder.peerId)}
+                          <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 flex-shrink-0">CDN</span>
+                        {/if}
+                      </div>
+                      {#if seeder.walletAddress}
+                        <div class="font-mono text-[11px] text-gray-400 dark:text-gray-500 truncate" title={seeder.walletAddress}>
+                          {seeder.walletAddress.slice(0, 10)}…{seeder.walletAddress.slice(-6)}
+                          {#if rep && (rep.completedCount || 0) + (rep.failedCount || 0) > 0}
+                            <span class="ml-1">· {rep.completedCount || 0}✓ {rep.failedCount || 0}✗</span>
+                          {/if}
+                        </div>
+                      {/if}
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2 flex-shrink-0 ml-2">
+                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
                       Elo {seederElo.toFixed(1)}
                     </span>
+                    <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 tabular-nums">
+                      {formatPriceWei(seeder.priceWei || '0')}
+                    </span>
                   </div>
-                  <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 flex-shrink-0 tabular-nums">
-                    {formatPriceWei(seeder.priceWei || '0')}
-                  </span>
                 </button>
               {/each}
             </div>
-          </div>
-        {:else if searchResult.seeders.length === 1}
-          {@const seeder = searchResult.seeders[0]}
-          {@const seederElo = getSeederElo(seeder)}
-          <div class="mt-3 flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-            <span class="font-mono text-xs truncate" title={seeder.peerId}>
-              Seeder: {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
-              {#if isCdnPeer(seeder.peerId)}
-                <span class="ml-1 px-1.5 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">CDN</span>
-              {/if}
-            </span>
-            <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
-              Elo {seederElo.toFixed(1)}
-            </span>
-            <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 tabular-nums">
-              {formatPriceWei(seeder.priceWei || '0')}
-            </span>
           </div>
         {/if}
 
