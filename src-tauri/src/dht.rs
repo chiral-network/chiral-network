@@ -135,15 +135,13 @@ mod cbor_codec {
     }
 }
 
-/// Get bootstrap nodes for the Chiral Network DHT
+/// Get bootstrap nodes for the active Chiral Network DHT.
 pub fn get_bootstrap_nodes() -> Vec<String> {
-    vec![
-        // Primary bootstrap node with relay server (IPv4 + IPv6)
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
-            .to_string(),
-        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
-            .to_string(),
-    ]
+    crate::network::active()
+        .libp2p_bootstrap_addrs
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Get relay server nodes — only bootstrap nodes that run a relay server.
@@ -151,12 +149,11 @@ pub fn get_bootstrap_nodes() -> Vec<String> {
 /// listener whose dropped receiver poisons the handler's to_listener channel on the
 /// SAME handler if libp2p reuses connections.
 pub fn get_relay_nodes() -> Vec<String> {
-    vec![
-        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
-            .to_string(),
-        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1"
-            .to_string(),
-    ]
+    crate::network::active()
+        .libp2p_relay_addrs
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// Get unique peer IDs of all bootstrap nodes
@@ -1101,12 +1098,12 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
 
 /// Path to the failed-peers persistence file.
 fn failed_peers_path() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("chiral-network").join("failed_peers.txt"))
+    Some(crate::network::data_dir().join("failed_peers.txt"))
 }
 
 /// Path to the persisted libp2p identity keypair.
 fn identity_key_path() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("chiral-network").join("peer_identity.key"))
+    Some(crate::network::data_dir().join("peer_identity.key"))
 }
 
 /// Load or generate the libp2p Ed25519 keypair.
@@ -2581,10 +2578,8 @@ async fn handle_behaviour_event(
                                                     .get("agreementId")
                                                     .and_then(|v| v.as_str())
                                                 {
-                                                    if let Some(data_dir) = dirs::data_dir() {
-                                                        let dir = data_dir
-                                                            .join("chiral-network")
-                                                            .join("agreements");
+                                                    {
+                                                        let dir = crate::network::data_dir().join("agreements");
                                                         let _ = std::fs::create_dir_all(&dir);
                                                         let _ = std::fs::write(
                                                             dir.join(format!("{}.json", id)),
@@ -2617,10 +2612,8 @@ async fn handle_behaviour_event(
 
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
-                                                if let Some(data_dir) = dirs::data_dir() {
-                                                    let dir = data_dir
-                                                        .join("chiral-network")
-                                                        .join("agreements");
+                                                {
+                                                        let dir = crate::network::data_dir().join("agreements");
                                                     let path =
                                                         dir.join(format!("{}.json", agreement_id));
                                                     if let Ok(contents) =
@@ -2665,10 +2658,8 @@ async fn handle_behaviour_event(
                                             println!("📋 Received cancellation request for agreement {} from peer {}", agreement_id, peer);
 
                                             if !agreement_id.is_empty() {
-                                                if let Some(data_dir) = dirs::data_dir() {
-                                                    let dir = data_dir
-                                                        .join("chiral-network")
-                                                        .join("agreements");
+                                                {
+                                                        let dir = crate::network::data_dir().join("agreements");
                                                     let path =
                                                         dir.join(format!("{}.json", agreement_id));
                                                     if let Ok(contents) =
@@ -2765,10 +2756,8 @@ async fn handle_behaviour_event(
 
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
-                                                if let Some(data_dir) = dirs::data_dir() {
-                                                    let dir = data_dir
-                                                        .join("chiral-network")
-                                                        .join("agreements");
+                                                {
+                                                        let dir = crate::network::data_dir().join("agreements");
                                                     let path =
                                                         dir.join(format!("{}.json", agreement_id));
                                                     if let Ok(contents) =
