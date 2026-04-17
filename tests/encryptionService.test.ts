@@ -117,7 +117,9 @@ describe('encryptionService', () => {
     });
 
     it('decryptFile should invoke backend and return Uint8Array', async () => {
-      mockedInvoke.mockResolvedValue([72, 101, 108, 108, 111]); // "Hello"
+      // Backend returns binary IPC (ArrayBuffer) — test both input shapes.
+      const buf = new Uint8Array([72, 101, 108, 108, 111]).buffer; // "Hello"
+      mockedInvoke.mockResolvedValue(buf);
       const bundle: EncryptedFileBundle = {
         ephemeralPublicKey: 'eph',
         ciphertext: 'ct',
