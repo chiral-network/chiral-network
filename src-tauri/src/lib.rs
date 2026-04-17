@@ -3525,18 +3525,21 @@ async fn encrypt_file_for_recipient(
     encryption::encrypt_for_recipient_hex(&file_data, &recipient_public_key)
 }
 
-/// Decrypt file data using our keypair
+/// Decrypt file data using our keypair.
+/// Returns raw bytes over binary IPC — JSON `number[]` would ~10× inflate
+/// the wire payload for anything larger than a few KB.
 #[tauri::command]
 async fn decrypt_file_data(
     state: tauri::State<'_, AppState>,
     encrypted_bundle: encryption::EncryptedFileBundle,
-) -> Result<Vec<u8>, String> {
+) -> Result<tauri::ipc::Response, String> {
     let keypair_guard = state.encryption_keypair.lock().await;
     let keypair = keypair_guard
         .as_ref()
         .ok_or("Encryption keypair not initialized")?;
 
-    encryption::decrypt_with_keypair(&encrypted_bundle, keypair)
+    let bytes = encryption::decrypt_with_keypair(&encrypted_bundle, keypair)?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Send an encrypted file to a peer

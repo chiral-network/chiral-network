@@ -34,6 +34,8 @@
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { walletService } from '$lib/services/walletService';
   import { ratingApi, setRatingOwner, type BatchReputationEntry } from '$lib/services/ratingApiService';
+  import { sortSeeders as sortSeedersUtil, type SeederSort } from '$lib/utils/seederSort';
+  import { withTimeout } from '$lib/utils/withTimeout';
   import { calculateCost, formatCost, formatSpeed } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
@@ -211,18 +213,6 @@
     return String(error);
   }
 
-  async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs);
-    });
-    try {
-      return await Promise.race([promise, timeoutPromise]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  }
-
   // State
   let searchMode = $state<SearchMode>('hash');
   let searchQuery = $state('');
@@ -271,28 +261,11 @@
 
   // Seeder selection (for multi-seeder downloads)
   let selectedSeederIndex = $state<number>(0);
-  type SeederSort = 'best' | 'elo' | 'price';
   let seederSort = $state<SeederSort>('best');
   const BASE_ELO = 50;
 
-  /// Sort seeders by the current mode. "Best" ranks by Elo descending and
-  /// breaks ties with cheaper price, which matches what the user is likely
-  /// optimizing for (highest reputation they can get at the lowest cost).
-  /// Returns a fresh array — does not mutate the input.
   function sortSeeders(list: SeederInfo[], mode: SeederSort): SeederInfo[] {
-    const withElo = list.map((s) => ({ s, elo: getSeederElo(s), price: BigInt(s.priceWei || '0') }));
-    switch (mode) {
-      case 'elo':
-        withElo.sort((a, b) => b.elo - a.elo);
-        break;
-      case 'price':
-        withElo.sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : b.elo - a.elo));
-        break;
-      case 'best':
-      default:
-        withElo.sort((a, b) => (b.elo - a.elo) || (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
-    }
-    return withElo.map((x) => x.s);
+    return sortSeedersUtil(list, mode, getSeederElo);
   }
 
   /// Re-sort the current searchResult.seeders in place, preserving the

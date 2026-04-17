@@ -96,7 +96,7 @@ export const encryptionService = {
       throw new Error('Decryption not available in web mode');
     }
 
-    const decrypted = await invoke<number[]>('decrypt_file_data', {
+    const decrypted = await invoke<ArrayBuffer>('decrypt_file_data', {
       encryptedBundle
     });
 
