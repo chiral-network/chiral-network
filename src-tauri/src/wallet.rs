@@ -158,7 +158,7 @@ pub async fn send_transaction(
     };
 
     let gas_limit: u64 = 21000;
-    let chain_id: u64 = crate::geth::CHAIN_ID;
+    let chain_id: u64 = crate::geth::chain_id();
     let gas_cost = gas_price as u128 * gas_limit as u128;
     let total_cost = amount_wei.checked_add(gas_cost).ok_or("Amount overflow")?;
 
@@ -406,10 +406,7 @@ pub async fn get_transaction_history(
 // ============================================================================
 
 fn tx_metadata_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("chiral-network")
-        .join("tx_metadata.json")
+    crate::network::data_dir().join("tx_metadata.json")
 }
 
 pub fn load_tx_metadata() -> HashMap<String, TransactionMeta> {

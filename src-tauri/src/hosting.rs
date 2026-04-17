@@ -35,12 +35,12 @@ pub struct HostedSite {
 
 /// Directory where all hosted sites are stored.
 pub fn sites_base_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("chiral-network").join("sites"))
+    Some(crate::network::data_dir().join("sites"))
 }
 
 /// Path to the metadata JSON file.
 fn metadata_path() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("chiral-network").join("hosted_sites.json"))
+    Some(crate::network::data_dir().join("hosted_sites.json"))
 }
 
 /// Load all hosted sites from disk.

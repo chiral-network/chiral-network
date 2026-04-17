@@ -9,6 +9,7 @@ pub mod geth;
 pub mod geth_bootstrap;
 pub mod hosting;
 pub mod hosting_server;
+pub mod network;
 pub mod rating_api;
 pub mod rating_storage;
 pub mod relay_share_proxy;
@@ -920,10 +921,7 @@ async fn get_host_advertisement(
 }
 
 fn agreements_dir() -> Result<std::path::PathBuf, String> {
-    let dir = dirs::data_dir()
-        .ok_or("Could not find data directory")?
-        .join("chiral-network")
-        .join("agreements");
+    let dir = network::data_dir().join("agreements");
     if !dir.exists() {
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Failed to create agreements dir: {e}"))?;
@@ -3357,7 +3355,47 @@ async fn set_miner_address(
 
 #[tauri::command]
 fn get_chain_id() -> u64 {
-    geth::CHAIN_ID
+    geth::chain_id()
+}
+
+// ============================================================================
+// Network selection commands
+// ============================================================================
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkInfo {
+    name: String,
+    display_name: String,
+    chain_id: u64,
+}
+
+fn network_info(cfg: &network::NetworkConfig) -> NetworkInfo {
+    NetworkInfo {
+        name: cfg.name.to_string(),
+        display_name: cfg.display_name.to_string(),
+        chain_id: cfg.chain_id,
+    }
+}
+
+/// Return the active network config (resolved at process start).
+#[tauri::command]
+fn get_active_network() -> NetworkInfo {
+    network_info(network::active())
+}
+
+/// Return every configured network.
+#[tauri::command]
+fn list_networks() -> Vec<NetworkInfo> {
+    network::ALL.iter().map(|c| network_info(c)).collect()
+}
+
+/// Persist the active-network choice to disk. The change takes effect on the
+/// next app launch — geth chain state, DHT identity, and wallet tx history
+/// must all swap atomically, and doing that hot is too fragile.
+#[tauri::command]
+fn set_active_network(name: String) -> Result<(), String> {
+    network::set_active(&name)
 }
 
 // ============================================================================
@@ -3414,10 +3452,7 @@ async fn send_wallet_backup_email(
 /// Read the last N lines of the Geth log file
 #[tauri::command]
 fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("chiral-network")
-        .join("geth");
+    let data_dir = network::data_dir().join("geth");
     let log_path = data_dir.join("geth.log");
     if !log_path.exists() {
         return Ok("No geth.log found".to_string());
@@ -5134,10 +5169,7 @@ pub fn run() {
                     }
                     Err(_) => {
                         // Fallback: kill via PID file
-                        let data_dir = dirs::data_dir()
-                            .unwrap_or_else(|| std::path::PathBuf::from("."))
-                            .join("chiral-network")
-                            .join("geth");
+                        let data_dir = network::data_dir().join("geth");
                         let pid_path = data_dir.join("geth.pid");
                         if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
                             if let Ok(pid) = pid_str.trim().parse::<u32>() {
@@ -5283,6 +5315,10 @@ pub fn run() {
             record_transaction_meta,
             request_faucet,
             get_chain_id,
+            // Network selection
+            get_active_network,
+            list_networks,
+            set_active_network,
             // Geth commands
             is_geth_installed,
             download_geth,
@@ -5390,10 +5426,7 @@ pub fn run() {
                     Err(_) => {
                         // Mutex is held — use synchronous force-kill as fallback
                         println!("⚠️  Could not acquire Geth lock on exit, force-killing via PID");
-                        let data_dir = dirs::data_dir()
-                            .unwrap_or_else(|| std::path::PathBuf::from("."))
-                            .join("chiral-network")
-                            .join("geth");
+                        let data_dir = network::data_dir().join("geth");
                         let pid_path = data_dir.join("geth.pid");
                         if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
                             if let Ok(pid) = pid_str.trim().parse::<u32>() {

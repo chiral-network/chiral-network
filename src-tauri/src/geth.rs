@@ -8,6 +8,7 @@
 //! - Bootstrap node health checking (via geth_bootstrap module)
 
 use crate::geth_bootstrap;
+use crate::network;
 use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -22,11 +23,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Configuration
 // ============================================================================
 
-/// Chiral Network chain ID
-pub const CHAIN_ID: u64 = 98765;
+/// Chiral Network chain ID for the active network.
+pub fn chain_id() -> u64 {
+    network::active().chain_id
+}
 
-/// Network ID (same as chain ID for our network)
-pub const NETWORK_ID: u64 = 98765;
+/// Network ID for the active network (same as chain ID for our deployments).
+pub fn network_id() -> u64 {
+    network::active().network_id
+}
 
 /// Tracks whether a local Geth process is running (set by GethProcess start/stop)
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -42,11 +47,7 @@ pub fn effective_rpc_endpoint() -> String {
 }
 
 fn diagnostics_geth_log_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("chiral-network")
-        .join("geth")
-        .join("geth.log")
+    network::data_dir().join("geth").join("geth.log")
 }
 
 fn detect_log_level(message: &str) -> &'static str {
@@ -105,7 +106,7 @@ macro_rules! println {
 /// Override with CHIRAL_RPC_ENDPOINT environment variable.
 pub fn rpc_endpoint() -> String {
     std::env::var("CHIRAL_RPC_ENDPOINT")
-        .unwrap_or_else(|_| "http://130.245.173.73:8545".to_string())
+        .unwrap_or_else(|_| network::active().rpc_fallback.to_string())
 }
 
 // ============================================================================
@@ -408,10 +409,7 @@ pub struct GethProcess {
 
 impl GethProcess {
     pub fn new() -> Self {
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("chiral-network")
-            .join("geth");
+        let data_dir = network::data_dir().join("geth");
 
         let process = GethProcess {
             child: None,
@@ -1132,36 +1130,11 @@ impl GethProcess {
         self.gpu_utilization_percent = 100;
     }
 
-    /// Get the genesis.json content for Chiral Network.
-    /// Must match V1 and the remote bootstrap node exactly so that
-    /// all nodes produce the same genesis hash and can peer together.
+    /// Get the genesis.json content for the active Chiral Network.
+    /// Must produce an identical genesis hash to the active network's
+    /// bootstrap node, otherwise peers will refuse to sync.
     fn get_genesis_json() -> String {
-        serde_json::json!({
-            "config": {
-                "chainId": CHAIN_ID,
-                "homesteadBlock": 0,
-                "eip150Block": 0,
-                "eip155Block": 0,
-                "eip158Block": 0,
-                "byzantiumBlock": 0,
-                "constantinopleBlock": 0,
-                "petersburgBlock": 0,
-                "istanbulBlock": 0,
-                "berlinBlock": 0,
-                "londonBlock": 0,
-                "ethash": {}
-            },
-            "difficulty": "0x400000",
-            "gasLimit": "0x47b760",
-            "alloc": {},
-            "coinbase": "0x0000000000000000000000000000000000000000",
-            "extraData": "0x4b656570206f6e206b656570696e67206f6e21",
-            "nonce": "0x0000000000000042",
-            "mixhash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "timestamp": "0x68b3b2ca"
-        })
-        .to_string()
+        network::genesis_json(network::active())
     }
 
     /// Initialize the blockchain with genesis
@@ -1193,7 +1166,7 @@ impl GethProcess {
             ));
         }
 
-        println!("✅ Blockchain initialized with chain ID {}", CHAIN_ID);
+        println!("✅ Blockchain initialized with chain ID {}", chain_id());
         Ok(())
     }
 
@@ -1323,7 +1296,7 @@ impl GethProcess {
         cmd.arg("--datadir")
             .arg(&self.data_dir)
             .arg("--networkid")
-            .arg(NETWORK_ID.to_string())
+            .arg(network_id().to_string())
             .arg("--http")
             .arg("--http.addr")
             .arg("127.0.0.1") // Only allow local RPC connections (security)
@@ -2269,13 +2242,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_chain_id_constant() {
-        assert_eq!(CHAIN_ID, 98765);
+    fn test_testnet_chain_id() {
+        assert_eq!(crate::network::TESTNET.chain_id, 98765);
     }
 
     #[test]
     fn test_network_id_matches_chain_id() {
-        assert_eq!(NETWORK_ID, CHAIN_ID);
+        assert_eq!(super::network_id(), super::chain_id());
     }
 
     #[test]
@@ -2307,7 +2280,7 @@ mod tests {
 
         let config = parsed.get("config").expect("genesis should have config");
         let chain_id = config.get("chainId").expect("config should have chainId");
-        assert_eq!(chain_id.as_u64().unwrap(), CHAIN_ID);
+        assert_eq!(chain_id.as_u64().unwrap(), super::chain_id());
 
         assert_eq!(config["homesteadBlock"].as_u64().unwrap(), 0);
         assert_eq!(config["eip155Block"].as_u64().unwrap(), 0);
@@ -2403,7 +2376,7 @@ mod tests {
             current_block: 100,
             highest_block: 100,
             peer_count: 5,
-            chain_id: CHAIN_ID,
+            chain_id: super::chain_id(),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("currentBlock"));
@@ -2411,7 +2384,7 @@ mod tests {
         assert!(json.contains("chainId"));
         assert!(json.contains("localRunning"));
         let deserialized: GethStatus = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.chain_id, CHAIN_ID);
+        assert_eq!(deserialized.chain_id, super::chain_id());
         assert!(deserialized.local_running);
     }
 
@@ -2591,10 +2564,7 @@ mod tests {
     fn test_geth_process_data_dir_path() {
         // GethProcess::new() sets data_dir under the system data directory
         // We can't call new() (it runs kill_orphaned_geth) but we can verify the path pattern
-        let data_dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("chiral-network")
-            .join("geth");
+        let data_dir = network::data_dir().join("geth");
         assert!(data_dir.to_string_lossy().contains("chiral-network"));
         assert!(data_dir.to_string_lossy().ends_with("geth"));
     }
@@ -3300,7 +3270,7 @@ m 12:00:12|cuda-0  Speed 41.25 Mh/s
             current_block: 50,
             highest_block: 100,
             peer_count: 3,
-            chain_id: CHAIN_ID,
+            chain_id: super::chain_id(),
         };
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("localRunning"));
@@ -3353,7 +3323,7 @@ m 12:00:12|cuda-0  Speed 41.25 Mh/s
         assert_eq!(status.current_block, 500);
         assert_eq!(status.highest_block, 1000);
         assert_eq!(status.peer_count, 8);
-        assert_eq!(status.chain_id, CHAIN_ID);
+        assert_eq!(status.chain_id, super::chain_id());
     }
 
     // ========================================================================
@@ -3622,7 +3592,7 @@ m 12:00:12|cuda-0  Speed 41.25 Mh/s
             current_block: 50,
             highest_block: 200,
             peer_count: 3,
-            chain_id: CHAIN_ID,
+            chain_id: super::chain_id(),
         };
         let json = serde_json::to_string(&status).unwrap();
         let d: GethStatus = serde_json::from_str(&json).unwrap();
@@ -3642,7 +3612,7 @@ m 12:00:12|cuda-0  Speed 41.25 Mh/s
             current_block: 306919,
             highest_block: 306919,
             peer_count: 1,
-            chain_id: CHAIN_ID,
+            chain_id: super::chain_id(),
         };
         let json = serde_json::to_string(&status).unwrap();
         let d: GethStatus = serde_json::from_str(&json).unwrap();

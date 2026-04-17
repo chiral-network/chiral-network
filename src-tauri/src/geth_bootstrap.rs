@@ -100,12 +100,13 @@ static CACHE: Lazy<Arc<RwLock<BootstrapCache>>> =
 // Bootstrap Node Registry
 // ============================================================================
 
-/// Get the default bootstrap nodes for Chiral Network
+/// Get the default bootstrap nodes for the active Chiral Network.
 pub fn get_default_nodes() -> Vec<BootstrapNode> {
+    let cfg = crate::network::active();
     vec![
         BootstrapNode {
-            enode: "enode://45cc5ba89142b2c82180986f411aa16dbfe6041043d1f7112f08e710f23fdeb7283551ec15ca9d23a0da91ac12e080e014f8c32230a8109d6d0b01be8ca71102@130.245.173.73:30303".into(),
-            name: "Primary Bootstrap (Chiral Test)".into(),
+            enode: cfg.geth_bootstrap_enode.to_string(),
+            name: format!("Primary Bootstrap ({})", cfg.display_name),
             region: "US East".into(),
             priority: 1,
         },

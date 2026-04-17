@@ -93,7 +93,7 @@ pub struct DriveManifest {
 
 /// Base directory for drive data.
 pub fn drive_base_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join("chiral-network").join("chiral-drive"))
+    Some(crate::network::data_dir().join("chiral-drive"))
 }
 
 /// Directory where uploaded files are stored.

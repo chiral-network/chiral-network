@@ -804,9 +804,7 @@ struct HostRegistryEntry {
 }
 
 fn default_data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("chiral-network")
+    chiral_network::network::data_dir()
 }
 
 fn headless_dir() -> PathBuf {
@@ -1385,7 +1383,7 @@ async fn send_transaction(
     };
 
     let gas_limit: u64 = 21000;
-    let chain_id = geth::CHAIN_ID;
+    let chain_id = geth::chain_id();
     let gas_price_u128 = gas_price as u128;
     let gas_cost = gas_price_u128 * gas_limit as u128;
     let total_cost = amount_wei
@@ -2713,7 +2711,7 @@ async fn handle_account(cmd: AccountCommand) -> Result<(), String> {
         AccountCommand::Meta => {
             let wallet = load_wallet_store()?.active;
             println!("rpc_endpoint={}", geth::rpc_endpoint());
-            println!("chain_id={}", geth::CHAIN_ID);
+            println!("chain_id={}", geth::chain_id());
             println!(
                 "active_wallet={}",
                 wallet

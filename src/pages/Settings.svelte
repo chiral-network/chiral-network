@@ -16,11 +16,18 @@
     FolderOpen,
     HardDrive,
     X,
-    Bell
+    Bell,
+    Network as NetworkIcon
   } from 'lucide-svelte';
 
   let isTauri = $state(false);
   let displayDownloadDir = $state('');
+
+  // Network selection
+  type NetworkInfo = { name: string; displayName: string; chainId: number };
+  let activeNetwork = $state<NetworkInfo | null>(null);
+  let availableNetworks = $state<NetworkInfo[]>([]);
+  let pendingNetwork = $state<string | null>(null);
 
   function checkTauriAvailability(): boolean {
     return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
@@ -30,8 +37,36 @@
     isTauri = checkTauriAvailability();
     if (isTauri) {
       await loadDownloadDirectory();
+      await loadNetworks();
     }
   });
+
+  async function loadNetworks() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      activeNetwork = await invoke<NetworkInfo>('get_active_network');
+      availableNetworks = await invoke<NetworkInfo[]>('list_networks');
+    } catch (e) {
+      console.error('Failed to load networks:', e);
+    }
+  }
+
+  async function selectNetwork(name: string) {
+    if (!activeNetwork || name === activeNetwork.name) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_active_network', { name });
+      pendingNetwork = name;
+      toasts.detail(
+        'Network change pending',
+        'Restart the app to finish switching networks. Chain state, DHT identity, and wallet history will swap together.',
+        'info',
+        8000,
+      );
+    } catch (e) {
+      toasts.detail('Failed to change network', String(e), 'error');
+    }
+  }
 
   async function loadDownloadDirectory() {
     try {
@@ -135,6 +170,56 @@
     <h1 class="text-2xl font-bold dark:text-white">Settings</h1>
     <p class="text-gray-600 dark:text-gray-400 mt-1">Customize your Chiral Network experience</p>
   </div>
+
+  <!-- Network Section -->
+  {#if isTauri && activeNetwork}
+    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
+      <div class="flex items-center gap-3 mb-6">
+        <div class="p-2 bg-blue-100 dark:bg-blue-900 rounded-lg">
+          <NetworkIcon class="w-5 h-5 text-blue-600 dark:text-blue-400" />
+        </div>
+        <div>
+          <h2 class="font-semibold text-lg dark:text-white">Network</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Choose which Chiral Network to connect to</p>
+        </div>
+      </div>
+
+      <div class="space-y-2">
+        {#each availableNetworks as net}
+          {@const isActive = activeNetwork.name === net.name}
+          {@const isPending = pendingNetwork === net.name}
+          <button
+            onclick={() => selectNetwork(net.name)}
+            disabled={isActive && !pendingNetwork}
+            class="w-full flex items-center justify-between p-4 rounded-lg border-2 transition-all text-left
+              {isActive
+                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
+                : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 bg-gray-50 dark:bg-gray-700'}"
+          >
+            <div>
+              <div class="font-medium {isActive ? 'text-primary-700 dark:text-primary-300' : 'text-gray-800 dark:text-gray-200'}">
+                {net.displayName}
+              </div>
+              <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Chain ID {net.chainId} · {net.name}
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              {#if isPending}
+                <span class="text-xs text-amber-600 dark:text-amber-400 font-medium">Restart required</span>
+              {:else if isActive}
+                <Check class="w-4 h-4 text-primary-500" />
+              {/if}
+            </div>
+          </button>
+        {/each}
+      </div>
+
+      <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">
+        Switching networks takes effect on the next app launch. Geth chain state, DHT identity, wallet transaction history, and Drive files are kept separate per network, so testnet and mainnet never mix.
+      </p>
+    </div>
+  {/if}
 
   <!-- Appearance Section -->
   <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">

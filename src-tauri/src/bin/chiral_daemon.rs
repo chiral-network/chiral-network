@@ -105,9 +105,7 @@ impl HeadlessRuntimeState {
 }
 
 fn default_data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("chiral-network")
+    chiral_network::network::data_dir()
 }
 
 fn default_pid_file() -> PathBuf {
@@ -201,10 +199,7 @@ async fn auto_publish_wallet_advertisement(
 }
 
 fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
-    let data_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("chiral-network")
-        .join("geth");
+    let data_dir = chiral_network::network::data_dir().join("geth");
     let log_path = data_dir.join("geth.log");
     if !log_path.exists() {
         return Ok("No geth.log found".to_string());
@@ -986,7 +981,7 @@ async fn wallet_faucet(
 }
 
 async fn wallet_chain_id() -> Response {
-    Json(json!({"chainId": chiral_network::geth::CHAIN_ID})).into_response()
+    Json(json!({"chainId": chiral_network::geth::chain_id()})).into_response()
 }
 
 // ---- File search endpoint ----
