@@ -129,51 +129,52 @@
 
   async function loadCdnServers() {
     loadingCdn = true;
-    const results: CdnServerInfo[] = [];
-
     const myWallet = $walletAccount?.address || '';
 
-    for (const server of CDN_SERVERS) {
-      try {
-        const statusResp = await fetch(`${server.url}/api/cdn/status`);
-        const status = await statusResp.json();
-
-        let myFiles: CdnFile[] = [];
-        if (myWallet) {
-          const filesResp = await fetch(`${server.url}/api/cdn/files?owner=${myWallet}`);
-          const filesData = await filesResp.json();
-          myFiles = filesData.files || [];
+    // Query every CDN server in parallel, and within each server query
+    // status + my-files in parallel too. Previously this was a serial
+    // double-loop, so two CDN servers at 500ms each meant a 2s page load.
+    cdnServers = await Promise.all(
+      CDN_SERVERS.map(async (server): Promise<CdnServerInfo> => {
+        try {
+          const [statusResp, filesResp] = await Promise.all([
+            fetch(`${server.url}/api/cdn/status`),
+            myWallet
+              ? fetch(`${server.url}/api/cdn/files?owner=${myWallet}`)
+              : Promise.resolve(null),
+          ]);
+          const status = await statusResp.json();
+          const myFiles: CdnFile[] = filesResp
+            ? (await filesResp.json()).files || []
+            : [];
+          return {
+            url: server.url,
+            name: server.name,
+            region: server.region,
+            status: status.status || 'unknown',
+            peerId: status.peerId || '',
+            walletAddress: status.walletAddress || '',
+            activeFiles: status.activeFiles || 0,
+            totalStorageBytes: status.totalStorageBytes || 0,
+            uniqueOwners: status.uniqueOwners || 0,
+            myFiles,
+          };
+        } catch {
+          return {
+            url: server.url,
+            name: server.name,
+            region: server.region,
+            status: 'offline',
+            peerId: '',
+            walletAddress: '',
+            activeFiles: 0,
+            totalStorageBytes: 0,
+            uniqueOwners: 0,
+            myFiles: [],
+          };
         }
-
-        results.push({
-          url: server.url,
-          name: server.name,
-          region: server.region,
-          status: status.status || 'unknown',
-          peerId: status.peerId || '',
-          walletAddress: status.walletAddress || '',
-          activeFiles: status.activeFiles || 0,
-          totalStorageBytes: status.totalStorageBytes || 0,
-          uniqueOwners: status.uniqueOwners || 0,
-          myFiles,
-        });
-      } catch {
-        results.push({
-          url: server.url,
-          name: server.name,
-          region: server.region,
-          status: 'offline',
-          peerId: '',
-          walletAddress: '',
-          activeFiles: 0,
-          totalStorageBytes: 0,
-          uniqueOwners: 0,
-          myFiles: [],
-        });
-      }
-    }
-
-    cdnServers = results;
+      }),
+    );
     loadingCdn = false;
   }
 
@@ -279,16 +280,27 @@
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
-      // Step 1: Pricing + CDN wallet, fetched in parallel
+      // Reuse the pricing already fetched for the confirm modal — pricing
+      // was the slowest endpoint (median-of-marketplace DHT lookup) and
+      // refetching it during upload was the second-largest source of the
+      // "everything is slow" complaint. Fall back to a fresh fetch only if
+      // the user got here via a path that skipped the modal.
       const sizeMb = (file.size || 1) / (1024 * 1024);
-      const [pricingResp, statusResp] = await Promise.all([
-        fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`),
-        fetch(`${serverUrl}/api/cdn/status`),
-      ]);
-      const pricing = await pricingResp.json();
-      const cdnStatus = await statusResp.json();
-      const totalCostChi = pricing.totalCostChi || '0';
-      const cdnWallet = cdnStatus.walletAddress;
+      let totalCostChi = cdnConfirmPricing?.totalCostChi;
+      let cdnWallet: string | undefined;
+      const statusReq = fetch(`${serverUrl}/api/cdn/status`);
+      if (totalCostChi && totalCostChi !== '?' && totalCostChi !== '...') {
+        cdnWallet = (await (await statusReq).json()).walletAddress;
+      } else {
+        const [pricingResp, statusResp] = await Promise.all([
+          fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`),
+          statusReq,
+        ]);
+        const pricing = await pricingResp.json();
+        totalCostChi = pricing.totalCostChi || '0';
+        cdnWallet = (await statusResp.json()).walletAddress;
+      }
+      totalCostChi = totalCostChi || '0';
 
       if (!cdnWallet) { toasts.show('CDN wallet not available', 'error'); return; }
 

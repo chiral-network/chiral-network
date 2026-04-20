@@ -1125,52 +1125,53 @@ const CDN_UPTIME_PREMIUM: f64 = 1.2;
 
 /// Calculate the current CDN storage price based on the peer hosting marketplace.
 /// Returns price in wei per MB per month.
+///
+/// Per-host advertisement lookups run concurrently — for an N-host registry
+/// this is one DHT round-trip total instead of N+1 serial round-trips, which
+/// was the dominant source of slow CDN pricing fetches.
 async fn calculate_cdn_price(state: &HeadlessRuntimeState) -> u128 {
     let dht = match state.dht_service().await {
         Some(d) => d,
         None => return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH,
     };
 
-    // Fetch the host registry from DHT
     let registry_json = match dht.get_dht_value("chiral_host_registry".to_string()).await {
         Ok(Some(json)) => json,
         _ => return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH,
     };
-
     let registry: Vec<serde_json::Value> = serde_json::from_str(&registry_json).unwrap_or_default();
     if registry.is_empty() {
         return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
     }
 
-    // Fetch each host's advertisement to get their price
-    let mut peer_prices: Vec<u128> = Vec::new();
-    for entry in &registry {
-        let peer_id = entry["peerId"].as_str().unwrap_or("");
-        if peer_id.is_empty() { continue; }
+    // Fan out the per-host ad fetches — these were the serial bottleneck.
+    let dht_for_lookups = dht.clone();
+    let lookups = registry.iter().filter_map(|entry| {
+        let peer_id = entry["peerId"].as_str().unwrap_or("").to_string();
+        if peer_id.is_empty() { return None; }
+        let dht = dht_for_lookups.clone();
+        Some(async move { dht.get_dht_value(format!("chiral_host_{}", peer_id)).await })
+    });
+    let results = futures_util::future::join_all(lookups).await;
 
-        let host_key = format!("chiral_host_{}", peer_id);
-        if let Ok(Some(ad_json)) = dht.get_dht_value(host_key).await {
-            if let Ok(ad) = serde_json::from_str::<serde_json::Value>(&ad_json) {
-                let price_str = ad["pricePerMbPerDayWei"].as_str().unwrap_or("0");
-                if let Ok(price_per_day) = price_str.parse::<u128>() {
-                    if price_per_day > 0 {
-                        // Convert daily price to monthly (× 30)
-                        peer_prices.push(price_per_day * 30);
-                    }
-                }
-            }
-        }
-    }
+    let mut peer_prices: Vec<u128> = results
+        .into_iter()
+        .filter_map(|r| r.ok().flatten())
+        .filter_map(|ad_json| serde_json::from_str::<serde_json::Value>(&ad_json).ok())
+        .filter_map(|ad| {
+            ad["pricePerMbPerDayWei"]
+                .as_str()
+                .and_then(|s| s.parse::<u128>().ok())
+                .filter(|p| *p > 0)
+                .map(|p| p * 30) // daily → monthly
+        })
+        .collect();
 
     if peer_prices.is_empty() {
         return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
     }
-
-    // Calculate median peer price
     peer_prices.sort();
     let median = peer_prices[peer_prices.len() / 2];
-
-    // CDN price = max(floor, median × premium)
     let cdn_price = (median as f64 * CDN_UPTIME_PREMIUM) as u128;
     std::cmp::max(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH, cdn_price)
 }
@@ -1185,22 +1186,21 @@ fn wei_to_chi_display(wei: u128) -> String {
     }
 }
 
-fn load_cdn_registry() -> Vec<CdnFileEntry> {
+async fn load_cdn_registry() -> Vec<CdnFileEntry> {
     let path = cdn_metadata_path();
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        Vec::new()
+    match tokio::fs::read_to_string(&path).await {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => Vec::new(),
     }
 }
 
-fn save_cdn_registry(entries: &[CdnFileEntry]) {
+async fn save_cdn_registry(entries: &[CdnFileEntry]) {
     let path = cdn_metadata_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = tokio::fs::create_dir_all(parent).await;
     }
     if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = std::fs::write(path, json);
+        let _ = tokio::fs::write(&path, json).await;
     }
 }
 
@@ -1218,9 +1218,9 @@ where
     F: FnOnce(&mut Vec<CdnFileEntry>) -> R,
 {
     let _guard = CDN_REGISTRY_LOCK.lock().await;
-    let mut registry = load_cdn_registry();
+    let mut registry = load_cdn_registry().await;
     let result = f(&mut registry);
-    save_cdn_registry(&registry);
+    save_cdn_registry(&registry).await;
     result
 }
 
@@ -1366,13 +1366,15 @@ async fn cdn_upload(
     let now = now_secs();
     let expires = now + duration_days * 86400;
 
-    // Calculate dynamic CDN price based on peer marketplace
-    let price_per_mb_month_wei = calculate_cdn_price(&state).await;
-    let file_mb = (file_size as f64) / (1024.0 * 1024.0);
-    let months = (duration_days as f64) / 30.0;
-    let total_cost_wei = (price_per_mb_month_wei as f64 * file_mb * months) as u128;
+    // Reuse the price already computed for payment verification — pricing is
+    // a function of file size + duration + marketplace median, none of which
+    // change within a single request. Re-running calculate_cdn_price here
+    // would refetch the entire host registry from the DHT for nothing.
+    let total_cost_wei = required_cost_wei;
     let total_cost_chi = wei_to_chi_display(total_cost_wei);
     let price_per_mb_chi = wei_to_chi_display(price_per_mb_month_wei);
+    let file_mb = (file_size as f64) / (1024.0 * 1024.0);
+    let months = (duration_days as f64) / 30.0;
 
     println!("[CDN] Price: {} CHI/MB/month, total: {} CHI for {:.2} MB × {:.1} months",
         price_per_mb_chi, total_cost_chi, file_mb, months);
@@ -1472,7 +1474,7 @@ async fn cdn_list(
 ) -> Response {
     let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
     let now = now_secs();
-    let registry = load_cdn_registry();
+    let registry = load_cdn_registry().await;
 
     let files: Vec<&CdnFileEntry> = registry.iter()
         .filter(|e| {
@@ -1646,7 +1648,7 @@ async fn cdn_pricing(
 async fn cdn_status(
     State(state): State<Arc<HeadlessRuntimeState>>,
 ) -> Response {
-    let registry = load_cdn_registry();
+    let registry = load_cdn_registry().await;
     let now = now_secs();
     let active: Vec<&CdnFileEntry> = registry.iter().filter(|e| e.expires_at > now).collect();
     let peer_id = if let Some(dht) = state.dht_service().await {
@@ -1908,7 +1910,7 @@ async fn main() {
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
 
             let now = now_secs();
-            let registry = load_cdn_registry();
+            let registry = load_cdn_registry().await;
             let active: Vec<&CdnFileEntry> = registry.iter().filter(|e| e.expires_at > now).collect();
 
             if active.is_empty() { return; }
