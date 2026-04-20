@@ -1576,74 +1576,101 @@
              is always visible, even when only one seeder is currently online. -->
         {#if searchResult.seeders.length >= 1}
           <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
-            <div class="flex items-center justify-between mb-3 gap-3">
+            <div class="flex items-baseline justify-between mb-3 gap-3">
               <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {#if searchResult.seeders.length === 1}
-                  Seeder
-                {:else}
-                  Choose seeder <span class="text-gray-400 font-normal">({searchResult.seeders.length} available)</span>
-                {/if}
+                {searchResult.seeders.length === 1 ? 'Seeder' : 'Choose seeder'}
+                <span class="text-gray-400 font-normal ml-1">({searchResult.seeders.length})</span>
               </p>
               {#if searchResult.seeders.length > 1}
-                <div class="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden text-xs">
-                  {#each (['best', 'elo', 'price'] as const) as mode}
-                    <button
-                      onclick={() => applySeederSort(mode)}
-                      class="px-2.5 py-1 capitalize transition-colors
-                        {seederSort === mode
-                          ? 'bg-primary-500 text-white'
-                          : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'}"
-                    >
-                      {mode}
-                    </button>
-                  {/each}
+                <div class="inline-flex items-center text-xs text-gray-500 dark:text-gray-400 gap-2">
+                  <span class="hidden sm:inline">Sort</span>
+                  <div class="inline-flex rounded-md border border-gray-300 dark:border-gray-600 overflow-hidden">
+                    {#each (['best', 'elo', 'price'] as const) as mode}
+                      <button
+                        onclick={() => applySeederSort(mode)}
+                        class="px-2.5 py-1 capitalize transition-colors
+                          {seederSort === mode
+                            ? 'bg-primary-500 text-white'
+                            : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'}"
+                      >
+                        {mode}
+                      </button>
+                    {/each}
+                  </div>
                 </div>
               {/if}
             </div>
-            <div class="space-y-2 max-h-60 overflow-y-auto">
+            <div class="divide-y divide-gray-100 dark:divide-gray-700 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden max-h-64 overflow-y-auto">
               {#each searchResult.seeders as seeder, i}
                 {@const seederElo = getSeederElo(seeder)}
                 {@const rep = getSeederReputation(seeder)}
+                {@const totalTransfers = (rep?.completedCount ?? 0) + (rep?.failedCount ?? 0)}
                 {@const interactive = searchResult.seeders.length > 1}
+                {@const isActive = selectedSeederIndex === i}
+                {@const priceWei = seeder.priceWei || '0'}
+                {@const isFree = priceWei === '0'}
+                {@const identity = seeder.walletAddress || seeder.peerId}
                 <button
                   onclick={() => { if (interactive) selectedSeederIndex = i; }}
                   disabled={!interactive}
-                  class="w-full flex items-center justify-between p-3 rounded-lg border-2 text-left transition-all text-sm
-                    {selectedSeederIndex === i
-                      ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30'
-                      : 'border-gray-200 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'
-                    }"
+                  title={seeder.peerId}
+                  class="w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors
+                    {isActive
+                      ? 'bg-primary-50 dark:bg-primary-900/20'
+                      : 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700/50'}"
                 >
-                  <div class="flex items-center gap-2 min-w-0 flex-1">
-                    {#if interactive}
-                      <input type="radio" checked={selectedSeederIndex === i} class="accent-primary-500 flex-shrink-0" />
-                    {/if}
-                    <div class="min-w-0 flex-1">
-                      <div class="flex items-center gap-2 min-w-0">
-                        <span class="font-mono text-xs text-gray-700 dark:text-gray-300 truncate" title={seeder.peerId}>
-                          {seeder.peerId.slice(0, 8)}...{seeder.peerId.slice(-6)}
-                        </span>
-                        {#if isCdnPeer(seeder.peerId)}
-                          <span class="px-1.5 py-0.5 text-[10px] font-bold rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 flex-shrink-0">CDN</span>
-                        {/if}
-                      </div>
-                      {#if seeder.walletAddress}
-                        <div class="font-mono text-[11px] text-gray-400 dark:text-gray-500 truncate" title={seeder.walletAddress}>
-                          {seeder.walletAddress.slice(0, 10)}…{seeder.walletAddress.slice(-6)}
-                          {#if rep && (rep.completedCount || 0) + (rep.failedCount || 0) > 0}
-                            <span class="ml-1">· {rep.completedCount || 0}✓ {rep.failedCount || 0}✗</span>
-                          {/if}
-                        </div>
+                  <!-- Radio (only when there's a choice to make) -->
+                  {#if interactive}
+                    <input
+                      type="radio"
+                      checked={isActive}
+                      tabindex="-1"
+                      class="accent-primary-500 flex-shrink-0 pointer-events-none"
+                    />
+                  {/if}
+
+                  <!-- Reputation column: the number the user is comparing. -->
+                  <div class="flex flex-col items-center w-14 flex-shrink-0 leading-tight">
+                    <span class="text-base font-semibold {isActive ? 'text-primary-700 dark:text-primary-300' : 'text-gray-800 dark:text-gray-200'} tabular-nums">
+                      {seederElo.toFixed(0)}
+                    </span>
+                    <span class="text-[10px] uppercase tracking-wider text-gray-400 dark:text-gray-500">Elo</span>
+                  </div>
+
+                  <!-- Identity + history. Identity is whichever is known (wallet
+                       preferred since reputation is keyed on it), truncated so
+                       the row stays visually quiet. Full peer ID is in the
+                       button's title tooltip. -->
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="font-mono text-xs text-gray-700 dark:text-gray-300 truncate">
+                        {identity.slice(0, 10)}…{identity.slice(-6)}
+                      </span>
+                      {#if isCdnPeer(seeder.peerId)}
+                        <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex-shrink-0">CDN</span>
                       {/if}
                     </div>
+                    {#if totalTransfers > 0}
+                      <div class="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">
+                        {rep?.completedCount ?? 0} completed · {rep?.failedCount ?? 0} failed
+                      </div>
+                    {:else}
+                      <div class="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">
+                        No transfer history
+                      </div>
+                    {/if}
                   </div>
-                  <div class="flex items-center gap-2 flex-shrink-0 ml-2">
-                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
-                      Elo {seederElo.toFixed(1)}
-                    </span>
-                    <span class="px-2 py-0.5 text-xs font-medium rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 tabular-nums">
-                      {formatPriceWei(seeder.priceWei || '0')}
-                    </span>
+
+                  <!-- Price: the other number the user is comparing. Anchored
+                       to the right so eyes can scan the column straight down. -->
+                  <div class="flex-shrink-0 text-right">
+                    {#if isFree}
+                      <span class="text-sm font-medium text-emerald-600 dark:text-emerald-400">Free</span>
+                    {:else}
+                      <span class="text-sm font-semibold text-amber-600 dark:text-amber-400 tabular-nums">
+                        {formatPriceWei(priceWei)}
+                      </span>
+                    {/if}
                   </div>
                 </button>
               {/each}
