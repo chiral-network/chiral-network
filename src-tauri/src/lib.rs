@@ -6,6 +6,7 @@ mod encryption;
 pub mod event_sink;
 pub mod file_transfer;
 pub mod geth;
+pub mod geth_gpu;
 pub mod hosting;
 pub mod hosting_server;
 pub mod network;
@@ -39,6 +40,7 @@ pub struct AppState {
     pub file_transfer: Arc<Mutex<FileTransferService>>,
     pub file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>, // hash -> file data (for local caching)
     pub geth: Arc<Mutex<GethProcess>>,
+    pub gpu_miner: Arc<Mutex<geth_gpu::GpuMiner>>,
     pub encryption_keypair: Arc<Mutex<Option<EncryptionKeypair>>>,
     pub tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>, // tx_hash -> metadata
     pub download_directory: Arc<Mutex<Option<String>>>, // custom download directory (None = system default)
@@ -3308,14 +3310,14 @@ async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningSt
 async fn get_gpu_mining_capabilities(
     state: tauri::State<'_, AppState>,
 ) -> Result<GpuMiningCapabilities, String> {
-    let geth = state.geth.lock().await;
-    geth.get_gpu_mining_capabilities().await
+    let miner = state.gpu_miner.lock().await;
+    Ok(miner.capabilities())
 }
 
 #[tauri::command]
 async fn list_gpu_devices(state: tauri::State<'_, AppState>) -> Result<Vec<GpuDevice>, String> {
-    let mut geth = state.geth.lock().await;
-    geth.list_gpu_devices().await
+    let miner = state.gpu_miner.lock().await;
+    miner.list_devices()
 }
 
 #[tauri::command]
@@ -3324,22 +3326,36 @@ async fn start_gpu_mining(
     device_ids: Option<Vec<String>>,
     utilization_percent: Option<u8>,
 ) -> Result<(), String> {
-    let mut geth = state.geth.lock().await;
-    geth.start_gpu_mining(device_ids, utilization_percent).await
+    // The miner address comes from whatever geth was started with —
+    // ethminer talks getwork to geth, and geth's --miner.etherbase is
+    // what actually determines the reward destination.
+    let miner_address = {
+        let geth = state.geth.lock().await;
+        geth.get_mining_status()
+            .await
+            .ok()
+            .and_then(|s| s.miner_address)
+            .unwrap_or_default()
+    };
+    if miner_address.is_empty() {
+        return Err("Start geth with a miner address before GPU mining".to_string());
+    }
+    let mut miner = state.gpu_miner.lock().await;
+    miner.start(&miner_address, device_ids, utilization_percent)
 }
 
 #[tauri::command]
 async fn stop_gpu_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut geth = state.geth.lock().await;
-    geth.stop_gpu_mining().await
+    let mut miner = state.gpu_miner.lock().await;
+    miner.stop()
 }
 
 #[tauri::command]
 async fn get_gpu_mining_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<GpuMiningStatus, String> {
-    let geth = state.geth.lock().await;
-    geth.get_gpu_mining_status().await
+    let miner = state.gpu_miner.lock().await;
+    Ok(miner.status())
 }
 
 
@@ -5221,6 +5237,7 @@ pub fn run() {
             file_transfer: Arc::new(Mutex::new(FileTransferService::new())),
             file_storage: Arc::new(Mutex::new(HashMap::new())),
             geth,
+            gpu_miner: Arc::new(Mutex::new(geth_gpu::GpuMiner::new())),
             encryption_keypair: Arc::new(Mutex::new(None)),
             tx_metadata: Arc::new(Mutex::new(wallet::load_tx_metadata())),
             download_directory: Arc::new(Mutex::new(None)),
