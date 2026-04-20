@@ -264,6 +264,11 @@
   let seederSort = $state<SeederSort>('best');
   const BASE_ELO = 50;
 
+  /// Bumped each time a new search starts. Late-arriving DHT/CDN responses
+  /// from a previous search check this before mutating state so a stale
+  /// callback can't clobber a fresh search's results.
+  let searchSession = 0;
+
   function sortSeeders(list: SeederInfo[], mode: SeederSort): SeederInfo[] {
     return sortSeedersUtil(list, mode, getSeederElo);
   }
@@ -468,33 +473,76 @@
         });
 
         if (result) {
-          // Search DHT and CDN servers for seeders in parallel — same fix as
-          // the main hash-search path (CDN entries must merge in regardless of
-          // whether the DHT also returned seeders).
-          const [dhtResult, cdnResults] = await Promise.all([
-            withTimeout(
-              invoke<SearchResult | null>('search_file', { fileHash: result.infoHash }),
-              8000,
-              'search',
-            ).catch(() => null),
-            fetchCdnSeeders(result.infoHash),
-          ]);
+          // Progressive rendering: render DHT and CDN as each one returns so
+          // a slow CDN doesn't delay seeder appearance, and a late CDN
+          // arrival merges in instead of being dropped.
+          searchSession += 1;
+          const torrentSession = searchSession;
+          let dhtResult: SearchResult | null = null;
+          let cdnResults: SearchResult[] = [];
+          let firstNonEmptyRender = true;
+          let lastSeederCount = 0;
 
-          const merged = mergeSeederResult(dhtResult, cdnResults);
-
-          searchResult = {
-            hash: result.infoHash,
-            fileName: result.name,
-            fileSize: result.size || merged?.fileSize || 0,
-            seeders: merged?.seeders || [],
-            createdAt: merged?.createdAt || Date.now(),
-            priceWei: merged?.priceWei || '0',
-            walletAddress: merged?.walletAddress || '',
+          const apply = async () => {
+            if (torrentSession !== searchSession) return;
+            const merged = mergeSeederResult(dhtResult, cdnResults);
+            const next: SearchResult = {
+              hash: result.infoHash,
+              fileName: result.name,
+              fileSize: result.size || merged?.fileSize || 0,
+              seeders: merged?.seeders ? [...merged.seeders] : [],
+              createdAt: merged?.createdAt || Date.now(),
+              priceWei: merged?.priceWei || '0',
+              walletAddress: merged?.walletAddress || '',
+            };
+            if (next.seeders.length > 0) {
+              await fetchSeederRatings(next.seeders);
+              if (torrentSession !== searchSession) return;
+              const previouslySelectedPeerId = searchResult?.seeders[selectedSeederIndex]?.peerId;
+              next.seeders = sortSeeders(next.seeders, seederSort);
+              const newIdx = previouslySelectedPeerId
+                ? next.seeders.findIndex((s) => s.peerId === previouslySelectedPeerId)
+                : -1;
+              selectedSeederIndex = newIdx >= 0 ? newIdx : 0;
+            }
+            searchResult = next;
+            if (firstNonEmptyRender && next.seeders.length > 0) {
+              firstNonEmptyRender = false;
+              toasts.detail(
+                'Torrent loaded',
+                `${result.name} — ${next.seeders.length} seeder${next.seeders.length !== 1 ? 's' : ''} found`,
+                'success',
+              );
+              lastSeederCount = next.seeders.length;
+            } else if (next.seeders.length > lastSeederCount) {
+              const added = next.seeders.length - lastSeederCount;
+              toasts.show(`+${added} more seeder${added !== 1 ? 's' : ''} found`, 'info', 3000);
+              lastSeederCount = next.seeders.length;
+            }
           };
 
-          if (searchResult.seeders.length > 0) {
-            toasts.detail('Torrent loaded', `${result.name} — ${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found`, 'success');
-          } else {
+          const dhtTask = withTimeout(
+            invoke<SearchResult | null>('search_file', { fileHash: result.infoHash }),
+            8000,
+            'search',
+          )
+            .catch(() => null)
+            .then(async (r) => {
+              if (torrentSession !== searchSession) return;
+              dhtResult = r;
+              await apply();
+            });
+
+          const cdnTask = fetchCdnSeeders(result.infoHash).then(async (r) => {
+            if (torrentSession !== searchSession) return;
+            cdnResults = r;
+            await apply();
+          });
+
+          await Promise.allSettled([dhtTask, cdnTask]);
+          if (torrentSession !== searchSession) return;
+
+          if (searchResult && searchResult.seeders.length === 0) {
             toasts.detail('Torrent loaded', `${result.name} — searching for seeders…`, 'info');
           }
         }
@@ -588,6 +636,8 @@
       return;
     }
 
+    searchSession += 1; // invalidate any in-flight callbacks from a previous search
+    const mySession = searchSession;
     isSearching = true;
     searchResult = null;
     searchError = null;
@@ -612,50 +662,89 @@
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
 
-        // Query DHT and CDN servers in parallel. The DHT lookup gets a longer
-        // timeout because Kademlia traversal is inherently slow, but CDN
-        // queries resolve within a few hundred ms when reachable — so racing
-        // both means the seeder list always includes CDN-hosted entries, not
-        // only when the DHT returns nothing, and a DHT timeout no longer
-        // delays the CDN response.
-        const [dhtResult, cdnResults] = await Promise.all([
-          withTimeout(
-            invoke<SearchResult | null>('search_file', { fileHash }),
-            15000,
-            'search',
-          ).catch(() => null),
-          fetchCdnSeeders(fileHash),
-        ]);
+        // Progressive rendering: kick off DHT and CDN queries in parallel and
+        // re-render as each one returns, so a fast DHT response shows
+        // immediately and a late CDN response merges in afterward (instead of
+        // waiting for both, which forced the user to wait for the slower
+        // branch — and previously meant CDN seeders were dropped entirely
+        // whenever the DHT returned anything else).
+        let dhtResult: SearchResult | null = null;
+        let cdnResults: SearchResult[] = [];
+        let firstNonEmptyRender = true;
+        let lastSeederCount = 0;
 
-        let result = mergeSeederResult(dhtResult, cdnResults);
+        const apply = async () => {
+          if (mySession !== searchSession) return; // a newer search has superseded us
+          const merged = mergeSeederResult(dhtResult, cdnResults);
+          if (!merged) return;
 
-        if (result) {
-          // For magnet links, use the name from the magnet link if available
+          // File-name fallbacks (DHT records sometimes have empty names)
           if ((searchMode === 'magnet' || searchQuery.startsWith('magnet:')) && fileName !== 'Unknown') {
-            result.fileName = fileName;
+            merged.fileName = fileName;
           }
-          // If result has empty fileName (from DHT fallback), use the one from magnet/torrent
-          if (!result.fileName && fileName !== 'Unknown') {
-            result.fileName = fileName;
+          if (!merged.fileName && fileName !== 'Unknown') {
+            merged.fileName = fileName;
           }
-          // Fallback file name
-          if (!result.fileName) {
-            result.fileName = `file-${fileHash.slice(0, 8)}`;
+          if (!merged.fileName) {
+            merged.fileName = `file-${fileHash.slice(0, 8)}`;
           }
-          // Pre-fetch reputations so sort-by-best uses real Elo, not BASE_ELO
-          if (result.seeders.length > 0) {
-            await fetchSeederRatings(result.seeders);
-            result.seeders = sortSeeders(result.seeders, seederSort);
+
+          if (merged.seeders.length > 0) {
+            // Reputation must be fetched before sort so "best" uses real Elo.
+            await fetchSeederRatings(merged.seeders);
+            if (mySession !== searchSession) return;
+            // Preserve the currently-selected seeder by peerId so a late
+            // CDN arrival doesn't surprise-reorder under the user's cursor.
+            const previouslySelectedPeerId = searchResult?.seeders[selectedSeederIndex]?.peerId;
+            merged.seeders = sortSeeders(merged.seeders, seederSort);
+            const newIdx = previouslySelectedPeerId
+              ? merged.seeders.findIndex((s) => s.peerId === previouslySelectedPeerId)
+              : -1;
+            selectedSeederIndex = newIdx >= 0 ? newIdx : 0;
           }
-          searchResult = result;
-          selectedSeederIndex = 0;
-          if (result.seeders.length > 0) {
-            toasts.detail('File found', `${result.fileName} — ${result.seeders.length} seeder${result.seeders.length !== 1 ? 's' : ''} available`, 'success');
-          } else {
-            toasts.detail('File found', `${result.fileName} — no seeders online`, 'warning');
+
+          searchResult = merged;
+
+          if (firstNonEmptyRender && merged.seeders.length > 0) {
+            firstNonEmptyRender = false;
+            toasts.detail(
+              'File found',
+              `${merged.fileName} — ${merged.seeders.length} seeder${merged.seeders.length !== 1 ? 's' : ''} available`,
+              'success',
+            );
+            lastSeederCount = merged.seeders.length;
+          } else if (merged.seeders.length > lastSeederCount) {
+            const added = merged.seeders.length - lastSeederCount;
+            toasts.show(`+${added} more seeder${added !== 1 ? 's' : ''} found`, 'info', 3000);
+            lastSeederCount = merged.seeders.length;
           }
-        } else {
-          // For magnet links, create a result even if not in DHT but show warning
+        };
+
+        const dhtTask = withTimeout(
+          invoke<SearchResult | null>('search_file', { fileHash }),
+          15000,
+          'search',
+        )
+          .catch(() => null)
+          .then(async (r) => {
+            if (mySession !== searchSession) return;
+            dhtResult = r;
+            await apply();
+          });
+
+        const cdnTask = fetchCdnSeeders(fileHash).then(async (r) => {
+          if (mySession !== searchSession) return;
+          cdnResults = r;
+          await apply();
+        });
+
+        await Promise.allSettled([dhtTask, cdnTask]);
+
+        if (mySession !== searchSession) return; // superseded
+
+        if (searchResult === null) {
+          // Both queries returned nothing. Magnet mode still gets a placeholder
+          // so the file name shows up — search-by-hash gets an explicit error.
           if (searchMode === 'magnet' || searchQuery.startsWith('magnet:')) {
             searchResult = {
               hash: fileHash,
@@ -666,9 +755,16 @@
               priceWei: '0',
               walletAddress: '',
             };
-            toasts.detail('File not in DHT', 'The seeder may be offline or hasn\'t published this file yet', 'warning');
+            toasts.detail('File not in DHT', "The seeder may be offline or hasn't published this file yet", 'warning');
           } else {
             searchError = 'File not found in DHT. The seeder may be offline or the hash may be incorrect.';
+          }
+        } else {
+          // Got file metadata from somewhere — emit the empty-seeders warning
+          // if no peers materialized after both DHT and CDN settled.
+          const sr: SearchResult = searchResult;
+          if (sr.seeders.length === 0) {
+            toasts.detail('File found', `${sr.fileName} — no seeders online`, 'warning');
           }
         }
       } else {
@@ -676,10 +772,15 @@
         searchError = 'Search requires the desktop application';
       }
     } catch (error) {
+      if (mySession !== searchSession) return; // a newer search has taken over
       log.error('Search failed:', error);
       searchError = `Search failed: ${error}`;
     } finally {
-      isSearching = false;
+      // Only clear the spinner if no newer search has started in the
+      // meantime — otherwise we'd hide the spinner for the active search.
+      if (mySession === searchSession) {
+        isSearching = false;
+      }
     }
   }
 
