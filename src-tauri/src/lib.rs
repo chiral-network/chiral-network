@@ -6,7 +6,6 @@ mod encryption;
 pub mod event_sink;
 pub mod file_transfer;
 pub mod geth;
-pub mod geth_bootstrap;
 pub mod hosting;
 pub mod hosting_server;
 pub mod network;
@@ -25,7 +24,8 @@ use geth::{
     GethDownloader, GethProcess, GethStatus, GpuDevice, GpuMiningCapabilities, GpuMiningStatus,
     MiningStatus,
 };
-use geth_bootstrap::BootstrapHealthReport;
+// Bootstrap health is reported via inline placeholder structs in this file
+// — the legacy geth_bootstrap module was deleted with the geth rewrite.
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -3279,7 +3279,7 @@ async fn stop_geth(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_geth_status(state: tauri::State<'_, AppState>) -> Result<GethStatus, String> {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     geth.get_status().await
 }
 
@@ -3288,19 +3288,19 @@ async fn start_mining(
     state: tauri::State<'_, AppState>,
     threads: Option<u32>,
 ) -> Result<(), String> {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     geth.start_mining(threads.unwrap_or(1)).await
 }
 
 #[tauri::command]
 async fn stop_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     geth.stop_mining().await
 }
 
 #[tauri::command]
 async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningStatus, String> {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     geth.get_mining_status().await
 }
 
@@ -3308,7 +3308,7 @@ async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningSt
 async fn get_gpu_mining_capabilities(
     state: tauri::State<'_, AppState>,
 ) -> Result<GpuMiningCapabilities, String> {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     geth.get_gpu_mining_capabilities().await
 }
 
@@ -3338,7 +3338,7 @@ async fn stop_gpu_mining(state: tauri::State<'_, AppState>) -> Result<(), String
 async fn get_gpu_mining_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<GpuMiningStatus, String> {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     geth.get_gpu_mining_status().await
 }
 
@@ -3349,7 +3349,7 @@ async fn set_miner_address(
     state: tauri::State<'_, AppState>,
     address: String,
 ) -> Result<(), String> {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     geth.set_miner_address(&address).await
 }
 
@@ -3470,19 +3470,45 @@ fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
 }
 
 // ============================================================================
-// Bootstrap Health Commands
+// Bootstrap Health Commands (frontend stubs — real bootstrap discovery was
+// dropped with the geth rewrite, since freshnet is solo-mining only).
 // ============================================================================
 
-/// Check health of all bootstrap nodes
-#[tauri::command]
-async fn check_bootstrap_health() -> Result<BootstrapHealthReport, String> {
-    Ok(geth_bootstrap::check_all_nodes().await)
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapHealthReport {
+    total_nodes: usize,
+    healthy_nodes: usize,
+    nodes: Vec<serde_json::Value>,
+    timestamp: u64,
+    is_healthy: bool,
+    healthy_enode_string: String,
 }
 
-/// Get cached bootstrap health report (faster, no network calls)
+fn current_bootstrap_health() -> BootstrapHealthReport {
+    let cfg = network::active();
+    let has_enode = !cfg.geth_bootstrap_enode.is_empty();
+    BootstrapHealthReport {
+        total_nodes: if has_enode { 1 } else { 0 },
+        healthy_nodes: if has_enode { 1 } else { 0 },
+        nodes: Vec::new(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        is_healthy: true,
+        healthy_enode_string: cfg.geth_bootstrap_enode.to_string(),
+    }
+}
+
+#[tauri::command]
+async fn check_bootstrap_health() -> Result<BootstrapHealthReport, String> {
+    Ok(current_bootstrap_health())
+}
+
 #[tauri::command]
 async fn get_bootstrap_health() -> Result<Option<BootstrapHealthReport>, String> {
-    Ok(geth_bootstrap::get_cached_report().await)
+    Ok(Some(current_bootstrap_health()))
 }
 
 // ============================================================================

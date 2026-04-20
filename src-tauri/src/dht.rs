@@ -4387,40 +4387,50 @@ mod tests {
         assert_eq!(selected, long);
     }
 
-    #[test]
-    fn test_bootstrap_nodes_not_empty() {
-        let nodes = get_bootstrap_nodes();
-        assert!(!nodes.is_empty());
-        assert_eq!(nodes.len(), 2);
-    }
+    // Bootstrap-discovery tests target the testnet preset directly because
+    // freshnet (the default for new installs) deliberately has no bootstrap
+    // nodes — solo mining only.
 
     #[test]
-    fn test_bootstrap_nodes_are_valid_multiaddrs() {
-        for addr_str in get_bootstrap_nodes() {
+    fn test_testnet_bootstrap_addrs_well_formed() {
+        for addr_str in crate::network::TESTNET.libp2p_bootstrap_addrs {
             let parsed = addr_str.parse::<Multiaddr>();
             assert!(parsed.is_ok(), "Failed to parse multiaddr: {}", addr_str);
         }
+        assert_eq!(crate::network::TESTNET.libp2p_bootstrap_addrs.len(), 2);
     }
 
     #[test]
-    fn test_bootstrap_nodes_contain_peer_ids() {
-        for addr_str in get_bootstrap_nodes() {
+    fn test_testnet_bootstrap_addrs_contain_peer_ids() {
+        for addr_str in crate::network::TESTNET.libp2p_bootstrap_addrs {
             let addr: Multiaddr = addr_str.parse().unwrap();
-            let peer_id = extract_peer_id_from_multiaddr(&addr);
-            assert!(peer_id.is_some(), "No peer ID in: {}", addr_str);
+            assert!(extract_peer_id_from_multiaddr(&addr).is_some(),
+                "No peer ID in: {}", addr_str);
         }
     }
 
     #[test]
-    fn test_bootstrap_nodes_have_unique_peer_ids() {
-        let peer_ids = get_bootstrap_peer_ids();
+    fn test_testnet_bootstrap_addrs_share_one_peer_id() {
+        // IPv4 + IPv6 entry for the same primary bootstrap peer
         let mut seen = Vec::new();
-        for id in &peer_ids {
-            assert!(!seen.contains(id), "Duplicate peer ID: {}", id);
-            seen.push(id.clone());
+        for addr_str in crate::network::TESTNET.libp2p_bootstrap_addrs {
+            let addr: Multiaddr = addr_str.parse().unwrap();
+            if let Some(peer_id) = extract_peer_id_from_multiaddr(&addr) {
+                let id_str = peer_id.to_string();
+                if !seen.contains(&id_str) {
+                    seen.push(id_str);
+                }
+            }
         }
-        // One unique peer (primary bootstrap with IPv4 + IPv6)
-        assert_eq!(peer_ids.len(), 1);
+        assert_eq!(seen.len(), 1, "expected one unique peer across IPv4 + IPv6 entries");
+    }
+
+    #[test]
+    fn test_freshnet_has_no_bootstrap_nodes() {
+        // Solo-mining chain; if peer addrs ever get added back, the start()
+        // codepath needs to drop --nodiscover too.
+        assert!(crate::network::FRESHNET.libp2p_bootstrap_addrs.is_empty());
+        assert!(crate::network::FRESHNET.geth_bootstrap_enode.is_empty());
     }
 
     #[test]

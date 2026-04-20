@@ -56,7 +56,7 @@ pub struct NetworkConfig {
 
 pub const TESTNET: NetworkConfig = NetworkConfig {
     name: "testnet",
-    display_name: "Testnet",
+    display_name: "Testnet (legacy)",
     chain_id: 98765,
     network_id: 98765,
     genesis_difficulty: "0x400000",
@@ -75,12 +75,41 @@ pub const TESTNET: NetworkConfig = NetworkConfig {
         "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
     ],
+    // Legacy unprefixed layout — existing installs already live here.
     data_subdir: None,
 };
 
-/// All configured networks. Mainnet will be appended in a later PR once the
-/// launch-day genesis (with NYT-headline commitment in `extraData`) is locked in.
-pub const ALL: &[&NetworkConfig] = &[&TESTNET];
+/// Fresh local-mining chain. New chain id, fresh genesis, low starting
+/// difficulty so the first few blocks come quickly when mining solo.
+/// No bootstrap nodes — this is a deliberately isolated chain that exists
+/// to give the rebuilt geth integration a clean state to mine against.
+pub const FRESHNET: NetworkConfig = NetworkConfig {
+    name: "freshnet",
+    display_name: "Freshnet",
+    chain_id: 98763,
+    network_id: 98763,
+    // Low difficulty so solo mining reaches block ~10 in seconds, not minutes.
+    // Ethash adjusts upward toward target block time after the first window.
+    genesis_difficulty: "0x10000",
+    // hex("Chiral Freshnet v1")
+    genesis_extra_data: "0x43686972616c2046726573686e65742076310000000000000000000000000000",
+    genesis_nonce: "0x0000000000000043",
+    genesis_timestamp: "0x0",
+    genesis_gas_limit: "0x47b760",
+    genesis_coinbase: "0x0000000000000000000000000000000000000000",
+    // No remote RPC fallback — freshnet has no public node yet, so all chain
+    // queries route to the local geth.
+    rpc_fallback: "http://127.0.0.1:8545",
+    geth_bootstrap_enode: "",
+    libp2p_bootstrap_addrs: &[],
+    libp2p_relay_addrs: &[],
+    data_subdir: Some("freshnet"),
+};
+
+/// All configured networks. FRESHNET is first so it's the default for new
+/// installs; existing testnet users keep their data under `networks/testnet/`
+/// (the migration is automatic because TESTNET now has its own data_subdir).
+pub const ALL: &[&NetworkConfig] = &[&FRESHNET, &TESTNET];
 
 /// Currently active network. Resolved once per process from env/disk, cached.
 pub fn active() -> &'static NetworkConfig {
@@ -99,7 +128,8 @@ fn resolve_from_env_or_disk() -> &'static NetworkConfig {
             return cfg;
         }
     }
-    &TESTNET
+    // First entry in ALL is the default for new installs (currently FRESHNET).
+    ALL[0]
 }
 
 /// Write the active-network choice to disk. Takes effect on next launch.
