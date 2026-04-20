@@ -468,21 +468,28 @@
         });
 
         if (result) {
-          // Search DHT for seeders using the parsed hash
-          const dhtResult = await withTimeout(
-            invoke<SearchResult | null>('search_file', { fileHash: result.infoHash }),
-            8000,
-            'search'
-          );
+          // Search DHT and CDN servers for seeders in parallel — same fix as
+          // the main hash-search path (CDN entries must merge in regardless of
+          // whether the DHT also returned seeders).
+          const [dhtResult, cdnResults] = await Promise.all([
+            withTimeout(
+              invoke<SearchResult | null>('search_file', { fileHash: result.infoHash }),
+              8000,
+              'search',
+            ).catch(() => null),
+            fetchCdnSeeders(result.infoHash),
+          ]);
+
+          const merged = mergeSeederResult(dhtResult, cdnResults);
 
           searchResult = {
             hash: result.infoHash,
             fileName: result.name,
-            fileSize: result.size || dhtResult?.fileSize || 0,
-            seeders: dhtResult?.seeders || [],
-            createdAt: dhtResult?.createdAt || Date.now(),
-            priceWei: dhtResult?.priceWei || '0',
-            walletAddress: dhtResult?.walletAddress || '',
+            fileSize: result.size || merged?.fileSize || 0,
+            seeders: merged?.seeders || [],
+            createdAt: merged?.createdAt || Date.now(),
+            priceWei: merged?.priceWei || '0',
+            walletAddress: merged?.walletAddress || '',
           };
 
           if (searchResult.seeders.length > 0) {
@@ -496,6 +503,77 @@
       log.error('Failed to parse torrent file:', error);
       toasts.detail('Invalid torrent file', String(error), 'error');
     }
+  }
+
+  // CDN servers — queried in parallel with the DHT so their seeder entries
+  // always land in the result, not only when the DHT returns nothing.
+  const CDN_SEARCH_URLS = ['http://130.245.173.73:9420', 'http://130.245.173.231:9420'];
+
+  /// Query every configured CDN server concurrently for this file's seeder
+  /// metadata. Each server gets its own short timeout so one slow CDN doesn't
+  /// extend the overall search wait. Results that don't come back in time are
+  /// simply skipped — the caller is expected to merge whatever it got with
+  /// any DHT result rather than wait for CDN responses.
+  async function fetchCdnSeeders(fileHash: string, timeoutMs = 5000): Promise<SearchResult[]> {
+    const queries = CDN_SEARCH_URLS.map(async (cdnUrl) => {
+      try {
+        const resp = await withTimeout(
+          fetch(`${cdnUrl}/api/headless/file/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fileHash }),
+          }),
+          timeoutMs,
+          `cdn ${cdnUrl}`,
+        );
+        const data = await resp.json();
+        if (!data.found || !data.metadata) return null;
+        const meta = data.metadata;
+        return {
+          hash: meta.hash,
+          fileName: meta.fileName,
+          fileSize: meta.fileSize,
+          seeders: (meta.seeders || []).map(
+            (s: { peerId: string; priceWei: string; walletAddress: string; multiaddrs: string[] }) => ({
+              peerId: s.peerId,
+              priceWei: s.priceWei || '0',
+              walletAddress: s.walletAddress || '',
+              multiaddrs: s.multiaddrs || [],
+            }),
+          ),
+          createdAt: meta.createdAt || 0,
+          priceWei: meta.priceWei || '0',
+          walletAddress: meta.walletAddress || '',
+        } as SearchResult;
+      } catch {
+        return null;
+      }
+    });
+    const settled = await Promise.all(queries);
+    return settled.filter((r): r is SearchResult => r !== null);
+  }
+
+  /// Merge additional seeders into an existing SearchResult, deduplicating by
+  /// peerId. Also backfills file metadata (name, size, hash, price) from the
+  /// first extra if the original was empty.
+  function mergeSeederResult(base: SearchResult | null, extras: SearchResult[]): SearchResult | null {
+    if (extras.length === 0) return base;
+    const merged: SearchResult = base
+      ? { ...base, seeders: [...base.seeders] }
+      : { ...extras[0], seeders: [...extras[0].seeders] };
+    const seen = new Set(merged.seeders.map((s) => s.peerId));
+    for (const extra of extras) {
+      for (const s of extra.seeders) {
+        if (!seen.has(s.peerId)) {
+          merged.seeders.push(s);
+          seen.add(s.peerId);
+        }
+      }
+      if (!merged.fileName && extra.fileName) merged.fileName = extra.fileName;
+      if (!merged.fileSize && extra.fileSize) merged.fileSize = extra.fileSize;
+      if (!merged.hash && extra.hash) merged.hash = extra.hash;
+    }
+    return merged;
   }
 
   // Search for file
@@ -534,45 +612,22 @@
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
 
-        // Search DHT first (15s timeout to allow Kademlia to traverse the network)
-        let result = await withTimeout(
-          invoke<SearchResult | null>('search_file', { fileHash }),
-          15000,
-          'search'
-        ).catch(() => null);
+        // Query DHT and CDN servers in parallel. The DHT lookup gets a longer
+        // timeout because Kademlia traversal is inherently slow, but CDN
+        // queries resolve within a few hundred ms when reachable — so racing
+        // both means the seeder list always includes CDN-hosted entries, not
+        // only when the DHT returns nothing, and a DHT timeout no longer
+        // delays the CDN response.
+        const [dhtResult, cdnResults] = await Promise.all([
+          withTimeout(
+            invoke<SearchResult | null>('search_file', { fileHash }),
+            15000,
+            'search',
+          ).catch(() => null),
+          fetchCdnSeeders(fileHash),
+        ]);
 
-        // CDN fallback: if DHT didn't find it, check CDN servers directly
-        if (!result) {
-          const CDN_URLS = ['http://130.245.173.73:9420', 'http://130.245.173.231:9420'];
-          for (const cdnUrl of CDN_URLS) {
-            try {
-              const resp = await fetch(`${cdnUrl}/api/headless/file/search`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ fileHash }),
-              });
-              const data = await resp.json();
-              if (data.found && data.metadata) {
-                const meta = data.metadata;
-                result = {
-                  hash: meta.hash,
-                  fileName: meta.fileName,
-                  fileSize: meta.fileSize,
-                  seeders: (meta.seeders || []).map((s: { peerId: string; priceWei: string; walletAddress: string; multiaddrs: string[] }) => ({
-                    peerId: s.peerId,
-                    priceWei: s.priceWei || '0',
-                    walletAddress: s.walletAddress || '',
-                    multiaddrs: s.multiaddrs || [],
-                  })),
-                  createdAt: meta.createdAt || 0,
-                  priceWei: meta.priceWei || '0',
-                  walletAddress: meta.walletAddress || '',
-                };
-                break;
-              }
-            } catch { /* CDN unreachable, continue */ }
-          }
-        }
+        let result = mergeSeederResult(dhtResult, cdnResults);
 
         if (result) {
           // For magnet links, use the name from the magnet link if available
