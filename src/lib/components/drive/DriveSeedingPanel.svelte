@@ -197,7 +197,7 @@
           <div class="flex items-start gap-3">
             <!-- File icon -->
             <div class="flex-shrink-0 w-10 h-10 rounded-lg bg-gray-50 dark:bg-gray-700 flex items-center justify-center">
-              <svelte:component this={Icon} class="w-5 h-5 {getFileColor(item.name)}" />
+              <Icon class="w-5 h-5 {getFileColor(item.name)}" />
             </div>
 
             <!-- File info -->

@@ -901,7 +901,7 @@ async fn wallet_show(State(state): State<Arc<HeadlessRuntimeState>>) -> Response
 // ---- Wallet balance/transaction endpoints ----
 
 async fn wallet_balance(
-    State(state): State<Arc<HeadlessRuntimeState>>,
+    State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     let address = body["address"].as_str().unwrap_or("").to_string();
@@ -916,7 +916,7 @@ async fn wallet_balance(
 }
 
 async fn wallet_send(
-    State(state): State<Arc<HeadlessRuntimeState>>,
+    State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     let from = body["from"].as_str().unwrap_or("").to_string();
@@ -936,7 +936,7 @@ async fn wallet_send(
 }
 
 async fn wallet_receipt(
-    State(state): State<Arc<HeadlessRuntimeState>>,
+    State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     let tx_hash = body["txHash"].as_str().unwrap_or("").to_string();
@@ -952,7 +952,7 @@ async fn wallet_receipt(
 }
 
 async fn wallet_history(
-    State(state): State<Arc<HeadlessRuntimeState>>,
+    State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
     let address = body["address"].as_str().unwrap_or("").to_string();
@@ -1067,7 +1067,7 @@ async fn hosting_get_registry(
 }
 
 async fn bootstrap_health(
-    State(state): State<Arc<HeadlessRuntimeState>>,
+    State(_state): State<Arc<HeadlessRuntimeState>>,
 ) -> Response {
     let report = chiral_network::geth_bootstrap::check_all_nodes().await;
     Json(json!(report)).into_response()
@@ -1189,6 +1189,26 @@ fn save_cdn_registry(entries: &[CdnFileEntry]) {
     if let Ok(json) = serde_json::to_string_pretty(entries) {
         let _ = std::fs::write(path, json);
     }
+}
+
+/// Serializes read-modify-write access to the CDN registry on disk.
+/// Without this, two concurrent cdn_upload / cdn_delete / cdn_update_price
+/// handlers can both `load` the same snapshot, both mutate it locally, then
+/// both `save` — the later write silently overwrites the earlier one and the
+/// first handler's change is lost.
+static CDN_REGISTRY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Run a read-modify-write against the CDN registry while holding the
+/// registry lock, so concurrent handlers can't clobber each other.
+async fn with_cdn_registry<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut Vec<CdnFileEntry>) -> R,
+{
+    let _guard = CDN_REGISTRY_LOCK.lock().await;
+    let mut registry = load_cdn_registry();
+    let result = f(&mut registry);
+    save_cdn_registry(&registry);
+    result
 }
 
 
@@ -1394,21 +1414,22 @@ async fn cdn_upload(
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("DHT publish failed: {}", e));
     }
 
-    // Save to CDN registry
-    let mut registry = load_cdn_registry();
-    registry.retain(|e| e.file_hash != file_hash);
-    registry.push(CdnFileEntry {
-        file_hash: file_hash.clone(),
-        file_name: file_name.clone(),
-        file_size,
-        owner_wallet: owner_wallet.clone(),
-        price_chi_per_month: price_per_mb_chi.clone(),
-        download_price_chi: download_price_chi.clone(),
-        payment_tx: payment_tx.clone(),
-        uploaded_at: now,
-        expires_at: expires,
-    });
-    save_cdn_registry(&registry);
+    // Save to CDN registry (serialized so concurrent uploads/deletes can't clobber each other).
+    with_cdn_registry(|registry| {
+        registry.retain(|e| e.file_hash != file_hash);
+        registry.push(CdnFileEntry {
+            file_hash: file_hash.clone(),
+            file_name: file_name.clone(),
+            file_size,
+            owner_wallet: owner_wallet.clone(),
+            price_chi_per_month: price_per_mb_chi.clone(),
+            download_price_chi: download_price_chi.clone(),
+            payment_tx: payment_tx.clone(),
+            uploaded_at: now,
+            expires_at: expires,
+        });
+    })
+    .await;
 
     println!("[CDN] Uploaded: {} ({} bytes, hash: {}, owner: {}, cost: {} CHI, expires: {})",
         file_name, file_size, file_hash, owner_wallet, total_cost_chi, expires);
@@ -1466,19 +1487,20 @@ async fn cdn_delete(
         return json_error(StatusCode::BAD_REQUEST, "owner query param required");
     }
 
-    let mut registry = load_cdn_registry();
-    let before = registry.len();
-    registry.retain(|e| !(e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner));
+    let removed = with_cdn_registry(|registry| {
+        let before = registry.len();
+        registry.retain(|e| !(e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner));
+        before != registry.len()
+    })
+    .await;
 
-    if registry.len() == before {
+    if !removed {
         return json_error(StatusCode::NOT_FOUND, "File not found or not owned by this wallet");
     }
 
-    save_cdn_registry(&registry);
-
     // Remove from disk
     let file_path = cdn_storage_dir().join(&file_hash);
-    let _ = std::fs::remove_file(&file_path);
+    let _ = tokio::fs::remove_file(&file_path).await;
 
     // Unregister from DHT — remove CDN's seeder entry from the metadata
     if let Some(dht) = state.dht_service().await {
@@ -1521,16 +1543,24 @@ async fn cdn_update_price(
         return json_error(StatusCode::BAD_REQUEST, "owner required");
     }
 
-    let mut registry = load_cdn_registry();
-    let entry = registry.iter_mut().find(|e| e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner);
+    // Apply the price change under the registry lock, and grab the fields we
+    // need for the downstream DHT re-registration so we don't have to touch
+    // the registry again outside the lock.
+    let updated_entry = with_cdn_registry(|registry| {
+        registry
+            .iter_mut()
+            .find(|e| e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner)
+            .map(|e| {
+                e.download_price_chi = new_price.clone();
+                e.clone()
+            })
+    })
+    .await;
 
-    let entry = match entry {
+    let entry = match updated_entry {
         Some(e) => e,
         None => return json_error(StatusCode::NOT_FOUND, "File not found or not owned by this wallet"),
     };
-
-    entry.download_price_chi = new_price.clone();
-    save_cdn_registry(&registry);
 
     // Update DHT record with new price
     let new_price_wei = if new_price.is_empty() || new_price == "0" {
@@ -1559,7 +1589,6 @@ async fn cdn_update_price(
         // Also update shared file registration
         let file_path = cdn_storage_dir().join(&file_hash);
         if file_path.exists() {
-            let entry = registry.iter().find(|e| e.file_hash == file_hash).unwrap();
             dht.register_shared_file(
                 file_hash.clone(),
                 file_path.to_string_lossy().to_string(),
@@ -1933,22 +1962,25 @@ async fn main() {
             loop {
                 interval.tick().await;
                 let now = now_secs();
-                let mut registry = load_cdn_registry();
-                let before = registry.len();
-                let expired: Vec<CdnFileEntry> = registry.iter()
-                    .filter(|e| e.expires_at <= now)
-                    .cloned()
-                    .collect();
+                let expired = with_cdn_registry(|registry| {
+                    let expired: Vec<CdnFileEntry> = registry
+                        .iter()
+                        .filter(|e| e.expires_at <= now)
+                        .cloned()
+                        .collect();
+                    registry.retain(|e| e.expires_at > now);
+                    expired
+                })
+                .await;
 
-                if expired.is_empty() { continue; }
-
-                registry.retain(|e| e.expires_at > now);
-                save_cdn_registry(&registry);
+                if expired.is_empty() {
+                    continue;
+                }
 
                 // Unregister expired files from DHT and delete from disk
                 for entry in &expired {
                     let file_path = cdn_storage_dir().join(&entry.file_hash);
-                    let _ = std::fs::remove_file(&file_path);
+                    let _ = tokio::fs::remove_file(&file_path).await;
 
                     if let Some(dht) = cdn_rt.dht_service().await {
                         dht.unregister_shared_file(&entry.file_hash).await;
@@ -1957,8 +1989,7 @@ async fn main() {
                     println!("[CDN] Expired and removed: {} (owner: {}, hash: {})",
                         entry.file_name, entry.owner_wallet, entry.file_hash);
                 }
-                println!("[CDN] Cleanup: removed {} expired files ({} remaining)",
-                    expired.len(), registry.len());
+                println!("[CDN] Cleanup: removed {} expired files", expired.len());
             }
         });
     }

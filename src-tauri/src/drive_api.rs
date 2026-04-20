@@ -553,14 +553,23 @@ async fn delete_item(
         (to_delete, files)
     };
 
-    let mut errors = Vec::new();
-    for path in file_paths {
-        match std::fs::remove_file(&path) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => errors.push(format!("{}: {}", path.display(), e)),
-        }
-    }
+    // Delete files in parallel — the async runtime can schedule many
+    // remove_file calls concurrently, which is much faster than serial
+    // blocking I/O on a folder with many files.
+    let removals = file_paths
+        .into_iter()
+        .map(|path| async move {
+            match tokio::fs::remove_file(&path).await {
+                Ok(_) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!("{}: {}", path.display(), e)),
+            }
+        });
+    let errors: Vec<String> = futures_util::future::join_all(removals)
+        .await
+        .into_iter()
+        .filter_map(Result::err)
+        .collect();
 
     if !errors.is_empty() {
         return (
