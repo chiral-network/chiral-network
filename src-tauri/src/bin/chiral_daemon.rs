@@ -332,7 +332,7 @@ async fn health_check() -> Response {
 async fn readiness_check(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
     let dht_running = state.dht_service().await.is_some();
     let geth_running = {
-        let mut geth = state.geth.lock().await;
+        let geth = state.geth.lock().await;
         geth.get_status().await.map(|s| s.running).unwrap_or(false)
     };
     let ready = dht_running; // DHT is the minimum requirement for readiness
@@ -363,7 +363,7 @@ async fn runtime_status(State(state): State<Arc<HeadlessRuntimeState>>) -> Respo
         None
     };
 
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     let geth_status = geth.get_status().await.ok();
 
     Json(json!({
@@ -684,7 +684,7 @@ async fn geth_stop(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
 }
 
 async fn geth_status(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     match geth.get_status().await {
         Ok(status) => Json(status).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
@@ -702,7 +702,7 @@ async fn mining_start(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<StartMiningRequest>,
 ) -> Response {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     match geth.start_mining(req.threads.unwrap_or(1)).await {
         Ok(()) => Json(json!({ "status": "started" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
@@ -710,7 +710,7 @@ async fn mining_start(
 }
 
 async fn mining_stop(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     match geth.stop_mining().await {
         Ok(()) => Json(json!({ "status": "stopped" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
@@ -718,7 +718,7 @@ async fn mining_stop(State(state): State<Arc<HeadlessRuntimeState>>) -> Response
 }
 
 async fn mining_status(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
-    let mut geth = state.geth.lock().await;
+    let geth = state.geth.lock().await;
     match geth.get_mining_status().await {
         Ok(status) => Json(status).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
@@ -740,7 +740,7 @@ async fn set_miner_address(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<MinerAddressRequest>,
 ) -> Response {
-    let geth = state.geth.lock().await;
+    let mut geth = state.geth.lock().await;
     match geth.set_miner_address(&req.address).await {
         Ok(()) => Json(json!({ "status": "ok" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
@@ -1069,8 +1069,21 @@ async fn hosting_get_registry(
 async fn bootstrap_health(
     State(_state): State<Arc<HeadlessRuntimeState>>,
 ) -> Response {
-    let report = chiral_network::geth_bootstrap::check_all_nodes().await;
-    Json(json!(report)).into_response()
+    // Bootstrap discovery was removed with the geth rewrite. Report the
+    // active network's configured enode (if any) as a single static entry.
+    let cfg = chiral_network::network::active();
+    let has_enode = !cfg.geth_bootstrap_enode.is_empty();
+    Json(json!({
+        "totalNodes": if has_enode { 1 } else { 0 },
+        "healthyNodes": if has_enode { 1 } else { 0 },
+        "nodes": [],
+        "isHealthy": true,
+        "healthyEnodeString": cfg.geth_bootstrap_enode,
+        "timestamp": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    })).into_response()
 }
 
 // ============================================================================
@@ -1869,7 +1882,7 @@ async fn main() {
             if auto_mine {
                 if let Some(ref addr) = miner_address {
                     println!("[AUTO] Setting miner address: {}", addr);
-                    let geth = rt.geth.lock().await;
+                    let mut geth = rt.geth.lock().await;
                     let _ = geth.set_miner_address(addr).await;
                     drop(geth);
                 }
@@ -1878,7 +1891,7 @@ async fn main() {
                     "[AUTO] Starting mining with {} thread(s)...",
                     mining_threads
                 );
-                let mut geth = rt.geth.lock().await;
+                let geth = rt.geth.lock().await;
                 match geth.start_mining(mining_threads).await {
                     Ok(()) => println!("[AUTO] Mining started successfully"),
                     Err(e) => eprintln!("[AUTO] Mining start failed: {}", e),
