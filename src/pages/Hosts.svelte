@@ -107,11 +107,19 @@
     status: string;
     peerId: string;
     walletAddress: string;
+    chainId?: number;
+    networkName?: string;
     activeFiles: number;
     totalStorageBytes: number;
     uniqueOwners: number;
     myFiles: CdnFile[];
   }
+
+  // Active network's chain id, fetched once at mount. Compared against each
+  // CDN server's reported chainId to detect the "wrong chain" case where
+  // payment verification will silently fail because the CDN can't see the
+  // tx on its local chain.
+  let myChainId = $state<number | null>(null);
 
   interface CdnFile {
     fileHash: string;
@@ -154,6 +162,8 @@
             status: status.status || 'unknown',
             peerId: status.peerId || '',
             walletAddress: status.walletAddress || '',
+            chainId: typeof status.chainId === 'number' ? status.chainId : undefined,
+            networkName: status.networkName || undefined,
             activeFiles: status.activeFiles || 0,
             totalStorageBytes: status.totalStorageBytes || 0,
             uniqueOwners: status.uniqueOwners || 0,
@@ -255,6 +265,19 @@
   }
 
   async function confirmCdnUpload(serverUrl: string, file: { id: string; name: string; size: number }) {
+    // Refuse to even open the modal if this CDN is on a different chain.
+    // The upload would just sit on the 30s payment-verify polling loop and
+    // then fail; surface the real reason now instead of after the wait.
+    const target = cdnServers.find((c) => c.url === serverUrl);
+    if (myChainId != null && target?.chainId != null && target.chainId !== myChainId) {
+      toasts.detail(
+        'Different chain',
+        `This CDN is on chain ${target.chainId}; your wallet is on chain ${myChainId}. Switch networks in Settings or use a CDN on the same chain.`,
+        'error',
+        8000,
+      );
+      return;
+    }
     cdnConfirmFile = file;
     cdnConfirmServerUrl = serverUrl;
     cdnFilePrice = '0';
@@ -970,6 +993,14 @@
     // Load marketplace data
     await loadAgreements();
     loadHosts();
+    if (isTauri) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        myChainId = await invoke<number>('get_chain_id');
+      } catch (e) {
+        console.warn('Failed to read local chain id:', e);
+      }
+    }
     loadCdnServers();
 
     if (isTauri) {
@@ -1255,8 +1286,27 @@
       onDeleteSite={deleteSite}
     />
   {:else if activeTab === 'cdn'}
+    {@const mismatchedCdns = cdnServers.filter(
+      (c) => myChainId != null && c.chainId != null && c.chainId !== myChainId,
+    )}
     <!-- CDN Servers -->
     <div class="space-y-4">
+      {#if mismatchedCdns.length > 0}
+        <div class="rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-4">
+          <p class="font-medium text-amber-900 dark:text-amber-200 mb-1">CDN on a different chain</p>
+          <p class="text-sm text-amber-800 dark:text-amber-300">
+            Your wallet is on chain <span class="font-mono">{myChainId}</span> but
+            {#if mismatchedCdns.length === 1}
+              the CDN at <span class="font-mono">{mismatchedCdns[0].url}</span> is on chain
+              <span class="font-mono">{mismatchedCdns[0].chainId}</span>{mismatchedCdns[0].networkName ? ` (${mismatchedCdns[0].networkName})` : ''}.
+            {:else}
+              {mismatchedCdns.length} CDN servers are on different chains.
+            {/if}
+            Uploads will hang for 30s and then fail because the CDN can't see your payment on its chain.
+            Either switch networks in Settings or wait for the CDN operator to redeploy.
+          </p>
+        </div>
+      {/if}
       <div class="flex items-center justify-between">
         <div>
           <h2 class="text-lg font-semibold dark:text-white">CDN Servers</h2>
