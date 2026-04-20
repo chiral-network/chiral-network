@@ -1123,25 +1123,51 @@ const CDN_FLOOR_PRICE_WEI_PER_MB_MONTH: u128 = 1_000_000_000_000_000; // 0.001 C
 /// CDN charges a 1.2x premium over median peer price for guaranteed uptime.
 const CDN_UPTIME_PREMIUM: f64 = 1.2;
 
+/// In-memory cache for the CDN per-MB-per-month price. The marketplace
+/// median changes on the order of minutes (hosts adjust rarely), so a
+/// short TTL eliminates the DHT-lookup latency from every pricing fetch
+/// while still letting price updates propagate.
+static CDN_PRICE_CACHE: tokio::sync::Mutex<Option<(u128, std::time::Instant)>> =
+    tokio::sync::Mutex::const_new(None);
+const CDN_PRICE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Calculate the current CDN storage price based on the peer hosting marketplace.
 /// Returns price in wei per MB per month.
 ///
-/// Per-host advertisement lookups run concurrently — for an N-host registry
-/// this is one DHT round-trip total instead of N+1 serial round-trips, which
-/// was the dominant source of slow CDN pricing fetches.
+/// Per-host advertisement lookups run concurrently and the result is cached
+/// for 30s — a single CDN page load that previously fanned out to 1+N DHT
+/// round-trips per request now does at most one.
 async fn calculate_cdn_price(state: &HeadlessRuntimeState) -> u128 {
+    {
+        let cached = CDN_PRICE_CACHE.lock().await;
+        if let Some((price, at)) = *cached {
+            if at.elapsed() < CDN_PRICE_CACHE_TTL {
+                return price;
+            }
+        }
+    }
+
+    // Helper closure: cache + return. Used by the floor-price early exits
+    // too, so a marketplace with no hosts (or no DHT) doesn't hammer the
+    // network on every request.
+    let cache_and_return = |price: u128| async move {
+        let mut cached = CDN_PRICE_CACHE.lock().await;
+        *cached = Some((price, std::time::Instant::now()));
+        price
+    };
+
     let dht = match state.dht_service().await {
         Some(d) => d,
-        None => return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH,
+        None => return cache_and_return(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH).await,
     };
 
     let registry_json = match dht.get_dht_value("chiral_host_registry".to_string()).await {
         Ok(Some(json)) => json,
-        _ => return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH,
+        _ => return cache_and_return(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH).await,
     };
     let registry: Vec<serde_json::Value> = serde_json::from_str(&registry_json).unwrap_or_default();
     if registry.is_empty() {
-        return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
+        return cache_and_return(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH).await;
     }
 
     // Fan out the per-host ad fetches — these were the serial bottleneck.
@@ -1167,13 +1193,19 @@ async fn calculate_cdn_price(state: &HeadlessRuntimeState) -> u128 {
         })
         .collect();
 
-    if peer_prices.is_empty() {
-        return CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
-    }
-    peer_prices.sort();
-    let median = peer_prices[peer_prices.len() / 2];
-    let cdn_price = (median as f64 * CDN_UPTIME_PREMIUM) as u128;
-    std::cmp::max(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH, cdn_price)
+    let final_price = if peer_prices.is_empty() {
+        CDN_FLOOR_PRICE_WEI_PER_MB_MONTH
+    } else {
+        peer_prices.sort();
+        let median = peer_prices[peer_prices.len() / 2];
+        let cdn_price = (median as f64 * CDN_UPTIME_PREMIUM) as u128;
+        std::cmp::max(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH, cdn_price)
+    };
+
+    // Stash for the next 30s of pricing requests.
+    let mut cached = CDN_PRICE_CACHE.lock().await;
+    *cached = Some((final_price, std::time::Instant::now()));
+    final_price
 }
 
 /// Format wei to CHI string for display.
@@ -1666,6 +1698,13 @@ async fn cdn_status(
         "status": "online",
         "peerId": peer_id,
         "walletAddress": wallet_address,
+        // chainId tells clients which chain this CDN verifies payments
+        // against. Frontends should refuse to upload (or warn loudly) if
+        // their active network's chain id doesn't match — otherwise the
+        // CDN will silently sit on the payment-verify polling loop until
+        // it gives up.
+        "chainId": chiral_network::geth::chain_id(),
+        "networkName": chiral_network::network::active().name,
         "activeFiles": active.len(),
         "totalStorageBytes": active.iter().map(|f| f.file_size).sum::<u64>(),
         "uniqueOwners": active.iter().map(|f| f.owner_wallet.to_lowercase()).collect::<std::collections::HashSet<_>>().len(),
@@ -1822,6 +1861,18 @@ async fn main() {
 
     println!("chiral-daemon running on http://{}", bound);
     println!("PID file: {}", pid_file.display());
+    {
+        // Loud network log so an operator restarting a CDN server can see
+        // immediately which chain it's bound to. Override at launch with
+        // `CHIRAL_NETWORK=testnet ./chiral_daemon ...`.
+        let net = chiral_network::network::active();
+        println!(
+            "Network: {} (chain id {}, datadir {})",
+            net.display_name,
+            net.chain_id,
+            chiral_network::network::data_dir().display(),
+        );
+    }
 
     // Auto-start services if requested
     let auto_mine = args.auto_mine;
