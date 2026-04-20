@@ -1881,6 +1881,22 @@ async fn main() {
     let miner_address = args.miner_address.clone();
     let mining_threads = args.mining_threads;
 
+    // If the operator passed --miner-address at launch, pre-populate the
+    // wallet slot with that address (no private key). This lets endpoints
+    // like /api/cdn/status report a non-empty walletAddress so clients know
+    // where to send CDN payments, without requiring a separate
+    // `POST /api/headless/wallet/import` call after boot.
+    if let Some(ref addr) = miner_address {
+        let mut wallet_guard = runtime_state.wallet.lock().await;
+        if wallet_guard.is_none() {
+            *wallet_guard = Some(WalletInfo {
+                address: addr.clone(),
+                private_key: String::new(),
+            });
+            println!("Pre-populated CDN wallet with miner address: {}", addr);
+        }
+    }
+
     if auto_start_dht || auto_start_geth || auto_mine {
         let rt = Arc::clone(&runtime_state);
         tokio::spawn(async move {
