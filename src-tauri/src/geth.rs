@@ -94,33 +94,9 @@ pub struct MinedBlock {
     pub difficulty: u64,
 }
 
-// GPU mining types are required by the frontend import surface but the
-// integration itself is gone. Always report "unsupported".
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GpuDevice { pub id: String, pub name: String }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GpuMiningCapabilities {
-    pub supported: bool,
-    pub binary_path: Option<String>,
-    pub devices: Vec<GpuDevice>,
-    pub running: bool,
-    pub active_devices: Vec<String>,
-    pub utilization_percent: u8,
-    pub last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GpuMiningStatus {
-    pub running: bool,
-    pub hash_rate: u64,
-    pub active_devices: Vec<String>,
-    pub utilization_percent: u8,
-    pub last_error: Option<String>,
-}
+// GPU mining lives in the `geth_gpu` module. Re-exported here so the
+// existing import surface (`crate::geth::GpuDevice` etc.) keeps working.
+pub use crate::geth_gpu::{GpuDevice, GpuMiningCapabilities, GpuMiningStatus};
 
 // ============================================================================
 // Downloader
@@ -556,23 +532,8 @@ impl GethProcess {
         Ok(out)
     }
 
-    // GPU mining is not implemented in this build. The frontend imports the
-    // surface, so we return "unsupported" shapes rather than removing it.
-    pub async fn get_gpu_mining_capabilities(&self) -> Result<GpuMiningCapabilities, String> {
-        Ok(GpuMiningCapabilities {
-            supported: false, binary_path: None, devices: vec![],
-            running: false, active_devices: vec![], utilization_percent: 100,
-            last_error: Some("GPU mining not supported in this build".into()),
-        })
-    }
-    pub async fn list_gpu_devices(&mut self) -> Result<Vec<GpuDevice>, String> { Ok(vec![]) }
-    pub async fn start_gpu_mining(&mut self, _d: Option<Vec<String>>, _u: Option<u8>) -> Result<(), String> {
-        Err("GPU mining not supported in this build".into())
-    }
-    pub async fn stop_gpu_mining(&mut self) -> Result<(), String> { Ok(()) }
-    pub async fn get_gpu_mining_status(&self) -> Result<GpuMiningStatus, String> {
-        Ok(GpuMiningStatus { running: false, hash_rate: 0, active_devices: vec![], utilization_percent: 100, last_error: None })
-    }
+    // GPU mining lives in the `geth_gpu` module now. The Tauri command
+    // handlers in lib.rs route to AppState.gpu_miner directly.
 }
 
 impl Default for GethProcess {
