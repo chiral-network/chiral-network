@@ -41,10 +41,12 @@
   import { logger } from '$lib/logger';
   const log = logger('Download');
 
-  // Known CDN peer IDs — tagged as "(CDN)" in seeder list
+  // Known CDN peer IDs — tagged as "(CDN)" in seeder list.
+  // These identities were regenerated when the CDN servers were migrated
+  // to freshnet (chain 98763). Update when redeploying a CDN server.
   const CDN_PEER_IDS = new Set([
-    '12D3KooWAWXmjHRqNG5Cphug9HihC1LvuMnpvMRcFHxtqMemL95h', // CDN Primary (US East)
-    '12D3KooWHUwrCrqd3yTuZYZzr9zs4QBeLVkcpLYGJGZm8X4ShiZx', // CDN Secondary (Stony Brook)
+    '12D3KooWEjL8w9ArG1fZm5jGpYUw7YPQy94zbSFkG4uCeStAoV54', // CDN Primary (US East, 130.245.173.73)
+    '12D3KooWCQ8cMx4NGRszbVmRRLW1raRZ9bZpyWEbWrxriMga59Ym', // CDN Secondary (Stony Brook, 130.245.173.231)
   ]);
 
   function isCdnPeer(peerId: string): boolean {
