@@ -4426,11 +4426,12 @@ mod tests {
     }
 
     #[test]
-    fn test_freshnet_has_no_bootstrap_nodes() {
-        // Solo-mining chain; if peer addrs ever get added back, the start()
-        // codepath needs to drop --nodiscover too.
+    fn test_freshnet_has_shared_geth_bootstrap_but_no_libp2p_bootstrap() {
+        // freshnet clients sync to a single shared geth at the configured
+        // enode so CDN payment verification works. libp2p bootstrap is still
+        // empty — DHT discovery is mDNS/Kademlia-organic on this chain.
+        assert!(!crate::network::FRESHNET.geth_bootstrap_enode.is_empty());
         assert!(crate::network::FRESHNET.libp2p_bootstrap_addrs.is_empty());
-        assert!(crate::network::FRESHNET.geth_bootstrap_enode.is_empty());
     }
 
     #[test]
