@@ -79,10 +79,12 @@ pub const TESTNET: NetworkConfig = NetworkConfig {
     data_subdir: None,
 };
 
-/// Fresh local-mining chain. New chain id, fresh genesis, low starting
-/// difficulty so the first few blocks come quickly when mining solo.
-/// No bootstrap nodes — this is a deliberately isolated chain that exists
-/// to give the rebuilt geth integration a clean state to mine against.
+/// Fresh production chain. New chain id, fresh genesis, low starting
+/// difficulty so the first few blocks come quickly. Bootstrap and RPC
+/// fallback both point at the CDN primary on `.73` — that server runs a
+/// public geth on the freshnet chain that every client syncs from, so
+/// wallets without a local geth can still read state and CDN payment
+/// verification works (same chain on every side).
 pub const FRESHNET: NetworkConfig = NetworkConfig {
     name: "freshnet",
     display_name: "Freshnet",
@@ -97,10 +99,8 @@ pub const FRESHNET: NetworkConfig = NetworkConfig {
     genesis_timestamp: "0x0",
     genesis_gas_limit: "0x47b760",
     genesis_coinbase: "0x0000000000000000000000000000000000000000",
-    // No remote RPC fallback — freshnet has no public node yet, so all chain
-    // queries route to the local geth.
-    rpc_fallback: "http://127.0.0.1:8545",
-    geth_bootstrap_enode: "",
+    rpc_fallback: "http://130.245.173.73:8545",
+    geth_bootstrap_enode: "enode://97dbda18dd3a26c32e99358e34591b09bd172fc023ea19b6eb13a936f49de2d708273a88b406c675af9231e88bb6d9c83ba8eb778d42443e1f5eff4e395a4461@130.245.173.73:30303",
     libp2p_bootstrap_addrs: &[],
     libp2p_relay_addrs: &[],
     data_subdir: Some("freshnet"),

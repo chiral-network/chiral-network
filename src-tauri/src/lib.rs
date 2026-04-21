@@ -5,6 +5,7 @@ pub mod drive_storage;
 mod encryption;
 pub mod event_sink;
 pub mod file_transfer;
+pub mod cdn_server;
 pub mod geth;
 pub mod geth_gpu;
 pub mod hosting;

@@ -328,10 +328,15 @@ impl GethProcess {
             .open(&log_path).map_err(|e| format!("open log file: {e}"))?;
         let log_clone = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
+        // Bind address for the HTTP RPC. Default 127.0.0.1 (safe for desktop
+        // users), overridable to 0.0.0.0 for server operators running the
+        // chain's public RPC endpoint.
+        let http_addr = std::env::var("CHIRAL_GETH_HTTP_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
         let mut cmd = Command::new(self.geth_path());
         cmd.args(["--datadir"]).arg(&self.data_dir)
             .args(["--networkid", &network_id().to_string()])
-            .args(["--http", "--http.addr", "127.0.0.1", "--http.port", "8545"])
+            .args(["--http", "--http.addr", &http_addr, "--http.port", "8545"])
             .args(["--http.api", "eth,net,web3,personal,debug,miner,admin,txpool"])
             .args(["--http.corsdomain", "*"])
             // Full sync + archive GC is the key to not regressing block height

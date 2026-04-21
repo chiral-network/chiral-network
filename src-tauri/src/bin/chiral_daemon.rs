@@ -1,13 +1,13 @@
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Query, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use base64::Engine;
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -1086,636 +1086,6 @@ async fn bootstrap_health(
     })).into_response()
 }
 
-// ============================================================================
-// CDN endpoints — always-on file hosting service
-// ============================================================================
-
-/// CDN storage directory.
-fn cdn_storage_dir() -> PathBuf {
-    default_data_dir().join("cdn")
-}
-
-/// CDN metadata file (tracks all hosted files and their owners).
-fn cdn_metadata_path() -> PathBuf {
-    default_data_dir().join("cdn_registry.json")
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct CdnFileEntry {
-    file_hash: String,
-    file_name: String,
-    file_size: u64,
-    owner_wallet: String,
-    price_chi_per_month: String,
-    #[serde(default)]
-    download_price_chi: String,
-    payment_tx: String,
-    uploaded_at: u64,
-    expires_at: u64,
-}
-
-// ---- CDN dynamic pricing engine ----
-
-/// Minimum floor price: 0.001 CHI per MB per month.
-const CDN_FLOOR_PRICE_WEI_PER_MB_MONTH: u128 = 1_000_000_000_000_000; // 0.001 CHI
-
-/// CDN charges a 1.2x premium over median peer price for guaranteed uptime.
-const CDN_UPTIME_PREMIUM: f64 = 1.2;
-
-/// In-memory cache for the CDN per-MB-per-month price. The marketplace
-/// median changes on the order of minutes (hosts adjust rarely), so a
-/// short TTL eliminates the DHT-lookup latency from every pricing fetch
-/// while still letting price updates propagate.
-static CDN_PRICE_CACHE: tokio::sync::Mutex<Option<(u128, std::time::Instant)>> =
-    tokio::sync::Mutex::const_new(None);
-const CDN_PRICE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Calculate the current CDN storage price based on the peer hosting marketplace.
-/// Returns price in wei per MB per month.
-///
-/// Per-host advertisement lookups run concurrently and the result is cached
-/// for 30s — a single CDN page load that previously fanned out to 1+N DHT
-/// round-trips per request now does at most one.
-async fn calculate_cdn_price(state: &HeadlessRuntimeState) -> u128 {
-    {
-        let cached = CDN_PRICE_CACHE.lock().await;
-        if let Some((price, at)) = *cached {
-            if at.elapsed() < CDN_PRICE_CACHE_TTL {
-                return price;
-            }
-        }
-    }
-
-    // Helper closure: cache + return. Used by the floor-price early exits
-    // too, so a marketplace with no hosts (or no DHT) doesn't hammer the
-    // network on every request.
-    let cache_and_return = |price: u128| async move {
-        let mut cached = CDN_PRICE_CACHE.lock().await;
-        *cached = Some((price, std::time::Instant::now()));
-        price
-    };
-
-    let dht = match state.dht_service().await {
-        Some(d) => d,
-        None => return cache_and_return(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH).await,
-    };
-
-    let registry_json = match dht.get_dht_value("chiral_host_registry".to_string()).await {
-        Ok(Some(json)) => json,
-        _ => return cache_and_return(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH).await,
-    };
-    let registry: Vec<serde_json::Value> = serde_json::from_str(&registry_json).unwrap_or_default();
-    if registry.is_empty() {
-        return cache_and_return(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH).await;
-    }
-
-    // Fan out the per-host ad fetches — these were the serial bottleneck.
-    let dht_for_lookups = dht.clone();
-    let lookups = registry.iter().filter_map(|entry| {
-        let peer_id = entry["peerId"].as_str().unwrap_or("").to_string();
-        if peer_id.is_empty() { return None; }
-        let dht = dht_for_lookups.clone();
-        Some(async move { dht.get_dht_value(format!("chiral_host_{}", peer_id)).await })
-    });
-    let results = futures_util::future::join_all(lookups).await;
-
-    let mut peer_prices: Vec<u128> = results
-        .into_iter()
-        .filter_map(|r| r.ok().flatten())
-        .filter_map(|ad_json| serde_json::from_str::<serde_json::Value>(&ad_json).ok())
-        .filter_map(|ad| {
-            ad["pricePerMbPerDayWei"]
-                .as_str()
-                .and_then(|s| s.parse::<u128>().ok())
-                .filter(|p| *p > 0)
-                .map(|p| p * 30) // daily → monthly
-        })
-        .collect();
-
-    let final_price = if peer_prices.is_empty() {
-        CDN_FLOOR_PRICE_WEI_PER_MB_MONTH
-    } else {
-        peer_prices.sort();
-        let median = peer_prices[peer_prices.len() / 2];
-        let cdn_price = (median as f64 * CDN_UPTIME_PREMIUM) as u128;
-        std::cmp::max(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH, cdn_price)
-    };
-
-    // Stash for the next 30s of pricing requests.
-    let mut cached = CDN_PRICE_CACHE.lock().await;
-    *cached = Some((final_price, std::time::Instant::now()));
-    final_price
-}
-
-/// Format wei to CHI string for display.
-fn wei_to_chi_display(wei: u128) -> String {
-    let chi = wei as f64 / 1e18;
-    if chi < 0.000001 {
-        format!("{:.18}", chi).trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        format!("{:.6}", chi)
-    }
-}
-
-async fn load_cdn_registry() -> Vec<CdnFileEntry> {
-    let path = cdn_metadata_path();
-    match tokio::fs::read_to_string(&path).await {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
-}
-
-async fn save_cdn_registry(entries: &[CdnFileEntry]) {
-    let path = cdn_metadata_path();
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(&path, json).await;
-    }
-}
-
-/// Serializes read-modify-write access to the CDN registry on disk.
-/// Without this, two concurrent cdn_upload / cdn_delete / cdn_update_price
-/// handlers can both `load` the same snapshot, both mutate it locally, then
-/// both `save` — the later write silently overwrites the earlier one and the
-/// first handler's change is lost.
-static CDN_REGISTRY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Run a read-modify-write against the CDN registry while holding the
-/// registry lock, so concurrent handlers can't clobber each other.
-async fn with_cdn_registry<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut Vec<CdnFileEntry>) -> R,
-{
-    let _guard = CDN_REGISTRY_LOCK.lock().await;
-    let mut registry = load_cdn_registry().await;
-    let result = f(&mut registry);
-    save_cdn_registry(&registry).await;
-    result
-}
-
-
-/// POST /api/cdn/upload — Upload a file to the CDN.
-/// `multipart/form-data` with a single "file" field (raw bytes + filename).
-/// Metadata is passed via headers:
-///   X-Payment-Tx        — payment tx hash (required)
-///   X-Owner-Wallet      — owner's wallet address (required)
-///   X-Duration-Days     — hosting duration in days (default: 30)
-///   X-Download-Price-Chi — price downloaders pay (CHI, default: "0")
-///
-/// Payment verification (wait for tx to mine, ~15s+ block time) runs in
-/// parallel with the multipart body upload, so the client doesn't pay for
-/// both serially.
-async fn cdn_upload(
-    State(state): State<Arc<HeadlessRuntimeState>>,
-    headers: HeaderMap,
-    mut multipart: Multipart,
-) -> Response {
-    fn header_str(h: &HeaderMap, key: &str) -> String {
-        h.get(key).and_then(|v| v.to_str().ok()).unwrap_or("").to_string()
-    }
-
-    let payment_tx = header_str(&headers, "X-Payment-Tx");
-    let owner_wallet = header_str(&headers, "X-Owner-Wallet");
-    let duration_days: u64 = header_str(&headers, "X-Duration-Days").parse().unwrap_or(30);
-    let download_price_chi = {
-        let s = header_str(&headers, "X-Download-Price-Chi");
-        if s.is_empty() { "0".to_string() } else { s }
-    };
-
-    if payment_tx.is_empty() || owner_wallet.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "X-Payment-Tx and X-Owner-Wallet headers required");
-    }
-
-    let cdn_address = {
-        let cdn_wallet = state.wallet.lock().await;
-        cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default()
-    };
-    if cdn_address.is_empty() {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "CDN wallet not configured");
-    }
-
-    // Kick off block-wait in parallel with body upload. The tx hash is known
-    // from the header, so we don't need to wait for the body to start polling.
-    let mined_task = {
-        let tx = payment_tx.clone();
-        tokio::spawn(async move { chiral_network::wallet::wait_for_tx_mined(&tx).await })
-    };
-
-    // Read the file field from the multipart body
-    let mut file_name: Option<String> = None;
-    let mut file_data: Option<Vec<u8>> = None;
-    loop {
-        let field = match multipart.next_field().await {
-            Ok(Some(f)) => f,
-            Ok(None) => break,
-            Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Multipart error: {}", e)),
-        };
-        if field.name() == Some("file") {
-            file_name = field.file_name().map(|s| s.to_string());
-            match field.bytes().await {
-                Ok(b) => file_data = Some(b.to_vec()),
-                Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Failed to read file: {}", e)),
-            }
-        }
-    }
-
-    let file_name = match file_name.filter(|n| !n.is_empty()) {
-        Some(n) => n,
-        None => return json_error(StatusCode::BAD_REQUEST, "Multipart file field missing or unnamed"),
-    };
-    let file_data = match file_data {
-        Some(d) if !d.is_empty() => d,
-        _ => return json_error(StatusCode::BAD_REQUEST, "Empty file"),
-    };
-
-    if file_data.len() > 500 * 1024 * 1024 {
-        return json_error(StatusCode::BAD_REQUEST, "File exceeds 500MB limit");
-    }
-
-    // Now that we know file size, compute required cost.
-    let price_per_mb_month_wei = calculate_cdn_price(&state).await;
-    let file_mb = (file_data.len() as f64) / (1024.0 * 1024.0);
-    let months = (duration_days as f64) / 30.0;
-    let required_cost_wei = (price_per_mb_month_wei as f64 * file_mb * months) as u128;
-    // 5% tolerance for CHI→wei rounding during send_transaction
-    let min_accepted_wei = required_cost_wei * 95 / 100;
-
-    println!("[CDN] Verifying payment: tx={} from={} to={} required_wei={} min_accepted={}",
-        payment_tx, owner_wallet, cdn_address, required_cost_wei, min_accepted_wei);
-
-    // Join the parallel mining wait
-    let mined = match mined_task.await {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => {
-            println!("[CDN] Payment verification ERROR: tx={} err={}", payment_tx, e);
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Payment verification failed: {}", e));
-        }
-        Err(e) => {
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Payment verification task failed: {}", e));
-        }
-    };
-    if !mined {
-        println!("[CDN] Payment not mined in time: tx={}", payment_tx);
-        return json_error(StatusCode::PAYMENT_REQUIRED,
-            &format!("Payment not confirmed in time. Tx: {}", payment_tx));
-    }
-
-    // Tx is mined; now check from/to/amount with the actual required cost.
-    match chiral_network::wallet::verify_tx_details(&payment_tx, &owner_wallet, &cdn_address, min_accepted_wei).await {
-        Ok(true) => println!("[CDN] Payment verified OK: tx={}", payment_tx),
-        Ok(false) => {
-            println!("[CDN] Payment details mismatch: tx={} (wrong recipient or insufficient amount)", payment_tx);
-            return json_error(StatusCode::PAYMENT_REQUIRED,
-                &format!("Payment details mismatch. Tx: {}. Expected: from={}, to={}, amount>={} wei",
-                    payment_tx, owner_wallet, cdn_address, min_accepted_wei));
-        }
-        Err(e) => {
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Payment detail check failed: {}", e));
-        }
-    }
-
-    // Compute SHA-256 hash
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(&file_data);
-    let file_hash = hex::encode(hasher.finalize());
-
-    // Store file on disk
-    let storage_dir = cdn_storage_dir();
-    let _ = tokio::fs::create_dir_all(&storage_dir).await;
-    let file_path = storage_dir.join(&file_hash);
-    if let Err(e) = tokio::fs::write(&file_path, &file_data).await {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to store file: {}", e));
-    }
-
-    let file_size = file_data.len() as u64;
-    let now = now_secs();
-    let expires = now + duration_days * 86400;
-
-    // Reuse the price already computed for payment verification — pricing is
-    // a function of file size + duration + marketplace median, none of which
-    // change within a single request. Re-running calculate_cdn_price here
-    // would refetch the entire host registry from the DHT for nothing.
-    let total_cost_wei = required_cost_wei;
-    let total_cost_chi = wei_to_chi_display(total_cost_wei);
-    let price_per_mb_chi = wei_to_chi_display(price_per_mb_month_wei);
-    let file_mb = (file_size as f64) / (1024.0 * 1024.0);
-    let months = (duration_days as f64) / 30.0;
-
-    println!("[CDN] Price: {} CHI/MB/month, total: {} CHI for {:.2} MB × {:.1} months",
-        price_per_mb_chi, total_cost_chi, file_mb, months);
-
-    // Register as seeder in DHT
-    let dht = match state.dht_service().await {
-        Some(d) => d,
-        None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
-    };
-
-    // Parse download price (CHI → wei)
-    let download_price_wei = if download_price_chi.is_empty() || download_price_chi == "0" {
-        0u128
-    } else {
-        chiral_network::wallet::parse_chi_to_wei(&download_price_chi).unwrap_or(0)
-    };
-    let download_price_wei_str = download_price_wei.to_string();
-
-    let peer_id = dht.get_peer_id().await.unwrap_or_default();
-    dht.register_shared_file(
-        file_hash.clone(),
-        file_path.to_string_lossy().to_string(),
-        file_name.clone(),
-        file_size,
-        download_price_wei,
-        owner_wallet.clone(),
-    ).await;
-
-    // Publish file metadata to DHT with the download price
-    let our_addrs = dht.get_listening_addresses().await;
-    let metadata = json!({
-        "hash": file_hash,
-        "fileName": file_name,
-        "fileSize": file_size,
-        "protocol": "WebRTC",
-        "createdAt": now,
-        "peerId": peer_id,
-        "priceWei": download_price_wei_str,
-        "walletAddress": owner_wallet,
-        "seeders": [{
-            "peerId": peer_id,
-            "priceWei": download_price_wei_str,
-            "walletAddress": owner_wallet,
-            "multiaddrs": our_addrs,
-            "signature": ""
-        }],
-        "publisherSignature": ""
-    });
-
-    let dht_key = format!("chiral_file_{}", file_hash);
-    if let Err(e) = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await {
-        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("DHT publish failed: {}", e));
-    }
-
-    // Save to CDN registry (serialized so concurrent uploads/deletes can't clobber each other).
-    with_cdn_registry(|registry| {
-        registry.retain(|e| e.file_hash != file_hash);
-        registry.push(CdnFileEntry {
-            file_hash: file_hash.clone(),
-            file_name: file_name.clone(),
-            file_size,
-            owner_wallet: owner_wallet.clone(),
-            price_chi_per_month: price_per_mb_chi.clone(),
-            download_price_chi: download_price_chi.clone(),
-            payment_tx: payment_tx.clone(),
-            uploaded_at: now,
-            expires_at: expires,
-        });
-    })
-    .await;
-
-    println!("[CDN] Uploaded: {} ({} bytes, hash: {}, owner: {}, cost: {} CHI, expires: {})",
-        file_name, file_size, file_hash, owner_wallet, total_cost_chi, expires);
-
-    Json(json!({
-        "status": "uploaded",
-        "fileHash": file_hash,
-        "fileName": file_name,
-        "fileSize": file_size,
-        "expiresAt": expires,
-        "cdnPeerId": peer_id,
-        "pricing": {
-            "pricePerMbMonthChi": price_per_mb_chi,
-            "pricePerMbMonthWei": price_per_mb_month_wei.to_string(),
-            "totalCostChi": total_cost_chi,
-            "totalCostWei": total_cost_wei.to_string(),
-            "durationDays": duration_days,
-            "source": "market_median_1.2x_premium",
-        }
-    })).into_response()
-}
-
-/// GET /api/cdn/files?owner=0xABC — List CDN files, optionally filtered by owner.
-async fn cdn_list(
-    State(_state): State<Arc<HeadlessRuntimeState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Response {
-    let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    let now = now_secs();
-    let registry = load_cdn_registry().await;
-
-    let files: Vec<&CdnFileEntry> = registry.iter()
-        .filter(|e| {
-            let not_expired = e.expires_at > now;
-            let owner_match = owner_filter.is_empty() || e.owner_wallet.to_lowercase() == owner_filter;
-            not_expired && owner_match
-        })
-        .collect();
-
-    Json(json!({
-        "files": files,
-        "totalFiles": files.len(),
-        "storageUsedBytes": files.iter().map(|f| f.file_size).sum::<u64>(),
-    })).into_response()
-}
-
-/// DELETE /api/cdn/files/:fileHash?owner=0xABC — Remove a file from CDN.
-async fn cdn_delete(
-    State(state): State<Arc<HeadlessRuntimeState>>,
-    axum::extract::Path(file_hash): axum::extract::Path<String>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Response {
-    let owner = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    if owner.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "owner query param required");
-    }
-
-    let removed = with_cdn_registry(|registry| {
-        let before = registry.len();
-        registry.retain(|e| !(e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner));
-        before != registry.len()
-    })
-    .await;
-
-    if !removed {
-        return json_error(StatusCode::NOT_FOUND, "File not found or not owned by this wallet");
-    }
-
-    // Remove from disk
-    let file_path = cdn_storage_dir().join(&file_hash);
-    let _ = tokio::fs::remove_file(&file_path).await;
-
-    // Unregister from DHT — remove CDN's seeder entry from the metadata
-    if let Some(dht) = state.dht_service().await {
-        dht.unregister_shared_file(&file_hash).await;
-
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
-        let dht_key = format!("chiral_file_{}", file_hash);
-        if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
-            if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
-                // Remove CDN's peer from seeders array
-                if let Some(seeders) = metadata["seeders"].as_array_mut() {
-                    seeders.retain(|s| s["peerId"].as_str() != Some(&peer_id));
-                }
-                if metadata["peerId"].as_str() == Some(&peer_id) {
-                    metadata["peerId"] = serde_json::json!("");
-                }
-                let _ = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await;
-            }
-        }
-    }
-
-    println!("[CDN] Deleted: {} (owner: {})", file_hash, owner);
-    Json(json!({"status": "deleted", "fileHash": file_hash})).into_response()
-}
-
-/// PUT /api/cdn/files/:fileHash — Update download price for a CDN file.
-async fn cdn_update_price(
-    State(state): State<Arc<HeadlessRuntimeState>>,
-    axum::extract::Path(file_hash): axum::extract::Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> Response {
-    let owner = body["owner"].as_str().unwrap_or("").to_lowercase();
-    let new_price = match &body["downloadPriceChi"] {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        _ => "0".to_string(),
-    };
-
-    if owner.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "owner required");
-    }
-
-    // Apply the price change under the registry lock, and grab the fields we
-    // need for the downstream DHT re-registration so we don't have to touch
-    // the registry again outside the lock.
-    let updated_entry = with_cdn_registry(|registry| {
-        registry
-            .iter_mut()
-            .find(|e| e.file_hash == file_hash && e.owner_wallet.to_lowercase() == owner)
-            .map(|e| {
-                e.download_price_chi = new_price.clone();
-                e.clone()
-            })
-    })
-    .await;
-
-    let entry = match updated_entry {
-        Some(e) => e,
-        None => return json_error(StatusCode::NOT_FOUND, "File not found or not owned by this wallet"),
-    };
-
-    // Update DHT record with new price
-    let new_price_wei = if new_price.is_empty() || new_price == "0" {
-        0u128
-    } else {
-        chiral_network::wallet::parse_chi_to_wei(&new_price).unwrap_or(0)
-    };
-
-    if let Some(dht) = state.dht_service().await {
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
-        let dht_key = format!("chiral_file_{}", file_hash);
-        if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
-            if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&meta_json) {
-                metadata["priceWei"] = serde_json::json!(new_price_wei.to_string());
-                if let Some(seeders) = metadata["seeders"].as_array_mut() {
-                    for s in seeders.iter_mut() {
-                        if s["peerId"].as_str() == Some(&peer_id) {
-                            s["priceWei"] = serde_json::json!(new_price_wei.to_string());
-                        }
-                    }
-                }
-                let _ = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await;
-            }
-        }
-
-        // Also update shared file registration
-        let file_path = cdn_storage_dir().join(&file_hash);
-        if file_path.exists() {
-            dht.register_shared_file(
-                file_hash.clone(),
-                file_path.to_string_lossy().to_string(),
-                entry.file_name.clone(),
-                entry.file_size,
-                new_price_wei,
-                entry.owner_wallet.clone(),
-            ).await;
-        }
-    }
-
-    println!("[CDN] Updated price for {}: {} CHI", file_hash, new_price);
-    Json(json!({"status": "updated", "fileHash": file_hash, "downloadPriceChi": new_price})).into_response()
-}
-
-/// GET /api/cdn/pricing?sizeMb=10&durationDays=30 — Calculate storage cost.
-async fn cdn_pricing(
-    State(state): State<Arc<HeadlessRuntimeState>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Response {
-    let size_mb: f64 = params.get("sizeMb").and_then(|s| s.parse().ok()).unwrap_or(1.0);
-    let duration_days: u64 = params.get("durationDays").and_then(|s| s.parse().ok()).unwrap_or(30);
-
-    let price_per_mb_month_wei = calculate_cdn_price(&state).await;
-    let months = (duration_days as f64) / 30.0;
-    let total_cost_wei = (price_per_mb_month_wei as f64 * size_mb * months) as u128;
-
-    Json(json!({
-        "pricePerMbMonthChi": wei_to_chi_display(price_per_mb_month_wei),
-        "pricePerMbMonthWei": price_per_mb_month_wei.to_string(),
-        "totalCostChi": wei_to_chi_display(total_cost_wei),
-        "totalCostWei": total_cost_wei.to_string(),
-        "sizeMb": size_mb,
-        "durationDays": duration_days,
-        "source": "market_median_1.2x_premium",
-        "floorPriceWei": CDN_FLOOR_PRICE_WEI_PER_MB_MONTH.to_string(),
-        "uptimePremium": CDN_UPTIME_PREMIUM,
-    })).into_response()
-}
-
-/// GET /api/cdn/status — CDN service status.
-async fn cdn_status(
-    State(state): State<Arc<HeadlessRuntimeState>>,
-) -> Response {
-    let registry = load_cdn_registry().await;
-    let now = now_secs();
-    let active: Vec<&CdnFileEntry> = registry.iter().filter(|e| e.expires_at > now).collect();
-    let peer_id = if let Some(dht) = state.dht_service().await {
-        dht.get_peer_id().await.unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let cdn_wallet = state.wallet.lock().await;
-    let wallet_address = cdn_wallet.as_ref().map(|w| w.address.clone()).unwrap_or_default();
-
-    // Use floor price for fast response — full calculation is on /api/cdn/pricing
-    let floor_price = CDN_FLOOR_PRICE_WEI_PER_MB_MONTH;
-
-    Json(json!({
-        "status": "online",
-        "peerId": peer_id,
-        "walletAddress": wallet_address,
-        // chainId tells clients which chain this CDN verifies payments
-        // against. Frontends should refuse to upload (or warn loudly) if
-        // their active network's chain id doesn't match — otherwise the
-        // CDN will silently sit on the payment-verify polling loop until
-        // it gives up.
-        "chainId": chiral_network::geth::chain_id(),
-        "networkName": chiral_network::network::active().name,
-        "activeFiles": active.len(),
-        "totalStorageBytes": active.iter().map(|f| f.file_size).sum::<u64>(),
-        "uniqueOwners": active.iter().map(|f| f.owner_wallet.to_lowercase()).collect::<std::collections::HashSet<_>>().len(),
-        "pricing": {
-            "pricePerMbMonthChi": wei_to_chi_display(floor_price),
-            "pricePerMbMonthWei": floor_price.to_string(),
-            "source": "market_median_1.2x_premium",
-            "floorPriceChi": wei_to_chi_display(CDN_FLOOR_PRICE_WEI_PER_MB_MONTH),
-        }
-    })).into_response()
-}
 
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
@@ -1784,16 +1154,9 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         // Hosting
         .route("/api/headless/hosting/publish-ad", post(hosting_publish_ad))
         .route("/api/headless/hosting/registry", get(hosting_get_registry))
-        // CDN — always-on file hosting service
-        // 500MB body limit matches the per-file cap enforced inside cdn_upload.
-        .route(
-            "/api/cdn/upload",
-            post(cdn_upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
-        )
-        .route("/api/cdn/files", get(cdn_list))
-        .route("/api/cdn/files/:file_hash", delete(cdn_delete).put(cdn_update_price))
-        .route("/api/cdn/pricing", get(cdn_pricing))
-        .route("/api/cdn/status", get(cdn_status))
+        // CDN routes live in crate::cdn_server and are merged into the
+        // top-level router via main() — kept separate from this handler
+        // state so the CDN module can own its own registry + price config.
         // Diagnostics
         .route("/api/headless/bootstrap-health", get(bootstrap_health))
         .with_state(state)
@@ -1830,8 +1193,38 @@ async fn main() {
         None,
     );
 
+    // If the operator passed --miner-address at launch, pre-populate the
+    // wallet slot with that address (no private key). This has to run
+    // before CdnState is constructed — CdnState captures the wallet
+    // address at build time, and an empty one means CDN clients have no
+    // address to pay.
+    if let Some(ref addr) = args.miner_address {
+        let mut wallet_guard = runtime_state.wallet.lock().await;
+        if wallet_guard.is_none() {
+            *wallet_guard = Some(WalletInfo {
+                address: addr.clone(),
+                private_key: String::new(),
+            });
+            println!("Pre-populated CDN wallet with miner address: {}", addr);
+        }
+    }
+
+    // CDN server owns its own registry + price config. We build it here so
+    // both the router and the reseed/expiration tasks share the same state.
+    let cdn_state = {
+        let wallet_address = {
+            let guard = runtime_state.wallet.lock().await;
+            guard.as_ref().map(|w| w.address.clone()).unwrap_or_default()
+        };
+        Arc::new(
+            chiral_network::cdn_server::CdnState::new(wallet_address, Arc::clone(&runtime_state.dht))
+                .await,
+        )
+    };
+
     let app = base_router
         .merge(headless_routes(Arc::clone(&runtime_state)))
+        .merge(chiral_network::cdn_server::router(Arc::clone(&cdn_state)))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -1881,21 +1274,7 @@ async fn main() {
     let miner_address = args.miner_address.clone();
     let mining_threads = args.mining_threads;
 
-    // If the operator passed --miner-address at launch, pre-populate the
-    // wallet slot with that address (no private key). This lets endpoints
-    // like /api/cdn/status report a non-empty walletAddress so clients know
-    // where to send CDN payments, without requiring a separate
-    // `POST /api/headless/wallet/import` call after boot.
-    if let Some(ref addr) = miner_address {
-        let mut wallet_guard = runtime_state.wallet.lock().await;
-        if wallet_guard.is_none() {
-            *wallet_guard = Some(WalletInfo {
-                address: addr.clone(),
-                private_key: String::new(),
-            });
-            println!("Pre-populated CDN wallet with miner address: {}", addr);
-        }
-    }
+    // (Wallet pre-populate moved earlier — see above.)
 
     if auto_start_dht || auto_start_geth || auto_mine {
         let rt = Arc::clone(&runtime_state);
@@ -1969,111 +1348,15 @@ async fn main() {
         });
     }
 
-    // CDN re-seed: re-register all non-expired CDN files in the DHT on startup
+    // CDN background tasks (startup reseed + 60s expiration sweep) — logic
+    // lives in crate::cdn_server. See also the router merge above.
     {
-        let cdn_reseed_rt = Arc::clone(&runtime_state);
-        tokio::spawn(async move {
-            // Wait for DHT to be fully bootstrapped
-            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-
-            let now = now_secs();
-            let registry = load_cdn_registry().await;
-            let active: Vec<&CdnFileEntry> = registry.iter().filter(|e| e.expires_at > now).collect();
-
-            if active.is_empty() { return; }
-
-            let dht = match cdn_reseed_rt.dht_service().await {
-                Some(d) => d,
-                None => { eprintln!("[CDN] Cannot re-seed: DHT not running"); return; }
-            };
-
-            let peer_id = dht.get_peer_id().await.unwrap_or_default();
-            let our_addrs = dht.get_listening_addresses().await;
-
-            for entry in &active {
-                let file_path = cdn_storage_dir().join(&entry.file_hash);
-                if !file_path.exists() { continue; }
-
-                // Parse download price
-                let price_wei = if entry.download_price_chi.is_empty() || entry.download_price_chi == "0" {
-                    0u128
-                } else {
-                    chiral_network::wallet::parse_chi_to_wei(&entry.download_price_chi).unwrap_or(0)
-                };
-
-                dht.register_shared_file(
-                    entry.file_hash.clone(),
-                    file_path.to_string_lossy().to_string(),
-                    entry.file_name.clone(),
-                    entry.file_size,
-                    price_wei,
-                    entry.owner_wallet.clone(),
-                ).await;
-
-                // Re-publish to DHT
-                let metadata = serde_json::json!({
-                    "hash": entry.file_hash,
-                    "fileName": entry.file_name,
-                    "fileSize": entry.file_size,
-                    "protocol": "WebRTC",
-                    "createdAt": entry.uploaded_at,
-                    "peerId": peer_id,
-                    "priceWei": price_wei.to_string(),
-                    "walletAddress": entry.owner_wallet,
-                    "seeders": [{
-                        "peerId": peer_id,
-                        "priceWei": price_wei.to_string(),
-                        "walletAddress": entry.owner_wallet,
-                        "multiaddrs": our_addrs,
-                        "signature": ""
-                    }],
-                    "publisherSignature": ""
-                });
-                let dht_key = format!("chiral_file_{}", entry.file_hash);
-                let _ = dht.put_dht_value(dht_key, serde_json::to_string(&metadata).unwrap_or_default()).await;
-            }
-            println!("[CDN] Re-seeded {} files on startup", active.len());
-        });
+        let cdn_state = Arc::clone(&cdn_state);
+        tokio::spawn(chiral_network::cdn_server::reseed_on_startup(cdn_state));
     }
-
-    // CDN expiration cleanup — runs every 60 seconds, removes expired files
     {
-        let cdn_rt = Arc::clone(&runtime_state);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                let now = now_secs();
-                let expired = with_cdn_registry(|registry| {
-                    let expired: Vec<CdnFileEntry> = registry
-                        .iter()
-                        .filter(|e| e.expires_at <= now)
-                        .cloned()
-                        .collect();
-                    registry.retain(|e| e.expires_at > now);
-                    expired
-                })
-                .await;
-
-                if expired.is_empty() {
-                    continue;
-                }
-
-                // Unregister expired files from DHT and delete from disk
-                for entry in &expired {
-                    let file_path = cdn_storage_dir().join(&entry.file_hash);
-                    let _ = tokio::fs::remove_file(&file_path).await;
-
-                    if let Some(dht) = cdn_rt.dht_service().await {
-                        dht.unregister_shared_file(&entry.file_hash).await;
-                    }
-
-                    println!("[CDN] Expired and removed: {} (owner: {}, hash: {})",
-                        entry.file_name, entry.owner_wallet, entry.file_hash);
-                }
-                println!("[CDN] Cleanup: removed {} expired files", expired.len());
-            }
-        });
+        let cdn_state = Arc::clone(&cdn_state);
+        tokio::spawn(chiral_network::cdn_server::expiration_loop(cdn_state));
     }
 
     tokio::spawn(async move {
