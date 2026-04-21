@@ -100,7 +100,7 @@ pub const FRESHNET: NetworkConfig = NetworkConfig {
     genesis_gas_limit: "0x47b760",
     genesis_coinbase: "0x0000000000000000000000000000000000000000",
     rpc_fallback: "http://130.245.173.73:8545",
-    geth_bootstrap_enode: "enode://97dbda18dd3a26c32e99358e34591b09bd172fc023ea19b6eb13a936f49de2d708273a88b406c675af9231e88bb6d9c83ba8eb778d42443e1f5eff4e395a4461@130.245.173.73:30303",
+    geth_bootstrap_enode: "enode://2fa9c8979d1b780ca3a3a366fd1bf132259ecb82caaf6bfb6bc8d4d50dc5e2ac5abcffb901d7bdb3983c4060e2fe39a8ccc2fc8ffaa7a87dc5e45f7c6aaa232e@130.245.173.73:30303",
     libp2p_bootstrap_addrs: &[],
     libp2p_relay_addrs: &[],
     data_subdir: Some("freshnet"),
