@@ -508,48 +508,6 @@ pub async fn reseed_on_startup(state: Arc<CdnState>) {
     }
 }
 
-/// Periodically re-publish every active CDN file's seeder entry so we stay
-/// in the DHT record even if a concurrent writer (e.g. the original uploader
-/// republishing their Drive seed) overwrites a replica that hadn't seen our
-/// last put yet. Uses merging semantics via `register_in_dht`.
-pub async fn periodic_republish_loop(state: Arc<CdnState>) {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
-    interval.tick().await; // skip the immediate tick — startup handles the first pass
-    loop {
-        interval.tick().await;
-        let dht = {
-            let guard = state.dht.lock().await;
-            guard.as_ref().cloned()
-        };
-        let Some(dht) = dht else { continue };
-        let now = now_secs();
-        let active: Vec<CdnEntry> = state
-            .snapshot()
-            .await
-            .into_iter()
-            .filter(|e| e.expires_at > now)
-            .collect();
-        for entry in &active {
-            let file_path = state.storage_dir.join(&entry.file_hash);
-            if !file_path.exists() {
-                continue;
-            }
-            let download_price_wei = parse_chi_or_zero(&entry.download_price_chi);
-            register_in_dht(
-                &dht,
-                &entry.file_hash,
-                &file_path,
-                &entry.file_name,
-                entry.file_size,
-                download_price_wei,
-                &state.wallet_address,
-                entry.uploaded_at,
-            )
-            .await;
-        }
-    }
-}
-
 /// Every 60 seconds, drop expired entries from the registry + disk + DHT.
 pub async fn expiration_loop(state: Arc<CdnState>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -602,83 +560,27 @@ async fn register_in_dht(
     .await;
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     let our_addrs = dht.get_listening_addresses().await;
-    let key = format!("chiral_file_{file_hash}");
 
-    // Read-modify-write: merge the CDN seeder into any existing record
-    // so concurrent publishes from the original uploader don't overwrite
-    // the CDN out of the seeders list.
-    let mut metadata = match dht.get_dht_value(key.clone()).await {
-        Ok(Some(json)) => serde_json::from_str::<serde_json::Value>(&json).unwrap_or_else(|_| {
-            json!({
-                "hash": file_hash,
-                "fileName": file_name,
-                "fileSize": file_size,
-                "protocol": "WebRTC",
-                "createdAt": created_at,
-                "peerId": "",
-                "priceWei": "0",
-                "walletAddress": "",
-                "seeders": [],
-                "publisherSignature": "",
-            })
-        }),
-        _ => json!({
+    // Immutable file-metadata blob: write only if absent. The CDN is not
+    // necessarily the original publisher, so we don't overwrite an existing
+    // publisher-signed record.
+    let key = format!("chiral_file_{file_hash}");
+    let blob_present = matches!(dht.get_dht_value(key.clone()).await, Ok(Some(_)));
+    if !blob_present {
+        let metadata = json!({
             "hash": file_hash,
             "fileName": file_name,
             "fileSize": file_size,
             "protocol": "WebRTC",
             "createdAt": created_at,
-            "peerId": "",
-            "priceWei": "0",
-            "walletAddress": "",
-            "seeders": [],
+            "walletAddress": cdn_wallet,
             "publisherSignature": "",
-        }),
-    };
-
-    // Ensure core fields are populated even if existing record was sparse.
-    if metadata["hash"].as_str().unwrap_or("").is_empty() {
-        metadata["hash"] = json!(file_hash);
-    }
-    if metadata["fileName"].as_str().unwrap_or("").is_empty() {
-        metadata["fileName"] = json!(file_name);
-    }
-    if metadata["fileSize"].as_u64().unwrap_or(0) == 0 {
-        metadata["fileSize"] = json!(file_size);
-    }
-    if metadata["protocol"].as_str().unwrap_or("").is_empty() {
-        metadata["protocol"] = json!("WebRTC");
-    }
-    if metadata["createdAt"].as_u64().unwrap_or(0) == 0 {
-        metadata["createdAt"] = json!(created_at);
+        });
+        let _ = dht.put_dht_value(key, metadata.to_string()).await;
     }
 
-    let cdn_seeder = json!({
-        "peerId": peer_id,
-        "priceWei": download_price_wei.to_string(),
-        "walletAddress": cdn_wallet,
-        "multiaddrs": our_addrs,
-        "signature": "",
-    });
-
-    let seeders = metadata["seeders"].as_array_mut();
-    match seeders {
-        Some(arr) => {
-            if let Some(existing) = arr.iter_mut().find(|s| s["peerId"].as_str() == Some(&peer_id)) {
-                *existing = cdn_seeder;
-            } else {
-                arr.push(cdn_seeder);
-            }
-        }
-        None => {
-            metadata["seeders"] = json!([cdn_seeder]);
-        }
-    }
-
-    let _ = dht.put_dht_value(key, metadata.to_string()).await;
-
-    // Stage 2: dual-write to per-seeder schema + Kademlia provider
-    // registration. The CDN is just another seeder in the new schema.
+    // The CDN is just another seeder in the provider-records model: publish
+    // a per-seeder record + register as a Kademlia provider.
     let seeder_entry = crate::SeederInfo {
         peer_id: peer_id.clone(),
         price_wei: download_price_wei.to_string(),
@@ -693,19 +595,8 @@ async fn register_in_dht(
 
 async fn unregister_in_dht(dht: &Arc<DhtService>, file_hash: &str) {
     dht.unregister_shared_file(file_hash).await;
-    let peer_id = dht.get_peer_id().await.unwrap_or_default();
-    let key = format!("chiral_file_{file_hash}");
-    if let Ok(Some(existing)) = dht.get_dht_value(key.clone()).await {
-        if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&existing) {
-            if let Some(seeders) = metadata["seeders"].as_array_mut() {
-                seeders.retain(|seeder| seeder["peerId"].as_str() != Some(&peer_id));
-            }
-            if metadata["peerId"].as_str() == Some(&peer_id) {
-                metadata["peerId"] = json!("");
-            }
-            let _ = dht.put_dht_value(key, metadata.to_string()).await;
-        }
-    }
+    // Stop being a Kademlia provider; the immutable blob is left alone.
+    let _ = crate::remove_seeder_entry(dht, file_hash).await;
 
     // Stage 2: stop being a Kademlia provider for this file.
     let _ = crate::remove_seeder_entry(dht, file_hash).await;
