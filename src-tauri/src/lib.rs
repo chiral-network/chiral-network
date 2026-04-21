@@ -2002,7 +2002,7 @@ async fn start_download(
         );
 
         let burn_addr = "0x000000000000000000000000000000000000dEaD";
-        let endpoint = geth::effective_rpc_endpoint();
+        let endpoint = geth::wallet_rpc_endpoint();
 
         // Send main payment to burn address
         let payment_result = wallet::send_transaction(
@@ -2965,13 +2965,16 @@ use wallet::TransactionMeta;
 async fn get_wallet_balance(
     address: String,
 ) -> Result<wallet::WalletBalanceResult, String> {
-    let endpoint = geth::effective_rpc_endpoint();
+    let endpoint = geth::wallet_rpc_endpoint();
     wallet::get_balance(&endpoint, &address).await
 }
 
 
 
-/// Send a transaction from one address to another (signs locally)
+/// Send a transaction from one address to another (signs locally).
+/// Routes through the canonical RPC — a user running local geth that's
+/// isolated from the network would otherwise submit the tx to their own
+/// private chain, where nobody (including the CDN) can see it.
 #[tauri::command]
 async fn send_transaction(
     from_address: String,
@@ -2979,13 +2982,13 @@ async fn send_transaction(
     amount: String,
     private_key: String,
 ) -> Result<wallet::SendTransactionResult, String> {
-    let endpoint = geth::effective_rpc_endpoint();
+    let endpoint = geth::wallet_rpc_endpoint();
     wallet::send_transaction(&endpoint, &from_address, &to_address, &amount, &private_key).await
 }
 
 #[tauri::command]
 async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::Value>, String> {
-    let endpoint = geth::effective_rpc_endpoint();
+    let endpoint = geth::wallet_rpc_endpoint();
     wallet::get_receipt(&endpoint, &tx_hash).await
 }
 
@@ -3000,7 +3003,7 @@ async fn get_transaction_history(
     state: tauri::State<'_, AppState>,
     address: String,
 ) -> Result<wallet::TransactionHistoryResult, String> {
-    let endpoint = geth::effective_rpc_endpoint();
+    let endpoint = geth::wallet_rpc_endpoint();
     let metadata = { state.tx_metadata.lock().await.clone() };
     wallet::get_transaction_history(&endpoint, &address, &metadata).await
 }

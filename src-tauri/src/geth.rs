@@ -39,13 +39,26 @@ pub fn rpc_endpoint() -> String {
         .unwrap_or_else(|_| network::active().rpc_fallback.to_string())
 }
 
-/// Local geth when it's running, remote fallback otherwise.
+/// Local geth when it's running, remote fallback otherwise. Correct for
+/// processes that *own* the chain state (the CDN server's own chain
+/// operations). Use [`wallet_rpc_endpoint`] for anything the desktop
+/// user's wallet touches — otherwise a user running local geth that's
+/// isolated from the canonical chain will silently mine their own fork
+/// and send payments into it, where nobody else can see them.
 pub fn effective_rpc_endpoint() -> String {
     if LOCAL_GETH_RUNNING.load(Ordering::Relaxed) {
         "http://127.0.0.1:8545".to_string()
     } else {
         rpc_endpoint()
     }
+}
+
+/// Canonical RPC for wallet operations — always the network's public
+/// endpoint, never the local node. Ensures balance reads and outbound
+/// transactions land on the chain that peers (especially the CDN) can
+/// actually observe.
+pub fn wallet_rpc_endpoint() -> String {
+    rpc_endpoint()
 }
 
 // ============================================================================
