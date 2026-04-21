@@ -676,6 +676,19 @@ async fn register_in_dht(
     }
 
     let _ = dht.put_dht_value(key, metadata.to_string()).await;
+
+    // Stage 2: dual-write to per-seeder schema + Kademlia provider
+    // registration. The CDN is just another seeder in the new schema.
+    let seeder_entry = crate::SeederInfo {
+        peer_id: peer_id.clone(),
+        price_wei: download_price_wei.to_string(),
+        wallet_address: cdn_wallet.to_string(),
+        multiaddrs: our_addrs,
+        signature: String::new(),
+    };
+    if let Err(e) = crate::publish_seeder_entry(dht, file_hash, &seeder_entry).await {
+        println!("[CDN] Provider publish failed for {}: {}", file_hash, e);
+    }
 }
 
 async fn unregister_in_dht(dht: &Arc<DhtService>, file_hash: &str) {
@@ -693,6 +706,9 @@ async fn unregister_in_dht(dht: &Arc<DhtService>, file_hash: &str) {
             let _ = dht.put_dht_value(key, metadata.to_string()).await;
         }
     }
+
+    // Stage 2: stop being a Kademlia provider for this file.
+    let _ = crate::remove_seeder_entry(dht, file_hash).await;
 }
 
 // ============================================================================
