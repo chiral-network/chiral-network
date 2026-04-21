@@ -1358,6 +1358,12 @@ async fn main() {
         let cdn_state = Arc::clone(&cdn_state);
         tokio::spawn(chiral_network::cdn_server::expiration_loop(cdn_state));
     }
+    {
+        let cdn_state = Arc::clone(&cdn_state);
+        tokio::spawn(chiral_network::cdn_server::periodic_republish_loop(
+            cdn_state,
+        ));
+    }
 
     tokio::spawn(async move {
         let server = axum::serve(
