@@ -1235,6 +1235,94 @@ impl FileMetadata {
     }
 }
 
+// ============================================================================
+// Per-seeder DHT key schema (Stage 1 of provider-based refactor).
+//
+// New model:
+//   - `chiral_file_{hash}`            → immutable file metadata (publisher-signed).
+//   - `chiral_seeder_{hash}_{peerId}` → one seeder's own entry (price, wallet,
+//                                       multiaddrs, signature). Each seeder
+//                                       writes ONLY their own key — no
+//                                       read-modify-write races.
+//   - Kademlia providers on the file hash → live peer-ID set of currently-
+//                                           online seeders. Auto-expires.
+//
+// `publish_seeder_entry` + `start_providing_file` together make this node a
+// discoverable seeder. `fetch_seeders` is the reverse operation: discover
+// providers via Kademlia, then fetch each one's per-seeder record.
+// ============================================================================
+
+/// DHT key namespacing a seeder's per-file metadata record.
+fn seeder_entry_key(file_hash: &str, peer_id: &str) -> String {
+    format!("chiral_seeder_{}_{}", file_hash, peer_id)
+}
+
+/// Publish this node's seeder entry for a file and register it as a Kademlia
+/// provider. Safe to call repeatedly — each call refreshes the entry and
+/// republishes the provider record.
+#[allow(dead_code)] // Stage 1: helper for Stage 2 callers.
+async fn publish_seeder_entry(
+    dht: &dht::DhtService,
+    file_hash: &str,
+    seeder: &SeederInfo,
+) -> Result<(), String> {
+    let json = serde_json::to_string(seeder).map_err(|e| e.to_string())?;
+    let key = seeder_entry_key(file_hash, &seeder.peer_id);
+    dht.put_dht_value(key, json).await?;
+    dht.start_providing_file(file_hash.to_string()).await?;
+    Ok(())
+}
+
+/// Remove this node from a file's provider set. The per-seeder metadata
+/// record cannot be deleted from Kademlia (no delete primitive) but will
+/// age out on its record TTL — and since `fetch_seeders` treats providers
+/// as the source of truth, an entry without a matching live provider is
+/// ignored in search.
+#[allow(dead_code)] // Stage 1: helper for Stage 2 callers.
+async fn remove_seeder_entry(dht: &dht::DhtService, file_hash: &str) -> Result<(), String> {
+    dht.stop_providing_file(file_hash.to_string()).await
+}
+
+/// Discover all currently-online seeders for a file. Queries Kademlia for
+/// the provider set, then fetches each provider's per-seeder record in
+/// parallel. Signature-verified entries are returned; unsigned or
+/// signature-invalid entries are logged and dropped.
+#[allow(dead_code)] // Stage 1: helper for Stage 2 callers.
+async fn fetch_seeders(
+    dht: &dht::DhtService,
+    file_hash: &str,
+) -> Result<Vec<SeederInfo>, String> {
+    let providers = dht.get_file_providers(file_hash.to_string()).await?;
+    if providers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fetches = providers.into_iter().map(|peer_id| {
+        let key = seeder_entry_key(file_hash, &peer_id);
+        async move {
+            match dht.get_dht_value(key).await {
+                Ok(Some(json)) => serde_json::from_str::<SeederInfo>(&json).ok(),
+                _ => None,
+            }
+        }
+    });
+    let results = futures::future::join_all(fetches).await;
+    let mut seeders = Vec::new();
+    for entry in results.into_iter().flatten() {
+        // Drop unsigned / invalid-signature entries — in the new schema every
+        // seeder signs their own key so there's no legacy-compat reason to
+        // accept unsigned records here.
+        if entry.verify(file_hash) {
+            seeders.push(entry);
+        } else if !entry.signature.is_empty() {
+            println!(
+                "  ⚠️ Seeder entry for {} has INVALID signature — dropping",
+                &entry.peer_id[..20.min(entry.peer_id.len())]
+            );
+        }
+    }
+    Ok(seeders)
+}
+
 /// Build a signed SeederInfo entry.
 fn make_signed_seeder(
     peer_id: &str,
