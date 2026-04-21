@@ -36,7 +36,7 @@
   import { ratingApi, setRatingOwner, type BatchReputationEntry } from '$lib/services/ratingApiService';
   import { sortSeeders as sortSeedersUtil, type SeederSort } from '$lib/utils/seederSort';
   import { withTimeout } from '$lib/utils/withTimeout';
-  import { calculateCost, formatCost, formatSpeed } from '$lib/speedTiers';
+  import { formatSpeed } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
   import { logger } from '$lib/logger';
   const log = logger('Download');
@@ -67,7 +67,6 @@
   let unlistenDownloadFailed: (() => void) | null = null;
   let unlistenDownloadProgress: (() => void) | null = null;
   let unlistenPaymentProcessing: (() => void) | null = null;
-  let unlistenSpeedTierPayment: (() => void) | null = null;
   let unlistenPaymentSent: (() => void) | null = null;
 
   // Types
@@ -253,7 +252,7 @@
   let blacklistWarning = $state<{ match: BlacklistEntry; result: SearchResult } | null>(null);
 
   // Download confirmation modal
-  let pendingDownload = $state<{ result: SearchResult; tierCost: number; seederPriceChi: number; totalCost: number } | null>(null);
+  let pendingDownload = $state<{ result: SearchResult; seederPriceChi: number; totalCost: number } | null>(null);
 
   // Seeder reputation
   let seederRatings = $state<Record<string, BatchReputationEntry>>({});
@@ -992,12 +991,13 @@
     const seederPriceWei = selected?.priceWei || result.priceWei || '0';
     const seederWalletAddr = selected?.walletAddress || result.walletAddress || '';
 
-    // Calculate total cost: download fee + seeder file price
-    const tierCost = calculateCost(result.fileSize);
+    // Total cost is now just the chosen seeder's price — the old flat
+    // per-MB "download fee" to the burn address was removed in the
+    // pay-the-chosen-seeder refactor (backend Stage 3).
     const seederPriceChi = seederPriceWei !== '0'
       ? Number(BigInt(seederPriceWei)) / 1e18
       : 0;
-    const totalCost = tierCost + seederPriceChi;
+    const totalCost = seederPriceChi;
 
     if (totalCost > 0) {
       if (!$walletAccount) {
@@ -1010,7 +1010,7 @@
       }
       // Show confirmation modal before spending CHI
       if (!skipCostConfirm) {
-        pendingDownload = { result, tierCost, seederPriceChi, totalCost };
+        pendingDownload = { result, seederPriceChi, totalCost };
         return;
       }
     }
@@ -1053,27 +1053,23 @@
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
-      // Build params - only include wallet fields when they have values
-      // Extract peer IDs for the download command, with selected seeder first
-      const seederPeerIds = result.seeders.map(s => s.peerId);
-      if (selected && selectedSeederIndex > 0) {
-        // Move selected seeder to front of list
-        const selectedId = selected.peerId;
-        const reordered = [selectedId, ...seederPeerIds.filter(id => id !== selectedId)];
-        seederPeerIds.splice(0, seederPeerIds.length, ...reordered);
+      // Pass only the chosen seeder. The backend dispatches to exactly one
+      // peer — the user's selection — and surfaces an explicit failure if
+      // that peer is unreachable (no silent fall-through to a seeder the
+      // user didn't pick).
+      if (!selected) {
+        throw new Error('No seeder selected. Pick a seeder from the list before downloading.');
       }
-
       const params: Record<string, unknown> = {
         fileHash: result.hash,
         fileName: result.fileName,
-        seeders: seederPeerIds,
+        seeders: [selected.peerId],
         fileSize: result.fileSize || 0,
       };
       if ($walletAccount?.address) {
         params.walletAddress = $walletAccount.address;
         params.privateKey = $walletAccount.privateKey;
       }
-      // Pass selected seeder's pricing info
       if (seederPriceWei !== '0') {
         params.seederPriceWei = seederPriceWei;
         params.seederWalletAddress = seederWalletAddr;
@@ -1086,11 +1082,8 @@
       );
 
       log.info('Download request sent:', response);
-      if (tierCost > 0) {
-        toasts.notifyDetail('paymentReceived', 'Download started', 'Speed tier payment processed — requesting file from seeder', 'success');
-        refreshWalletBalance();
-      } else if (seederPriceChi > 0) {
-        toasts.notifyDetail('paymentReceived', 'Download started', 'Payment will be sent automatically when transfer begins', 'info');
+      if (seederPriceChi > 0) {
+        toasts.notifyDetail('paymentReceived', 'Download started', 'Payment will be sent to the chosen seeder when transfer begins', 'info');
       } else {
         toasts.notify('downloadComplete', 'Download started', 'info');
       }
@@ -1346,27 +1339,6 @@
         });
       });
 
-      // Listen for speed tier payment completion with balance data
-      unlistenSpeedTierPayment = await listen<{
-        txHash: string;
-        fileHash: string;
-        fileName: string;
-        speedTier: string;
-        balanceBefore: string;
-        balanceAfter: string;
-      }>('speed-tier-payment-complete', (event) => {
-        const { fileHash, balanceBefore, balanceAfter } = event.payload;
-        log.info('Speed tier payment complete:', event.payload);
-
-        // Store balance data on the active download so it transfers to history
-        downloads = downloads.map(d => {
-          if (d.hash === fileHash && d.status === 'downloading') {
-            return { ...d, balanceBefore, balanceAfter };
-          }
-          return d;
-        });
-      });
-
       // Track paid transfer tx hash so outcome events can be chain-verified.
       unlistenPaymentSent = await listen<{
         requestId: string;
@@ -1418,10 +1390,6 @@
     if (unlistenPaymentProcessing) {
       unlistenPaymentProcessing();
       unlistenPaymentProcessing = null;
-    }
-    if (unlistenSpeedTierPayment) {
-      unlistenSpeedTierPayment();
-      unlistenSpeedTierPayment = null;
     }
     if (unlistenPaymentSent) {
       unlistenPaymentSent();
@@ -1788,18 +1756,14 @@
             {@const selectedSeeder = searchResult.seeders[selectedSeederIndex] || searchResult.seeders[0]}
             {@const selectedPriceWei = selectedSeeder?.priceWei || searchResult.priceWei || '0'}
             {@const seederPrice = selectedPriceWei !== '0' ? formatPriceWei(selectedPriceWei) : null}
-            {@const downloadCost = searchResult.fileSize > 0 ? calculateCost(searchResult.fileSize) : 0}
             <div class="flex items-center justify-between">
               <div class="text-sm text-gray-600 dark:text-gray-400">
                 Cost:
                 {#if seederPrice}
-                  <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span> (file)
-                {/if}
-                {#if seederPrice && downloadCost > 0}
-                  <span class="mx-1">+</span>
-                {/if}
-                {#if downloadCost > 0}
-                  <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(downloadCost)}</span> (download)
+                  <span class="font-medium text-amber-600 dark:text-amber-400">{seederPrice}</span>
+                  <span class="text-gray-400"> to chosen seeder</span>
+                {:else}
+                  <span class="text-gray-400">Free</span>
                 {/if}
                 {#if $walletAccount}
                   <span class="text-gray-400 mx-1">•</span>
@@ -2266,12 +2230,6 @@
             <div class="flex justify-between text-sm">
               <span class="text-gray-600 dark:text-gray-300">File price</span>
               <span class="font-medium text-amber-600 dark:text-amber-400">{pendingDownload.seederPriceChi.toFixed(6)} CHI</span>
-            </div>
-          {/if}
-          {#if pendingDownload.tierCost > 0}
-            <div class="flex justify-between text-sm">
-              <span class="text-gray-600 dark:text-gray-300">Download fee</span>
-              <span class="font-medium text-amber-600 dark:text-amber-400">{formatCost(pendingDownload.tierCost)}</span>
             </div>
           {/if}
           <div class="flex justify-between text-sm pt-2 border-t border-gray-200 dark:border-gray-600">
