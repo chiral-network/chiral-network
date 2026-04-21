@@ -2188,98 +2188,32 @@ async fn start_download(
     seeder_price_wei: Option<String>,
     _seeder_wallet_address: Option<String>,
 ) -> Result<DownloadStartResult, String> {
+    // Stage 3: single chosen seeder — the frontend passes the user's selection
+    // as the first (and ideally only) entry. We no longer dispatch to multiple
+    // seeders in parallel: the user chose who to pay, so only that seeder gets
+    // the request and the payment.
+    if seeders.len() > 1 {
+        println!(
+            "⚠️ start_download received {} seeders; Stage 3 dispatches to the first only. \
+             Update the UI to pass a single chosen seeder.",
+            seeders.len()
+        );
+    }
+    let _ = file_size; // file_size is used by the frontend for UX; backend no longer charges by size.
     println!(
-        "⚡ Starting download: {} (hash: {}) from {} seeders",
+        "⚡ Starting download: {} (hash: {}) — chosen seeder: {}",
         file_name,
         file_hash,
-        seeders.len(),
+        seeders.first().cloned().unwrap_or_else(|| "(none)".into())
     );
 
-    // Handle payment
-    let cost_wei = speed_tiers::calculate_cost(file_size);
-    if cost_wei > 0 {
-        let wallet_addr = wallet_address
-            .as_deref()
-            .ok_or("Wallet address required for paid download")?;
-        let priv_key = private_key
-            .as_deref()
-            .ok_or("Private key required for paid download")?;
-
-        // Split payment: 99.5% to burn address, 0.5% platform fee
-        let (seller_wei, fee_wei) = speed_tiers::split_payment(cost_wei);
-        let seller_chi = speed_tiers::format_wei_as_chi(seller_wei);
-        let fee_chi = speed_tiers::format_wei_as_chi(fee_wei);
-        let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
-        println!(
-            "💰 Download payment: {} CHI total ({} seller + {} platform fee)",
-            cost_chi, seller_chi, fee_chi
-        );
-
-        let burn_addr = "0x000000000000000000000000000000000000dEaD";
-        let endpoint = geth::wallet_rpc_endpoint();
-
-        // Send main payment to burn address
-        let payment_result = wallet::send_transaction(
-            &endpoint,
-            wallet_addr,
-            burn_addr,
-            &seller_chi,
-            priv_key,
-        )
-        .await;
-
-        // Send platform fee (best-effort, don't block download on fee failure)
-        if fee_wei > 0 {
-            let fee_result = wallet::send_transaction(
-                &endpoint,
-                wallet_addr,
-                speed_tiers::PLATFORM_WALLET,
-                &fee_chi,
-                priv_key,
-            )
-            .await;
-            if let Err(e) = fee_result {
-                eprintln!("[PLATFORM FEE] Failed to collect: {}", e);
-            }
-        }
-
-        match payment_result {
-            Ok(result) => {
-                println!("✅ Download payment successful: tx {}", result.hash);
-                // Record transaction metadata for enriched history
-                let meta = TransactionMeta {
-                    tx_hash: result.hash.clone(),
-                    tx_type: "download_payment".to_string(),
-                    description: format!("⚡ Download: {}", file_name),
-                    file_name: Some(file_name.clone()),
-                    file_hash: Some(file_hash.clone()),
-                    speed_tier: Some("download".to_string()),
-                    recipient_label: Some("Burn Address (Download)".to_string()),
-                    balance_before: Some(result.balance_before.clone()),
-                    balance_after: Some(result.balance_after.clone()),
-                };
-                let mut metadata = state.tx_metadata.lock().await;
-                wallet::record_meta(&mut metadata, meta);
-
-                // Emit event so Download page can show balance change
-                let _ = app.emit(
-                    "speed-tier-payment-complete",
-                    serde_json::json!({
-                        "txHash": result.hash,
-                        "fileHash": file_hash,
-                        "fileName": file_name,
-                        "speedTier": "download",
-                        "balanceBefore": result.balance_before,
-                        "balanceAfter": result.balance_after,
-                    }),
-                );
-            }
-            Err(e) => {
-                println!("❌ Download payment failed: {}", e);
-                return Err(format!("Payment failed: {}. Download not started.", e));
-            }
-        }
-    }
+    // Stage 3: the burn-address download-fee payment has been removed. The
+    // per-seeder payment happens inside the dht event loop when the seeder's
+    // FileInfo response arrives — that's the payment the user actually
+    // authorised (to the seeder's wallet, at the seeder's price). Keeping a
+    // separate flat burn fee alongside would double-charge users and muddy
+    // the pay-the-chosen-seeder contract.
+    let _ = seeder_price_wei; // consumed by the event-loop payment path via DHT metadata.
 
     // First, check if we have the file in local cache
     {
@@ -2542,44 +2476,29 @@ async fn start_download(
             }
         };
 
-        // Start requests against all candidate seeders. The DHT layer will
-        // keep trying alternatives and only fail when all attempts are exhausted.
-        let mut last_error = String::new();
-        let mut request_sent = false;
+        // Stage 3: dispatch to the chosen seeder only. If this one fails, the
+        // user is informed explicitly and can re-select (a new pick = a new
+        // payment). No silent fall-through to a seeder the user did not
+        // authorise.
+        let chosen_seeder = candidate_seeders.first().cloned().ok_or_else(|| {
+            "No chosen seeder provided — the Download UI must select one first.".to_string()
+        })?;
+        let addrs = seeder_addrs.get(&chosen_seeder).cloned().unwrap_or_default();
+        println!(
+            "Dispatching file request to chosen seeder: {} for file {}",
+            chosen_seeder, file_hash
+        );
+        let result = dht
+            .request_file(
+                chosen_seeder.clone(),
+                file_hash.clone(),
+                request_id.clone(),
+                addrs,
+            )
+            .await;
 
-        let mut request_tasks = Vec::with_capacity(candidate_seeders.len());
-        for (i, seeder) in candidate_seeders.iter().enumerate() {
-            let dht = dht.clone();
-            let seeder = seeder.clone();
-            let fh = file_hash.clone();
-            let rid = request_id.clone();
-            let addrs = seeder_addrs.get(&seeder).cloned().unwrap_or_default();
-            let total = candidate_seeders.len();
-            request_tasks.push(async move {
-                println!(
-                    "Trying seeder {}/{}: {} for file {}",
-                    i + 1,
-                    total,
-                    seeder,
-                    fh
-                );
-                let result = dht.request_file(seeder.clone(), fh, rid, addrs).await;
-                (seeder, result)
-            });
-        }
-
-        for (seeder, result) in futures::future::join_all(request_tasks).await {
-            match result {
-                Ok(_) => {
-                    println!("✅ File request started for seeder {}", seeder);
-                    request_sent = true;
-                }
-                Err(e) => {
-                    println!("❌ Failed to request file from seeder {}: {}", seeder, e);
-                    last_error = e;
-                }
-            }
-        }
+        let request_sent = result.is_ok();
+        let last_error = result.err().unwrap_or_default();
 
         if request_sent {
             Ok(DownloadStartResult {
@@ -2589,8 +2508,8 @@ async fn start_download(
         } else {
             let error_msg = if last_error.is_empty() {
                 format!(
-                    "No seeder could be contacted for this file ({} candidate(s)).",
-                    candidate_seeders.len()
+                    "Chosen seeder ({}) could not be contacted.",
+                    chosen_seeder
                 )
             } else {
                 format!("No seeder could provide the file: {}", last_error)
