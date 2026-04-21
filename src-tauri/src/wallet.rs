@@ -299,7 +299,10 @@ pub async fn request_faucet(address: &str) -> Result<SendTransactionResult, Stri
 pub async fn send_payment(
     from: &str, to: &str, amount_chi: &str, private_key: &str,
 ) -> Result<PaymentResult, String> {
-    let endpoint = crate::geth::effective_rpc_endpoint();
+    // Canonical RPC — see wallet_rpc_endpoint doc. File-payment txs have
+    // to be visible to the receiver's geth, which means they can't land
+    // on an isolated local chain.
+    let endpoint = crate::geth::wallet_rpc_endpoint();
     let result = send_transaction(&endpoint, from, to, amount_chi, private_key).await?;
     Ok(PaymentResult {
         tx_hash: result.hash,
