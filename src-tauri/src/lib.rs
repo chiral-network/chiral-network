@@ -81,26 +81,17 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
         "🛑 Unpublishing {} shared files from DHT",
         file_hashes.len()
     );
+    // Provider-records teardown: `remove_seeder_entry` calls
+    // `stop_providing_file` so downloaders' search queries see us drop out
+    // of the seeder set. The file metadata blob is immutable per-file in
+    // the new schema, so we no longer mutate it on shutdown.
     let mut count = 0u32;
     for file_hash in &file_hashes {
-        let dht_key = format!("chiral_file_{}", file_hash);
-        if let Ok(Some(json)) = dht.get_dht_value(dht_key.clone()).await {
-            if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
-                metadata.seeders.retain(|s| s.peer_id != peer_id);
-                if metadata.peer_id == peer_id {
-                    metadata.peer_id = String::new();
-                }
-                if let Ok(updated_json) = serde_json::to_string(&metadata) {
-                    let _ = dht.put_dht_value(dht_key, updated_json).await;
-                    count += 1;
-                }
-            }
-        }
-        // Stage 2: stop being a Kademlia provider so the new-schema search
-        // drops us from seeder results immediately.
         let _ = remove_seeder_entry(dht, file_hash).await;
+        count += 1;
     }
-    println!("✅ Unpublished {} files from DHT", count);
+    let _ = peer_id; // retained for the host-registry cleanup below
+    println!("✅ Stopped providing {} files to DHT", count);
 
     // 2. Remove our host advertisement from the registry
     let registry_key = "chiral_host_registry".to_string();
@@ -368,26 +359,17 @@ async fn auto_reseed_drive_files(state: &AppState) {
             continue;
         }
 
+        // Re-publish immutable file metadata only if it's missing. The blob
+        // is per-file immutable in the provider-records model, so if a
+        // previous publish (or a different publisher) already wrote it,
+        // leave it alone — our per-seeder record carries the price/wallet.
         let dht_key = format!("chiral_file_{}", file_hash);
-        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-            Ok(Some(json)) => {
-                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-                    hash: file_hash.clone(),
-                    file_name: file_name.clone(),
-                    file_size,
-                    protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    peer_id: String::new(),
-                    price_wei: String::new(),
-                    wallet_address: String::new(),
-                    seeders: Vec::new(),
-                publisher_signature: String::new(),
-                })
-            }
-            _ => FileMetadata {
+        let blob_present = matches!(
+            dht.get_dht_value(dht_key.clone()).await,
+            Ok(Some(_))
+        );
+        if !blob_present {
+            let metadata = FileMetadata {
                 hash: file_hash.clone(),
                 file_name: file_name.clone(),
                 file_size,
@@ -396,58 +378,27 @@ async fn auto_reseed_drive_files(state: &AppState) {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
-                peer_id: String::new(),
-                price_wei: String::new(),
-                wallet_address: String::new(),
-                seeders: Vec::new(),
+                wallet_address: wallet_addr.clone(),
                 publisher_signature: String::new(),
-            },
-        };
+            };
+            if let Ok(metadata_json) = serde_json::to_string(&metadata) {
+                let _ = dht.put_dht_value(dht_key, metadata_json).await;
+            }
+        }
 
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei.to_string(),
-            wallet_address: wallet_addr.clone(),
+            wallet_address: wallet_addr,
             multiaddrs: our_multiaddrs.clone(),
             signature: String::new(),
         };
-        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei.clone();
-            existing.wallet_address = our_seeder.wallet_address.clone();
-            existing.multiaddrs = our_seeder.multiaddrs.clone();
-        } else {
-            metadata.seeders.push(our_seeder.clone());
-        }
-        metadata.peer_id = peer_id.clone();
-        metadata.price_wei = price_wei.to_string();
-        metadata.wallet_address = wallet_addr;
-
-        let metadata_json = match serde_json::to_string(&metadata) {
-            Ok(json) => json,
-            Err(e) => {
-                println!(
-                    "[DRIVE] Auto-reseed failed to serialize metadata for {}: {}",
-                    file_name, e
-                );
-                continue;
-            }
-        };
-        if let Err(e) = dht.put_dht_value(dht_key, metadata_json).await {
-            println!(
-                "[DRIVE] Auto-reseed failed to publish metadata for {}: {}",
-                file_name, e
-            );
-            continue;
-        }
-
-        // Stage 2: dual-write to the new per-seeder schema + register as a
-        // Kademlia provider. Failures here are logged but don't abort the
-        // legacy-blob publish above.
         if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {
             println!(
                 "[DRIVE] Auto-reseed provider publish failed for {}: {}",
                 file_name, e
             );
+            continue;
         }
 
         reseeded_dht_metadata += 1;
@@ -542,29 +493,12 @@ async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
                     map.keys().cloned().collect()
                 };
                 for file_hash in &file_hashes {
-                    let dht_key = format!("chiral_file_{}", file_hash);
-                    if let Ok(Some(json)) = dht.get_dht_value(dht_key.clone()).await {
-                        if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
-                            metadata.seeders.retain(|s| s.peer_id != peer_id);
-                            if metadata.peer_id == peer_id {
-                                metadata.peer_id = String::new();
-                            }
-                            if metadata.wallet_address.is_empty() {
-                                metadata.wallet_address = metadata
-                                    .seeders
-                                    .first()
-                                    .map(|s| s.wallet_address.clone())
-                                    .unwrap_or_default();
-                            }
-                            if let Ok(updated_json) = serde_json::to_string(&metadata) {
-                                let _ = dht.put_dht_value(dht_key, updated_json).await;
-                            }
-                        }
-                    }
-                    // Stage 2: drop ourselves from the Kademlia provider set
-                    // so the new-schema search stops returning us immediately.
+                    // File metadata blob is immutable per-file; seeder
+                    // liveness lives in Kademlia provider records. Logout
+                    // just drops us from the provider set.
                     let _ = remove_seeder_entry(&dht, file_hash).await;
                 }
+                let _ = peer_id;
             }
         }).await;
         if cleanup_result.is_err() {
@@ -1203,8 +1137,17 @@ impl SeederInfo {
     }
 }
 
-/// File metadata stored in DHT.
-/// The publisher signs the core metadata so readers can verify it hasn't been tampered with.
+/// File metadata stored in DHT under `chiral_file_{hash}`.
+///
+/// In the provider-records model this blob is **immutable** per-file: the
+/// publisher writes it once at share time and never touches it again.
+/// Seeders live in Kademlia provider records plus `chiral_seeder_{hash}_{peerId}`
+/// entries — not in this struct. The `wallet_address` field here is the
+/// publisher's wallet, used only to verify `publisher_signature`.
+///
+/// Serde defaults on every field preserve forward-compat with records
+/// written by older clients that had extra fields (peer_id, price_wei,
+/// seeders, etc). Those get silently dropped on read.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct FileMetadata {
@@ -1213,18 +1156,11 @@ struct FileMetadata {
     file_size: u64,
     protocol: String,
     created_at: u64,
-    /// Legacy single-seeder field — kept for backward compat with old DHT records
-    #[serde(default)]
-    peer_id: String,
-    #[serde(default)]
-    price_wei: String,
+    /// Publisher's wallet address (for publisher_signature verification).
     #[serde(default)]
     wallet_address: String,
-    /// Multi-seeder list — each seeder signs their own entry
-    #[serde(default)]
-    seeders: Vec<SeederInfo>,
-    /// ECDSA signature of "file:{hash}:{file_name}:{file_size}" by the publisher's wallet.
-    /// Proves the metadata was created by the wallet_address owner.
+    /// ECDSA signature of "file:{hash}:{file_name}:{file_size}" by the
+    /// publisher's wallet. Proves the metadata was created by wallet_address.
     #[serde(default)]
     publisher_signature: String,
 }
@@ -1426,37 +1362,26 @@ async fn publish_file(
         )
         .await;
 
-        // Build our seeder entry with listening addresses so other peers can dial us
         let our_multiaddrs = dht.get_listening_addresses().await;
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
-            wallet_address: wallet_addr,
+            wallet_address: wallet_addr.clone(),
             multiaddrs: our_multiaddrs,
             signature: String::new(),
         };
 
-        // Read-modify-write: preserve existing seeders from other peers
+        // Immutable metadata write: only publish the blob if absent. This
+        // node is the publisher if nothing is there; otherwise someone else
+        // already published the name/size/signature and we just attach our
+        // per-seeder record below.
         let dht_key = format!("chiral_file_{}", merkle_root);
-        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-            Ok(Some(json)) => {
-                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-                    hash: merkle_root.clone(),
-                    file_name: file_name.clone(),
-                    file_size,
-                    protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    peer_id: String::new(),
-                    price_wei: String::new(),
-                    wallet_address: String::new(),
-                    seeders: Vec::new(),
-                publisher_signature: String::new(),
-                })
-            }
-            _ => FileMetadata {
+        let blob_present = matches!(
+            dht.get_dht_value(dht_key.clone()).await,
+            Ok(Some(_))
+        );
+        if !blob_present {
+            let metadata = FileMetadata {
                 hash: merkle_root.clone(),
                 file_name: file_name.clone(),
                 file_size,
@@ -1465,54 +1390,19 @@ async fn publish_file(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
-                peer_id: String::new(),
-                price_wei: String::new(),
-                wallet_address: String::new(),
-                seeders: Vec::new(),
+                wallet_address: wallet_addr,
                 publisher_signature: String::new(),
-            },
-        };
-
-        // Upsert our seeder entry (add or update by peer_id)
-        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei.clone();
-            existing.wallet_address = our_seeder.wallet_address.clone();
-            existing.multiaddrs = our_seeder.multiaddrs.clone();
-        } else {
-            metadata.seeders.push(our_seeder);
-        }
-        // Update legacy fields for backward compat
-        metadata.peer_id = peer_id.clone();
-        metadata.price_wei = price_wei_val.to_string();
-        metadata.wallet_address = metadata
-            .seeders
-            .iter()
-            .find(|s| s.peer_id == peer_id)
-            .map(|s| s.wallet_address.clone())
-            .unwrap_or_default();
-
-        // Serialize and store in DHT
-        let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        dht.put_dht_value(dht_key, metadata_json).await?;
-
-        // Stage 2: dual-write to per-seeder schema + provider registration.
-        if let Some(our_seeder) = metadata
-            .seeders
-            .iter()
-            .find(|s| s.peer_id == peer_id)
-            .cloned()
-        {
-            if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
-                println!("Provider publish failed for {}: {}", merkle_root, e);
-            }
+            };
+            let metadata_json = serde_json::to_string(&metadata)
+                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            dht.put_dht_value(dht_key, metadata_json).await?;
         }
 
-        println!(
-            "File metadata published to DHT: {} ({} seeders)",
-            merkle_root,
-            metadata.seeders.len()
-        );
+        if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
+            println!("Provider publish failed for {}: {}", merkle_root, e);
+        }
+
+        println!("File published: {}", merkle_root);
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -1582,37 +1472,23 @@ async fn publish_file_data(
         )
         .await;
 
-        // Build our seeder entry with listening addresses so other peers can dial us
         let our_multiaddrs = dht.get_listening_addresses().await;
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei_val.to_string(),
-            wallet_address: wallet_addr,
+            wallet_address: wallet_addr.clone(),
             multiaddrs: our_multiaddrs,
             signature: String::new(),
         };
 
-        // Read-modify-write: preserve existing seeders from other peers
+        // Immutable metadata: write only if absent.
         let dht_key = format!("chiral_file_{}", merkle_root);
-        let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-            Ok(Some(json)) => {
-                serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-                    hash: merkle_root.clone(),
-                    file_name: file_name.clone(),
-                    file_size,
-                    protocol: "WebRTC".to_string(),
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    peer_id: String::new(),
-                    price_wei: String::new(),
-                    wallet_address: String::new(),
-                    seeders: Vec::new(),
-                publisher_signature: String::new(),
-                })
-            }
-            _ => FileMetadata {
+        let blob_present = matches!(
+            dht.get_dht_value(dht_key.clone()).await,
+            Ok(Some(_))
+        );
+        if !blob_present {
+            let metadata = FileMetadata {
                 hash: merkle_root.clone(),
                 file_name: file_name.clone(),
                 file_size,
@@ -1621,52 +1497,21 @@ async fn publish_file_data(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs(),
-                peer_id: String::new(),
-                price_wei: String::new(),
-                wallet_address: String::new(),
-                seeders: Vec::new(),
+                wallet_address: wallet_addr,
                 publisher_signature: String::new(),
-            },
-        };
-
-        // Upsert our seeder entry
-        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei.clone();
-            existing.wallet_address = our_seeder.wallet_address.clone();
-            existing.multiaddrs = our_seeder.multiaddrs.clone();
-        } else {
-            metadata.seeders.push(our_seeder);
+            };
+            let metadata_json = serde_json::to_string(&metadata)
+                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            dht.put_dht_value(dht_key, metadata_json).await?;
         }
-        metadata.peer_id = peer_id.clone();
-        metadata.price_wei = price_wei_val.to_string();
-        metadata.wallet_address = metadata
-            .seeders
-            .iter()
-            .find(|s| s.peer_id == peer_id)
-            .map(|s| s.wallet_address.clone())
-            .unwrap_or_default();
 
-        // Serialize and store in DHT
-        let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        dht.put_dht_value(dht_key, metadata_json).await?;
-
-        // Stage 2: dual-write to per-seeder schema + provider registration.
-        if let Some(our_seeder) = metadata
-            .seeders
-            .iter()
-            .find(|s| s.peer_id == peer_id)
-            .cloned()
-        {
-            if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
-                println!("Provider publish failed for {}: {}", merkle_root, e);
-            }
+        if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
+            println!("Provider publish failed for {}: {}", merkle_root, e);
         }
 
         println!(
-            "File data published to DHT: {} ({} seeders)",
-            merkle_root,
-            metadata.seeders.len()
+            "File data published: {}",
+            merkle_root
         );
     } else {
         println!("DHT not running, file hash computed but not published to network");
@@ -1827,30 +1672,16 @@ async fn try_repair_local_drive_seed(
         .unwrap_or_default();
 
         let dht_key = format!("chiral_file_{}", file_hash_for_publish);
-        let mut metadata = match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            dht_for_publish.get_dht_value(dht_key.clone()),
-        )
-        .await
-        {
-            Ok(Ok(Some(json))) => {
-                serde_json::from_str::<FileMetadata>(&json).unwrap_or(FileMetadata {
-                    hash: file_hash_for_publish.clone(),
-                    file_name: file_name_for_publish.clone(),
-                    file_size,
-                    protocol: protocol_for_publish.clone(),
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
-                    peer_id: String::new(),
-                    price_wei: String::new(),
-                    wallet_address: String::new(),
-                    seeders: Vec::new(),
-                publisher_signature: String::new(),
-                })
-            }
-            _ => FileMetadata {
+        let blob_present = matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                dht_for_publish.get_dht_value(dht_key.clone()),
+            )
+            .await,
+            Ok(Ok(Some(_)))
+        );
+        if !blob_present {
+            let metadata = FileMetadata {
                 hash: file_hash_for_publish.clone(),
                 file_name: file_name_for_publish.clone(),
                 file_size,
@@ -1859,41 +1690,26 @@ async fn try_repair_local_drive_seed(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs(),
-                peer_id: String::new(),
-                price_wei: String::new(),
-                wallet_address: String::new(),
-                seeders: Vec::new(),
+                wallet_address: wallet_for_publish.clone(),
                 publisher_signature: String::new(),
-            },
-        };
+            };
+            if let Ok(json) = serde_json::to_string(&metadata) {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    dht_for_publish.put_dht_value(dht_key, json),
+                )
+                .await;
+            }
+        }
 
         let our_seeder = SeederInfo {
             peer_id: peer_id.clone(),
             price_wei: price_wei.to_string(),
-            wallet_address: wallet_for_publish.clone(),
+            wallet_address: wallet_for_publish,
             multiaddrs: our_multiaddrs,
             signature: String::new(),
         };
-        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = our_seeder.price_wei.clone();
-            existing.wallet_address = our_seeder.wallet_address.clone();
-            existing.multiaddrs = our_seeder.multiaddrs.clone();
-        } else {
-            metadata.seeders.push(our_seeder.clone());
-        }
-        metadata.peer_id = peer_id;
-        metadata.price_wei = price_wei.to_string();
-        metadata.wallet_address = wallet_for_publish;
-
-        if let Ok(json) = serde_json::to_string(&metadata) {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                dht_for_publish.put_dht_value(dht_key, json),
-            )
-            .await;
-        }
-
-        // Stage 2: dual-write to per-seeder schema + provider registration.
+        let _ = peer_id;
         let _ = tokio::time::timeout(
             std::time::Duration::from_secs(2),
             publish_seeder_entry(&dht_for_publish, &file_hash_for_publish, &our_seeder),
@@ -2036,44 +1852,13 @@ async fn search_file(
                         println!("⚠️ File metadata signature INVALID — record may be tampered");
                     }
 
-                    // Build seeder list: use seeders vec if present, fall back to legacy peer_id
-                    let file_hash_for_verify = metadata.hash.clone();
-                    let mut seeders = metadata.seeders;
-                    if seeders.is_empty() && !metadata.peer_id.is_empty() {
-                        // Legacy record: single peer_id with file-level price/wallet
-                        seeders.push(SeederInfo {
-                            peer_id: metadata.peer_id,
-                            price_wei: metadata.price_wei.clone(),
-                            wallet_address: metadata.wallet_address.clone(),
-                            multiaddrs: vec![],
-                            signature: String::new(),
-                        });
-                    }
-                    seeders.retain(|s| !s.peer_id.trim().is_empty());
+                    // Seeder list comes exclusively from Kademlia providers +
+                    // per-seeder records now. The blob is immutable metadata
+                    // (name/size/publisher) — no seeder info in it.
+                    let mut seeders = provider_seeders;
 
-                    // Verify seeder signatures — log warnings for invalid ones
-                    // but still include them (graceful degradation for unsigned legacy records)
-                    for seeder in &seeders {
-                        if seeder.verify(&file_hash_for_verify) {
-                            println!("  ✅ Seeder {} signature valid", &seeder.peer_id[..20.min(seeder.peer_id.len())]);
-                        } else if !seeder.signature.is_empty() {
-                            println!("  ⚠️ Seeder {} has INVALID signature — may be impersonating wallet {}",
-                                &seeder.peer_id[..20.min(seeder.peer_id.len())], seeder.wallet_address);
-                        }
-                    }
-
-                    // Stage 2: union in provider-sourced seeders. Providers are
-                    // signature-verified by fetch_seeders — entries already here
-                    // from the blob keep their position; new provider entries
-                    // append. This means a search that only sees the new schema
-                    // (no blob) still works, and vice-versa.
-                    for ps in &provider_seeders {
-                        if !seeders.iter().any(|s| s.peer_id == ps.peer_id) {
-                            seeders.push(ps.clone());
-                        }
-                    }
-
-                    // Merge local seeder if we're seeding this file but not in the DHT list
+                    // Merge local seeder if we're seeding this file but haven't
+                    // yet propagated our provider record to other nodes.
                     if let Some(ref local) = local_result {
                         for local_seeder in &local.seeders {
                             if !seeders.iter().any(|s| s.peer_id == local_seeder.peer_id) {
@@ -2082,13 +1867,17 @@ async fn search_file(
                         }
                     }
 
+                    let price_wei = seeders
+                        .first()
+                        .map(|s| s.price_wei.clone())
+                        .unwrap_or_default();
                     Ok(Some(SearchResult {
                         hash: metadata.hash,
                         file_name: metadata.file_name,
                         file_size: metadata.file_size,
                         seeders,
                         created_at: metadata.created_at,
-                        price_wei: metadata.price_wei,
+                        price_wei,
                         wallet_address: metadata.wallet_address,
                     }))
                 }
@@ -2454,24 +2243,20 @@ async fn start_download(
             }),
         );
 
-        // Look up seeder multiaddresses from DHT metadata so we can dial peers directly.
-        // Bound this lookup to keep download startup snappy even when DHT lookups are slow.
+        // Look up seeder multiaddresses from per-seeder records so we can
+        // dial peers directly. Bound the lookup so download startup stays
+        // snappy even when DHT lookups are slow.
         let seeder_addrs: std::collections::HashMap<String, Vec<String>> = {
-            let dht_key = format!("chiral_file_{}", file_hash);
             match tokio::time::timeout(
-                tokio::time::Duration::from_millis(900),
-                dht.get_dht_value(dht_key),
+                tokio::time::Duration::from_millis(1200),
+                fetch_seeders(dht, &file_hash),
             )
             .await
             {
-                Ok(Ok(Some(json))) => serde_json::from_str::<FileMetadata>(&json)
-                    .map(|meta| {
-                        meta.seeders
-                            .into_iter()
-                            .map(|s| (s.peer_id, s.multiaddrs))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                Ok(Ok(list)) => list
+                    .into_iter()
+                    .map(|s| (s.peer_id, s.multiaddrs))
+                    .collect(),
                 _ => std::collections::HashMap::new(),
             }
         };
@@ -2652,40 +2437,28 @@ async fn republish_shared_file(
         )
         .await;
 
-        // Step 2: Update DHT metadata — add ourselves to seeders list
+        // Step 2: publish our per-seeder record + register as a Kademlia
+        // provider. The file metadata blob is immutable per-file in the
+        // provider-records model; if it doesn't already exist we write it
+        // once, otherwise we only refresh our seeder entry.
         let peer_id = dht.get_peer_id().await.unwrap_or_default();
         if !peer_id.is_empty() {
             let dht_key = format!("chiral_file_{}", file_hash);
-
             let our_multiaddrs = dht.get_listening_addresses().await;
             let our_seeder = SeederInfo {
                 peer_id: peer_id.clone(),
                 price_wei: price_wei.to_string(),
                 wallet_address: wallet_addr.clone(),
                 multiaddrs: our_multiaddrs,
-            signature: String::new(),
+                signature: String::new(),
             };
 
-            // Read existing metadata or create fresh
-            let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-                Ok(Some(json)) => {
-                    serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-                        hash: file_hash.clone(),
-                        file_name: file_name.clone(),
-                        file_size,
-                        protocol: "WebRTC".to_string(),
-                        created_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs(),
-                        peer_id: String::new(),
-                        price_wei: String::new(),
-                        wallet_address: String::new(),
-                        seeders: Vec::new(),
-                publisher_signature: String::new(),
-                    })
-                }
-                _ => FileMetadata {
+            let blob_present = matches!(
+                dht.get_dht_value(dht_key.clone()).await,
+                Ok(Some(_))
+            );
+            if !blob_present {
+                let metadata = FileMetadata {
                     hash: file_hash.clone(),
                     file_name: file_name.clone(),
                     file_size,
@@ -2694,38 +2467,21 @@ async fn republish_shared_file(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_secs(),
-                    peer_id: String::new(),
-                    price_wei: String::new(),
-                    wallet_address: String::new(),
-                    seeders: Vec::new(),
-                publisher_signature: String::new(),
-                },
-            };
-
-            // Upsert our seeder entry
-            if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-                existing.price_wei = our_seeder.price_wei.clone();
-                existing.wallet_address = our_seeder.wallet_address.clone();
-                existing.multiaddrs = our_seeder.multiaddrs.clone();
-            } else {
-                metadata.seeders.push(our_seeder.clone());
+                    wallet_address: wallet_addr.clone(),
+                    publisher_signature: String::new(),
+                };
+                if let Ok(metadata_json) = serde_json::to_string(&metadata) {
+                    let _ = dht.put_dht_value(dht_key, metadata_json).await;
+                }
             }
-            metadata.peer_id = peer_id.clone();
 
-            let metadata_json = serde_json::to_string(&metadata)
-                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-            let _ = dht.put_dht_value(dht_key, metadata_json).await;
-
-            // Stage 2: dual-write to per-seeder schema + provider registration.
             if let Err(e) = publish_seeder_entry(dht, &file_hash, &our_seeder).await {
                 println!("Provider publish failed for {}: {}", file_hash, e);
             }
 
             println!(
-                "✅ Re-published {} to DHT with peer_id {} ({} seeders)",
-                file_hash,
-                peer_id,
-                metadata.seeders.len()
+                "✅ Re-published {} to DHT as seeder {}",
+                file_hash, peer_id
             );
         }
 
@@ -2763,27 +2519,12 @@ async fn unpublish_all_shared_files(state: tauri::State<'_, AppState>) -> Result
 
     let mut count = 0u32;
     for file_hash in &file_hashes {
-        let dht_key = format!("chiral_file_{}", file_hash);
-        match dht.get_dht_value(dht_key.clone()).await {
-            Ok(Some(json)) => {
-                if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&json) {
-                    // Remove our peer_id from seeders list (preserve other seeders)
-                    metadata.seeders.retain(|s| s.peer_id != peer_id);
-                    // Clear legacy peer_id if it was us
-                    if metadata.peer_id == peer_id {
-                        metadata.peer_id = String::new();
-                    }
-                    if let Ok(updated_json) = serde_json::to_string(&metadata) {
-                        let _ = dht.put_dht_value(dht_key, updated_json).await;
-                        count += 1;
-                    }
-                }
-            }
-            _ => {}
-        }
-        // Stage 2: stop being a Kademlia provider for this file.
+        // File metadata blob is immutable per-file; seeder liveness lives
+        // in Kademlia provider records, so teardown is just stop_providing.
         let _ = remove_seeder_entry(dht, file_hash).await;
+        count += 1;
     }
+    let _ = peer_id;
 
     println!(
         "✅ Unpublished {} files from DHT (removed our seeder entry)",
@@ -2911,21 +2652,11 @@ async fn cleanup_agreement_files(
                 map.remove(file_hash);
             }
 
-            // Remove ourselves from the seeder list in DHT
-            let dht_key = format!("chiral_file_{}", file_hash);
-            if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
-                if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&meta_json) {
-                    metadata.seeders.retain(|s| s.peer_id != peer_id);
-                    if metadata.peer_id == peer_id {
-                        metadata.peer_id = String::new();
-                    }
-                    if let Ok(updated) = serde_json::to_string(&metadata) {
-                        let _ = dht.put_dht_value(dht_key, updated).await;
-                    }
-                }
-            }
-            // Stage 2: stop being a Kademlia provider for this file.
+            // Stop being a Kademlia provider so the new-schema search
+            // drops us from seeder results immediately. The immutable file
+            // metadata blob is left alone.
             let _ = remove_seeder_entry(dht, file_hash).await;
+            let _ = peer_id;
 
             // Also disable seeding in Drive manifest
             {
@@ -4567,24 +4298,8 @@ async fn drive_delete_item(
     for (_, _, merkle_root) in &file_entries {
         if let (Some(dht), Some(hash)) = (dht.as_ref(), merkle_root.as_ref()) {
             dht.unregister_shared_file(hash).await;
-
-            // Remove ourselves from the DHT seeder list
-            let peer_id = dht.get_peer_id().await.unwrap_or_default();
-            if !peer_id.is_empty() {
-                let dht_key = format!("chiral_file_{}", hash);
-                if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
-                    if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&meta_json) {
-                        metadata.seeders.retain(|s| s.peer_id != peer_id);
-                        if metadata.peer_id == peer_id {
-                            metadata.peer_id = String::new();
-                        }
-                        if let Ok(updated) = serde_json::to_string(&metadata) {
-                            let _ = dht.put_dht_value(dht_key, updated).await;
-                        }
-                    }
-                }
-            }
-            // Stage 2: stop being a Kademlia provider for this file.
+            // Stop being a Kademlia provider for this file; the immutable
+            // file metadata blob is left alone.
             let _ = remove_seeder_entry(dht, hash).await;
         }
     }
@@ -4890,26 +4605,15 @@ async fn publish_drive_file(
         &wallet_addr, our_multiaddrs, private_key.as_deref(),
     );
 
+    // Write the immutable file-metadata blob only if it doesn't already exist.
+    // Seeder info lives in per-seeder records + provider registration below.
     let dht_key = format!("chiral_file_{}", file_hash);
-    let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-        Ok(Some(json)) => {
-            serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-                hash: file_hash.clone(),
-                file_name: file_name.clone(),
-                file_size: actual_size,
-                protocol: proto.clone(),
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                peer_id: String::new(),
-                price_wei: String::new(),
-                wallet_address: String::new(),
-                seeders: Vec::new(),
-                publisher_signature: String::new(),
-            })
-        }
-        _ => FileMetadata {
+    let blob_present = matches!(
+        dht.get_dht_value(dht_key.clone()).await,
+        Ok(Some(_))
+    );
+    if !blob_present {
+        let mut metadata = FileMetadata {
             hash: file_hash.clone(),
             file_name: file_name.clone(),
             file_size: actual_size,
@@ -4918,33 +4622,20 @@ async fn publish_drive_file(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            peer_id: String::new(),
-            price_wei: String::new(),
-            wallet_address: String::new(),
-            seeders: Vec::new(),
-                publisher_signature: String::new(),
-        },
-    };
-
-    if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-        *existing = our_seeder.clone();
-    } else {
-        metadata.seeders.push(our_seeder.clone());
+            wallet_address: wallet_addr.clone(),
+            publisher_signature: String::new(),
+        };
+        if let Some(ref key) = private_key {
+            metadata.sign(key);
+        }
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        dht.put_dht_value(dht_key, metadata_json).await?;
     }
-    metadata.peer_id = peer_id;
-    metadata.price_wei = price_wei_val.to_string();
-    metadata.wallet_address = wallet_addr;
+    let _ = peer_id;
+    let _ = price_wei_val;
+    let _ = wallet_addr;
 
-    // Sign the metadata if private key is available
-    if let Some(ref key) = private_key {
-        metadata.sign(key);
-    }
-
-    let metadata_json = serde_json::to_string(&metadata)
-        .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-    dht.put_dht_value(dht_key, metadata_json).await?;
-
-    // Stage 2: dual-write to per-seeder schema + provider registration.
     if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {
         println!("Provider publish failed for {}: {}", file_hash, e);
     }
@@ -5045,40 +4736,31 @@ async fn seed_hosted_file(
             signature: String::new(),
     };
 
+    // Immutable metadata blob: write only if absent.
     let dht_key = format!("chiral_file_{}", file_hash);
-    let mut metadata = match dht.get_dht_value(dht_key.clone()).await {
-        Ok(Some(json)) => serde_json::from_str::<FileMetadata>(&json).unwrap_or_else(|_| FileMetadata {
-            hash: file_hash.clone(), file_name: file_name.clone(), file_size,
+    let blob_present = matches!(
+        dht.get_dht_value(dht_key.clone()).await,
+        Ok(Some(_))
+    );
+    if !blob_present {
+        let metadata = FileMetadata {
+            hash: file_hash.clone(),
+            file_name: file_name.clone(),
+            file_size,
             protocol: "WebRTC".into(),
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-            peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
-            seeders: Vec::new(),
-                publisher_signature: String::new(),
-        }),
-        _ => FileMetadata {
-            hash: file_hash.clone(), file_name: file_name.clone(), file_size,
-            protocol: "WebRTC".into(),
-            created_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-            peer_id: String::new(), price_wei: String::new(), wallet_address: String::new(),
-            seeders: Vec::new(),
-                publisher_signature: String::new(),
-        },
-    };
-
-    // Add or update our seeder entry
-    if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-        existing.price_wei = our_seeder.price_wei.clone();
-        existing.wallet_address = our_seeder.wallet_address.clone();
-        existing.multiaddrs = our_seeder.multiaddrs.clone();
-    } else {
-        metadata.seeders.push(our_seeder.clone());
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            wallet_address: wallet_address.clone(),
+            publisher_signature: String::new(),
+        };
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize: {}", e))?;
+        dht.put_dht_value(dht_key, metadata_json).await?;
     }
+    let _ = peer_id;
 
-    let metadata_json = serde_json::to_string(&metadata)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
-    dht.put_dht_value(dht_key, metadata_json).await?;
-
-    // Stage 2: dual-write to per-seeder schema + provider registration.
     if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {
         println!("Provider publish failed for {}: {}", file_hash, e);
     }
@@ -5124,26 +4806,8 @@ async fn drive_stop_seeding(
     if let Some(ref hash) = merkle_root {
         let dht_guard = state.dht.lock().await;
         if let Some(dht) = dht_guard.as_ref() {
-            // Stop serving chunks
+            // Stop serving chunks + stop advertising as a Kademlia provider.
             dht.unregister_shared_file(hash).await;
-
-            // Remove ourselves from the DHT seeder list so downloaders stop seeing us
-            let peer_id = dht.get_peer_id().await.unwrap_or_default();
-            if !peer_id.is_empty() {
-                let dht_key = format!("chiral_file_{}", hash);
-                if let Ok(Some(meta_json)) = dht.get_dht_value(dht_key.clone()).await {
-                    if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&meta_json) {
-                        metadata.seeders.retain(|s| s.peer_id != peer_id);
-                        if metadata.peer_id == peer_id {
-                            metadata.peer_id = String::new();
-                        }
-                        if let Ok(updated) = serde_json::to_string(&metadata) {
-                            let _ = dht.put_dht_value(dht_key, updated).await;
-                        }
-                    }
-                }
-            }
-            // Stage 2: stop being a Kademlia provider for this file.
             let _ = remove_seeder_entry(dht, hash).await;
         }
         // Remove from in-memory file storage
@@ -5724,51 +5388,35 @@ mod multi_seeder_tests {
         assert!(result.is_none());
     }
 
+    // In the provider-records model, FileMetadata is the immutable
+    // publisher-signed header for a file. Seeder identity lives in Kademlia
+    // provider records + `chiral_seeder_{hash}_{peerId}` entries, so these
+    // tests cover only the header round-trip and the seeder-key schema.
+
     #[test]
-    fn file_metadata_with_seeders_roundtrip() {
+    fn file_metadata_immutable_header_roundtrip() {
         let metadata = FileMetadata {
             hash: "abc123".to_string(),
             file_name: "test.txt".to_string(),
             file_size: 1024,
             protocol: "WebRTC".to_string(),
             created_at: 1700000000,
-            peer_id: "12D3KooWPeerA".to_string(),
-            price_wei: "0".to_string(),
-            wallet_address: String::new(),
-            seeders: vec![
-                SeederInfo {
-                    peer_id: "12D3KooWPeerA".to_string(),
-                    price_wei: "0".to_string(),
-                    wallet_address: String::new(),
-                    multiaddrs: vec![],
-            signature: String::new(),
-                },
-                SeederInfo {
-                    peer_id: "12D3KooWPeerB".to_string(),
-                    price_wei: "5000000000000000".to_string(),
-                    wallet_address: "0xdef456".to_string(),
-                    multiaddrs: vec![],
-            signature: String::new(),
-                },
-            ],
+            wallet_address: "0xpublisher".to_string(),
             publisher_signature: String::new(),
         };
-
         let json = serde_json::to_string(&metadata).unwrap();
         let restored: FileMetadata = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(restored.seeders.len(), 2);
-        assert_eq!(restored.seeders[0].peer_id, "12D3KooWPeerA");
-        assert_eq!(restored.seeders[1].peer_id, "12D3KooWPeerB");
-        assert_eq!(restored.seeders[1].price_wei, "5000000000000000");
-        assert_eq!(restored.seeders[1].wallet_address, "0xdef456");
+        assert_eq!(restored.hash, "abc123");
+        assert_eq!(restored.file_name, "test.txt");
+        assert_eq!(restored.file_size, 1024);
+        assert_eq!(restored.wallet_address, "0xpublisher");
     }
 
-    // --- Backward Compatibility ---
-
     #[test]
-    fn legacy_metadata_without_seeders_field_deserializes() {
-        // Old records stored in DHT won't have a "seeders" field
+    fn file_metadata_ignores_stale_seeder_fields_from_old_clients() {
+        // Records written by clients on the legacy schema carry extra
+        // fields (peerId, priceWei, seeders). New clients should ignore
+        // them silently — provider records are the source of truth.
         let legacy_json = r#"{
             "hash": "abc123",
             "fileName": "old_file.txt",
@@ -5777,297 +5425,46 @@ mod multi_seeder_tests {
             "createdAt": 1700000000,
             "peerId": "12D3KooWLegacy",
             "priceWei": "1000",
-            "walletAddress": "0xlegacy"
+            "walletAddress": "0xlegacy",
+            "seeders": [{"peerId": "12D3KooWLegacy"}],
+            "publisherSignature": ""
         }"#;
-
         let metadata: FileMetadata = serde_json::from_str(legacy_json).unwrap();
-        assert_eq!(metadata.peer_id, "12D3KooWLegacy");
-        assert_eq!(metadata.price_wei, "1000");
+        assert_eq!(metadata.hash, "abc123");
         assert_eq!(metadata.wallet_address, "0xlegacy");
-        // seeders should default to empty vec
-        assert!(metadata.seeders.is_empty());
     }
 
     #[test]
-    fn legacy_metadata_search_creates_seeder_from_peer_id() {
-        // Simulate what search_file does with legacy records
-        let metadata = FileMetadata {
-            hash: "abc123".to_string(),
-            file_name: "legacy.txt".to_string(),
-            file_size: 256,
-            protocol: "WebRTC".to_string(),
-            created_at: 1700000000,
-            peer_id: "12D3KooWLegacy".to_string(),
-            price_wei: "2000".to_string(),
-            wallet_address: "0xlegacy".to_string(),
-            seeders: Vec::new(), // empty — old record
-                publisher_signature: String::new(),
-        };
-
-        // This is the logic from search_file:
-        let mut seeders = metadata.seeders;
-        if seeders.is_empty() && !metadata.peer_id.is_empty() {
-            seeders.push(SeederInfo {
-                peer_id: metadata.peer_id,
-                price_wei: metadata.price_wei.clone(),
-                wallet_address: metadata.wallet_address.clone(),
-                multiaddrs: vec![],
-            signature: String::new(),
-            });
-        }
-
-        assert_eq!(seeders.len(), 1);
-        assert_eq!(seeders[0].peer_id, "12D3KooWLegacy");
-        assert_eq!(seeders[0].price_wei, "2000");
-        assert_eq!(seeders[0].wallet_address, "0xlegacy");
-    }
-
-    // --- Upsert Logic ---
-
-    #[test]
-    fn upsert_adds_new_seeder() {
-        let mut metadata = FileMetadata {
-            hash: "abc123".to_string(),
-            file_name: "test.txt".to_string(),
-            file_size: 1024,
-            protocol: "WebRTC".to_string(),
-            created_at: 1700000000,
-            peer_id: "12D3KooWPeerA".to_string(),
-            price_wei: "0".to_string(),
-            wallet_address: String::new(),
-            seeders: vec![SeederInfo {
-                peer_id: "12D3KooWPeerA".to_string(),
-                price_wei: "0".to_string(),
-                wallet_address: String::new(),
-                multiaddrs: vec![],
-            signature: String::new(),
-            }],
-            publisher_signature: String::new(),
-        };
-
-        let new_peer = "12D3KooWPeerB";
-        let our_seeder = SeederInfo {
-            peer_id: new_peer.to_string(),
-            price_wei: "5000".to_string(),
-            wallet_address: "0xB".to_string(),
-            multiaddrs: vec![],
-            signature: String::new(),
-        };
-
-        // Upsert logic from publish_file
-        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == new_peer) {
-            existing.price_wei = our_seeder.price_wei;
-            existing.wallet_address = our_seeder.wallet_address;
-        } else {
-            metadata.seeders.push(our_seeder);
-        }
-
-        assert_eq!(metadata.seeders.len(), 2);
-        assert_eq!(metadata.seeders[1].peer_id, "12D3KooWPeerB");
-        assert_eq!(metadata.seeders[1].price_wei, "5000");
+    fn seeder_entry_key_namespace_is_unique_per_peer() {
+        let key_a = seeder_entry_key("file1", "peerA");
+        let key_b = seeder_entry_key("file1", "peerB");
+        let key_c = seeder_entry_key("file2", "peerA");
+        assert_ne!(key_a, key_b);
+        assert_ne!(key_a, key_c);
+        assert!(key_a.starts_with("chiral_seeder_"));
     }
 
     #[test]
-    fn upsert_updates_existing_seeder_price() {
-        let mut metadata = FileMetadata {
-            hash: "abc123".to_string(),
-            file_name: "test.txt".to_string(),
-            file_size: 1024,
-            protocol: "WebRTC".to_string(),
-            created_at: 1700000000,
-            peer_id: "12D3KooWPeerA".to_string(),
-            price_wei: "1000".to_string(),
-            wallet_address: "0xA".to_string(),
-            seeders: vec![SeederInfo {
-                peer_id: "12D3KooWPeerA".to_string(),
-                price_wei: "1000".to_string(),
-                wallet_address: "0xA".to_string(),
-                multiaddrs: vec![],
-            signature: String::new(),
-            }],
-            publisher_signature: String::new(),
-        };
-
-        let peer_id = "12D3KooWPeerA";
-        let new_price = "9999".to_string();
-        let new_wallet = "0xA_new".to_string();
-
-        if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-            existing.price_wei = new_price;
-            existing.wallet_address = new_wallet;
-        } else {
-            unreachable!("should have found existing seeder");
-        }
-
-        assert_eq!(metadata.seeders.len(), 1); // no duplicates
-        assert_eq!(metadata.seeders[0].price_wei, "9999");
-        assert_eq!(metadata.seeders[0].wallet_address, "0xA_new");
-    }
-
-    // --- Unpublish (removal) ---
-
-    #[test]
-    fn unpublish_removes_only_our_peer() {
-        let our_peer = "12D3KooWUs";
-        let other_peer = "12D3KooWOther";
-
-        let mut metadata = FileMetadata {
-            hash: "abc123".to_string(),
-            file_name: "test.txt".to_string(),
-            file_size: 1024,
-            protocol: "WebRTC".to_string(),
-            created_at: 1700000000,
-            peer_id: our_peer.to_string(),
-            price_wei: "0".to_string(),
-            wallet_address: String::new(),
-            seeders: vec![
-                SeederInfo {
-                    peer_id: our_peer.to_string(),
-                    price_wei: "0".to_string(),
-                    wallet_address: String::new(),
-                    multiaddrs: vec![],
-            signature: String::new(),
-                },
-                SeederInfo {
-                    peer_id: other_peer.to_string(),
-                    price_wei: "3000".to_string(),
-                    wallet_address: "0xOther".to_string(),
-                    multiaddrs: vec![],
-            signature: String::new(),
-                },
-            ],
-            publisher_signature: String::new(),
-        };
-
-        // Unpublish logic from unpublish_all_shared_files
-        metadata.seeders.retain(|s| s.peer_id != our_peer);
-        if metadata.peer_id == our_peer {
-            metadata.peer_id = String::new();
-        }
-
-        assert_eq!(metadata.seeders.len(), 1);
-        assert_eq!(metadata.seeders[0].peer_id, other_peer);
-        assert_eq!(metadata.seeders[0].price_wei, "3000");
-        assert!(metadata.peer_id.is_empty());
-    }
-
-    #[test]
-    fn unpublish_from_single_seeder_leaves_empty() {
-        let our_peer = "12D3KooWSolo";
-
-        let mut metadata = FileMetadata {
-            hash: "abc123".to_string(),
-            file_name: "test.txt".to_string(),
-            file_size: 1024,
-            protocol: "WebRTC".to_string(),
-            created_at: 1700000000,
-            peer_id: our_peer.to_string(),
-            price_wei: "0".to_string(),
-            wallet_address: String::new(),
-            seeders: vec![SeederInfo {
-                peer_id: our_peer.to_string(),
-                price_wei: "0".to_string(),
-                wallet_address: String::new(),
-                multiaddrs: vec![],
-            signature: String::new(),
-            }],
-            publisher_signature: String::new(),
-        };
-
-        metadata.seeders.retain(|s| s.peer_id != our_peer);
-        if metadata.peer_id == our_peer {
-            metadata.peer_id = String::new();
-        }
-
-        assert!(metadata.seeders.is_empty());
-        assert!(metadata.peer_id.is_empty());
-    }
-
-    // --- Multiple seeders scenario ---
-
-    #[test]
-    fn three_seeders_with_different_prices() {
-        let mut metadata = FileMetadata {
-            hash: "multiseed".to_string(),
-            file_name: "popular.zip".to_string(),
-            file_size: 10_000_000,
-            protocol: "WebRTC".to_string(),
-            created_at: 1700000000,
-            peer_id: String::new(),
-            price_wei: String::new(),
-            wallet_address: String::new(),
-            seeders: Vec::new(),
-                publisher_signature: String::new(),
-        };
-
-        // Three peers publish in sequence
-        let peers = vec![
-            ("PeerA", "0", ""),
-            ("PeerB", "1000000000000000", "0xB_wallet"),
-            ("PeerC", "5000000000000000", "0xC_wallet"),
-        ];
-
-        for (peer_id, price, wallet) in &peers {
-            let seeder = SeederInfo {
-                peer_id: peer_id.to_string(),
-                price_wei: price.to_string(),
-                wallet_address: wallet.to_string(),
-                multiaddrs: vec![],
-            signature: String::new(),
-            };
-            if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == *peer_id) {
-                existing.price_wei = seeder.price_wei;
-                existing.wallet_address = seeder.wallet_address;
-            } else {
-                metadata.seeders.push(seeder);
-            }
-            metadata.peer_id = peer_id.to_string();
-        }
-
-        assert_eq!(metadata.seeders.len(), 3);
-        // Free seeder
-        assert_eq!(metadata.seeders[0].price_wei, "0");
-        // Cheapest paid seeder
-        assert_eq!(metadata.seeders[1].price_wei, "1000000000000000");
-        // Most expensive seeder
-        assert_eq!(metadata.seeders[2].price_wei, "5000000000000000");
-    }
-
-    #[test]
-    fn search_result_serialization_with_seeder_info() {
+    fn search_result_serialization_camel_case() {
         let result = SearchResult {
             hash: "abc123".to_string(),
             file_name: "test.txt".to_string(),
             file_size: 1024,
-            seeders: vec![
-                SeederInfo {
-                    peer_id: "PeerA".to_string(),
-                    price_wei: "0".to_string(),
-                    wallet_address: String::new(),
-                    multiaddrs: vec![],
-            signature: String::new(),
-                },
-                SeederInfo {
-                    peer_id: "PeerB".to_string(),
-                    price_wei: "5000".to_string(),
-                    wallet_address: "0xB".to_string(),
-                    multiaddrs: vec![],
-            signature: String::new(),
-                },
-            ],
+            seeders: vec![SeederInfo {
+                peer_id: "PeerA".to_string(),
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+                multiaddrs: vec![],
+                signature: String::new(),
+            }],
             created_at: 1700000000,
             price_wei: "0".to_string(),
             wallet_address: String::new(),
         };
-
         let json = serde_json::to_string(&result).unwrap();
-        // Verify it serializes as array of objects (not strings)
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let seeders = parsed["seeders"].as_array().unwrap();
-        assert_eq!(seeders.len(), 2);
-        assert_eq!(seeders[0]["peerId"], "PeerA");
-        assert_eq!(seeders[1]["peerId"], "PeerB");
-        assert_eq!(seeders[1]["priceWei"], "5000");
-        assert_eq!(seeders[1]["walletAddress"], "0xB");
+        assert_eq!(parsed["seeders"].as_array().unwrap().len(), 1);
+        assert_eq!(parsed["seeders"][0]["peerId"], "PeerA");
+        assert_eq!(parsed["fileName"], "test.txt");
     }
 }
