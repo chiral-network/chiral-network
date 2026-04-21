@@ -508,6 +508,48 @@ pub async fn reseed_on_startup(state: Arc<CdnState>) {
     }
 }
 
+/// Periodically re-publish every active CDN file's seeder entry so we stay
+/// in the DHT record even if a concurrent writer (e.g. the original uploader
+/// republishing their Drive seed) overwrites a replica that hadn't seen our
+/// last put yet. Uses merging semantics via `register_in_dht`.
+pub async fn periodic_republish_loop(state: Arc<CdnState>) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+    interval.tick().await; // skip the immediate tick — startup handles the first pass
+    loop {
+        interval.tick().await;
+        let dht = {
+            let guard = state.dht.lock().await;
+            guard.as_ref().cloned()
+        };
+        let Some(dht) = dht else { continue };
+        let now = now_secs();
+        let active: Vec<CdnEntry> = state
+            .snapshot()
+            .await
+            .into_iter()
+            .filter(|e| e.expires_at > now)
+            .collect();
+        for entry in &active {
+            let file_path = state.storage_dir.join(&entry.file_hash);
+            if !file_path.exists() {
+                continue;
+            }
+            let download_price_wei = parse_chi_or_zero(&entry.download_price_chi);
+            register_in_dht(
+                &dht,
+                &entry.file_hash,
+                &file_path,
+                &entry.file_name,
+                entry.file_size,
+                download_price_wei,
+                &state.wallet_address,
+                entry.uploaded_at,
+            )
+            .await;
+        }
+    }
+}
+
 /// Every 60 seconds, drop expired entries from the registry + disk + DHT.
 pub async fn expiration_loop(state: Arc<CdnState>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -560,27 +602,80 @@ async fn register_in_dht(
     .await;
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     let our_addrs = dht.get_listening_addresses().await;
-    let metadata = json!({
-        "hash": file_hash,
-        "fileName": file_name,
-        "fileSize": file_size,
-        "protocol": "WebRTC",
-        "createdAt": created_at,
+    let key = format!("chiral_file_{file_hash}");
+
+    // Read-modify-write: merge the CDN seeder into any existing record
+    // so concurrent publishes from the original uploader don't overwrite
+    // the CDN out of the seeders list.
+    let mut metadata = match dht.get_dht_value(key.clone()).await {
+        Ok(Some(json)) => serde_json::from_str::<serde_json::Value>(&json).unwrap_or_else(|_| {
+            json!({
+                "hash": file_hash,
+                "fileName": file_name,
+                "fileSize": file_size,
+                "protocol": "WebRTC",
+                "createdAt": created_at,
+                "peerId": "",
+                "priceWei": "0",
+                "walletAddress": "",
+                "seeders": [],
+                "publisherSignature": "",
+            })
+        }),
+        _ => json!({
+            "hash": file_hash,
+            "fileName": file_name,
+            "fileSize": file_size,
+            "protocol": "WebRTC",
+            "createdAt": created_at,
+            "peerId": "",
+            "priceWei": "0",
+            "walletAddress": "",
+            "seeders": [],
+            "publisherSignature": "",
+        }),
+    };
+
+    // Ensure core fields are populated even if existing record was sparse.
+    if metadata["hash"].as_str().unwrap_or("").is_empty() {
+        metadata["hash"] = json!(file_hash);
+    }
+    if metadata["fileName"].as_str().unwrap_or("").is_empty() {
+        metadata["fileName"] = json!(file_name);
+    }
+    if metadata["fileSize"].as_u64().unwrap_or(0) == 0 {
+        metadata["fileSize"] = json!(file_size);
+    }
+    if metadata["protocol"].as_str().unwrap_or("").is_empty() {
+        metadata["protocol"] = json!("WebRTC");
+    }
+    if metadata["createdAt"].as_u64().unwrap_or(0) == 0 {
+        metadata["createdAt"] = json!(created_at);
+    }
+
+    let cdn_seeder = json!({
         "peerId": peer_id,
         "priceWei": download_price_wei.to_string(),
         "walletAddress": cdn_wallet,
-        "seeders": [{
-            "peerId": peer_id,
-            "priceWei": download_price_wei.to_string(),
-            "walletAddress": cdn_wallet,
-            "multiaddrs": our_addrs,
-            "signature": "",
-        }],
-        "publisherSignature": "",
+        "multiaddrs": our_addrs,
+        "signature": "",
     });
-    let _ = dht
-        .put_dht_value(format!("chiral_file_{file_hash}"), metadata.to_string())
-        .await;
+
+    let seeders = metadata["seeders"].as_array_mut();
+    match seeders {
+        Some(arr) => {
+            if let Some(existing) = arr.iter_mut().find(|s| s["peerId"].as_str() == Some(&peer_id)) {
+                *existing = cdn_seeder;
+            } else {
+                arr.push(cdn_seeder);
+            }
+        }
+        None => {
+            metadata["seeders"] = json!([cdn_seeder]);
+        }
+    }
+
+    let _ = dht.put_dht_value(key, metadata.to_string()).await;
 }
 
 async fn unregister_in_dht(dht: &Arc<DhtService>, file_hash: &str) {
