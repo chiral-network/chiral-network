@@ -96,6 +96,9 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
                 }
             }
         }
+        // Stage 2: stop being a Kademlia provider so the new-schema search
+        // drops us from seeder results immediately.
+        let _ = remove_seeder_entry(dht, file_hash).await;
     }
     println!("✅ Unpublished {} files from DHT", count);
 
@@ -413,7 +416,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
             existing.wallet_address = our_seeder.wallet_address.clone();
             existing.multiaddrs = our_seeder.multiaddrs.clone();
         } else {
-            metadata.seeders.push(our_seeder);
+            metadata.seeders.push(our_seeder.clone());
         }
         metadata.peer_id = peer_id.clone();
         metadata.price_wei = price_wei.to_string();
@@ -435,6 +438,16 @@ async fn auto_reseed_drive_files(state: &AppState) {
                 file_name, e
             );
             continue;
+        }
+
+        // Stage 2: dual-write to the new per-seeder schema + register as a
+        // Kademlia provider. Failures here are logged but don't abort the
+        // legacy-blob publish above.
+        if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {
+            println!(
+                "[DRIVE] Auto-reseed provider publish failed for {}: {}",
+                file_name, e
+            );
         }
 
         reseeded_dht_metadata += 1;
@@ -548,6 +561,9 @@ async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
                             }
                         }
                     }
+                    // Stage 2: drop ourselves from the Kademlia provider set
+                    // so the new-schema search stops returning us immediately.
+                    let _ = remove_seeder_entry(&dht, file_hash).await;
                 }
             }
         }).await;
@@ -1156,19 +1172,19 @@ struct PublishResult {
 /// Each seeder signs their entry so downloaders can verify the wallet address is legitimate.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct SeederInfo {
-    peer_id: String,
+pub(crate) struct SeederInfo {
+    pub(crate) peer_id: String,
     #[serde(default)]
-    price_wei: String,
+    pub(crate) price_wei: String,
     #[serde(default)]
-    wallet_address: String,
+    pub(crate) wallet_address: String,
     /// Multiaddresses where this seeder can be reached.
     #[serde(default)]
-    multiaddrs: Vec<String>,
+    pub(crate) multiaddrs: Vec<String>,
     /// ECDSA signature of "seeder:{peer_id}:{file_hash}:{wallet_address}" by wallet key.
     /// Proves this seeder controls the claimed wallet (prevents payment redirection).
     #[serde(default)]
-    signature: String,
+    pub(crate) signature: String,
 }
 
 impl SeederInfo {
@@ -1260,8 +1276,7 @@ fn seeder_entry_key(file_hash: &str, peer_id: &str) -> String {
 /// Publish this node's seeder entry for a file and register it as a Kademlia
 /// provider. Safe to call repeatedly — each call refreshes the entry and
 /// republishes the provider record.
-#[allow(dead_code)] // Stage 1: helper for Stage 2 callers.
-async fn publish_seeder_entry(
+pub(crate) async fn publish_seeder_entry(
     dht: &dht::DhtService,
     file_hash: &str,
     seeder: &SeederInfo,
@@ -1278,8 +1293,10 @@ async fn publish_seeder_entry(
 /// age out on its record TTL — and since `fetch_seeders` treats providers
 /// as the source of truth, an entry without a matching live provider is
 /// ignored in search.
-#[allow(dead_code)] // Stage 1: helper for Stage 2 callers.
-async fn remove_seeder_entry(dht: &dht::DhtService, file_hash: &str) -> Result<(), String> {
+pub(crate) async fn remove_seeder_entry(
+    dht: &dht::DhtService,
+    file_hash: &str,
+) -> Result<(), String> {
     dht.stop_providing_file(file_hash.to_string()).await
 }
 
@@ -1479,6 +1496,18 @@ async fn publish_file(
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         dht.put_dht_value(dht_key, metadata_json).await?;
 
+        // Stage 2: dual-write to per-seeder schema + provider registration.
+        if let Some(our_seeder) = metadata
+            .seeders
+            .iter()
+            .find(|s| s.peer_id == peer_id)
+            .cloned()
+        {
+            if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
+                println!("Provider publish failed for {}: {}", merkle_root, e);
+            }
+        }
+
         println!(
             "File metadata published to DHT: {} ({} seeders)",
             merkle_root,
@@ -1621,6 +1650,18 @@ async fn publish_file_data(
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         dht.put_dht_value(dht_key, metadata_json).await?;
+
+        // Stage 2: dual-write to per-seeder schema + provider registration.
+        if let Some(our_seeder) = metadata
+            .seeders
+            .iter()
+            .find(|s| s.peer_id == peer_id)
+            .cloned()
+        {
+            if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
+                println!("Provider publish failed for {}: {}", merkle_root, e);
+            }
+        }
 
         println!(
             "File data published to DHT: {} ({} seeders)",
@@ -1838,7 +1879,7 @@ async fn try_repair_local_drive_seed(
             existing.wallet_address = our_seeder.wallet_address.clone();
             existing.multiaddrs = our_seeder.multiaddrs.clone();
         } else {
-            metadata.seeders.push(our_seeder);
+            metadata.seeders.push(our_seeder.clone());
         }
         metadata.peer_id = peer_id;
         metadata.price_wei = price_wei.to_string();
@@ -1851,6 +1892,13 @@ async fn try_repair_local_drive_seed(
             )
             .await;
         }
+
+        // Stage 2: dual-write to per-seeder schema + provider registration.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            publish_seeder_entry(&dht_for_publish, &file_hash_for_publish, &our_seeder),
+        )
+        .await;
     });
 
     // Keep runtime Drive state consistent with repaired registration.
@@ -1907,19 +1955,57 @@ async fn search_file(
             }
         }
 
-        // Search for file metadata in DHT
+        // Search for file metadata in DHT. Stage 2: fire the new-schema
+        // provider lookup in parallel with the legacy blob lookup so
+        // provider-sourced seeders augment the search result without
+        // adding latency.
         let dht_key = format!("chiral_file_{}", file_hash);
         println!("Looking up DHT key: {}", dht_key);
 
-        let dht_lookup = tokio::time::timeout(
+        let blob_fut = tokio::time::timeout(
             tokio::time::Duration::from_millis(10000),
             dht.get_dht_value(dht_key.clone()),
-        )
-        .await;
+        );
+        let providers_fut = tokio::time::timeout(
+            tokio::time::Duration::from_millis(5000),
+            fetch_seeders(dht, &file_hash),
+        );
+        let (dht_lookup, provider_seeders_res) = tokio::join!(blob_fut, providers_fut);
+        let provider_seeders: Vec<SeederInfo> = match provider_seeders_res {
+            Ok(Ok(list)) => list,
+            _ => Vec::new(),
+        };
 
         match dht_lookup {
             Err(_) => {
                 println!("DHT lookup timed out for key: {}", dht_key);
+                // If the legacy blob timed out but providers returned seeders,
+                // still surface a result from the new-schema path.
+                if !provider_seeders.is_empty() {
+                    println!(
+                        "Returning {} provider-sourced seeders after blob timeout for {}",
+                        provider_seeders.len(),
+                        file_hash
+                    );
+                    let first = provider_seeders.first().cloned();
+                    return Ok(Some(SearchResult {
+                        hash: file_hash.clone(),
+                        file_name: local_result
+                            .as_ref()
+                            .map(|r| r.file_name.clone())
+                            .unwrap_or_default(),
+                        file_size: local_result.as_ref().map(|r| r.file_size).unwrap_or(0),
+                        seeders: provider_seeders,
+                        created_at: 0,
+                        price_wei: first
+                            .as_ref()
+                            .map(|s| s.price_wei.clone())
+                            .unwrap_or_default(),
+                        wallet_address: first
+                            .map(|s| s.wallet_address)
+                            .unwrap_or_default(),
+                    }));
+                }
                 // Return local result if we're seeding, otherwise not found
                 if let Some(local) = local_result {
                     println!("Returning local seeding result after DHT timeout for {}", file_hash);
@@ -1976,6 +2062,17 @@ async fn search_file(
                         }
                     }
 
+                    // Stage 2: union in provider-sourced seeders. Providers are
+                    // signature-verified by fetch_seeders — entries already here
+                    // from the blob keep their position; new provider entries
+                    // append. This means a search that only sees the new schema
+                    // (no blob) still works, and vice-versa.
+                    for ps in &provider_seeders {
+                        if !seeders.iter().any(|s| s.peer_id == ps.peer_id) {
+                            seeders.push(ps.clone());
+                        }
+                    }
+
                     // Merge local seeder if we're seeding this file but not in the DHT list
                     if let Some(ref local) = local_result {
                         for local_seeder in &local.seeders {
@@ -1997,6 +2094,35 @@ async fn search_file(
                 }
                 Ok(None) => {
                     println!("File not found in DHT: {}", file_hash);
+                    // Stage 2: if the legacy blob is absent but providers
+                    // surfaced seeders, surface a result from the new schema
+                    // alone — this is the path that lets pure-new-schema
+                    // publishers still be discovered.
+                    if !provider_seeders.is_empty() {
+                        println!(
+                            "Returning {} provider-sourced seeders despite missing blob for {}",
+                            provider_seeders.len(),
+                            file_hash
+                        );
+                        let first = provider_seeders.first().cloned();
+                        return Ok(Some(SearchResult {
+                            hash: file_hash.clone(),
+                            file_name: local_result
+                                .as_ref()
+                                .map(|r| r.file_name.clone())
+                                .unwrap_or_default(),
+                            file_size: local_result.as_ref().map(|r| r.file_size).unwrap_or(0),
+                            seeders: provider_seeders,
+                            created_at: 0,
+                            price_wei: first
+                                .as_ref()
+                                .map(|s| s.price_wei.clone())
+                                .unwrap_or_default(),
+                            wallet_address: first
+                                .map(|s| s.wallet_address)
+                                .unwrap_or_default(),
+                        }));
+                    }
                     // DHT can lag behind local intent right after restart. Attempt
                     // local repair before returning not-found.
                     if let Some(repaired) =
@@ -2663,13 +2789,19 @@ async fn republish_shared_file(
                 existing.wallet_address = our_seeder.wallet_address.clone();
                 existing.multiaddrs = our_seeder.multiaddrs.clone();
             } else {
-                metadata.seeders.push(our_seeder);
+                metadata.seeders.push(our_seeder.clone());
             }
             metadata.peer_id = peer_id.clone();
 
             let metadata_json = serde_json::to_string(&metadata)
                 .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
             let _ = dht.put_dht_value(dht_key, metadata_json).await;
+
+            // Stage 2: dual-write to per-seeder schema + provider registration.
+            if let Err(e) = publish_seeder_entry(dht, &file_hash, &our_seeder).await {
+                println!("Provider publish failed for {}: {}", file_hash, e);
+            }
+
             println!(
                 "✅ Re-published {} to DHT with peer_id {} ({} seeders)",
                 file_hash,
@@ -2730,6 +2862,8 @@ async fn unpublish_all_shared_files(state: tauri::State<'_, AppState>) -> Result
             }
             _ => {}
         }
+        // Stage 2: stop being a Kademlia provider for this file.
+        let _ = remove_seeder_entry(dht, file_hash).await;
     }
 
     println!(
@@ -2871,6 +3005,8 @@ async fn cleanup_agreement_files(
                     }
                 }
             }
+            // Stage 2: stop being a Kademlia provider for this file.
+            let _ = remove_seeder_entry(dht, file_hash).await;
 
             // Also disable seeding in Drive manifest
             {
@@ -4529,6 +4665,8 @@ async fn drive_delete_item(
                     }
                 }
             }
+            // Stage 2: stop being a Kademlia provider for this file.
+            let _ = remove_seeder_entry(dht, hash).await;
         }
     }
     if !file_entries.is_empty() {
@@ -4870,9 +5008,9 @@ async fn publish_drive_file(
     };
 
     if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-        *existing = our_seeder;
+        *existing = our_seeder.clone();
     } else {
-        metadata.seeders.push(our_seeder);
+        metadata.seeders.push(our_seeder.clone());
     }
     metadata.peer_id = peer_id;
     metadata.price_wei = price_wei_val.to_string();
@@ -4886,6 +5024,11 @@ async fn publish_drive_file(
     let metadata_json = serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
     dht.put_dht_value(dht_key, metadata_json).await?;
+
+    // Stage 2: dual-write to per-seeder schema + provider registration.
+    if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {
+        println!("Provider publish failed for {}: {}", file_hash, e);
+    }
 
     // Update the Drive manifest with seeding metadata
     let updated_item = {
@@ -5009,12 +5152,17 @@ async fn seed_hosted_file(
         existing.wallet_address = our_seeder.wallet_address.clone();
         existing.multiaddrs = our_seeder.multiaddrs.clone();
     } else {
-        metadata.seeders.push(our_seeder);
+        metadata.seeders.push(our_seeder.clone());
     }
 
     let metadata_json = serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
     dht.put_dht_value(dht_key, metadata_json).await?;
+
+    // Stage 2: dual-write to per-seeder schema + provider registration.
+    if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {
+        println!("Provider publish failed for {}: {}", file_hash, e);
+    }
 
     // Enable seeding in Drive manifest
     {
@@ -5076,6 +5224,8 @@ async fn drive_stop_seeding(
                     }
                 }
             }
+            // Stage 2: stop being a Kademlia provider for this file.
+            let _ = remove_seeder_entry(dht, hash).await;
         }
         // Remove from in-memory file storage
         let mut storage = state.file_storage.lock().await;
