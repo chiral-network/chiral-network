@@ -998,17 +998,89 @@ impl DhtService {
 /// Checks that the transaction was sent to the expected recipient with at least the expected value.
 async fn verify_payment_on_chain(
     tx_hash: &str,
+    expected_sender: &str,
     expected_recipient: &str,
     expected_min_wei: u128,
 ) -> Result<bool, String> {
     // Use the wallet module's verify_payment which uses the shared RPC client
-    // and checks both the transaction details and the receipt status
+    // and checks both the transaction details and the receipt status. Stage 3:
+    // we now pass the sender through so a stranger can't claim someone else's
+    // payment tx to unlock a file.
     crate::wallet::verify_payment(
         tx_hash,
-        "", // we don't know the sender, skip from-check
+        expected_sender,
         expected_recipient,
         expected_min_wei,
     ).await
+}
+
+// ============================================================================
+// Spent-tx guard (Stage 3).
+//
+// Each successful payment tx is persisted so it can only unlock one download.
+// Without this, a downloader could send one tx and replay the PaymentProof to
+// request the same file over and over (or swap request_ids to pull multiple
+// copies, or forward the proof to bypass paying on a re-request). This is the
+// seeder's "one payment = one delivery" enforcement.
+//
+// Store: a set of lowercased tx hashes, JSON-serialised as `{"spent":[...]}`,
+// persisted at `<data_dir>/seeder_spent_tx.json`. Corruption on read is
+// treated as an empty store (the on-chain verification still prevents double
+// withdrawal of funds; worst case is one stale-replay delivery after a
+// corrupted restart, which we judge acceptable vs. crashing the seeder).
+// ============================================================================
+
+static SPENT_TX_STORE: tokio::sync::OnceCell<Mutex<HashSet<String>>> = tokio::sync::OnceCell::const_new();
+
+fn spent_tx_path() -> std::path::PathBuf {
+    crate::network::data_dir().join("seeder_spent_tx.json")
+}
+
+async fn load_spent_tx_set() -> HashSet<String> {
+    let path = spent_tx_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
+            .ok()
+            .and_then(|v| v.get("spent").cloned())
+            .and_then(|a| serde_json::from_value::<Vec<String>>(a).ok())
+            .map(|v| v.into_iter().map(|s| s.to_lowercase()).collect())
+            .unwrap_or_default(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+async fn spent_tx_store() -> &'static Mutex<HashSet<String>> {
+    SPENT_TX_STORE
+        .get_or_init(|| async { Mutex::new(load_spent_tx_set().await) })
+        .await
+}
+
+async fn persist_spent_tx_set(set: &HashSet<String>) {
+    let path = spent_tx_path();
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let list: Vec<&String> = set.iter().collect();
+    let json = serde_json::json!({ "spent": list }).to_string();
+    // Best-effort write. A crash mid-write could truncate the file, falling
+    // back to an empty set on next load — acceptable given the tradeoff above.
+    let _ = tokio::fs::write(&path, json).await;
+}
+
+/// Returns true if the tx was newly recorded, false if it had already been
+/// spent (duplicate / replay). The seeder must reject the second case.
+async fn claim_spent_tx(tx_hash: &str) -> bool {
+    let tx_lower = tx_hash.to_lowercase();
+    let store = spent_tx_store().await;
+    let mut guard = store.lock().await;
+    if guard.contains(&tx_lower) {
+        return false;
+    }
+    guard.insert(tx_lower);
+    let snapshot = guard.clone();
+    drop(guard);
+    persist_spent_tx_set(&snapshot).await;
+    true
 }
 
 // Legacy verify function kept for reference but replaced by wallet::verify_payment above
@@ -3468,14 +3540,58 @@ async fn handle_behaviour_event(
                                             let expected_price = file_info.price_wei;
                                             drop(shared);
 
+                                            // Stage 3: replay guard — reject up front if this
+                                            // tx was already redeemed. Peeking first (rather
+                                            // than claim-then-verify) avoids burning a slot on
+                                            // an invalid tx.
+                                            let already_spent = {
+                                                let store = spent_tx_store().await;
+                                                let guard = store.lock().await;
+                                                guard.contains(&payment_tx.to_lowercase())
+                                            };
+                                            if already_spent {
+                                                println!(
+                                                    "❌ Payment tx {} already redeemed for a previous download",
+                                                    payment_tx
+                                                );
+                                                ChunkResponse::PaymentAck {
+                                                    request_id,
+                                                    file_hash,
+                                                    accepted: false,
+                                                    error: Some(
+                                                        "Payment tx already redeemed — one payment serves one download"
+                                                            .to_string(),
+                                                    ),
+                                                }
+                                            } else {
                                             match verify_payment_on_chain(
                                                 &payment_tx,
+                                                &payer_address,
                                                 &expected_wallet,
                                                 expected_price,
                                             )
                                             .await
                                             {
                                                 Ok(true) => {
+                                                    // Atomically claim this tx so concurrent
+                                                    // replays can't slip through between the
+                                                    // peek above and the chain verify. If the
+                                                    // claim fails, another task beat us to it.
+                                                    if !claim_spent_tx(&payment_tx).await {
+                                                        println!(
+                                                            "❌ Race: tx {} redeemed by a concurrent request",
+                                                            payment_tx
+                                                        );
+                                                        ChunkResponse::PaymentAck {
+                                                            request_id,
+                                                            file_hash,
+                                                            accepted: false,
+                                                            error: Some(
+                                                                "Payment tx already redeemed by a concurrent request"
+                                                                    .to_string(),
+                                                            ),
+                                                        }
+                                                    } else {
                                                     println!(
                                                         "✅ Payment verified for {} from {}",
                                                         file_hash, payer_address
@@ -3496,6 +3612,7 @@ async fn handle_behaviour_event(
                                                         file_hash,
                                                         accepted: true,
                                                         error: None,
+                                                    }
                                                     }
                                                 }
                                                 Ok(false) => {
@@ -3526,6 +3643,7 @@ async fn handle_behaviour_event(
                                                     }
                                                 }
                                             }
+                                        }
                                         }
                                     } else {
                                         drop(shared);
