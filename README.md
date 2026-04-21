@@ -1,240 +1,85 @@
 # Chiral Network
 
-Decentralized peer-to-peer file sharing, local Drive seeding, hosting marketplace, and CHI-based payments — built as a Tauri 2 desktop app with a headless daemon mode for servers and Docker.
+Chiral Network is a decentralized file-sharing desktop app. You can share files directly with other users, pay (or get paid) for downloads using the built-in CHI cryptocurrency, host files on the always-on CDN, and even mine CHI on your computer — all from a single app.
 
-## Stack
+There's no central server deciding what can be shared or who can participate. Your files stay on your computer (or on the CDN if you choose), and transfers happen peer-to-peer.
 
-- **Frontend**: Svelte 5 + TypeScript + Tailwind CSS
-- **Desktop runtime**: Tauri 2
-- **Backend**: Rust (`src-tauri`)
-- **Networking**: libp2p 0.53 (Kademlia DHT, circuit relay, chunked file transfer)
-- **Blockchain**: Core-Geth v1.12.20 (CHI chain, Ethash PoW, chain ID 98765)
-- **Relay**: Production relay at `130.245.173.73` (libp2p relay + HTTP API)
+## What You Can Do
 
-## Features
+- **Share files with anyone** — publish a file to the network and other users can find and download it.
+- **Download files** — search by file hash and download from peers who are sharing it, paying a small CHI fee per megabyte.
+- **Manage a personal Drive** — organize your local files and choose which ones to seed to the network.
+- **Send files directly (ChiralDrop)** — one-to-one transfers with an optional price.
+- **Host files on the CDN** — upload to an always-on server so your files remain available even when your computer is offline. You set the download price; others pay you.
+- **Run a hosting marketplace** — browse peer hosts and CDN servers, sign hosting agreements, and earn CHI by hosting other users' files.
+- **Mine CHI** — use your CPU (or GPU on Linux/Windows) to mine blocks and earn 5 CHI per block.
+- **Manage your wallet** — create a new wallet or import an existing one, back it up by email, view your balance and transaction history, and send CHI to other addresses.
+- **Check your reputation** — every completed or failed transfer feeds into an Elo-style reputation score (0–100) that other users can see.
 
-- **Wallet** — create, import (private key or mnemonic), optional email backup
-- **Network** — DHT peer connectivity, Kademlia discovery, relay circuit NAT traversal
-- **Download** — search files by hash, download with CHI payments to burn address
-- **Drive** — local file management, seeding to P2P network, paid share links via relay
-- **ChiralDrop** — direct peer-to-peer file transfers with optional pricing
-- **Hosting** — marketplace: CDN servers (always-on), peer hosts, hosting agreements, auto-seed
-- **CDN** — always-on file hosting service with market-based dynamic pricing
-- **Mining** — CPU mining (GPU mining via ethminer on Linux/Windows, OpenCL on macOS)
-- **Security** — ECDSA-signed DHT records, on-chain payment verification, 0.5% platform fee
-- **Account** — wallet balance, transaction history, Elo reputation panel
-- **Settings** — appearance (dark/light/system), notification preferences, download directory
-- **Diagnostics** — structured event log, system info
+## Getting Started
 
-## Development
+### 1. Install
 
-```bash
-# Install frontend dependencies
-npm install
+Download the installer for your platform from the releases page and install it like any normal desktop app. Chiral Network runs on **Windows**, **macOS**, and **Linux**.
 
-# Run desktop app in dev mode
-npm run tauri:dev
+### 2. First launch
 
-# Build frontend only
-npm run build
+When you open the app for the first time:
 
-# Build desktop app
-npm run tauri:build
-```
+1. **Create a wallet.** You'll be given a recovery phrase — write it down and keep it somewhere safe. This is the only way to recover your wallet if you lose access. You can optionally receive an encrypted backup by email.
+2. **Connect to the network.** The app automatically connects to the Chiral peer-to-peer network. You should see peers appear on the Network page within a few seconds.
+3. **Get some CHI.** You'll need a small amount of CHI to download files (0.01 CHI per MB). You can either:
+   - Mine some yourself on the Mining page, or
+   - Receive CHI from another user who sends it to your wallet address.
 
-## Testing
+### 3. Share or download a file
 
-```bash
-# Frontend tests (Vitest — 585+ tests)
-npm test
+- **To share**, go to the **Drive** page, add a file, and toggle seeding on. The file's hash is what others need to download it.
+- **To download**, go to the **Download** page, paste the file hash, and confirm the payment. The app handles the rest.
 
-# Rust tests (271+ tests)
-cargo test --manifest-path src-tauri/Cargo.toml
+## A Tour of the App
 
-# Rust compile check
-cargo check --manifest-path src-tauri/Cargo.toml
+| Page | What it does |
+|------|---------------|
+| **Wallet** | Create or import a wallet, view your recovery phrase, set up email backup. |
+| **Network** | See connected peers, network status, and blockchain sync status. |
+| **Download** | Search for files by hash and download them, paying in CHI. |
+| **Drive** | Organize your local files and choose which ones to share on the network. |
+| **ChiralDrop** | Send a file directly to a specific peer, with an optional price. |
+| **Hosts** | Hosting marketplace: publish your site, browse CDN servers and peer hosts, manage agreements. |
+| **Mining** | Start and stop CPU or GPU mining; track the blocks you've mined. |
+| **Account** | Your wallet balance, full transaction history, and reputation panel. |
+| **Settings** | Switch between light/dark themes, toggle notifications, set your download folder. |
+| **Diagnostics** | Event log and system info — handy if something isn't working. |
 
-# 30-node stress test (requires Docker containers running)
-bash scripts/stress-test-30-nodes.sh
-```
+## How Payments Work
 
-## Headless Daemon
+Chiral Network has its own cryptocurrency called **CHI**. It's used to pay for downloads and hosting, and it's earned by mining or by sharing popular files.
 
-The headless daemon (`chiral_daemon`) runs without a GUI for servers and Docker.
+- **Download fee**: 0.01 CHI per megabyte, paid to the file's seeder.
+- **Platform fee**: 0.5% of every transaction goes to network upkeep; the rest goes to the seller.
+- **Mining reward**: 5 CHI per block mined.
+- **Gas fees**: Zero — transactions are free apart from the 0.5% platform fee.
 
-```bash
-# Build
-cargo build --manifest-path src-tauri/Cargo.toml --release --bin chiral_daemon
+Payments are verified on-chain before any file data is served, so you can't be charged without actually receiving your file, and sellers can't be stiffed after serving.
 
-# Run with auto-start
-./chiral_daemon --port 9419 --auto-start-dht
+## Privacy & Security
 
-# With mining
-./chiral_daemon --port 9419 --auto-start-dht --auto-start-geth --auto-mine \
-  --miner-address 0xYOUR_ADDRESS --mining-threads 4
-```
+- **Your wallet lives on your device.** Nobody else — not even the Chiral team — has your recovery phrase. If you lose it, your CHI is gone.
+- **File listings are signed.** Every file's metadata and seeder entry is cryptographically signed, so nobody can spoof your files in the network.
+- **Payments are verified.** Seeders check the blockchain for your payment before sending chunks.
+- **Direct transfers.** When you download a file, it comes directly from the peer (or CDN) sharing it — there's no central middleman storing copies.
 
-### API Endpoints
+## Running Without a Window (Headless Mode)
 
-All endpoints prefixed with `/api/headless/` unless noted.
+If you want to run Chiral Network on a server, a Raspberry Pi, or inside Docker — without a graphical interface — there's a `chiral_daemon` binary that exposes the same features over a local HTTP API. This is mainly useful for always-on seeders, mining rigs, and automated setups. See `CLAUDE.md` for the full API reference.
 
-| Category | Endpoints |
-|----------|-----------|
-| Health | `GET /api/health`, `GET /api/ready` |
-| Wallet | `POST wallet/create`, `wallet/import`, `wallet/balance`, `wallet/send`, `wallet/receipt`, `wallet/history`, `wallet/faucet`; `GET wallet`, `wallet/chain-id` |
-| DHT | `POST dht/start`, `dht/stop`, `dht/put`, `dht/get`, `dht/ping`, `dht/echo`; `GET dht/health`, `dht/peers`, `dht/peer-id` |
-| Files | `POST file/search`, `dht/register-shared-file`, `dht/request-file`, `dht/send-file` |
-| Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status` |
-| Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
-| Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
-| CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash`; `PUT cdn/files/:hash` |
-| Drive | Full CRUD via `/api/drive/*` (requires `X-Owner` header) |
+## Troubleshooting
 
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHIRAL_AUTO_START_DHT` | `false` | Auto-start DHT on daemon launch |
-| `CHIRAL_AUTO_START_GETH` | `false` | Auto-start Geth node |
-| `CHIRAL_AUTO_MINE` | `false` | Auto-start mining |
-| `CHIRAL_MINER_ADDRESS` | — | Wallet address for mining rewards |
-| `CHIRAL_MINING_THREADS` | `1` | CPU mining thread count |
-| `CHIRAL_GETH_SYNCMODE` | `full` | Geth sync mode (`full` or `snap`) |
-| `CHIRAL_RPC_ENDPOINT` | `http://130.245.173.73:8545` | Remote RPC fallback |
-
-## Docker
-
-```bash
-# Build image from pre-compiled binary
-docker build -f Dockerfile.local -t chiral-network-node .
-
-# Run 30 nodes connected to production relay
-docker compose -f docker-compose.production-net.yml up -d
-
-# Run local isolated test cluster with relay
-docker compose -f docker-compose.local-test.yml up -d --scale node=10
-```
-
-## Blockchain
-
-| Parameter | Value |
-|-----------|-------|
-| Chain ID | 98765 |
-| Consensus | Ethash (PoW) |
-| Block reward | 5 CHI |
-| Difficulty | 0x400000 (genesis) |
-| Sync mode | full (archive GC) |
-| Gas price | 0 (free transactions) |
-| Download cost | 0.01 CHI per MB |
-| Platform fee | 0.5% on all transactions |
-| Gas limit | 4,700,000 per block |
-| P2P port | 30303 |
-| RPC port | 8545 (local only) |
-| Bootstrap | `130.245.173.73:30303` |
-
-## Relay Server
-
-The relay server (`relay_server` binary) runs on `130.245.173.73`:
-- **Port 4001**: libp2p circuit relay v2 + Kademlia DHT routing
-- **Port 8080**: HTTP API (reputation, drive proxy, wallet backup, site hosting)
-
-```bash
-# Build and deploy
-cargo build --release --bin relay_server
-scp target/release/relay_server root@130.245.173.73:/usr/local/bin/
-ssh root@130.245.173.73 'systemctl restart relay-server'
-```
-
-The relay filters private IPs from its Kademlia routing table — only stores public and relay circuit addresses so remote peers get routable entries from DHT lookups.
-
-## CDN Service
-
-Always-on file hosting — users upload files to the CDN so they stay available when the user goes offline. Payment is required before upload and verified on-chain.
-
-- **Deployed at**: `130.245.173.73:9420` (systemd service: `cdn-server.service`)
-- **Capacity**: 227 GB available
-- **Pricing**: Market-based — `max(floor, median_peer_price × 1.2)`
-- **Payment**: Required before upload, verified on-chain (5% tolerance for rounding)
-- **Expiration**: Files auto-removed when paid duration expires (cleanup every 60s)
-- **Discovery**: CDN files appear on the Download page (DHT + CDN fallback search)
-- **Download price**: Uploader sets a per-download price that others pay
-
-```bash
-# Check pricing
-curl http://130.245.173.73:9420/api/cdn/pricing?sizeMb=100&durationDays=30
-
-# Upload (requires paymentTx — send CHI to CDN wallet first)
-curl -X POST http://130.245.173.73:9420/api/cdn/upload \
-  -H "Content-Type: application/json" \
-  -d '{"fileName":"file.pdf","fileData":"<base64>","ownerWallet":"0xYOU","paymentTx":"0xTXHASH","durationDays":30,"downloadPriceChi":"0.5"}'
-
-# List your files
-curl http://130.245.173.73:9420/api/cdn/files?owner=0xYOU
-
-# Delete
-curl -X DELETE http://130.245.173.73:9420/api/cdn/files/HASH?owner=0xYOU
-```
-
-**Desktop app flow**: Hosts page → CDN Servers tab → Upload → select file from Drive → confirm price → pay → upload.
-
-## Security
-
-- **Signed DHT records**: File metadata and seeder entries are ECDSA-signed by the publisher/seeder wallet
-- **Payment verification**: Seeders verify on-chain tx receipt before serving file chunks
-- **Platform fee**: 0.5% of all transactions (split: 99.5% to seller, 0.5% to platform)
-- **Relay IP filtering**: Only public and relay circuit addresses stored in Kademlia
-
-## Reputation System
-
-Elo scores (0–100, base 50) computed from transfer outcomes only:
-- **Completed transfer**: positive adjustment
-- **Failed transfer**: negative adjustment
-- **Amount weighting**: logarithmic scaling based on CHI
-- **Time decay**: 180-day lookback with recency weighting
-
-Endpoints on relay (`130.245.173.73:8080`):
-- `POST /api/ratings/transfer` — record outcome
-- `GET /api/ratings/:wallet` — get Elo + history
-- `POST /api/ratings/batch` — batch lookup
-
-## Project Structure
-
-```
-src/                          # Svelte 5 frontend
-├── pages/                    # 10 route pages
-├── lib/
-│   ├── stores.ts             # Svelte stores (wallet, peers, settings)
-│   ├── dhtService.ts         # DHT service singleton
-│   ├── services/             # 8 service modules
-│   ├── components/           # Reusable components
-│   └── types/                # TypeScript type definitions
-src-tauri/
-├── src/
-│   ├── lib.rs                # Tauri command wrappers (thin delegation)
-│   ├── wallet.rs             # All wallet/transaction logic
-│   ├── rpc_client.rs         # Shared HTTP client, batch RPC, cache
-│   ├── dht.rs                # libp2p DHT, Kademlia, file transfer
-│   ├── geth.rs               # Geth process management, mining
-│   ├── geth_bootstrap.rs     # Bootstrap node health checking
-│   ├── drive_api.rs          # Drive HTTP API routes
-│   ├── drive_storage.rs      # Drive persistence layer
-│   ├── hosting.rs            # Hosting types and persistence
-│   ├── hosting_server.rs     # Site hosting HTTP server
-│   ├── relay_share_proxy.rs  # Relay proxy + WebSocket tunnel
-│   ├── rating_api.rs         # Reputation API routes
-│   ├── rating_storage.rs     # Elo computation
-│   ├── encryption.rs         # File encryption
-│   ├── file_transfer.rs      # Chunked transfer protocol
-│   ├── speed_tiers.rs        # Download cost calculation
-│   └── bin/
-│       ├── chiral.rs          # CLI client
-│       ├── chiral_daemon.rs   # Headless daemon (57+ API endpoints)
-│       └── relay_server.rs    # Production relay server
-scripts/
-├── stress-test-30-nodes.sh   # 12-phase, 35-test stress suite
-├── local-test-cluster.sh     # Local process-based test cluster
-└── full-feature-test.sh      # Feature validation suite
-```
+- **No peers showing up?** Make sure your firewall isn't blocking outbound UDP/TCP traffic. The app connects through a relay server if your network is restrictive.
+- **Download stuck?** Check the Diagnostics page for errors. The file may not currently have any seeders online — try the CDN as a fallback.
+- **Balance not updating?** Balance is refreshed every few seconds; if it's been longer than a minute, restart the app or check your Geth sync status on the Network page.
+- **Lost your wallet?** You can import it again on the Wallet page using your recovery phrase or the email backup.
 
 ## License
 
