@@ -1358,6 +1358,9 @@ async fn main() {
         let cdn_state = Arc::clone(&cdn_state);
         tokio::spawn(chiral_network::cdn_server::expiration_loop(cdn_state));
     }
+    // Kademlia handles provider-record republishing on its configured
+    // interval, so the manual CDN republish loop from the legacy blob
+    // schema is no longer needed.
 
     tokio::spawn(async move {
         let server = axum::serve(

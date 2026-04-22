@@ -560,44 +560,46 @@ async fn register_in_dht(
     .await;
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     let our_addrs = dht.get_listening_addresses().await;
-    let metadata = json!({
-        "hash": file_hash,
-        "fileName": file_name,
-        "fileSize": file_size,
-        "protocol": "WebRTC",
-        "createdAt": created_at,
-        "peerId": peer_id,
-        "priceWei": download_price_wei.to_string(),
-        "walletAddress": cdn_wallet,
-        "seeders": [{
-            "peerId": peer_id,
-            "priceWei": download_price_wei.to_string(),
+
+    // Immutable file-metadata blob: write only if absent. The CDN is not
+    // necessarily the original publisher, so we don't overwrite an existing
+    // publisher-signed record.
+    let key = format!("chiral_file_{file_hash}");
+    let blob_present = matches!(dht.get_dht_value(key.clone()).await, Ok(Some(_)));
+    if !blob_present {
+        let metadata = json!({
+            "hash": file_hash,
+            "fileName": file_name,
+            "fileSize": file_size,
+            "protocol": "WebRTC",
+            "createdAt": created_at,
             "walletAddress": cdn_wallet,
-            "multiaddrs": our_addrs,
-            "signature": "",
-        }],
-        "publisherSignature": "",
-    });
-    let _ = dht
-        .put_dht_value(format!("chiral_file_{file_hash}"), metadata.to_string())
-        .await;
+            "publisherSignature": "",
+        });
+        let _ = dht.put_dht_value(key, metadata.to_string()).await;
+    }
+
+    // The CDN is just another seeder in the provider-records model: publish
+    // a per-seeder record + register as a Kademlia provider.
+    let seeder_entry = crate::SeederInfo {
+        peer_id: peer_id.clone(),
+        price_wei: download_price_wei.to_string(),
+        wallet_address: cdn_wallet.to_string(),
+        multiaddrs: our_addrs,
+        signature: String::new(),
+    };
+    if let Err(e) = crate::publish_seeder_entry(dht, file_hash, &seeder_entry).await {
+        println!("[CDN] Provider publish failed for {}: {}", file_hash, e);
+    }
 }
 
 async fn unregister_in_dht(dht: &Arc<DhtService>, file_hash: &str) {
     dht.unregister_shared_file(file_hash).await;
-    let peer_id = dht.get_peer_id().await.unwrap_or_default();
-    let key = format!("chiral_file_{file_hash}");
-    if let Ok(Some(existing)) = dht.get_dht_value(key.clone()).await {
-        if let Ok(mut metadata) = serde_json::from_str::<serde_json::Value>(&existing) {
-            if let Some(seeders) = metadata["seeders"].as_array_mut() {
-                seeders.retain(|seeder| seeder["peerId"].as_str() != Some(&peer_id));
-            }
-            if metadata["peerId"].as_str() == Some(&peer_id) {
-                metadata["peerId"] = json!("");
-            }
-            let _ = dht.put_dht_value(key, metadata.to_string()).await;
-        }
-    }
+    // Stop being a Kademlia provider; the immutable blob is left alone.
+    let _ = crate::remove_seeder_entry(dht, file_hash).await;
+
+    // Stage 2: stop being a Kademlia provider for this file.
+    let _ = crate::remove_seeder_entry(dht, file_hash).await;
 }
 
 // ============================================================================

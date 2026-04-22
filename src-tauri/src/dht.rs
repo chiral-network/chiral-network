@@ -365,6 +365,21 @@ enum SwarmCommand {
     GetListeningAddresses {
         response_tx: tokio::sync::oneshot::Sender<Vec<String>>,
     },
+    /// Register this node as a Kademlia provider for a file hash.
+    /// Kademlia handles republishing on the configured interval.
+    StartProviding {
+        file_hash: String,
+        response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    /// Stop advertising this node as a provider for a file hash.
+    StopProviding { file_hash: String },
+    /// Query the DHT for the current set of providers (live seeders) for a
+    /// file hash. Results accumulate across multiple FoundProviders events
+    /// and resolve when the query finishes.
+    GetProviders {
+        file_hash: String,
+        response_tx: tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
+    },
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -850,6 +865,53 @@ impl DhtService {
         }
     }
 
+    /// Register this node as a Kademlia provider for a file hash. After this
+    /// returns, Kademlia automatically republishes on the configured interval
+    /// until `stop_providing_file` is called or the node shuts down.
+    pub async fn start_providing_file(&self, file_hash: String) -> Result<(), String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            tx.send(SwarmCommand::StartProviding {
+                file_hash,
+                response_tx,
+            })
+            .map_err(|e| e.to_string())?;
+            response_rx.await.map_err(|e| e.to_string())?
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
+    /// Stop advertising this node as a provider for a file hash.
+    pub async fn stop_providing_file(&self, file_hash: String) -> Result<(), String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            tx.send(SwarmCommand::StopProviding { file_hash })
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
+    /// Look up the current provider peer IDs (live seeders) for a file hash.
+    /// Returns the union of provider sets found across the DHT query.
+    pub async fn get_file_providers(&self, file_hash: String) -> Result<Vec<String>, String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            tx.send(SwarmCommand::GetProviders {
+                file_hash,
+                response_tx,
+            })
+            .map_err(|e| e.to_string())?;
+            response_rx.await.map_err(|e| e.to_string())?
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
     /// Check if a specific peer is currently connected to the swarm
     pub async fn is_peer_connected(&self, peer_id: &str) -> Result<bool, String> {
         let sender = self.command_sender.lock().await;
@@ -936,17 +998,89 @@ impl DhtService {
 /// Checks that the transaction was sent to the expected recipient with at least the expected value.
 async fn verify_payment_on_chain(
     tx_hash: &str,
+    expected_sender: &str,
     expected_recipient: &str,
     expected_min_wei: u128,
 ) -> Result<bool, String> {
     // Use the wallet module's verify_payment which uses the shared RPC client
-    // and checks both the transaction details and the receipt status
+    // and checks both the transaction details and the receipt status. Stage 3:
+    // we now pass the sender through so a stranger can't claim someone else's
+    // payment tx to unlock a file.
     crate::wallet::verify_payment(
         tx_hash,
-        "", // we don't know the sender, skip from-check
+        expected_sender,
         expected_recipient,
         expected_min_wei,
     ).await
+}
+
+// ============================================================================
+// Spent-tx guard (Stage 3).
+//
+// Each successful payment tx is persisted so it can only unlock one download.
+// Without this, a downloader could send one tx and replay the PaymentProof to
+// request the same file over and over (or swap request_ids to pull multiple
+// copies, or forward the proof to bypass paying on a re-request). This is the
+// seeder's "one payment = one delivery" enforcement.
+//
+// Store: a set of lowercased tx hashes, JSON-serialised as `{"spent":[...]}`,
+// persisted at `<data_dir>/seeder_spent_tx.json`. Corruption on read is
+// treated as an empty store (the on-chain verification still prevents double
+// withdrawal of funds; worst case is one stale-replay delivery after a
+// corrupted restart, which we judge acceptable vs. crashing the seeder).
+// ============================================================================
+
+static SPENT_TX_STORE: tokio::sync::OnceCell<Mutex<HashSet<String>>> = tokio::sync::OnceCell::const_new();
+
+fn spent_tx_path() -> std::path::PathBuf {
+    crate::network::data_dir().join("seeder_spent_tx.json")
+}
+
+async fn load_spent_tx_set() -> HashSet<String> {
+    let path = spent_tx_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
+            .ok()
+            .and_then(|v| v.get("spent").cloned())
+            .and_then(|a| serde_json::from_value::<Vec<String>>(a).ok())
+            .map(|v| v.into_iter().map(|s| s.to_lowercase()).collect())
+            .unwrap_or_default(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+async fn spent_tx_store() -> &'static Mutex<HashSet<String>> {
+    SPENT_TX_STORE
+        .get_or_init(|| async { Mutex::new(load_spent_tx_set().await) })
+        .await
+}
+
+async fn persist_spent_tx_set(set: &HashSet<String>) {
+    let path = spent_tx_path();
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let list: Vec<&String> = set.iter().collect();
+    let json = serde_json::json!({ "spent": list }).to_string();
+    // Best-effort write. A crash mid-write could truncate the file, falling
+    // back to an empty set on next load — acceptable given the tradeoff above.
+    let _ = tokio::fs::write(&path, json).await;
+}
+
+/// Returns true if the tx was newly recorded, false if it had already been
+/// spent (duplicate / replay). The seeder must reject the second case.
+async fn claim_spent_tx(tx_hash: &str) -> bool {
+    let tx_lower = tx_hash.to_lowercase();
+    let store = spent_tx_store().await;
+    let mut guard = store.lock().await;
+    if guard.contains(&tx_lower) {
+        return false;
+    }
+    guard.insert(tx_lower);
+    let snapshot = guard.clone();
+    drop(guard);
+    persist_spent_tx_set(&snapshot).await;
+    true
 }
 
 // Legacy verify function kept for reference but replaced by wallet::verify_payment above
@@ -961,6 +1095,14 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     // Use custom Kademlia protocol name to match v1 bootstrap nodes
     let mut kad_config = kad::Config::default();
     kad_config.set_protocol_names(vec![StreamProtocol::new("/chiral/kad/1.0.0")]);
+    // Provider records carry the live seeder list for each file hash. TTL must
+    // be significantly larger than the republish interval so a brief network
+    // hiccup doesn't evict a healthy seeder, while short enough that offline
+    // seeders drop out of search results quickly. With a 10 min TTL and 3 min
+    // republish, a healthy peer refreshes ~3x before expiry, and an offline
+    // peer's stale entry clears within 10 minutes.
+    kad_config.set_provider_record_ttl(Some(Duration::from_secs(10 * 60)));
+    kad_config.set_provider_publication_interval(Some(Duration::from_secs(3 * 60)));
     let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
     kad.set_mode(Some(kad::Mode::Server));
 
@@ -1684,6 +1826,13 @@ async fn event_loop(
     // Without this, the first FoundRecord (often from local stale MemoryStore)
     // would resolve the query, ignoring more up-to-date remote records.
     let mut pending_get_results: HashMap<kad::QueryId, Vec<String>> = HashMap::new();
+    // Track pending GetProviders queries and accumulate the union of peer IDs
+    // found across all FoundProviders events for each query.
+    let mut pending_get_providers_queries: HashMap<
+        kad::QueryId,
+        tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
+    > = HashMap::new();
+    let mut pending_get_providers_results: HashMap<kad::QueryId, HashSet<PeerId>> = HashMap::new();
     // Periodic auto-discovery query IDs for host registry refresh.
     let mut pending_auto_host_registry_queries: HashSet<kad::QueryId> = HashSet::new();
     // Map libp2p OutboundRequestId -> our request_id for failure correlation
@@ -1859,6 +2008,8 @@ async fn event_loop(
                             &file_transfer_service,
                             &mut pending_get_queries,
                             &mut pending_get_results,
+                            &mut pending_get_providers_queries,
+                            &mut pending_get_providers_results,
                             &mut pending_auto_host_registry_queries,
                             &shared_files,
                             &download_directory,
@@ -2224,6 +2375,39 @@ async fn event_loop(
                         let query_id = swarm.behaviour_mut().kad.get_record(record_key);
                         pending_get_queries.insert(query_id, response_tx);
                     }
+                    SwarmCommand::StartProviding { file_hash, response_tx } => {
+                        let record_key = kad::RecordKey::new(&file_hash.as_bytes());
+                        match swarm.behaviour_mut().kad.start_providing(record_key) {
+                            Ok(_query_id) => {
+                                println!("DHT start_providing initiated for {}", file_hash);
+                                // Resolve synchronously once the local provider record
+                                // is stored. The async QueryResult::StartProviding event
+                                // confirms republish to remote peers but we don't gate
+                                // callers on that — they can publish seeder metadata
+                                // immediately and providers converge in the background.
+                                let _ = response_tx.send(Ok(()));
+                            }
+                            Err(e) => {
+                                println!("Failed to start providing {}: {:?}", file_hash, e);
+                                let _ = response_tx.send(Err(format!(
+                                    "Failed to start providing: {:?}",
+                                    e
+                                )));
+                            }
+                        }
+                    }
+                    SwarmCommand::StopProviding { file_hash } => {
+                        let record_key = kad::RecordKey::new(&file_hash.as_bytes());
+                        swarm.behaviour_mut().kad.stop_providing(&record_key);
+                        println!("DHT stop_providing for {}", file_hash);
+                    }
+                    SwarmCommand::GetProviders { file_hash, response_tx } => {
+                        println!("DHT get_providers for {}", file_hash);
+                        let record_key = kad::RecordKey::new(&file_hash.as_bytes());
+                        let query_id = swarm.behaviour_mut().kad.get_providers(record_key);
+                        pending_get_providers_queries.insert(query_id, response_tx);
+                        pending_get_providers_results.insert(query_id, HashSet::new());
+                    }
                     SwarmCommand::HealthCheck { response_tx } => {
                         let listeners: Vec<String> = swarm.listeners().map(|a| a.to_string()).collect();
                         let connected: Vec<PeerId> = swarm.connected_peers().cloned().collect();
@@ -2447,6 +2631,11 @@ async fn handle_behaviour_event(
         tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
     >,
     pending_get_results: &mut HashMap<kad::QueryId, Vec<String>>,
+    pending_get_providers_queries: &mut HashMap<
+        kad::QueryId,
+        tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
+    >,
+    pending_get_providers_results: &mut HashMap<kad::QueryId, HashSet<PeerId>>,
     pending_auto_host_registry_queries: &mut HashSet<kad::QueryId>,
     shared_files: &SharedFilesMap,
     download_directory: &DownloadDirectoryRef,
@@ -2895,6 +3084,61 @@ async fn handle_behaviour_event(
                     // was incomplete, which is expected in sparse networks.
                     println!("⚠️ DHT put replication incomplete for query {:?} (record stored locally): {:?}", id, err);
                 }
+                kad::QueryResult::GetProviders(Ok(
+                    kad::GetProvidersOk::FoundProviders { providers, .. },
+                )) => {
+                    // Accumulate — Kademlia may fire this multiple times per query
+                    // as it contacts more peers. We resolve on the Finished event
+                    // below so the caller sees the full union.
+                    if let Some(acc) = pending_get_providers_results.get_mut(&id) {
+                        acc.extend(providers);
+                    }
+                }
+                kad::QueryResult::GetProviders(Ok(
+                    kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. },
+                )) => {
+                    let providers = pending_get_providers_results
+                        .remove(&id)
+                        .unwrap_or_default();
+                    if let Some(tx) = pending_get_providers_queries.remove(&id) {
+                        let peer_ids: Vec<String> =
+                            providers.into_iter().map(|p| p.to_string()).collect();
+                        let _ = tx.send(Ok(peer_ids));
+                    }
+                }
+                kad::QueryResult::GetProviders(Err(err)) => {
+                    // Even on timeout we may have found providers before the error
+                    // fired — return whatever we have rather than failing the caller.
+                    let providers = pending_get_providers_results
+                        .remove(&id)
+                        .unwrap_or_default();
+                    if let Some(tx) = pending_get_providers_queries.remove(&id) {
+                        if providers.is_empty() {
+                            let _ = tx.send(Err(format!("GetProviders failed: {:?}", err)));
+                        } else {
+                            let peer_ids: Vec<String> =
+                                providers.into_iter().map(|p| p.to_string()).collect();
+                            let _ = tx.send(Ok(peer_ids));
+                        }
+                    }
+                }
+                kad::QueryResult::StartProviding(Ok(ok)) => {
+                    let key_bytes = ok.key.as_ref();
+                    let key_str = String::from_utf8_lossy(key_bytes);
+                    println!(
+                        "✅ DHT start_providing replicated for query {:?}, key: {}",
+                        id, key_str
+                    );
+                }
+                kad::QueryResult::StartProviding(Err(err)) => {
+                    // Replication timeout is logged but not surfaced — the local
+                    // provider record is stored regardless, and Kademlia retries
+                    // on its republish cadence.
+                    println!(
+                        "⚠️ DHT start_providing replication incomplete for query {:?}: {:?}",
+                        id, err
+                    );
+                }
                 kad::QueryResult::Bootstrap(Ok(result)) => {
                     println!(
                         "Kademlia bootstrap successful: {:?} peers remaining",
@@ -3298,14 +3542,58 @@ async fn handle_behaviour_event(
                                             let expected_price = file_info.price_wei;
                                             drop(shared);
 
+                                            // Stage 3: replay guard — reject up front if this
+                                            // tx was already redeemed. Peeking first (rather
+                                            // than claim-then-verify) avoids burning a slot on
+                                            // an invalid tx.
+                                            let already_spent = {
+                                                let store = spent_tx_store().await;
+                                                let guard = store.lock().await;
+                                                guard.contains(&payment_tx.to_lowercase())
+                                            };
+                                            if already_spent {
+                                                println!(
+                                                    "❌ Payment tx {} already redeemed for a previous download",
+                                                    payment_tx
+                                                );
+                                                ChunkResponse::PaymentAck {
+                                                    request_id,
+                                                    file_hash,
+                                                    accepted: false,
+                                                    error: Some(
+                                                        "Payment tx already redeemed — one payment serves one download"
+                                                            .to_string(),
+                                                    ),
+                                                }
+                                            } else {
                                             match verify_payment_on_chain(
                                                 &payment_tx,
+                                                &payer_address,
                                                 &expected_wallet,
                                                 expected_price,
                                             )
                                             .await
                                             {
                                                 Ok(true) => {
+                                                    // Atomically claim this tx so concurrent
+                                                    // replays can't slip through between the
+                                                    // peek above and the chain verify. If the
+                                                    // claim fails, another task beat us to it.
+                                                    if !claim_spent_tx(&payment_tx).await {
+                                                        println!(
+                                                            "❌ Race: tx {} redeemed by a concurrent request",
+                                                            payment_tx
+                                                        );
+                                                        ChunkResponse::PaymentAck {
+                                                            request_id,
+                                                            file_hash,
+                                                            accepted: false,
+                                                            error: Some(
+                                                                "Payment tx already redeemed by a concurrent request"
+                                                                    .to_string(),
+                                                            ),
+                                                        }
+                                                    } else {
                                                     println!(
                                                         "✅ Payment verified for {} from {}",
                                                         file_hash, payer_address
@@ -3326,6 +3614,7 @@ async fn handle_behaviour_event(
                                                         file_hash,
                                                         accepted: true,
                                                         error: None,
+                                                    }
                                                     }
                                                 }
                                                 Ok(false) => {
@@ -3356,6 +3645,7 @@ async fn handle_behaviour_event(
                                                     }
                                                 }
                                             }
+                                        }
                                         }
                                     } else {
                                         drop(shared);
