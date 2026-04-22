@@ -1098,9 +1098,11 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     // Provider records carry the live seeder list for each file hash. TTL must
     // be significantly larger than the republish interval so a brief network
     // hiccup doesn't evict a healthy seeder, while short enough that offline
-    // seeders drop out of search results in a reasonable window.
-    kad_config.set_provider_record_ttl(Some(Duration::from_secs(30 * 60)));
-    kad_config.set_provider_publication_interval(Some(Duration::from_secs(10 * 60)));
+    // seeders drop out of search results quickly. With a 10 min TTL and 3 min
+    // republish, a healthy peer refreshes ~3x before expiry, and an offline
+    // peer's stale entry clears within 10 minutes.
+    kad_config.set_provider_record_ttl(Some(Duration::from_secs(10 * 60)));
+    kad_config.set_provider_publication_interval(Some(Duration::from_secs(3 * 60)));
     let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
     kad.set_mode(Some(kad::Mode::Server));
 
