@@ -1103,6 +1103,14 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     // peer's stale entry clears within 10 minutes.
     kad_config.set_provider_record_ttl(Some(Duration::from_secs(10 * 60)));
     kad_config.set_provider_publication_interval(Some(Duration::from_secs(3 * 60)));
+    // Regular KV records (chiral_seeder_* per-seeder metadata, chiral_file_*
+    // immutable headers) default to a 22-hour republish cycle, which means
+    // puts that QuorumFail on startup (routing table too sparse to reach K
+    // remotes) stay stuck locally for a day. Tighten to 3 min republish /
+    // 22 min TTL so the retry path is tight and records converge quickly.
+    // TTL must be larger than publication interval.
+    kad_config.set_publication_interval(Some(Duration::from_secs(3 * 60)));
+    kad_config.set_record_ttl(Some(Duration::from_secs(22 * 60)));
     let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
     kad.set_mode(Some(kad::Mode::Server));
 

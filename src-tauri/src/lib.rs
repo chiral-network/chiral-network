@@ -1252,30 +1252,43 @@ async fn fetch_seeders(
     let fetches = providers.into_iter().map(|peer_id| {
         let key = seeder_entry_key(file_hash, &peer_id);
         async move {
-            match dht.get_dht_value(key).await {
+            let fetched = match dht.get_dht_value(key).await {
                 Ok(Some(json)) => serde_json::from_str::<SeederInfo>(&json).ok(),
                 _ => None,
-            }
+            };
+            (peer_id, fetched)
         }
     });
     let results = futures::future::join_all(fetches).await;
     let mut seeders = Vec::new();
-    for entry in results.into_iter().flatten() {
-        if entry.signature.is_empty() {
-            // Unsigned entries are currently produced by most seed paths
-            // (CDN, auto-reseed, publish_file/_data, etc.) because the
-            // signing-plumb work hasn't landed. Accept them for now so
-            // search works; re-tighten to signature-required once every
-            // write site threads the wallet private key through
-            // publish_seeder_entry.
-            seeders.push(entry);
-        } else if entry.verify(file_hash) {
-            seeders.push(entry);
-        } else {
-            println!(
-                "  ⚠️ Seeder entry for {} has INVALID signature — dropping",
-                &entry.peer_id[..20.min(entry.peer_id.len())]
-            );
+    for (peer_id, entry) in results {
+        match entry {
+            Some(entry) if !entry.signature.is_empty() && !entry.verify(file_hash) => {
+                // Present-but-invalid signature is still a red flag — drop.
+                println!(
+                    "  ⚠️ Seeder entry for {} has INVALID signature — dropping",
+                    &peer_id[..20.min(peer_id.len())]
+                );
+            }
+            Some(entry) => {
+                // Unsigned entries are accepted (see signing-plumb TODO on
+                // the write sites). Signed + valid also accepted.
+                seeders.push(entry);
+            }
+            None => {
+                // Provider advertises the hash but their per-seeder record
+                // isn't retrievable yet (put replication lagging, or peer
+                // never got a chance to persist it). Emit a stub so the UI
+                // still surfaces the seeder; the real price/wallet come
+                // from the FileInfo response when the download starts.
+                seeders.push(SeederInfo {
+                    peer_id,
+                    price_wei: String::new(),
+                    wallet_address: String::new(),
+                    multiaddrs: Vec::new(),
+                    signature: String::new(),
+                });
+            }
         }
     }
     Ok(seeders)
