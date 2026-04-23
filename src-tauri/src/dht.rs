@@ -1122,11 +1122,15 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     kad_config.set_provider_record_ttl(Some(Duration::from_secs(10 * 60)));
     kad_config.set_provider_publication_interval(Some(Duration::from_secs(3 * 60)));
     // Regular KV records (chiral_seeder_* per-seeder metadata, chiral_file_*
-    // immutable headers) default to a 22-hour republish cycle, which means
-    // puts that QuorumFail on startup (routing table too sparse to reach K
-    // remotes) stay stuck locally for a day. Tighten to 3 min republish /
-    // 22 min TTL so the retry path is tight and records converge quickly.
-    // TTL must be larger than publication interval.
+    // immutable headers) default to a 22-hour publish cycle AND a 1-hour
+    // replication job cadence. Both gates matter: the PutRecordJob only
+    // runs at `record_replication_interval`, and within a run only
+    // publishes when `record_publication_interval` has elapsed. Default
+    // setup means a failed initial put only retries once per hour.
+    //
+    // Tighten all three so a QuorumFailed put on startup retries within
+    // minutes. TTL must stay larger than the publication interval.
+    kad_config.set_replication_interval(Some(Duration::from_secs(3 * 60)));
     kad_config.set_publication_interval(Some(Duration::from_secs(3 * 60)));
     kad_config.set_record_ttl(Some(Duration::from_secs(22 * 60)));
     let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
@@ -2378,10 +2382,14 @@ async fn event_loop(
                     SwarmCommand::PutDhtValue { key, value, response_tx } => {
                         println!("Storing DHT value for key: {}", key);
                         let record_key = kad::RecordKey::new(&key);
+                        // Mark ourselves as publisher so the PutRecordJob
+                        // treats this record as owned — otherwise it's
+                        // filtered as "cached from a remote" and the
+                        // republish semantics get confused.
                         let record = kad::Record {
                             key: record_key,
                             value: value.into_bytes(),
-                            publisher: None,
+                            publisher: Some(*swarm.local_peer_id()),
                             expires: None,
                         };
                         match swarm.behaviour_mut().kad.put_record(record, kad::Quorum::One) {

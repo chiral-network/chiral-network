@@ -333,15 +333,36 @@ A bootstrap node runs at `130.245.173.73` and serves as the initial peer for new
 
 ## Reputation System
 
-The Elo-based reputation system provides a trust score for each wallet address based on file transfer outcomes.
+The Elo-based reputation system provides a trust score for each wallet address based on file transfer outcomes. It replaces an earlier 1-to-5-star user-rating model; historical rating data was reset to start the new system fresh.
 
-### Score Calculation
+### Scale
 
-- Base Elo: 50
-- Range: 0 to 100 (clamped)
-- Input: transfer outcome (completed = 1.0, failed = 0.0)
-- Time weight: events within the last 180 days are weighted more heavily using exponential decay
-- Amount weight: logarithmic scaling based on the CHI value transferred
+- Range: `0` to `100` (clamped)
+- Base score for new wallets: `50`
+
+### Inputs
+
+Only events within the last **180 days** (the lookback window) are considered. Within the window, older events are weighted less than recent events.
+
+1. File transfer outcomes — completed or failed.
+2. Amount of CHI transferred on completed payments (logarithmic weighting).
+
+### Event Effects
+
+- Successful transfer: positive Elo adjustment.
+- Failed transfer: negative Elo adjustment.
+- Higher CHI amount (recent): larger positive contribution via the amount weight.
+
+### Elo Formula
+
+For each event in the lookback window:
+
+1. **Time weight** (`w_time`): linear decay from `1.0` (today) to `0.0` (180 days ago).
+2. **Amount weight** (`w_amount`): `1.0 + clamp(ln(1 + chi) / ln(51), 0, 1)` — ranges from `1.0` (free transfer) to `2.0` (50+ CHI).
+3. **Outcome**: `1.0` for completed, `0.0` for failed.
+4. **Expected score**: `1 / (1 + 10^((50 - elo) / 12))`.
+5. **K factor**: `4 * w_time * w_amount`.
+6. **Update**: `elo = clamp(elo + K * (outcome - expected), 0, 100)`.
 
 ### API Endpoints (Relay Server)
 
@@ -351,11 +372,13 @@ The Elo-based reputation system provides a trust score for each wallet address b
 | `/api/ratings/batch` | POST | Batch lookup of Elo scores for multiple wallets |
 | `/api/ratings/transfer` | POST | Record a transfer outcome (completed/failed) |
 
+Wallet addresses are normalized to lowercase for consistent lookup.
+
 ### Integration
 
 - The Download page displays seeder Elo scores next to each search result.
 - After a file transfer completes or fails, the outcome is automatically reported to the relay.
-- Wallet addresses are normalized to lowercase for consistent lookup.
+- Paid-transfer events are verified against the on-chain tx (sender, recipient, amount) before being recorded — the backend does not trust frontend-submitted event data. Future hardening can add per-event cryptographic attestations.
 
 ---
 
