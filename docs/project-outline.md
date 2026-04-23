@@ -6,7 +6,7 @@ It is **not** the authoritative description of current behavior.
 
 For up-to-date implementation details, use:
 
-- `docs/architecture.md`
+- `docs/chiral-book.md`
 - `docs/pages.md`
 - `docs/networking.md`
 - `docs/backend-api.md`
