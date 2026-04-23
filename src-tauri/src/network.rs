@@ -101,8 +101,19 @@ pub const FRESHNET: NetworkConfig = NetworkConfig {
     genesis_coinbase: "0x0000000000000000000000000000000000000000",
     rpc_fallback: "http://130.245.173.73:8545",
     geth_bootstrap_enode: "enode://2fa9c8979d1b780ca3a3a366fd1bf132259ecb82caaf6bfb6bc8d4d50dc5e2ac5abcffb901d7bdb3983c4060e2fe39a8ccc2fc8ffaa7a87dc5e45f7c6aaa232e@130.245.173.73:30303",
-    libp2p_bootstrap_addrs: &[],
-    libp2p_relay_addrs: &[],
+    // libp2p bootstrap + relay: .73 runs relay-server.service on :4001
+    // with a stable peer identity. Empty lists here meant clients had no
+    // entry point to the DHT and their routing tables stayed empty —
+    // get_providers returned nothing for every hash and search never
+    // surfaced any seeders.
+    libp2p_bootstrap_addrs: &[
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
+    ],
+    libp2p_relay_addrs: &[
+        "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
+        "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
+    ],
     data_subdir: Some("freshnet"),
 };
 
