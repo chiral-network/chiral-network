@@ -999,14 +999,40 @@ async fn file_search(
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
     };
     let dht_key = format!("chiral_file_{}", file_hash);
-    match dht.get_dht_value(dht_key).await {
-        Ok(Some(json_str)) => {
-            match serde_json::from_str::<serde_json::Value>(&json_str) {
-                Ok(metadata) => Json(json!({"found": true, "metadata": metadata})).into_response(),
-                Err(_) => Json(json!({"found": true, "raw": json_str})).into_response(),
+    let blob = dht.get_dht_value(dht_key).await;
+    // Provider + per-seeder lookup so headless search mirrors the Tauri
+    // search_file command — a hash with no blob but live providers still
+    // surfaces a result.
+    let providers = dht.get_file_providers(file_hash.clone()).await.unwrap_or_default();
+    let mut seeders: Vec<serde_json::Value> = Vec::new();
+    for peer_id in &providers {
+        let key = format!("chiral_seeder_{}_{}", file_hash, peer_id);
+        if let Ok(Some(json_str)) = dht.get_dht_value(key).await {
+            if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                seeders.push(entry);
             }
         }
-        Ok(None) => Json(json!({"found": false})).into_response(),
+    }
+    match blob {
+        Ok(Some(json_str)) => {
+            let metadata = serde_json::from_str::<serde_json::Value>(&json_str)
+                .unwrap_or_else(|_| json!({"raw": json_str}));
+            Json(json!({
+                "found": true,
+                "metadata": metadata,
+                "providers": providers,
+                "seeders": seeders,
+            }))
+            .into_response()
+        }
+        Ok(None) if !seeders.is_empty() => Json(json!({
+            "found": true,
+            "metadata": null,
+            "providers": providers,
+            "seeders": seeders,
+        }))
+        .into_response(),
+        Ok(None) => Json(json!({"found": false, "providers": providers})).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
