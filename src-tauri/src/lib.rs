@@ -1224,15 +1224,21 @@ pub(crate) async fn publish_seeder_entry(
     Ok(())
 }
 
-/// Remove this node from a file's provider set. The per-seeder metadata
-/// record cannot be deleted from Kademlia (no delete primitive) but will
-/// age out on its record TTL — and since `fetch_seeders` treats providers
-/// as the source of truth, an entry without a matching live provider is
-/// ignored in search.
+/// Remove this node from a file's provider set AND purge its per-seeder
+/// record from the local Kademlia store. Stopping providing alone isn't
+/// enough — libp2p-kad auto-republishes locally-stored records every
+/// ~3 min, which would keep a stale per-seeder entry alive on the network
+/// long after we've deleted the file. Removing the local record kills the
+/// republish cycle; remote replicas age out naturally over the record TTL.
 pub(crate) async fn remove_seeder_entry(
     dht: &dht::DhtService,
     file_hash: &str,
 ) -> Result<(), String> {
+    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    if !peer_id.is_empty() {
+        let key = seeder_entry_key(file_hash, &peer_id);
+        let _ = dht.remove_dht_record(key).await;
+    }
     dht.stop_providing_file(file_hash.to_string()).await
 }
 

@@ -350,6 +350,10 @@ enum SwarmCommand {
         key: String,
         response_tx: tokio::sync::oneshot::Sender<Result<Option<String>, String>>,
     },
+    /// Remove a record from the local Kademlia store. Stops the automatic
+    /// republish cycle for that key so stale records (e.g. per-seeder
+    /// entries for files we no longer host) stop propagating.
+    RemoveDhtRecord { key: String },
     HealthCheck {
         response_tx: tokio::sync::oneshot::Sender<DhtHealthInfo>,
     },
@@ -860,6 +864,20 @@ impl DhtService {
             tx.send(SwarmCommand::GetDhtValue { key, response_tx })
                 .map_err(|e| e.to_string())?;
             response_rx.await.map_err(|e| e.to_string())?
+        } else {
+            Err("DHT not running".to_string())
+        }
+    }
+
+    /// Remove a record from the local Kademlia store. Prevents the auto-
+    /// republish cycle from continuing to push stale records to the network.
+    /// Fire-and-forget — the remote TTL still applies to any replicas.
+    pub async fn remove_dht_record(&self, key: String) -> Result<(), String> {
+        let sender = self.command_sender.lock().await;
+        if let Some(tx) = sender.as_ref() {
+            tx.send(SwarmCommand::RemoveDhtRecord { key })
+                .map_err(|e| e.to_string())?;
+            Ok(())
         } else {
             Err("DHT not running".to_string())
         }
@@ -2382,6 +2400,11 @@ async fn event_loop(
                         let record_key = kad::RecordKey::new(&key);
                         let query_id = swarm.behaviour_mut().kad.get_record(record_key);
                         pending_get_queries.insert(query_id, response_tx);
+                    }
+                    SwarmCommand::RemoveDhtRecord { key } => {
+                        let record_key = kad::RecordKey::new(&key);
+                        swarm.behaviour_mut().kad.remove_record(&record_key);
+                        println!("Removed DHT record from local store: {}", key);
                     }
                     SwarmCommand::StartProviding { file_hash, response_tx } => {
                         let record_key = kad::RecordKey::new(&file_hash.as_bytes());
