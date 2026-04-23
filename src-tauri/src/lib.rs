@@ -1261,12 +1261,17 @@ async fn fetch_seeders(
     let results = futures::future::join_all(fetches).await;
     let mut seeders = Vec::new();
     for entry in results.into_iter().flatten() {
-        // Drop unsigned / invalid-signature entries — in the new schema every
-        // seeder signs their own key so there's no legacy-compat reason to
-        // accept unsigned records here.
-        if entry.verify(file_hash) {
+        if entry.signature.is_empty() {
+            // Unsigned entries are currently produced by most seed paths
+            // (CDN, auto-reseed, publish_file/_data, etc.) because the
+            // signing-plumb work hasn't landed. Accept them for now so
+            // search works; re-tighten to signature-required once every
+            // write site threads the wallet private key through
+            // publish_seeder_entry.
             seeders.push(entry);
-        } else if !entry.signature.is_empty() {
+        } else if entry.verify(file_hash) {
+            seeders.push(entry);
+        } else {
             println!(
                 "  ⚠️ Seeder entry for {} has INVALID signature — dropping",
                 &entry.peer_id[..20.min(entry.peer_id.len())]
