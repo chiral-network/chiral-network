@@ -3689,6 +3689,7 @@ async fn create_hosted_site(
         created_at: now,
         files: site_files,
         relay_url: None,
+        directory_name: None,
     };
 
     // Persist to disk
@@ -4041,6 +4042,264 @@ async fn unpublish_site_from_relay(
 
     println!("[HOSTING] Unpublished site {} from relay", site_id);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Site directory ("DNS-like" name resolution for hosted sites).
+//
+// Each user can claim a human-readable name for their relay-published site
+// and have it appear in a network-wide directory other peers can browse.
+//
+// Storage:
+//   chiral_sitename_{name}  → SiteDirectoryEntry JSON (publisher-owned)
+//   chiral_site_directory   → JSON array of registered names
+//
+// First claim wins for a given name — on conflict the publish command
+// returns an error rather than overwriting.
+// ---------------------------------------------------------------------------
+
+const SITE_DIRECTORY_REGISTRY_KEY: &str = "chiral_site_directory";
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SiteDirectoryEntry {
+    /// The claimed name (lowercased, [a-z0-9-], 1..=63 chars).
+    name: String,
+    /// Optional human-readable summary shown in the directory listing.
+    #[serde(default)]
+    description: String,
+    /// Wallet that registered the name (informational, not authoritative).
+    #[serde(default)]
+    owner_wallet: String,
+    /// Site ID on the publisher's local Drive — used to remove the
+    /// directory entry without prompting on which name was claimed.
+    site_id: String,
+    /// Public URL pointing at the relay-mounted site.
+    public_url: String,
+    /// Unix timestamp (seconds).
+    created_at: u64,
+}
+
+fn validate_site_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim().to_lowercase();
+    if trimmed.is_empty() {
+        return Err("Site name is required".to_string());
+    }
+    if trimmed.len() > 63 {
+        return Err("Site name must be 63 characters or fewer".to_string());
+    }
+    let bad = trimmed
+        .chars()
+        .find(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '-'));
+    if bad.is_some() {
+        return Err("Site name may only contain a-z, 0-9, and '-'".to_string());
+    }
+    if trimmed.starts_with('-') || trimmed.ends_with('-') {
+        return Err("Site name may not start or end with '-'".to_string());
+    }
+    Ok(trimmed)
+}
+
+fn site_name_key(name: &str) -> String {
+    format!("chiral_sitename_{}", name)
+}
+
+#[tauri::command]
+async fn publish_site_to_directory(
+    state: tauri::State<'_, AppState>,
+    site_id: String,
+    name: String,
+    description: Option<String>,
+    owner_wallet: Option<String>,
+) -> Result<SiteDirectoryEntry, String> {
+    let name = validate_site_name(&name)?;
+    let description = description.unwrap_or_default();
+
+    // Site must exist locally and must already have a public relay URL —
+    // visitors need somewhere to be sent when they pick the name.
+    let mut all_sites = hosting::load_sites();
+    let site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+    let public_url = site
+        .relay_url
+        .clone()
+        .ok_or_else(|| "Publish site to a relay first — visitors need a public URL".to_string())?;
+
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT is not running. Connect to the network first.".to_string())?
+    };
+
+    // First-claim wins: if the name already resolves to someone else's
+    // site, refuse. If it resolves to OUR own site_id, we treat it as an
+    // update.
+    let key = site_name_key(&name);
+    if let Ok(Some(existing_json)) = dht.get_dht_value(key.clone()).await {
+        if let Ok(existing) = serde_json::from_str::<SiteDirectoryEntry>(&existing_json) {
+            if existing.site_id != site_id {
+                return Err(format!(
+                    "Name '{}' is already taken by another site",
+                    name
+                ));
+            }
+        }
+    }
+
+    let entry = SiteDirectoryEntry {
+        name: name.clone(),
+        description,
+        owner_wallet: owner_wallet.unwrap_or_default(),
+        site_id: site_id.clone(),
+        public_url,
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    let entry_json = serde_json::to_string(&entry)
+        .map_err(|e| format!("Serialise directory entry: {}", e))?;
+    dht.put_dht_value(key, entry_json).await?;
+
+    // Add the name to the global registry — read-modify-write since
+    // multiple peers append concurrently. Lost-update is acceptable: the
+    // per-name record is the source of truth, the registry is just an
+    // index of "names you may want to look up".
+    let mut registry: Vec<String> = match dht
+        .get_dht_value(SITE_DIRECTORY_REGISTRY_KEY.to_string())
+        .await
+    {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    if !registry.iter().any(|n| n == &name) {
+        registry.push(name.clone());
+        if let Ok(json) = serde_json::to_string(&registry) {
+            let _ = dht
+                .put_dht_value(SITE_DIRECTORY_REGISTRY_KEY.to_string(), json)
+                .await;
+        }
+    }
+
+    // Record the claimed name on the local site so the UI can show
+    // "Listed as: <name>" without re-querying the DHT.
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.directory_name = Some(name.clone());
+    }
+    hosting::save_sites(&all_sites);
+
+    println!("[HOSTING] Site {} listed in directory as '{}'", site_id, name);
+    Ok(entry)
+}
+
+#[tauri::command]
+async fn unpublish_site_from_directory(
+    state: tauri::State<'_, AppState>,
+    site_id: String,
+) -> Result<(), String> {
+    let mut all_sites = hosting::load_sites();
+    let site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+    let Some(name) = site.directory_name.clone() else {
+        return Ok(());
+    };
+
+    if let Some(dht) = state.dht.lock().await.as_ref().cloned() {
+        // Remove from registry first.
+        let mut registry: Vec<String> = match dht
+            .get_dht_value(SITE_DIRECTORY_REGISTRY_KEY.to_string())
+            .await
+        {
+            Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let before = registry.len();
+        registry.retain(|n| n != &name);
+        if registry.len() != before {
+            if let Ok(json) = serde_json::to_string(&registry) {
+                let _ = dht
+                    .put_dht_value(SITE_DIRECTORY_REGISTRY_KEY.to_string(), json)
+                    .await;
+            }
+        }
+        // Purge the per-name record from the local store so we stop
+        // republishing it. Remote replicas age out on the record TTL.
+        let _ = dht.remove_dht_record(site_name_key(&name)).await;
+    }
+
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.directory_name = None;
+    }
+    hosting::save_sites(&all_sites);
+
+    println!("[HOSTING] Site {} removed from directory ('{}')", site_id, name);
+    Ok(())
+}
+
+#[tauri::command]
+async fn resolve_site_name(
+    state: tauri::State<'_, AppState>,
+    name: String,
+) -> Result<Option<SiteDirectoryEntry>, String> {
+    let name = validate_site_name(&name)?;
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT is not running.".to_string())?
+    };
+    match dht.get_dht_value(site_name_key(&name)).await {
+        Ok(Some(json)) => match serde_json::from_str::<SiteDirectoryEntry>(&json) {
+            Ok(entry) => Ok(Some(entry)),
+            Err(e) => Err(format!("Invalid directory entry for '{}': {}", name, e)),
+        },
+        Ok(None) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+async fn list_directory_sites(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<SiteDirectoryEntry>, String> {
+    let dht = {
+        let dht_guard = state.dht.lock().await;
+        dht_guard
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT is not running.".to_string())?
+    };
+    let registry: Vec<String> = match dht
+        .get_dht_value(SITE_DIRECTORY_REGISTRY_KEY.to_string())
+        .await
+    {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    if registry.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fetches = registry.into_iter().map(|name| {
+        let dht = dht.clone();
+        async move {
+            let key = site_name_key(&name);
+            match dht.get_dht_value(key).await {
+                Ok(Some(json)) => serde_json::from_str::<SiteDirectoryEntry>(&json).ok(),
+                _ => None,
+            }
+        }
+    });
+    let results = futures::future::join_all(fetches).await;
+    Ok(results.into_iter().flatten().collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -5478,6 +5737,10 @@ pub fn run() {
             get_hosting_server_status,
             publish_site_to_relay,
             unpublish_site_from_relay,
+            publish_site_to_directory,
+            unpublish_site_from_directory,
+            resolve_site_name,
+            list_directory_sites,
             // Drive commands
             get_drive_server_url,
             publish_drive_share,

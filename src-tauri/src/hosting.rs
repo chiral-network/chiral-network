@@ -27,6 +27,10 @@ pub struct HostedSite {
     /// URL on a relay gateway, if published (e.g. "http://130.245.173.73:8080/sites/a1b2c3d4/")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_url: Option<String>,
+    /// Human-readable name registered in the network site directory, if any
+    /// (e.g. "alice"). Shows up in the Browse Sites listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
