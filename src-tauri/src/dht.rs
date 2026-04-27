@@ -4755,12 +4755,15 @@ mod tests {
     }
 
     #[test]
-    fn test_freshnet_has_shared_geth_bootstrap_but_no_libp2p_bootstrap() {
-        // freshnet clients sync to a single shared geth at the configured
-        // enode so CDN payment verification works. libp2p bootstrap is still
-        // empty — DHT discovery is mDNS/Kademlia-organic on this chain.
+    fn test_freshnet_has_shared_geth_and_libp2p_bootstrap() {
+        // freshnet clients sync to a single shared geth (so CDN payment
+        // verification works) and bootstrap libp2p against the same .73
+        // relay used by testnet. Empty libp2p bootstrap meant new clients
+        // couldn't enter the DHT — the assertion below pins that we keep
+        // populated entry points on this chain.
         assert!(!crate::network::FRESHNET.geth_bootstrap_enode.is_empty());
-        assert!(crate::network::FRESHNET.libp2p_bootstrap_addrs.is_empty());
+        assert!(!crate::network::FRESHNET.libp2p_bootstrap_addrs.is_empty());
+        assert!(!crate::network::FRESHNET.libp2p_relay_addrs.is_empty());
     }
 
     #[test]
