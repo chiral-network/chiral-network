@@ -96,12 +96,23 @@
     ...(onShowInExplorer
       ? [{ label: 'Show in Explorer', icon: FolderOpen, action: action(onShowInExplorer) }]
       : []),
-    // Seeding actions
-    ...(item.type === 'file' && !item.seeding && onSeed
-      ? [{ label: 'Seed to Network', icon: Globe, action: action(onSeed) }]
+    // Seeding actions — supported for both files and folders. For a folder,
+    // "Sell Folder" propagates the chosen price down to every file inside
+    // (recursively) and seeds each one. The folder card then shows the sale
+    // state in the UI.
+    ...(!item.seeding && onSeed
+      ? [{
+          label: item.type === 'folder' ? 'Sell Folder' : 'Seed to Network',
+          icon: Globe,
+          action: action(onSeed),
+        }]
       : []),
     ...(item.seeding && onStopSeed
-      ? [{ label: 'Stop Seeding', icon: StopCircle, action: action(onStopSeed) }]
+      ? [{
+          label: item.type === 'folder' ? 'Stop Selling Folder' : 'Stop Seeding',
+          icon: StopCircle,
+          action: action(onStopSeed),
+        }]
       : []),
     ...(item.merkleRoot && onCopyHash
       ? [{ label: 'Copy Merkle Hash', icon: Copy, action: action(onCopyHash) }]
@@ -109,7 +120,7 @@
     ...(item.merkleRoot && onCopyMagnet
       ? [{ label: 'Copy Magnet Link', icon: Link2, action: action(onCopyMagnet) }]
       : []),
-    ...(item.type === 'file' && onEditPrice
+    ...(onEditPrice
       ? [{ label: 'Edit Price', icon: Coins, action: action(onEditPrice) }]
       : []),
     ...(item.shared

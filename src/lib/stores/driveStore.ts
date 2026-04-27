@@ -499,6 +499,82 @@ function createDriveStore() {
       }
     },
 
+    /**
+     * Sell a folder by recursing into its descendants and seeding every
+     * file at the same `priceChi`. Returns `{ filesTotal, filesSucceeded,
+     * filesFailed, failures }` so the caller can surface partial-success
+     * counts. After the call, the manifest is reloaded from the backend
+     * so per-file seeding state is reflected.
+     */
+    async seedFolder(
+      folderId: string,
+      protocol: 'WebRTC' | 'BitTorrent',
+      priceChi?: string | number | null,
+    ): Promise<{
+      filesTotal: number;
+      filesSucceeded: number;
+      filesFailed: number;
+      failures: { itemId: string; name: string; error: string }[];
+    } | null> {
+      const owner = syncOwner();
+      if (!owner) return null;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const normalizedPrice = normalizePriceChi(priceChi);
+        const walletAddr = normalizedPrice ? owner : undefined;
+        const raw = await invoke<{
+          folder: any;
+          filesTotal: number;
+          filesSucceeded: number;
+          filesFailed: number;
+          failures: { itemId: string; name: string; error: string }[];
+        }>('publish_drive_folder', {
+          owner,
+          folderId,
+          protocol,
+          priceChi: normalizedPrice,
+          walletAddress: walletAddr ?? null,
+        });
+        await this.load();
+        return {
+          filesTotal: raw.filesTotal,
+          filesSucceeded: raw.filesSucceeded,
+          filesFailed: raw.filesFailed,
+          failures: raw.failures,
+        };
+      } catch (e) {
+        console.error('Failed to seed folder:', e);
+        return null;
+      }
+    },
+
+    /** Stop selling every file inside a folder. Mirror of seedFolder. */
+    async stopSeedingFolder(folderId: string): Promise<{
+      filesTotal: number;
+      filesSucceeded: number;
+      filesFailed: number;
+    } | null> {
+      const owner = syncOwner();
+      if (!owner) return null;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const raw = await invoke<{
+          filesTotal: number;
+          filesSucceeded: number;
+          filesFailed: number;
+        }>('unpublish_drive_folder', { owner, folderId });
+        await this.load();
+        return {
+          filesTotal: raw.filesTotal,
+          filesSucceeded: raw.filesSucceeded,
+          filesFailed: raw.filesFailed,
+        };
+      } catch (e) {
+        console.error('Failed to stop seeding folder:', e);
+        return null;
+      }
+    },
+
     /** Stop seeding a file on the P2P network */
     async stopSeeding(itemId: string): Promise<void> {
       const owner = syncOwner();
