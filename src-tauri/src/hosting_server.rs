@@ -309,6 +309,7 @@ async fn upload_site(
         created_at: now,
         files: site_files,
         relay_url: None,
+        directory_name: None,
     };
 
     // Register in server state

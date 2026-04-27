@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Server, Users, Shield, AlertCircle, FileText, Cloud, Globe, Loader2, RefreshCw, Upload, Trash2, Copy, Check } from 'lucide-svelte';
+  import { Server, Users, Shield, AlertCircle, FileText, Cloud, Globe, Loader2, RefreshCw, Upload, Trash2, Copy, Check, ExternalLink, Search, Tag } from 'lucide-svelte';
   import { settings, walletAccount, networkConnected } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
@@ -39,13 +39,23 @@
   interface HostedSite {
     id: string; name: string; directory: string; createdAt: number;
     files: SiteFile[]; relayUrl?: string | null;
+    /** Human-readable name registered in the network site directory, if any. */
+    directoryName?: string | null;
   }
   interface ServerStatus { running: boolean; address: string | null; }
+  interface SiteDirectoryEntry {
+    name: string;
+    description: string;
+    ownerWallet: string;
+    siteId: string;
+    publicUrl: string;
+    createdAt: number;
+  }
 
   // ---------------------------------------------------------------------------
   // Tab state
   // ---------------------------------------------------------------------------
-  type Tab = 'sites' | 'cdn' | 'marketplace' | 'agreements';
+  type Tab = 'sites' | 'cdn' | 'marketplace' | 'agreements' | 'browse';
   let activeTab = $state<Tab>('sites');
 
   // ---------------------------------------------------------------------------
@@ -68,6 +78,19 @@
   let showDrivePickerForSite = $state(false);
   let drivePickerFiles = $state<{ id: string; name: string; size: number }[]>([]);
   let drivePickerLoading = $state(false);
+
+  // Site directory ("DNS-like") state
+  // ─ Per-site claim form (which site is currently being named, plus the
+  //   inputs the user is filling in).
+  let directoryClaimSiteId = $state<string | null>(null);
+  let directoryClaimName = $state('');
+  let directoryClaimDescription = $state('');
+  let directoryClaimSubmitting = $state(false);
+  // ─ Browse tab state.
+  let directoryEntries = $state<SiteDirectoryEntry[]>([]);
+  let directoryLoading = $state(false);
+  let directoryError = $state<string | null>(null);
+  let directorySearch = $state('');
 
   // ---------------------------------------------------------------------------
   // Marketplace / agreements state
@@ -631,6 +654,99 @@
       publishingStates = { ...publishingStates, [siteId]: false };
     }
   }
+
+  // ──── Site directory ("DNS-like") ─────────────────────────────────────
+
+  function openDirectoryClaim(site: HostedSite) {
+    directoryClaimSiteId = site.id;
+    directoryClaimName = site.directoryName ?? '';
+    directoryClaimDescription = '';
+  }
+
+  function cancelDirectoryClaim() {
+    directoryClaimSiteId = null;
+    directoryClaimName = '';
+    directoryClaimDescription = '';
+  }
+
+  async function submitDirectoryClaim() {
+    if (!isTauri || !directoryClaimSiteId) return;
+    const siteId = directoryClaimSiteId;
+    const name = directoryClaimName.trim().toLowerCase();
+    if (!name) {
+      toasts.show('Pick a name to list this site', 'warning');
+      return;
+    }
+    if (!/^[a-z0-9-]{1,63}$/.test(name) || name.startsWith('-') || name.endsWith('-')) {
+      toasts.show("Names use a-z, 0-9, and '-' (1–63 chars, no leading/trailing dash)", 'warning');
+      return;
+    }
+    directoryClaimSubmitting = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('publish_site_to_directory', {
+        siteId,
+        name,
+        description: directoryClaimDescription.trim() || null,
+        ownerWallet: $walletAccount?.address ?? null,
+      });
+      toasts.show(`Listed as "${name}" in the network directory`, 'success');
+      cancelDirectoryClaim();
+      await loadSites();
+    } catch (err: any) {
+      toasts.detail('Failed to list site', String(err), 'error');
+    } finally {
+      directoryClaimSubmitting = false;
+    }
+  }
+
+  async function removeFromDirectory(siteId: string) {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('unpublish_site_from_directory', { siteId });
+      toasts.show('Removed from network directory', 'info');
+      await loadSites();
+    } catch (err: any) {
+      toasts.detail('Failed to remove from directory', String(err), 'error');
+    }
+  }
+
+  async function loadDirectory() {
+    if (!isTauri) return;
+    directoryLoading = true;
+    directoryError = null;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      directoryEntries = await invoke<SiteDirectoryEntry[]>('list_directory_sites');
+    } catch (err: any) {
+      directoryError = String(err);
+      directoryEntries = [];
+    } finally {
+      directoryLoading = false;
+    }
+  }
+
+  async function openDirectoryEntry(entry: SiteDirectoryEntry) {
+    try {
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(entry.publicUrl);
+    } catch {
+      window.open(entry.publicUrl, '_blank');
+    }
+  }
+
+  let filteredDirectory = $derived(
+    directorySearch.trim()
+      ? directoryEntries.filter(e => {
+          const q = directorySearch.trim().toLowerCase();
+          return (
+            e.name.toLowerCase().includes(q) ||
+            (e.description ?? '').toLowerCase().includes(q)
+          );
+        })
+      : directoryEntries,
+  );
 
   // Drag and drop
   let unlistenDragDrop: (() => void) | undefined;
@@ -1218,6 +1334,18 @@
       <span class="hidden sm:inline">My Sites</span>
     </button>
     <button
+      onclick={() => { activeTab = 'browse'; loadDirectory(); }}
+      role="tab"
+      aria-selected={activeTab === 'browse'}
+      class="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all flex-1 justify-center
+        {activeTab === 'browse'
+          ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm ring-1 ring-gray-200/50 dark:ring-gray-600/50'
+          : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-white/50 dark:hover:bg-gray-700/30'}"
+    >
+      <Globe class="w-4 h-4" />
+      <span class="hidden sm:inline">Browse Sites</span>
+    </button>
+    <button
       onclick={() => { activeTab = 'cdn'; loadCdnServers(); }}
       role="tab"
       aria-selected={activeTab === 'cdn'}
@@ -1285,6 +1413,160 @@
       onOpenSite={openSite}
       onDeleteSite={deleteSite}
     />
+
+    <!-- Site directory: claim a name so other peers can find this site -->
+    {#if sites.some(s => s.relayUrl)}
+      <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5">
+        <div class="flex items-center gap-2 mb-1">
+          <Tag class="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Network listings</h3>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Pick a short name so other Chiral users can find this site in the Browse tab.
+        </p>
+        <div class="space-y-3">
+          {#each sites.filter(s => s.relayUrl) as site (site.id)}
+            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{site.name}</p>
+                  {#if site.directoryName}
+                    <p class="text-xs text-blue-600 dark:text-blue-400 mt-0.5">
+                      Listed as <span class="font-mono font-semibold">{site.directoryName}</span>
+                    </p>
+                  {:else}
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Not listed yet</p>
+                  {/if}
+                </div>
+                {#if site.directoryName}
+                  <button
+                    onclick={() => removeFromDirectory(site.id)}
+                    class="text-xs px-3 py-1.5 rounded-md border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                  >
+                    Remove from directory
+                  </button>
+                {:else if directoryClaimSiteId === site.id}
+                  <button
+                    onclick={cancelDirectoryClaim}
+                    class="text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                  >
+                    Cancel
+                  </button>
+                {:else}
+                  <button
+                    onclick={() => openDirectoryClaim(site)}
+                    class="text-xs px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white transition flex items-center gap-1"
+                  >
+                    <Tag class="w-3 h-3" /> List in directory
+                  </button>
+                {/if}
+              </div>
+
+              {#if directoryClaimSiteId === site.id && !site.directoryName}
+                <div class="grid sm:grid-cols-[1fr_2fr_auto] gap-2 mt-3">
+                  <input
+                    type="text"
+                    placeholder="name (a-z, 0-9, -)"
+                    bind:value={directoryClaimName}
+                    class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                  />
+                  <input
+                    type="text"
+                    placeholder="optional description"
+                    bind:value={directoryClaimDescription}
+                    class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    onclick={submitDirectoryClaim}
+                    disabled={directoryClaimSubmitting || !directoryClaimName.trim()}
+                    class="px-3 py-2 text-sm rounded-md bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition flex items-center gap-1"
+                  >
+                    {#if directoryClaimSubmitting}
+                      <Loader2 class="w-3.5 h-3.5 animate-spin" /> Listing
+                    {:else}
+                      Confirm
+                    {/if}
+                  </button>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+  {:else if activeTab === 'browse'}
+    <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5">
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Sites on the Chiral Network</h3>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Static sites other peers have published. Click any name to open it.
+          </p>
+        </div>
+        <button
+          onclick={loadDirectory}
+          disabled={directoryLoading}
+          class="p-2 rounded-md border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          aria-label="Refresh directory"
+        >
+          <RefreshCw class="w-4 h-4 {directoryLoading ? 'animate-spin' : ''}" />
+        </button>
+      </div>
+
+      <div class="relative mb-4">
+        <Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input
+          type="text"
+          placeholder="Search by name or description..."
+          bind:value={directorySearch}
+          class="w-full pl-9 pr-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+
+      {#if directoryError}
+        <div class="text-center py-12">
+          <AlertCircle class="w-10 h-10 mx-auto text-red-300 dark:text-red-700 mb-2" />
+          <p class="text-sm text-red-600 dark:text-red-400">{directoryError}</p>
+        </div>
+      {:else if directoryLoading && directoryEntries.length === 0}
+        <div class="text-center py-12">
+          <Loader2 class="w-8 h-8 mx-auto text-gray-300 dark:text-gray-600 mb-2 animate-spin" />
+          <p class="text-sm text-gray-500 dark:text-gray-400">Loading directory...</p>
+        </div>
+      {:else if filteredDirectory.length === 0}
+        <div class="text-center py-12">
+          <Globe class="w-10 h-10 mx-auto text-gray-300 dark:text-gray-600 mb-2" />
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            {directorySearch.trim() ? 'No matching sites' : 'No sites listed yet — be the first to publish one'}
+          </p>
+        </div>
+      {:else}
+        <ul class="divide-y divide-gray-200 dark:divide-gray-700">
+          {#each filteredDirectory as entry (entry.name)}
+            <li>
+              <button
+                onclick={() => openDirectoryEntry(entry)}
+                class="w-full flex items-start gap-3 px-2 py-3 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700/50 transition text-left"
+              >
+                <Globe class="w-4 h-4 mt-0.5 text-blue-500 flex-shrink-0" />
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="font-mono text-sm font-semibold text-gray-900 dark:text-white">{entry.name}</span>
+                    <ExternalLink class="w-3 h-3 text-gray-400" />
+                  </div>
+                  {#if entry.description}
+                    <p class="text-xs text-gray-600 dark:text-gray-300 mt-0.5">{entry.description}</p>
+                  {/if}
+                  <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5 truncate">{entry.publicUrl}</p>
+                </div>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+
   {:else if activeTab === 'cdn'}
     {@const mismatchedCdns = cdnServers.filter(
       (c) => myChainId != null && c.chainId != null && c.chainId !== myChainId,
