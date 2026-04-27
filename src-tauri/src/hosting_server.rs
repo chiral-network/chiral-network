@@ -529,6 +529,7 @@ mod tests {
             created_at: 0,
             files: vec![],
             relay_url: None,
+            directory_name: None,
         }
     }
 

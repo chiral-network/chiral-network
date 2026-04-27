@@ -191,6 +191,7 @@ mod tests {
                 SiteFile { path: "css/style.css".into(), size: 512 },
             ],
             relay_url: None,
+            directory_name: None,
         };
         let json = serde_json::to_string(&site).unwrap();
         let back: HostedSite = serde_json::from_str(&json).unwrap();
