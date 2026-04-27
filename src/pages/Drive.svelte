@@ -441,6 +441,30 @@
       return;
     }
 
+    if (item.type === 'folder') {
+      const result = await driveStore.seedFolder(item.id, seedProtocol, priceChi || undefined);
+      if (!result) {
+        toasts.show(`Failed to sell folder "${item.name}"`, 'error');
+        return;
+      }
+      const { filesTotal, filesSucceeded, filesFailed } = result;
+      if (filesTotal === 0) {
+        toasts.show(`"${item.name}" is empty — nothing to sell`, 'warning');
+      } else if (filesFailed === 0) {
+        toasts.show(
+          `Now selling "${item.name}" — ${filesSucceeded} file${filesSucceeded === 1 ? '' : 's'} at ${priceLabel}`,
+          'success',
+        );
+      } else {
+        toasts.detail(
+          `Folder "${item.name}" partially listed`,
+          `${filesSucceeded}/${filesTotal} file(s) seeded at ${priceLabel}; ${filesFailed} failed`,
+          'warning',
+        );
+      }
+      return;
+    }
+
     const result = await driveStore.seedFile(item.id, seedProtocol, priceChi || undefined);
     if (result) {
       toasts.show(
@@ -455,6 +479,16 @@
   }
 
   async function handleStopSeeding(item: DriveItem) {
+    if (item.type === 'folder') {
+      const result = await driveStore.stopSeedingFolder(item.id);
+      if (result && result.filesSucceeded > 0) {
+        toasts.show(
+          `Stopped selling "${item.name}" (${result.filesSucceeded} file${result.filesSucceeded === 1 ? '' : 's'})`,
+          'info',
+        );
+      }
+      return;
+    }
     await driveStore.stopSeeding(item.id);
     // Silent — seeding badge disappears from the UI
   }
@@ -743,9 +777,21 @@
       class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4"
       onclick={(e) => e.stopPropagation()}
     >
-      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">{seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}</h3>
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        {#if seedModalItem.type === 'folder'}
+          {seedModalItem.seeding ? 'Edit Folder Sale' : 'Sell Folder'}
+        {:else}
+          {seedModalItem.seeding ? 'Edit Seeding' : 'Seed to Network'}
+        {/if}
+      </h3>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
+        {#if seedModalItem.type === 'folder'}
+          {seedModalItem.seeding ? 'Update the price for' : 'Sell every file inside'}
+          <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong>.
+          The price is applied to each file in this folder (recursively).
+        {:else}
+          {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
+        {/if}
       </p>
 
       <div class="space-y-4">
@@ -794,7 +840,15 @@
         <button
           onclick={confirmSeed}
           class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition"
-        >{seedModalItem?.seeding ? 'Update' : 'Start Seeding'}</button>
+        >
+          {#if seedModalItem?.seeding}
+            Update
+          {:else if seedModalItem?.type === 'folder'}
+            Sell Folder
+          {:else}
+            Start Seeding
+          {/if}
+        </button>
       </div>
     </div>
   </div>

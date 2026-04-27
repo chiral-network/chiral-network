@@ -25,7 +25,6 @@
   }
 
   function getPriceLabel(item: DriveItem): string | null {
-    if (item.type !== 'file') return null;
     const raw = item.priceChi?.trim();
     if (raw && raw !== '0') return `${raw} CHI`;
     if (item.seeding || raw === '0') return 'Free';

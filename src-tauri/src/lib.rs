@@ -4507,6 +4507,30 @@ async fn publish_drive_file(
     wallet_address: Option<String>,
     private_key: Option<String>,
 ) -> Result<ds::DriveItem, String> {
+    publish_drive_file_inner(
+        state.inner(),
+        &owner,
+        &item_id,
+        protocol,
+        price_chi,
+        wallet_address,
+        private_key,
+    )
+    .await
+}
+
+/// Shared body for "publish a single Drive file as a paid seeder". Reused by
+/// the per-file Tauri command and the folder-level loop in
+/// `publish_drive_folder`.
+async fn publish_drive_file_inner(
+    state: &AppState,
+    owner: &str,
+    item_id: &str,
+    protocol: Option<String>,
+    price_chi: Option<String>,
+    wallet_address: Option<String>,
+    private_key: Option<String>,
+) -> Result<ds::DriveItem, String> {
     if owner.is_empty() {
         return Err("owner required".into());
     }
@@ -4591,7 +4615,7 @@ async fn publish_drive_file(
     };
     let wallet_addr = wallet_address
         .filter(|addr| !addr.trim().is_empty())
-        .unwrap_or_else(|| owner.clone())
+        .unwrap_or_else(|| owner.to_string())
         .trim()
         .to_string();
     if price_wei_val > 0 && wallet_addr.is_empty() {
@@ -4811,6 +4835,17 @@ async fn drive_stop_seeding(
     owner: String,
     item_id: String,
 ) -> Result<ds::DriveItem, String> {
+    drive_stop_seeding_inner(state.inner(), &owner, &item_id).await
+}
+
+/// Shared body for "stop seeding a single Drive file". Reused by the
+/// per-file Tauri command and the folder-level loop in
+/// `unpublish_drive_folder`.
+async fn drive_stop_seeding_inner(
+    state: &AppState,
+    owner: &str,
+    item_id: &str,
+) -> Result<ds::DriveItem, String> {
     if owner.is_empty() {
         return Err("owner required".into());
     }
@@ -4856,6 +4891,198 @@ async fn drive_stop_seeding(
     state.drive_state.persist().await;
 
     Ok(updated_item)
+}
+
+/// Result of a folder seed/unseed operation.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DriveFolderSeedResult {
+    folder: ds::DriveItem,
+    files_total: usize,
+    files_succeeded: usize,
+    files_failed: usize,
+    /// Per-file failure messages, keyed by file id.
+    failures: Vec<DriveFolderFileError>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DriveFolderFileError {
+    item_id: String,
+    name: String,
+    error: String,
+}
+
+/// Walk the manifest from `folder_id` and return the IDs (in arbitrary order)
+/// of every descendant file owned by `owner`.
+fn collect_descendant_files(
+    manifest: &ds::DriveManifest,
+    owner: &str,
+    folder_id: &str,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut stack: Vec<String> = vec![folder_id.to_string()];
+    while let Some(parent) = stack.pop() {
+        for item in &manifest.items {
+            if item.owner != owner {
+                continue;
+            }
+            if item.parent_id.as_deref() != Some(parent.as_str()) {
+                continue;
+            }
+            match item.item_type.as_str() {
+                "folder" => stack.push(item.id.clone()),
+                "file" => out.push((item.id.clone(), item.name.clone())),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Publish every file inside `folder_id` (recursively) as a paid seeder at
+/// the same `price_chi`, and mark the folder as seeding so the UI can show
+/// its sale state. The folder itself is just a container — sale = each
+/// child file is independently registered with the same price + the same
+/// underlying per-seeder DHT plumbing as `publish_drive_file`.
+#[tauri::command]
+async fn publish_drive_folder(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    folder_id: String,
+    protocol: Option<String>,
+    price_chi: Option<String>,
+    wallet_address: Option<String>,
+    private_key: Option<String>,
+) -> Result<DriveFolderSeedResult, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    // Snapshot the file list under this folder.
+    let files: Vec<(String, String)> = {
+        let m = state.drive_state.manifest.read().await;
+        let folder = m
+            .items
+            .iter()
+            .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
+            .ok_or("Drive folder not found")?;
+        let _ = folder; // existence check
+        collect_descendant_files(&m, &owner, &folder_id)
+    };
+    if files.is_empty() {
+        return Err("Folder is empty — nothing to sell".into());
+    }
+
+    let mut succeeded = 0usize;
+    let mut failures: Vec<DriveFolderFileError> = Vec::new();
+    for (file_id, file_name) in &files {
+        match publish_drive_file_inner(
+            state.inner(),
+            &owner,
+            file_id,
+            protocol.clone(),
+            price_chi.clone(),
+            wallet_address.clone(),
+            private_key.clone(),
+        )
+        .await
+        {
+            Ok(_) => succeeded += 1,
+            Err(e) => failures.push(DriveFolderFileError {
+                item_id: file_id.clone(),
+                name: file_name.clone(),
+                error: e,
+            }),
+        }
+    }
+
+    // Mark the folder itself as seeding + record the price so the UI can
+    // display the sale state on the folder card. seed_enabled is purely a
+    // UI hint here — auto-reseed iterates files, not folders, and each
+    // child file already has its own seed_enabled flag set.
+    let folder = {
+        let mut m = state.drive_state.manifest.write().await;
+        let item = m
+            .items
+            .iter_mut()
+            .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
+            .ok_or("Drive folder not found in manifest")?;
+        item.price_chi = price_chi;
+        item.protocol = protocol;
+        item.seed_enabled = true;
+        item.seeding = succeeded > 0;
+        item.modified_at = ds::now_secs();
+        item.clone()
+    };
+    state.drive_state.persist().await;
+
+    Ok(DriveFolderSeedResult {
+        folder,
+        files_total: files.len(),
+        files_succeeded: succeeded,
+        files_failed: failures.len(),
+        failures,
+    })
+}
+
+/// Stop seeding every file inside `folder_id` (recursively) and clear the
+/// folder's own seeding state. Mirror of `publish_drive_folder`.
+#[tauri::command]
+async fn unpublish_drive_folder(
+    state: tauri::State<'_, AppState>,
+    owner: String,
+    folder_id: String,
+) -> Result<DriveFolderSeedResult, String> {
+    if owner.is_empty() {
+        return Err("owner required".into());
+    }
+
+    let files: Vec<(String, String)> = {
+        let m = state.drive_state.manifest.read().await;
+        let folder = m
+            .items
+            .iter()
+            .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
+            .ok_or("Drive folder not found")?;
+        let _ = folder;
+        collect_descendant_files(&m, &owner, &folder_id)
+    };
+
+    let mut succeeded = 0usize;
+    let mut failures: Vec<DriveFolderFileError> = Vec::new();
+    for (file_id, file_name) in &files {
+        match drive_stop_seeding_inner(state.inner(), &owner, file_id).await {
+            Ok(_) => succeeded += 1,
+            Err(e) => failures.push(DriveFolderFileError {
+                item_id: file_id.clone(),
+                name: file_name.clone(),
+                error: e,
+            }),
+        }
+    }
+
+    let folder = {
+        let mut m = state.drive_state.manifest.write().await;
+        let item = m
+            .items
+            .iter_mut()
+            .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
+            .ok_or("Drive folder not found in manifest")?;
+        item.seed_enabled = false;
+        item.seeding = false;
+        item.modified_at = ds::now_secs();
+        item.clone()
+    };
+    state.drive_state.persist().await;
+
+    Ok(DriveFolderSeedResult {
+        folder,
+        files_total: files.len(),
+        files_succeeded: succeeded,
+        files_failed: failures.len(),
+        failures,
+    })
 }
 
 #[tauri::command]
@@ -5267,6 +5494,8 @@ pub fn run() {
             drive_list_shares,
             drive_toggle_visibility,
             publish_drive_file,
+            publish_drive_folder,
+            unpublish_drive_folder,
             seed_hosted_file,
             drive_stop_seeding,
             drive_export_torrent,
