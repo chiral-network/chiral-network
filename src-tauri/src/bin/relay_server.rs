@@ -284,12 +284,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                     RelayServerBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-                        // Phase 4 of version enforcement: drop peers whose
-                        // Identify says they're below our bundled
-                        // min_required. Same comparator as the Tauri client
-                        // and the gateway middleware.
+                        // Drop peers whose Identify says they're below the
+                        // currently-effective min_required. Reads the
+                        // RwLock-backed global slot so a signed policy
+                        // update tightening the floor takes effect on
+                        // live connections without redeploying the relay.
                         {
-                            let policy = chiral_network::version::bundled_policy();
+                            let policy = chiral_network::version::effective_policy();
                             let agent_v = info
                                 .agent_version
                                 .trim_start_matches("chiral/")

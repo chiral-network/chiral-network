@@ -3235,20 +3235,17 @@ async fn handle_behaviour_event(
             }
         }
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-            // Phase 4 of version enforcement: drop peers whose Identify
-            // says they're below our bundled `min_required`. The peer's
+            // Drop peers whose Identify says they're below the
+            // currently-effective `min_required`. The peer's
             // agent_version is the same string we set in our own
             // identify config — usually "chiral/<semver>" — so we strip
             // the prefix and run it through the shared comparator.
             //
-            // Bundled-policy lookup is intentional: the local AppState
-            // policy slot lives behind an async Mutex and the swarm
-            // event handler is sync, so reaching for it here would mean
-            // a `block_on` that we don't want to take in the libp2p
-            // poll loop. The bundled policy is the floor every build
-            // ships with anyway; Phase 5 will pipe the AppState policy
-            // through if/when we want runtime overrides.
-            let policy = crate::version::bundled_policy();
+            // Phase 5 swapped the bundled-policy lookup for the global
+            // RwLock-backed slot, so a relay-pushed signed policy
+            // tightening `min_required` at runtime takes effect on
+            // libp2p connections without waiting for redeploy.
+            let policy = crate::version::effective_policy();
             let agent_v = info
                 .agent_version
                 .trim_start_matches("chiral/")

@@ -55,12 +55,11 @@ pub struct AppState {
     /// Active WebSocket tunnel tasks keyed by resource key (e.g. "site:abc123").
     /// Dropping the AbortHandle cancels the tunnel task.
     pub tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
-    /// Currently effective `VersionPolicy` — initialised to the bundled
-    /// snapshot at startup, then replaced when the relay-fetched policy
-    /// arrives. Phase 5 will gate replacement on signature verification +
-    /// `issuedAt` rollback protection; Phase 2 already enforces the
-    /// rollback rule (don't accept policies older than what we have).
-    pub version_policy: Arc<Mutex<version::VersionPolicy>>,
+    // The effective `VersionPolicy` lives in `version::EFFECTIVE_POLICY`
+    // (a global RwLock) since Phase 5; that gives every caller —
+    // including the sync libp2p Identify event handler — a non-blocking
+    // read path. The Tauri commands and the fetch task all go through
+    // `version::effective_policy()` / `version::update_effective_policy()`.
 }
 
 /// Cleanup DHT seeder entries and host advertisement on shutdown.
@@ -6076,22 +6075,22 @@ pub struct VersionStatus {
 /// Returns the active version policy (network-fetched if available, else
 /// the bundled snapshot).
 #[tauri::command]
-async fn get_version_policy(state: tauri::State<'_, AppState>) -> Result<version::VersionPolicy, String> {
-    Ok(state.version_policy.lock().await.clone())
+fn get_version_policy() -> version::VersionPolicy {
+    version::effective_policy()
 }
 
 /// Returns `{currentVersion, status, policy}` so the frontend can drive
 /// the soft "update available" banner and the hard blocking modal off
 /// one Tauri call.
 #[tauri::command]
-async fn get_version_status(state: tauri::State<'_, AppState>) -> Result<VersionStatus, String> {
-    let policy = state.version_policy.lock().await.clone();
+fn get_version_status() -> VersionStatus {
+    let policy = version::effective_policy();
     let status = version::compare_to_policy(version::CURRENT_VERSION, &policy);
-    Ok(VersionStatus {
+    VersionStatus {
         current_version: version::CURRENT_VERSION.to_string(),
         status: status.to_string(),
         policy,
-    })
+    }
 }
 
 /// Phase 2 backend gate: refuse to enter ops protected by the version
@@ -6099,8 +6098,8 @@ async fn get_version_status(state: tauri::State<'_, AppState>) -> Result<Version
 /// policy's `min_required`. The frontend's blocking modal already
 /// prevents this in honest UIs; the backend gate stops anyone bypassing
 /// it via direct Tauri invokes.
-async fn ensure_version_supported(state: &AppState) -> Result<(), String> {
-    let policy = state.version_policy.lock().await.clone();
+async fn ensure_version_supported(_state: &AppState) -> Result<(), String> {
+    let policy = version::effective_policy();
     if version::compare_to_policy(version::CURRENT_VERSION, &policy) == "required" {
         return Err(format!(
             "This client (v{}) is below the network's required version (v{}). \
@@ -6119,7 +6118,7 @@ async fn ensure_version_supported(state: &AppState) -> Result<(), String> {
 /// policy with one whose `issuedAt` is older than the stored one. The
 /// bundled policy starts at `issuedAt: 0`, so the first relay-supplied
 /// non-zero issuance always wins.
-async fn fetch_and_log_remote_version_policy(policy: Arc<Mutex<version::VersionPolicy>>) {
+async fn fetch_and_log_remote_version_policy() {
     let url = "http://130.245.173.73:8080/api/version-policy";
     let resp = match rpc_client::client()
         .get(url)
@@ -6157,21 +6156,26 @@ async fn fetch_and_log_remote_version_policy(policy: Arc<Mutex<version::VersionP
         }
     };
 
-    let mut guard = policy.lock().await;
-    if remote.issued_at >= guard.issued_at {
-        let outcome = version::compare_to_policy(version::CURRENT_VERSION, &remote);
+    // Hand the candidate to the global slot; it applies the
+    // signed-or-permissive + rollback rules and tells us whether it
+    // accepted.
+    let outcome = version::compare_to_policy(version::CURRENT_VERSION, &remote);
+    let accepted = version::update_effective_policy(remote.clone());
+    if accepted {
         println!(
-            "[VERSION] Local build {} — relay says min={} recommended={} → {}",
+            "[VERSION] Local build {} — relay says min={} recommended={} → {} (accepted)",
             version::CURRENT_VERSION,
             remote.min_required,
             remote.recommended,
             outcome
         );
-        *guard = remote;
     } else {
         println!(
-            "[VERSION] Ignoring stale relay policy (issued_at {} < stored {})",
-            remote.issued_at, guard.issued_at
+            "[VERSION] Local build {} — relay policy rejected (signed?{} issuedAt={}, min={})",
+            version::CURRENT_VERSION,
+            !remote.signature.is_empty(),
+            remote.issued_at,
+            remote.min_required,
         );
     }
 }
@@ -6263,19 +6267,17 @@ pub fn run() {
             hosting_server_shutdown: Arc::clone(&hosting_shutdown_for_exit),
             drive_state: Arc::new(drive_api::DriveState::new()),
             tunnel_handles: Arc::clone(&tunnel_handles_for_exit),
-            version_policy: Arc::new(Mutex::new(version::bundled_policy())),
         })
         .setup(|app| {
             use tauri::Manager;
             let app_handle = app.handle().clone();
 
             // Background probe of the relay's /api/version-policy. The
-            // result is stored on AppState's version_policy slot, which
-            // backs get_version_status() and the frontend's UpdateGate.
-            {
-                let policy = Arc::clone(&app.state::<AppState>().version_policy);
-                tauri::async_runtime::spawn(fetch_and_log_remote_version_policy(policy));
-            }
+            // result is funnelled into the global EFFECTIVE_POLICY slot
+            // in version.rs, which backs get_version_status() (Tauri),
+            // the libp2p Identify rejection in dht.rs, and the frontend
+            // UpdateGate.
+            tauri::async_runtime::spawn(fetch_and_log_remote_version_policy());
             // Auto-start local server with Drive routes on port 9419
             let state = app.state::<AppState>();
             let hosting: Arc<hosting_server::HostingServerState> =

@@ -119,3 +119,132 @@ pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str 
         "ok"
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Ed25519 signing + verification
+// ---------------------------------------------------------------------------
+//
+// Goal: a runtime policy update must come signed by a long-lived project
+// key whose public half is hardcoded here. Servers ship the bundled
+// policy as a known-good floor; clients only accept network-fetched
+// policies that verify against POLICY_PUBLIC_KEY (or, transitionally,
+// unsigned policies that don't tighten beyond what's bundled — see
+// [`is_acceptable_remote_policy`]).
+//
+// The placeholder below is 32 zero bytes — *not* a real key. Replace it
+// with the project's real Ed25519 public key (32 bytes, hex-encoded
+// inline) when the operator generates one. The matching private key
+// stays offline / in a CI secret and only feeds the
+// `chiral-policy-sign` operator CLI.
+
+/// Project policy-signing public key. **Placeholder zeros until the real
+/// key is generated.** No signature can verify against an all-zero key,
+/// so signed policies are always rejected until a real key is wired in
+/// — and the unsigned-but-permissive transition path (see below) is the
+/// only way for a relay-served policy to take effect today.
+pub const POLICY_PUBLIC_KEY: [u8; 32] = [0u8; 32];
+
+/// Canonical bytes that get fed to Ed25519 sign/verify. Stable order +
+/// NUL separators so any other implementation can reproduce the payload
+/// without a JSON canonicaliser.
+pub fn canonical_signing_payload(p: &VersionPolicy) -> Vec<u8> {
+    let mut out = Vec::with_capacity(256);
+    let issued = p.issued_at.to_string();
+    let valid = p.valid_until.to_string();
+    let parts: [&[u8]; 6] = [
+        p.min_required.as_bytes(),
+        p.recommended.as_bytes(),
+        p.download_url.as_bytes(),
+        p.message.as_deref().unwrap_or("").as_bytes(),
+        issued.as_bytes(),
+        valid.as_bytes(),
+    ];
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(part);
+    }
+    out
+}
+
+/// Verify the policy's `signature` field against POLICY_PUBLIC_KEY.
+/// Returns `false` for empty signatures, malformed hex, malformed
+/// signatures, malformed public keys (e.g. while the placeholder zeros
+/// stand in), or signature mismatches.
+pub fn verify_policy(p: &VersionPolicy) -> bool {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    if p.signature.is_empty() {
+        return false;
+    }
+    let sig_bytes = match hex::decode(&p.signature) {
+        Ok(b) if b.len() == 64 => b,
+        _ => return false,
+    };
+    let signature = match Signature::from_slice(&sig_bytes) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let key = match VerifyingKey::from_bytes(&POLICY_PUBLIC_KEY) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+    key.verify(&canonical_signing_payload(p), &signature).is_ok()
+}
+
+/// Decide whether a policy fetched from the network should replace the
+/// current effective policy. Three rules, in priority order:
+///
+/// 1. **Rollback protection.** Never accept a policy whose `issuedAt` is
+///    older than the currently-stored one.
+/// 2. **Signature.** A valid signature is sufficient.
+/// 3. **Unsigned-but-permissive (transitional).** While the public key
+///    is still the placeholder, real signatures don't exist. Accept
+///    unsigned policies *only* if they don't tighten beyond the bundled
+///    floor — i.e. their `min_required` is at or below bundled. This
+///    lets relays advertise "update available" nudges (recommended /
+///    message / downloadUrl) without ever pushing a more aggressive
+///    `min_required` than what the binary itself ships with.
+pub fn is_acceptable_remote_policy(remote: &VersionPolicy, current: &VersionPolicy) -> bool {
+    if remote.issued_at < current.issued_at {
+        return false;
+    }
+    if !remote.signature.is_empty() {
+        return verify_policy(remote);
+    }
+    // Unsigned: accept only if it doesn't tighten the floor.
+    let bundled = bundled_policy();
+    !version_is_below(&bundled.min_required, &remote.min_required)
+}
+
+// ---------------------------------------------------------------------------
+// Effective policy slot — global so any caller (Tauri command, fetch
+// task, libp2p Identify handler) reads the same value with sync access.
+// ---------------------------------------------------------------------------
+
+use once_cell::sync::OnceCell;
+use parking_lot::RwLock;
+
+static EFFECTIVE_POLICY: OnceCell<RwLock<VersionPolicy>> = OnceCell::new();
+
+fn effective_slot() -> &'static RwLock<VersionPolicy> {
+    EFFECTIVE_POLICY.get_or_init(|| RwLock::new(bundled_policy()))
+}
+
+/// Snapshot the currently-effective policy (initialised to bundled if
+/// no override has been promoted yet).
+pub fn effective_policy() -> VersionPolicy {
+    effective_slot().read().clone()
+}
+
+/// Replace the effective policy. Returns `true` if accepted, `false` if
+/// the supplied policy was rejected by `is_acceptable_remote_policy`.
+pub fn update_effective_policy(new: VersionPolicy) -> bool {
+    let slot = effective_slot();
+    let current = slot.read().clone();
+    if !is_acceptable_remote_policy(&new, &current) {
+        return false;
+    }
+    *slot.write() = new;
+    true
+}
