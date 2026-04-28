@@ -6086,55 +6086,12 @@ async fn get_version_policy(state: tauri::State<'_, AppState>) -> Result<version
 #[tauri::command]
 async fn get_version_status(state: tauri::State<'_, AppState>) -> Result<VersionStatus, String> {
     let policy = state.version_policy.lock().await.clone();
-    let status = compare_to_policy(version::CURRENT_VERSION, &policy);
+    let status = version::compare_to_policy(version::CURRENT_VERSION, &policy);
     Ok(VersionStatus {
         current_version: version::CURRENT_VERSION.to_string(),
         status: status.to_string(),
         policy,
     })
-}
-
-/// Three-way comparison of `current` against the policy thresholds.
-/// Returns "ok" / "recommended" / "required".
-fn compare_to_policy(current: &str, policy: &version::VersionPolicy) -> &'static str {
-    if version_is_below(current, &policy.min_required) {
-        "required"
-    } else if version_is_below(current, &policy.recommended) {
-        "recommended"
-    } else {
-        "ok"
-    }
-}
-
-/// Lightweight semver-ish comparator: parses each side as
-/// `[0-9]+ ('.' [0-9]+)*` (ignoring any pre-release / build suffix after
-/// the first non-digit/dot) and lexicographically compares the integer
-/// component tuples. Phase 5 will swap this for a real semver crate
-/// once the policy comes signed and we care about pre-release ordering.
-fn version_is_below(a: &str, b: &str) -> bool {
-    fn parts(s: &str) -> Vec<u64> {
-        s.trim_start_matches('v')
-            .split(|c: char| !(c.is_ascii_digit() || c == '.'))
-            .next()
-            .unwrap_or(s)
-            .split('.')
-            .map(|p| p.parse::<u64>().unwrap_or(0))
-            .collect()
-    }
-    let ap = parts(a);
-    let bp = parts(b);
-    let n = ap.len().max(bp.len());
-    for i in 0..n {
-        let av = ap.get(i).copied().unwrap_or(0);
-        let bv = bp.get(i).copied().unwrap_or(0);
-        if av < bv {
-            return true;
-        }
-        if av > bv {
-            return false;
-        }
-    }
-    false
 }
 
 /// Phase 2 backend gate: refuse to enter ops protected by the version
@@ -6144,7 +6101,7 @@ fn version_is_below(a: &str, b: &str) -> bool {
 /// it via direct Tauri invokes.
 async fn ensure_version_supported(state: &AppState) -> Result<(), String> {
     let policy = state.version_policy.lock().await.clone();
-    if compare_to_policy(version::CURRENT_VERSION, &policy) == "required" {
+    if version::compare_to_policy(version::CURRENT_VERSION, &policy) == "required" {
         return Err(format!(
             "This client (v{}) is below the network's required version (v{}). \
              Update from {} to continue.",
@@ -6202,7 +6159,7 @@ async fn fetch_and_log_remote_version_policy(policy: Arc<Mutex<version::VersionP
 
     let mut guard = policy.lock().await;
     if remote.issued_at >= guard.issued_at {
-        let outcome = compare_to_policy(version::CURRENT_VERSION, &remote);
+        let outcome = version::compare_to_policy(version::CURRENT_VERSION, &remote);
         println!(
             "[VERSION] Local build {} — relay says min={} recommended={} → {}",
             version::CURRENT_VERSION,

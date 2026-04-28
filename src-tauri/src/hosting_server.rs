@@ -78,6 +78,66 @@ async fn version_policy_handler() -> impl IntoResponse {
     Json(crate::version::bundled_policy())
 }
 
+/// Phase 3 of version enforcement: every `/api/*` request (other than
+/// the policy + health endpoints, which must always succeed so outdated
+/// clients can discover that they're outdated and so monitoring keeps
+/// working) is gated against the server's bundled `min_required`. A
+/// request whose `X-Chiral-Client-Version` header is missing OR parses
+/// to a version below the floor gets `426 Upgrade Required` with the
+/// policy in the body.
+///
+/// Static-site routes (/sites/, /cdn/sites/, /drive/preview/...) are
+/// for browser visitors who aren't running a Chiral client at all and
+/// can't supply the header — those bypass via the `/api/` path filter.
+async fn version_gate_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = req.uri().path();
+    let method = req.method();
+
+    // CORS preflight bypass — browsers send OPTIONS without our header.
+    if method == axum::http::Method::OPTIONS {
+        return next.run(req).await;
+    }
+
+    // Only enforce on /api/* paths. Site / drive / preview routes are
+    // for browser visitors and don't carry a version header.
+    if !path.starts_with("/api/") {
+        return next.run(req).await;
+    }
+
+    // Always-allow paths so outdated clients can still bootstrap and
+    // monitoring stays unaffected.
+    if path == "/api/version-policy" || path == "/api/health" || path == "/api/ready" {
+        return next.run(req).await;
+    }
+
+    let client_version = req
+        .headers()
+        .get("X-Chiral-Client-Version")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("0.0.0");
+
+    let policy = crate::version::bundled_policy();
+    if crate::version::version_is_below(client_version, &policy.min_required) {
+        let body = serde_json::json!({
+            "error": "client version below network minimum",
+            "clientVersion": client_version,
+            "minRequired": policy.min_required,
+            "downloadUrl": policy.download_url,
+            "message": policy.message,
+        });
+        return (
+            axum::http::StatusCode::UPGRADE_REQUIRED,
+            axum::Json(body),
+        )
+            .into_response();
+    }
+
+    next.run(req).await
+}
+
 /// GET /sites/{site_id}  — redirect to trailing slash
 async fn redirect_to_index(Path(site_id): Path<String>) -> Response {
     (
@@ -458,6 +518,11 @@ pub fn create_gateway_router(
             .allow_headers(Any)
             .expose_headers(Any),
     )
+    // Outermost: version-gate every /api/* request. Layers run
+    // last-applied-first on incoming requests, so this runs *before*
+    // the CORS layer and the route handlers. Static site / drive /
+    // health / version-policy paths are exempted inside the function.
+    .layer(axum::middleware::from_fn(version_gate_middleware))
 }
 
 /// Start the hosting HTTP server. Returns the bound address.

@@ -15,7 +15,16 @@ use tokio::sync::RwLock;
 // ============================================================================
 
 static SHARED_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    // Default headers — every outgoing HTTP call from Rust carries the
+    // client's compile-time version. Phase 3 of version enforcement: the
+    // server gateway middleware compares this against its bundled
+    // `min_required` and 426s out-of-date clients.
+    let mut headers = reqwest::header::HeaderMap::new();
+    if let Ok(v) = reqwest::header::HeaderValue::from_str(crate::version::CURRENT_VERSION) {
+        headers.insert("X-Chiral-Client-Version", v);
+    }
     reqwest::Client::builder()
+        .default_headers(headers)
         .pool_max_idle_per_host(4)
         .pool_idle_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(5))

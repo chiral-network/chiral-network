@@ -76,3 +76,46 @@ pub fn bundled_policy() -> VersionPolicy {
         signature: String::new(),
     }
 }
+
+/// Lightweight semver-ish comparator: parses each side as
+/// `[0-9]+ ('.' [0-9]+)*` (ignoring any pre-release / build suffix after
+/// the first non-digit/dot) and lexicographically compares the integer
+/// component tuples. Phase 5 will swap this for a real semver crate
+/// once the policy comes signed and we care about pre-release ordering.
+pub fn version_is_below(a: &str, b: &str) -> bool {
+    fn parts(s: &str) -> Vec<u64> {
+        s.trim_start_matches('v')
+            .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .next()
+            .unwrap_or(s)
+            .split('.')
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let ap = parts(a);
+    let bp = parts(b);
+    let n = ap.len().max(bp.len());
+    for i in 0..n {
+        let av = ap.get(i).copied().unwrap_or(0);
+        let bv = bp.get(i).copied().unwrap_or(0);
+        if av < bv {
+            return true;
+        }
+        if av > bv {
+            return false;
+        }
+    }
+    false
+}
+
+/// Three-way comparison of `current` against the policy thresholds.
+/// Returns "ok" / "recommended" / "required".
+pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str {
+    if version_is_below(current, &policy.min_required) {
+        "required"
+    } else if version_is_below(current, &policy.recommended) {
+        "recommended"
+    } else {
+        "ok"
+    }
+}
