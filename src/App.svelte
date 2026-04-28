@@ -11,6 +11,8 @@
   import Toast from '$lib/components/Toast.svelte';
   import { AlertTriangle } from 'lucide-svelte';
   import { cancelLogout, confirmLogout, logoutModalOpen, loggingOut } from '$lib/logout';
+  import UpdateGate from '$lib/components/UpdateGate.svelte';
+  import { initVersionStore } from '$lib/stores/versionStore';
   import WalletPage from './pages/Wallet.svelte';
   import DownloadPage from './pages/Download.svelte';
   import ChiralDropPage from './pages/ChiralDrop.svelte';
@@ -56,6 +58,10 @@
   // + Auto-register hosted files as seeded when downloads complete
   // + Auto-reseed legacy uploads and hosted files on startup
   onMount(async () => {
+    // Phase 2 of version enforcement: kick off the version-policy poll
+    // so the UpdateGate has data as soon as the user lands on any page.
+    initVersionStore();
+
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const { invoke } = await import('@tauri-apps/api/core');
@@ -548,6 +554,11 @@
     onClose={() => toasts.remove(toast.id)}
   />
 {/each}
+
+<!-- Version policy gate: top-screen banner for "update recommended",
+     full-screen blocking modal for "update required". Kept last in
+     the markup so it stacks above every page route. -->
+<UpdateGate />
 
 <!-- Logout confirmation modal -->
 {#if $logoutModalOpen}
