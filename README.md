@@ -12,6 +12,8 @@ There's no central server deciding what can be shared or who can participate. Yo
 - **Send files directly (ChiralDrop)** — one-to-one transfers with an optional price.
 - **Host files on the CDN** — upload to an always-on server so your files remain available even when your computer is offline. You set the download price; others pay you.
 - **Run a hosting marketplace** — browse peer hosts and CDN servers, sign hosting agreements, and earn CHI by hosting other users' files.
+- **Publish a static site** — host an HTML/JS/CSS site through a relay or the CDN, claim a memorable name in the network's site directory, and let other peers find it by that name.
+- **Sell folders, not just files** — share a whole folder under a single hash; buyers see the file list and total cost, pay once, and download the bundle.
 - **Mine CHI** — use your CPU (or GPU on Linux/Windows) to mine blocks and earn 5 CHI per block.
 - **Manage your wallet** — create a new wallet or import an existing one, back it up by email, view your balance and transaction history, and send CHI to other addresses.
 - **Check your reputation** — every completed or failed transfer feeds into an Elo-style reputation score (0–100) that other users can see.
@@ -69,6 +71,7 @@ Payments are verified on-chain before any file data is served, so you can't be c
 - **File listings are signed.** Every file's metadata and seeder entry is cryptographically signed, so nobody can spoof your files in the network.
 - **Payments are verified.** Seeders check the blockchain for your payment before sending chunks.
 - **Direct transfers.** When you download a file, it comes directly from the peer (or CDN) sharing it — there's no central middleman storing copies.
+- **Update enforcement.** The app checks the network's published version policy on startup and walks you to the download page if your build is below the minimum required version. Vulnerable clients can't quietly stay on the network.
 
 ## Running Without a Window (Headless Mode)
 
