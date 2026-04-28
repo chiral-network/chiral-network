@@ -70,6 +70,14 @@ async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
+/// GET /api/version-policy — returns the bundled `VersionPolicy` for
+/// this build. Clients fetch this on startup to learn whether they're
+/// out of date relative to the network.
+async fn version_policy_handler() -> impl IntoResponse {
+    use axum::Json;
+    Json(crate::version::bundled_policy())
+}
+
 /// GET /sites/{site_id}  — redirect to trailing slash
 async fn redirect_to_index(Path(site_id): Path<String>) -> Response {
     (
@@ -395,9 +403,17 @@ pub fn create_gateway_router(
     rating_state: Option<Arc<RatingState>>,
     relay_share_state: Option<Arc<RelayShareRegistry>>,
 ) -> Router {
-    // Base: health check is always present
+    // Base: health check + version policy are always present, regardless
+    // of whether this gateway is running in relay mode or local mode.
+    // Phase 1 of version enforcement: serve the bundled policy so clients
+    // can fetch + log it on startup. (Future phases will reject
+    // out-of-date clients on every other route based on the
+    // X-Chiral-Client-Version header — this policy endpoint stays
+    // exempt so outdated clients can still discover that they're
+    // outdated.)
     let mut app = Router::new()
         .route("/health", get(health_check))
+        .route("/api/version-policy", get(version_policy_handler))
         .merge(chain_rpc_api::chain_rpc_routes());
 
     if relay_share_state.is_some() {
