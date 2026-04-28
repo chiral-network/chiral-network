@@ -55,6 +55,12 @@ pub struct AppState {
     /// Active WebSocket tunnel tasks keyed by resource key (e.g. "site:abc123").
     /// Dropping the AbortHandle cancels the tunnel task.
     pub tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
+    /// Currently effective `VersionPolicy` — initialised to the bundled
+    /// snapshot at startup, then replaced when the relay-fetched policy
+    /// arrives. Phase 5 will gate replacement on signature verification +
+    /// `issuedAt` rollback protection; Phase 2 already enforces the
+    /// rollback rule (don't accept policies older than what we have).
+    pub version_policy: Arc<Mutex<version::VersionPolicy>>,
 }
 
 /// Cleanup DHT seeder entries and host advertisement on shutdown.
@@ -111,6 +117,11 @@ async fn start_dht_internal(
     state: &AppState,
     allow_already_running: bool,
 ) -> Result<String, String> {
+    // Phase 2 gate: refuse to enter the network if our build is below
+    // the policy's `min_required`. The frontend's blocking modal already
+    // prevents this in the UI; this catches direct Tauri-invoke bypasses.
+    ensure_version_supported(state).await?;
+
     let mut dht_guard = state.dht.lock().await;
 
     if dht_guard.is_some() {
@@ -2002,6 +2013,11 @@ async fn start_download(
     seeder_price_wei: Option<String>,
     _seeder_wallet_address: Option<String>,
 ) -> Result<DownloadStartResult, String> {
+    // Phase 2 version gate: refuse paid downloads from out-of-date
+    // clients (the frontend modal already prevents this for honest UIs;
+    // this handles direct invoke bypasses).
+    ensure_version_supported(state.inner()).await?;
+
     // Stage 3: single chosen seeder — the frontend passes the user's selection
     // as the first (and ideally only) entry. We no longer dispatch to multiple
     // seeders in parallel: the user chose who to pay, so only that seeder gets
@@ -6040,23 +6056,113 @@ async fn unpublish_drive_share(
 }
 
 // ---------------------------------------------------------------------------
-// Version policy plumbing (Phase 1)
+// Version policy plumbing (Phase 1 + Phase 2)
 // ---------------------------------------------------------------------------
 
-/// Returns the version policy this build was compiled with. Phase 1 of
-/// the version-enforcement plan: clients can already call this Tauri
-/// command to know what the binary thinks the network's expectations
-/// look like. Phase 2 will overlay the network-fetched policy on top.
-#[tauri::command]
-fn get_version_policy() -> version::VersionPolicy {
-    version::bundled_policy()
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionStatus {
+    /// Compile-time version of this client.
+    current_version: String,
+    /// "ok" — at or above `recommended`.
+    /// "recommended" — between `min_required` and `recommended` (soft nudge).
+    /// "required" — strictly below `min_required` (hard block).
+    status: String,
+    /// The policy that produced this status — relay-fetched if we have one,
+    /// otherwise the bundled compile-time snapshot.
+    policy: version::VersionPolicy,
 }
 
-/// Phase 1 startup probe: ask the relay what version policy it's
-/// advertising and log a one-line comparison against our compiled-in
-/// version. No enforcement — this just gets the telemetry path warm
-/// before the UI / network rejection layers in later phases.
-async fn fetch_and_log_remote_version_policy() {
+/// Returns the active version policy (network-fetched if available, else
+/// the bundled snapshot).
+#[tauri::command]
+async fn get_version_policy(state: tauri::State<'_, AppState>) -> Result<version::VersionPolicy, String> {
+    Ok(state.version_policy.lock().await.clone())
+}
+
+/// Returns `{currentVersion, status, policy}` so the frontend can drive
+/// the soft "update available" banner and the hard blocking modal off
+/// one Tauri call.
+#[tauri::command]
+async fn get_version_status(state: tauri::State<'_, AppState>) -> Result<VersionStatus, String> {
+    let policy = state.version_policy.lock().await.clone();
+    let status = compare_to_policy(version::CURRENT_VERSION, &policy);
+    Ok(VersionStatus {
+        current_version: version::CURRENT_VERSION.to_string(),
+        status: status.to_string(),
+        policy,
+    })
+}
+
+/// Three-way comparison of `current` against the policy thresholds.
+/// Returns "ok" / "recommended" / "required".
+fn compare_to_policy(current: &str, policy: &version::VersionPolicy) -> &'static str {
+    if version_is_below(current, &policy.min_required) {
+        "required"
+    } else if version_is_below(current, &policy.recommended) {
+        "recommended"
+    } else {
+        "ok"
+    }
+}
+
+/// Lightweight semver-ish comparator: parses each side as
+/// `[0-9]+ ('.' [0-9]+)*` (ignoring any pre-release / build suffix after
+/// the first non-digit/dot) and lexicographically compares the integer
+/// component tuples. Phase 5 will swap this for a real semver crate
+/// once the policy comes signed and we care about pre-release ordering.
+fn version_is_below(a: &str, b: &str) -> bool {
+    fn parts(s: &str) -> Vec<u64> {
+        s.trim_start_matches('v')
+            .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .next()
+            .unwrap_or(s)
+            .split('.')
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let ap = parts(a);
+    let bp = parts(b);
+    let n = ap.len().max(bp.len());
+    for i in 0..n {
+        let av = ap.get(i).copied().unwrap_or(0);
+        let bv = bp.get(i).copied().unwrap_or(0);
+        if av < bv {
+            return true;
+        }
+        if av > bv {
+            return false;
+        }
+    }
+    false
+}
+
+/// Phase 2 backend gate: refuse to enter ops protected by the version
+/// floor (DHT start, paid downloads, …) if this client is below the
+/// policy's `min_required`. The frontend's blocking modal already
+/// prevents this in honest UIs; the backend gate stops anyone bypassing
+/// it via direct Tauri invokes.
+async fn ensure_version_supported(state: &AppState) -> Result<(), String> {
+    let policy = state.version_policy.lock().await.clone();
+    if compare_to_policy(version::CURRENT_VERSION, &policy) == "required" {
+        return Err(format!(
+            "This client (v{}) is below the network's required version (v{}). \
+             Update from {} to continue.",
+            version::CURRENT_VERSION,
+            policy.min_required,
+            policy.download_url
+        ));
+    }
+    Ok(())
+}
+
+/// Startup probe: pull the relay's `/api/version-policy`, log it, and
+/// store it in `AppState` if it's newer than what we already trust.
+/// `issuedAt` is the rollback-protection axis — refuse to replace a
+/// policy with one whose `issuedAt` is older than the stored one. The
+/// bundled policy starts at `issuedAt: 0`, so the first relay-supplied
+/// non-zero issuance always wins.
+async fn fetch_and_log_remote_version_policy(policy: Arc<Mutex<version::VersionPolicy>>) {
     let url = "http://130.245.173.73:8080/api/version-policy";
     let resp = match rpc_client::client()
         .get(url)
@@ -6082,19 +6188,34 @@ async fn fetch_and_log_remote_version_policy() {
         );
         return;
     }
-    match resp.json::<version::VersionPolicy>().await {
-        Ok(remote) => println!(
-            "[VERSION] Local build {} — relay says min={} recommended={} \
-             (no enforcement yet, Phase 1)",
+    let remote: version::VersionPolicy = match resp.json().await {
+        Ok(p) => p,
+        Err(e) => {
+            println!(
+                "[VERSION] Local build {} — could not parse relay policy: {}",
+                version::CURRENT_VERSION,
+                e
+            );
+            return;
+        }
+    };
+
+    let mut guard = policy.lock().await;
+    if remote.issued_at >= guard.issued_at {
+        let outcome = compare_to_policy(version::CURRENT_VERSION, &remote);
+        println!(
+            "[VERSION] Local build {} — relay says min={} recommended={} → {}",
             version::CURRENT_VERSION,
             remote.min_required,
-            remote.recommended
-        ),
-        Err(e) => println!(
-            "[VERSION] Local build {} — could not parse relay policy: {}",
-            version::CURRENT_VERSION,
-            e
-        ),
+            remote.recommended,
+            outcome
+        );
+        *guard = remote;
+    } else {
+        println!(
+            "[VERSION] Ignoring stale relay policy (issued_at {} < stored {})",
+            remote.issued_at, guard.issued_at
+        );
     }
 }
 
@@ -6185,15 +6306,19 @@ pub fn run() {
             hosting_server_shutdown: Arc::clone(&hosting_shutdown_for_exit),
             drive_state: Arc::new(drive_api::DriveState::new()),
             tunnel_handles: Arc::clone(&tunnel_handles_for_exit),
+            version_policy: Arc::new(Mutex::new(version::bundled_policy())),
         })
         .setup(|app| {
             use tauri::Manager;
             let app_handle = app.handle().clone();
 
-            // Phase 1 of version enforcement: kick off a background probe
-            // of the relay's /api/version-policy and log the result. No
-            // UI / no enforcement yet; this just exercises the wire.
-            tauri::async_runtime::spawn(fetch_and_log_remote_version_policy());
+            // Background probe of the relay's /api/version-policy. The
+            // result is stored on AppState's version_policy slot, which
+            // backs get_version_status() and the frontend's UpdateGate.
+            {
+                let policy = Arc::clone(&app.state::<AppState>().version_policy);
+                tauri::async_runtime::spawn(fetch_and_log_remote_version_policy(policy));
+            }
             // Auto-start local server with Drive routes on port 9419
             let state = app.state::<AppState>();
             let hosting: Arc<hosting_server::HostingServerState> =
@@ -6324,8 +6449,9 @@ pub fn run() {
             set_miner_address,
             // Diagnostics commands
             read_geth_log,
-            // Version policy (Phase 1: read-only)
+            // Version policy
             get_version_policy,
+            get_version_status,
             // Bootstrap health commands
             check_bootstrap_health,
             get_bootstrap_health,
