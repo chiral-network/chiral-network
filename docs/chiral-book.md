@@ -14,6 +14,7 @@ Chiral Network is a decentralized file sharing application built on peer-to-peer
 - [Backend Modules](#backend-modules)
 - [Blockchain and Mining](#blockchain-and-mining)
 - [Reputation System](#reputation-system)
+- [Version Enforcement](#version-enforcement)
 - [File Transfer Protocol](#file-transfer-protocol)
 - [Headless Mode and CLI](#headless-mode-and-cli)
 - [Docker and Scaled Testing](#docker-and-scaled-testing)
@@ -59,6 +60,12 @@ The application consists of three layers:
 - Unlimited download speed with a flat download fee of 0.01 CHI per MB.
 - 0.5% platform fee on all transactions (split between seller and platform wallet).
 
+### Folder Bundles
+- Sell an entire folder under a single content-addressed hash (SHA-256 of the owner address plus the sorted `(rel_path, file_hash)` list of every file in the folder).
+- The seller publishes a `chiral_folder_<hash>` manifest to the DHT and registers as a Kademlia provider for that hash. Each child file is seeded as normal.
+- Buyers paste the folder hash into Search, see the file list, total CHI cost, and the set of seeders that hold every file in the bundle (the "common seeders" intersection).
+- `Download Folder` confirms the total cost once and starts each child file's existing chunked transfer against the chosen seeder.
+
 ### ChiralDrop
 - Direct peer-to-peer file transfer between two users, similar to AirDrop.
 - Discover nearby peers on the network.
@@ -97,6 +104,12 @@ The application consists of three layers:
 - Hosted files are automatically seeded to the DHT.
 - CDN Servers tab: always-on infrastructure servers separated from peer hosts.
 
+### Site Directory (DNS-like)
+- Any user can publish a static site to a relay (the relay reverse-proxies it to a public URL) and then *claim a human-readable name* for it in the network's site directory.
+- Names are `[a-z0-9-]`, 1-63 chars, lowercased. **First claim wins**: subsequent attempts to claim the same name by a different wallet are rejected.
+- Directory entries live in the DHT under `chiral_site_directory` (registry of names) and per-name records, so any peer can resolve a name to its site without going through a central server.
+- Browse the site directory from the Hosts page to discover other peers' sites. Unpublishing a site clears the claim and frees the name.
+
 ### CDN Service
 - Always-on file hosting servers that keep files available when the uploader goes offline.
 - Market-based dynamic pricing: `max(floor_price, median_peer_price × 1.2)`.
@@ -104,6 +117,8 @@ The application consists of three layers:
 - Uploader sets a download price that other users pay to download from the CDN.
 - Files auto-expire and are cleaned up when the paid hosting duration elapses.
 - CDN re-seeds all active files to DHT on startup (15s after bootstrap).
+- Expiration cleanup runs every 60 seconds — files past their paid duration are removed from disk and from the DHT seeder list.
+- CDN can also host static sites (HTML/JS/CSS bundles), separate from per-file uploads.
 - Download page queries CDN servers directly as fallback when DHT search is slow.
 - Deployed at `130.245.173.73:9420` with 227 GB capacity.
 - Desktop app: Hosts → CDN Servers tab → Upload from Drive with payment confirmation.
@@ -276,8 +291,9 @@ The Rust backend is organized into the following modules under `src-tauri/src/`:
 | Speed Tiers | `speed_tiers.rs` | Download cost calculation (0.001 CHI/MB) |
 | Event Sink | `event_sink.rs` | Frontend event emission abstraction |
 | Geth Bootstrap | `geth_bootstrap.rs` | Bootstrap node health checking and selection |
+| Version Policy | `version.rs` | `VersionPolicy` types, Ed25519 sign/verify, `is_acceptable_remote_policy`, global effective-policy slot |
 
-Total: 23 Rust source files, 3 binary targets.
+Total: 24 Rust source files, 5 binary targets.
 
 ### Binary Targets
 
@@ -287,6 +303,7 @@ Total: 23 Rust source files, 3 binary targets.
 | `chiral` | `src-tauri/src/bin/chiral.rs` | Command-line interface |
 | `chiral_daemon` | `src-tauri/src/bin/chiral_daemon.rs` | Headless daemon server |
 | `relay_server` | `src-tauri/src/bin/relay_server.rs` | Relay and reputation server |
+| `chiral-policy-sign` | `src-tauri/src/bin/chiral_policy_sign.rs` | Operator CLI: keygen / sign / verify a `VersionPolicy` with the project's offline Ed25519 key |
 
 ---
 
@@ -382,6 +399,72 @@ Wallet addresses are normalized to lowercase for consistent lookup.
 
 ---
 
+## Version Enforcement
+
+Chiral Network ships a defence-in-depth scheme for keeping vulnerable client builds off the network. It is layered so a single bypass does not disable enforcement.
+
+### `VersionPolicy`
+
+The on-the-wire policy (`src-tauri/src/version.rs`) carries:
+
+| Field | Meaning |
+|-------|---------|
+| `minRequired` | Versions strictly below this are blocked. |
+| `recommended` | Versions below this trigger a soft "update available" nudge. |
+| `downloadUrl` | Where the UI sends users to upgrade. |
+| `message` | Optional human-readable reason (e.g. "fixes payment bug"). |
+| `issuedAt` | Unix-seconds the policy was issued (used for rollback protection). |
+| `validUntil` | Unix-seconds after which clients should re-fetch. `0` = no expiry. |
+| `signature` | Hex Ed25519 signature over a canonical NUL-separated payload. |
+
+Comparing the running build's `CARGO_PKG_VERSION` against the effective policy returns one of three states:
+
+- `ok` — version ≥ `recommended`, no UI.
+- `recommended` — `recommended > version ≥ minRequired`, soft banner the user can dismiss for the session.
+- `required` — `version < minRequired`, full-screen blocking modal (`UpdateGate.svelte`).
+
+### Enforcement layers
+
+1. **UI gate (`UpdateGate.svelte`)** — driven by `versionStore` over the Tauri `get_version_status` command; renders the soft banner / hard modal.
+2. **Tauri command gate** — `ensure_version_supported` is called from `start_dht_internal` and `start_download` so a stale build cannot join the DHT or initiate a download.
+3. **HTTP middleware** — every `/api/*` route on the gateway server (relay, daemon, desktop hosting) reads `X-Chiral-Client-Version` and returns `426 Upgrade Required` (with the policy JSON in the body) when the client is below `minRequired`. Health and `/api/version-policy` are exempted.
+4. **libp2p Identify** — `agent_version` is set to `chiral/<version>` and the Identify handler disconnects peers whose advertised version is below `minRequired`, blacklisting them so they aren't re-dialled.
+
+### Distribution
+
+Every binary embeds a `bundled_policy()` snapshot at compile time. On startup, the desktop app probes `http://130.245.173.73:8080/api/version-policy` (the relay's gateway) and promotes the result via `update_effective_policy()` if it passes acceptance. The same `/api/version-policy` route is mounted by the relay server, the headless daemon, and the desktop's hosting server, so any peer can read the network's current view of the policy.
+
+A global `EFFECTIVE_POLICY` slot (`OnceCell<RwLock<VersionPolicy>>`) holds the live policy. It's a sync `parking_lot::RwLock` because the libp2p event loop reads it from non-async contexts.
+
+### Acceptance rules (`is_acceptable_remote_policy`)
+
+A fetched policy replaces the current effective policy only if:
+
+1. **Rollback protection** — `remote.issuedAt` is not older than `current.issuedAt`.
+2. **Signature** — if `remote.signature` is non-empty, it must verify against `POLICY_PUBLIC_KEY`.
+3. **Unsigned transitional path** — if `current.signature` is empty *and* `remote.signature` is empty *and* `remote.minRequired` does not raise the floor above the binary's bundled `minRequired`, the policy is accepted. Once a signed policy has been adopted, unsigned remotes are no longer accepted.
+
+The transitional path lets relays advertise the recommended-version nudge before the project's offline signing key is wired in, while still preventing a hostile relay from raising `minRequired` to lock honest peers out.
+
+### Operator CLI: `chiral-policy-sign`
+
+The `chiral-policy-sign` binary signs and verifies policies with the project's offline Ed25519 key:
+
+```bash
+# Generate a new project keypair (paste the public hex into POLICY_PUBLIC_KEY).
+chiral-policy-sign keygen
+
+# Sign a policy JSON.
+chiral-policy-sign sign --key <secret-hex> --in policy.json --out policy.signed.json
+
+# Verify (defaults to the binary's compiled-in public key; --pub overrides).
+chiral-policy-sign verify --in policy.signed.json
+```
+
+`POLICY_PUBLIC_KEY` is currently a 32-byte zero placeholder. Until it is replaced with a real public key, signed policies cannot verify and only the unsigned-transitional path is active.
+
+---
+
 ## File Transfer Protocol
 
 Files are transferred using a custom request-response protocol built on libp2p.
@@ -425,13 +508,14 @@ chiral_daemon --port 9419 --auto-start-dht --auto-mine --miner-address 0xABC
 | `--miner-address` | `CHIRAL_MINER_ADDRESS` | none | Wallet for mining rewards |
 | `--mining-threads` | `CHIRAL_MINING_THREADS` | 1 | CPU mining threads |
 
-### Daemon API Endpoints (49 routes)
+### Daemon API Endpoints
 
-All headless paths prefixed with `/api/headless/` except health, ready, and drive routes.
+All headless paths are prefixed with `/api/headless/` except health, ready, drive, and the publicly-mounted `/api/version-policy`.
 
 | Category | Endpoints |
 |----------|-----------|
 | Health | `GET /api/health`, `GET /api/ready`, `GET runtime` |
+| Version policy | `GET /api/version-policy` — returns the currently-effective `VersionPolicy` (mounted on the gateway router; available on relay, daemon, and desktop hosting server alike) |
 | Wallet | `GET wallet`, `POST wallet/create`, `wallet/import`, `wallet/balance`, `wallet/send`, `wallet/receipt`, `wallet/history`, `wallet/faucet`; `GET wallet/chain-id` |
 | DHT | `POST dht/start`, `dht/stop`, `dht/put`, `dht/get`, `dht/ping`, `dht/echo`; `GET dht/health`, `dht/peers`, `dht/peer-id`, `dht/listening-addresses` |
 | Files | `POST file/search`, `dht/register-shared-file`, `dht/unregister-shared-file`, `dht/request-file`, `dht/send-file` |
@@ -439,6 +523,8 @@ All headless paths prefixed with `/api/headless/` except health, ready, and driv
 | Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
 | Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status`, `mining/blocks` |
 | Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
+| Site directory | Tauri-only: `publish_site_to_directory`, `unpublish_site_from_directory`, `resolve_site_name`, `list_directory_sites` (DHT-backed name claims, first-claim-wins) |
+| Folder bundles | Tauri-only: `publish_drive_folder`, `unpublish_drive_folder`, `search_folder` (one content-addressed hash per folder) |
 | CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash`; `PUT cdn/files/:hash` |
 | Drive | Full CRUD via `/api/drive/*` (requires `X-Owner` header) |
 | Diagnostics | `GET bootstrap-health` |
