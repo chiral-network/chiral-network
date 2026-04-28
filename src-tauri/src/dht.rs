@@ -1153,7 +1153,12 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     let ping =
         ping::Behaviour::new(ping::Config::new().with_interval(std::time::Duration::from_secs(15)));
 
-    let identify_config = identify::Config::new("/chiral/id/1.0.0".to_string(), local_key.public());
+    // Phase 4 of version enforcement: stamp our compile-time version into
+    // the Identify `agent_version` so remote peers can decide whether to
+    // talk to us. Format matches the version-policy comparator (a leading
+    // semver is parsed; "chiral/" prefix is informational).
+    let identify_config = identify::Config::new("/chiral/id/1.0.0".to_string(), local_key.public())
+        .with_agent_version(crate::version::agent_version_string());
     let identify = identify::Behaviour::new(identify_config);
 
     let ping_protocol = request_response::cbor::Behaviour::new(
@@ -2048,7 +2053,7 @@ async fn event_loop(
                             &mut pending_file_attempts,
                             &mut pending_file_hashes,
                             &download_credentials,
-                            &failed_peers,
+                            &mut failed_peers,
                             &mut auto_peer_dial_attempts,
                             &mut pending_echo,
                         )
@@ -2683,7 +2688,7 @@ async fn handle_behaviour_event(
     pending_file_attempts: &mut HashMap<String, usize>,
     pending_file_hashes: &mut HashMap<String, String>,
     download_credentials: &DownloadCredentialsMap,
-    failed_peers: &HashSet<PeerId>,
+    failed_peers: &mut HashSet<PeerId>,
     auto_peer_dial_attempts: &mut HashMap<PeerId, Instant>,
     pending_echo: &mut HashMap<
         request_response::OutboundRequestId,
@@ -3230,6 +3235,34 @@ async fn handle_behaviour_event(
             }
         }
         DhtBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
+            // Phase 4 of version enforcement: drop peers whose Identify
+            // says they're below our bundled `min_required`. The peer's
+            // agent_version is the same string we set in our own
+            // identify config — usually "chiral/<semver>" — so we strip
+            // the prefix and run it through the shared comparator.
+            //
+            // Bundled-policy lookup is intentional: the local AppState
+            // policy slot lives behind an async Mutex and the swarm
+            // event handler is sync, so reaching for it here would mean
+            // a `block_on` that we don't want to take in the libp2p
+            // poll loop. The bundled policy is the floor every build
+            // ships with anyway; Phase 5 will pipe the AppState policy
+            // through if/when we want runtime overrides.
+            let policy = crate::version::bundled_policy();
+            let agent_v = info
+                .agent_version
+                .trim_start_matches("chiral/")
+                .trim_start_matches('v');
+            if crate::version::version_is_below(agent_v, &policy.min_required) {
+                println!(
+                    "🚫 Disconnecting peer {} (agent_version='{}' < min_required={})",
+                    peer_id, info.agent_version, policy.min_required
+                );
+                let _ = swarm.disconnect_peer_id(peer_id);
+                failed_peers.insert(peer_id);
+                return;
+            }
+
             // Skip peers that previously failed to connect
             if !failed_peers.contains(&peer_id) {
                 // Add all listen addresses to Kademlia for routing.

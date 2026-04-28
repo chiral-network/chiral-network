@@ -147,12 +147,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut kad = kad::Behaviour::with_config(local_peer_id, kad_store, kad_config);
     kad.set_mode(Some(kad::Mode::Server));
 
-    // Configure Identify - accept both v1 and v2 protocol versions
+    // Configure Identify - accept both v1 and v2 protocol versions.
+    // Phase 4 of version enforcement: stamp the relay's compile-time
+    // version in agent_version so peers can drop us if we get out of
+    // date, and we'll likewise drop peers that come in too old.
     let identify = identify::Behaviour::new(
         identify::Config::new(
             "/chiral/id/1.0.0".to_string(),
             local_key.public(),
-        ),
+        )
+        .with_agent_version(chiral_network::version::agent_version_string()),
     );
 
     let ping = ping::Behaviour::new(
@@ -280,6 +284,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                     RelayServerBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
+                        // Phase 4 of version enforcement: drop peers whose
+                        // Identify says they're below our bundled
+                        // min_required. Same comparator as the Tauri client
+                        // and the gateway middleware.
+                        {
+                            let policy = chiral_network::version::bundled_policy();
+                            let agent_v = info
+                                .agent_version
+                                .trim_start_matches("chiral/")
+                                .trim_start_matches('v');
+                            if chiral_network::version::version_is_below(agent_v, &policy.min_required) {
+                                println!(
+                                    "🚫 [IDENTIFY] Disconnecting {} — agent_version='{}' < min_required={}",
+                                    peer_id, info.agent_version, policy.min_required
+                                );
+                                let _ = swarm.disconnect_peer_id(peer_id);
+                                continue;
+                            }
+                        }
+
                         // Only add routable addresses to Kademlia:
                         // - Relay circuit addresses (always reachable)
                         // - Public IPs (not private/link-local/loopback)
