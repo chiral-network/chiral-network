@@ -16,6 +16,7 @@ pub mod rating_storage;
 pub mod relay_share_proxy;
 pub mod rpc_client;
 mod speed_tiers;
+pub mod version;
 pub mod wallet;
 pub mod wallet_backup_api;
 
@@ -6038,6 +6039,65 @@ async fn unpublish_drive_share(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Version policy plumbing (Phase 1)
+// ---------------------------------------------------------------------------
+
+/// Returns the version policy this build was compiled with. Phase 1 of
+/// the version-enforcement plan: clients can already call this Tauri
+/// command to know what the binary thinks the network's expectations
+/// look like. Phase 2 will overlay the network-fetched policy on top.
+#[tauri::command]
+fn get_version_policy() -> version::VersionPolicy {
+    version::bundled_policy()
+}
+
+/// Phase 1 startup probe: ask the relay what version policy it's
+/// advertising and log a one-line comparison against our compiled-in
+/// version. No enforcement — this just gets the telemetry path warm
+/// before the UI / network rejection layers in later phases.
+async fn fetch_and_log_remote_version_policy() {
+    let url = "http://130.245.173.73:8080/api/version-policy";
+    let resp = match rpc_client::client()
+        .get(url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            println!(
+                "[VERSION] Local build {} — relay policy fetch failed: {}",
+                version::CURRENT_VERSION,
+                e
+            );
+            return;
+        }
+    };
+    if !resp.status().is_success() {
+        println!(
+            "[VERSION] Local build {} — relay policy returned HTTP {}",
+            version::CURRENT_VERSION,
+            resp.status()
+        );
+        return;
+    }
+    match resp.json::<version::VersionPolicy>().await {
+        Ok(remote) => println!(
+            "[VERSION] Local build {} — relay says min={} recommended={} \
+             (no enforcement yet, Phase 1)",
+            version::CURRENT_VERSION,
+            remote.min_required,
+            remote.recommended
+        ),
+        Err(e) => println!(
+            "[VERSION] Local build {} — could not parse relay policy: {}",
+            version::CURRENT_VERSION,
+            e
+        ),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
@@ -6129,6 +6189,11 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
             let app_handle = app.handle().clone();
+
+            // Phase 1 of version enforcement: kick off a background probe
+            // of the relay's /api/version-policy and log the result. No
+            // UI / no enforcement yet; this just exercises the wire.
+            tauri::async_runtime::spawn(fetch_and_log_remote_version_policy());
             // Auto-start local server with Drive routes on port 9419
             let state = app.state::<AppState>();
             let hosting: Arc<hosting_server::HostingServerState> =
@@ -6259,6 +6324,8 @@ pub fn run() {
             set_miner_address,
             // Diagnostics commands
             read_geth_log,
+            // Version policy (Phase 1: read-only)
+            get_version_policy,
             // Bootstrap health commands
             check_bootstrap_health,
             get_bootstrap_health,
