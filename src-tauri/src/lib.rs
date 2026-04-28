@@ -3689,6 +3689,7 @@ async fn create_hosted_site(
         created_at: now,
         files: site_files,
         relay_url: None,
+        cdn_url: None,
         directory_name: None,
     };
 
@@ -4045,6 +4046,261 @@ async fn unpublish_site_from_relay(
 }
 
 // ---------------------------------------------------------------------------
+// CDN site hosting — always-on counterpart to relay tunnels.
+//
+// Relay-published sites stop responding when the local daemon goes offline
+// (the relay is just a reverse proxy through a WebSocket tunnel that the
+// owner's process holds open). Uploading to a CDN copies every file to the
+// CDN's disk, so visitors keep getting served even when the owner closes
+// their app.
+//
+// The CDN charges price-per-MB-month × site_size_mb × duration; the client
+// pays the CDN's wallet and POSTs a multipart/form-data of every file with
+// each form-field's filename set to the file's path relative to the site
+// root. The CDN serves the result at <cdn_base>/cdn/sites/<site_id>/.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CdnSitePublishResult {
+    site_id: String,
+    cdn_url: String,
+    file_count: u32,
+    total_size_bytes: u64,
+    expires_at: u64,
+    payment_tx: String,
+}
+
+#[tauri::command]
+async fn publish_site_to_cdn(
+    site_id: String,
+    cdn_url: String,
+    duration_days: Option<u64>,
+    owner_wallet: String,
+    private_key: String,
+) -> Result<CdnSitePublishResult, String> {
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("Wallet must be unlocked before publishing to a CDN".into());
+    }
+    let duration_days = duration_days.unwrap_or(30);
+    if duration_days == 0 {
+        return Err("Duration must be at least 1 day".into());
+    }
+
+    // Look up the site + walk every file on disk so we can submit the full
+    // tree as a multipart upload.
+    let mut all_sites = hosting::load_sites();
+    let site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+    let site_dir = std::path::PathBuf::from(&site.directory);
+    if !site_dir.is_dir() {
+        return Err(format!("Site directory missing on disk: {}", site.directory));
+    }
+
+    // Read every file. We collect (rel_path, bytes) pairs because we need
+    // the total size for the price quote AND we can reuse the bytes for
+    // the multipart body without a second walk.
+    fn collect_files(
+        root: &std::path::Path,
+        cur: &std::path::Path,
+        out: &mut Vec<(String, Vec<u8>)>,
+    ) -> Result<(), String> {
+        let entries = std::fs::read_dir(cur)
+            .map_err(|e| format!("Read dir {}: {}", cur.display(), e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Read dir entry: {}", e))?;
+            let path = entry.path();
+            let ft = entry.file_type().map_err(|e| format!("File type: {}", e))?;
+            if ft.is_dir() {
+                collect_files(root, &path, out)?;
+            } else if ft.is_file() {
+                let rel = path
+                    .strip_prefix(root)
+                    .map_err(|e| format!("Strip prefix: {}", e))?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| format!("Read file {}: {}", path.display(), e))?;
+                out.push((rel, bytes));
+            }
+        }
+        Ok(())
+    }
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    collect_files(&site_dir, &site_dir, &mut files)?;
+    if files.is_empty() {
+        return Err("Site directory is empty".into());
+    }
+    let total_size: u64 = files.iter().map(|(_, b)| b.len() as u64).sum();
+
+    // Get pricing + CDN wallet so we know who to pay and how much.
+    let cdn_base = cdn_url.trim_end_matches('/').to_string();
+    let size_mb = total_size as f64 / (1024.0 * 1024.0);
+    let pricing_url = format!(
+        "{}/api/cdn/pricing?sizeMb={}&durationDays={}",
+        cdn_base, size_mb, duration_days
+    );
+    let pricing: serde_json::Value = rpc_client::client()
+        .get(&pricing_url)
+        .send()
+        .await
+        .map_err(|e| format!("CDN pricing request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Parse pricing response: {}", e))?;
+    let total_cost_chi = pricing
+        .get("totalCostChi")
+        .and_then(|v| v.as_str())
+        .ok_or("CDN pricing response missing totalCostChi")?
+        .to_string();
+
+    let status: serde_json::Value = rpc_client::client()
+        .get(&format!("{}/api/cdn/status", cdn_base))
+        .send()
+        .await
+        .map_err(|e| format!("CDN status request failed: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("Parse status response: {}", e))?;
+    let cdn_wallet = status
+        .get("walletAddress")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or("CDN wallet address not configured")?
+        .to_string();
+
+    // Pay the CDN.
+    let payment_tx = if total_cost_chi == "0" {
+        String::new()
+    } else {
+        let endpoint = geth::wallet_rpc_endpoint();
+        let result = wallet::send_transaction(
+            &endpoint,
+            &owner_wallet,
+            &cdn_wallet,
+            &total_cost_chi,
+            &private_key,
+        )
+        .await
+        .map_err(|e| format!("CDN payment failed: {}", e))?;
+        result.hash
+    };
+
+    // Multipart upload — each file gets a separate form-data part with the
+    // relative path stuck into the filename slot.
+    let mut form = reqwest::multipart::Form::new();
+    for (rel_path, bytes) in files.iter() {
+        let part = reqwest::multipart::Part::bytes(bytes.clone())
+            .file_name(rel_path.clone())
+            .mime_str("application/octet-stream")
+            .map_err(|e| format!("Build multipart part: {}", e))?;
+        form = form.part("file", part);
+    }
+    let upload_url = format!("{}/api/cdn/sites/upload", cdn_base);
+    let resp = rpc_client::client()
+        .post(&upload_url)
+        .header("X-Site-Id", &site_id)
+        .header("X-Site-Name", &site.name)
+        .header("X-Owner-Wallet", &owner_wallet)
+        .header("X-Payment-Tx", &payment_tx)
+        .header("X-Duration-Days", duration_days.to_string())
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("CDN upload failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("CDN returned {}: {}", status, text));
+    }
+    let resp_body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Parse CDN response: {}", e))?;
+    let expires_at = resp_body
+        .get("expiresAt")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let file_count = resp_body
+        .get("fileCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(files.len() as u64) as u32;
+
+    let public_url = format!("{}/cdn/sites/{}/", cdn_base, site_id);
+
+    // Persist the CDN URL on the local site so the UI can show it.
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.cdn_url = Some(public_url.clone());
+    }
+    hosting::save_sites(&all_sites);
+
+    println!(
+        "[HOSTING] Site {} uploaded to CDN: {} ({} files, {} bytes)",
+        site_id, public_url, file_count, total_size
+    );
+    Ok(CdnSitePublishResult {
+        site_id,
+        cdn_url: public_url,
+        file_count,
+        total_size_bytes: total_size,
+        expires_at,
+        payment_tx,
+    })
+}
+
+#[tauri::command]
+async fn unpublish_site_from_cdn(
+    site_id: String,
+    cdn_url: Option<String>,
+    owner_wallet: String,
+) -> Result<(), String> {
+    if owner_wallet.is_empty() {
+        return Err("Wallet required to unpublish from a CDN".into());
+    }
+    let mut all_sites = hosting::load_sites();
+    let site = all_sites
+        .iter()
+        .find(|s| s.id == site_id)
+        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .clone();
+
+    // Pull the CDN base from either the explicit arg or the persisted URL.
+    let cdn_base = cdn_url
+        .or_else(|| site.cdn_url.clone())
+        .ok_or_else(|| "Site is not published to any CDN".to_string())?;
+    let cdn_base = match cdn_base.find("/cdn/sites/") {
+        Some(pos) => cdn_base[..pos].to_string(),
+        None => cdn_base.trim_end_matches('/').to_string(),
+    };
+
+    let url = format!(
+        "{}/api/cdn/sites/{}?owner={}",
+        cdn_base, site_id, owner_wallet
+    );
+    let resp = rpc_client::client()
+        .delete(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to CDN: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("CDN returned {}: {}", status, text));
+    }
+
+    if let Some(s) = all_sites.iter_mut().find(|s| s.id == site_id) {
+        s.cdn_url = None;
+    }
+    hosting::save_sites(&all_sites);
+
+    println!("[HOSTING] Site {} removed from CDN", site_id);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Site directory ("DNS-like" name resolution for hosted sites).
 //
 // Each user can claim a human-readable name for their relay-published site
@@ -4123,10 +4379,16 @@ async fn publish_site_to_directory(
         .find(|s| s.id == site_id)
         .ok_or_else(|| format!("Site not found: {}", site_id))?
         .clone();
+    // Prefer the CDN URL when one is set — CDN-hosted sites stay reachable
+    // even when the local client is offline. Fall back to the relay URL
+    // (which is only live while the owner's daemon is running).
     let public_url = site
-        .relay_url
+        .cdn_url
         .clone()
-        .ok_or_else(|| "Publish site to a relay first — visitors need a public URL".to_string())?;
+        .or_else(|| site.relay_url.clone())
+        .ok_or_else(|| {
+            "Publish site to a relay or CDN first — visitors need a public URL".to_string()
+        })?;
 
     let dht = {
         let dht_guard = state.dht.lock().await;
@@ -5737,6 +5999,8 @@ pub fn run() {
             get_hosting_server_status,
             publish_site_to_relay,
             unpublish_site_from_relay,
+            publish_site_to_cdn,
+            unpublish_site_from_cdn,
             publish_site_to_directory,
             unpublish_site_from_directory,
             resolve_site_name,

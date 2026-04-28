@@ -309,6 +309,7 @@ async fn upload_site(
         created_at: now,
         files: site_files,
         relay_url: None,
+        cdn_url: None,
         directory_name: None,
     };
 
@@ -529,7 +530,8 @@ mod tests {
             created_at: 0,
             files: vec![],
             relay_url: None,
-            directory_name: None,
+            cdn_url: None,
+        directory_name: None,
         }
     }
 
