@@ -27,6 +27,11 @@ pub struct HostedSite {
     /// URL on a relay gateway, if published (e.g. "http://130.245.173.73:8080/sites/a1b2c3d4/")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_url: Option<String>,
+    /// URL on a CDN server, if uploaded for always-on hosting
+    /// (e.g. "http://130.245.173.73:9420/cdn/sites/a1b2c3d4/"). Unlike
+    /// the relay URL, this stays reachable when the local client is offline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cdn_url: Option<String>,
     /// Human-readable name registered in the network site directory, if any
     /// (e.g. "alice"). Shows up in the Browse Sites listing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -191,6 +196,7 @@ mod tests {
                 SiteFile { path: "css/style.css".into(), size: 512 },
             ],
             relay_url: None,
+            cdn_url: None,
             directory_name: None,
         };
         let json = serde_json::to_string(&site).unwrap();

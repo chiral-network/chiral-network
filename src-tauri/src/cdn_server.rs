@@ -57,10 +57,37 @@ pub struct CdnEntry {
     pub expires_at: u64,
 }
 
+/// One site hosted on this CDN — the always-on counterpart to
+/// `/sites/<id>` served by `hosting_server.rs` against the user's local
+/// daemon. CDN-hosted sites stay reachable when their owner is offline.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CdnSiteEntry {
+    /// Site ID (same opaque ID the user has locally, so we can correlate
+    /// HostedSite ↔ CdnSiteEntry without an extra mapping).
+    pub site_id: String,
+    /// Optional human-readable label (carried over from the local site).
+    #[serde(default)]
+    pub name: String,
+    pub owner_wallet: String,
+    /// Total bytes summed across every file in the site.
+    pub total_size_bytes: u64,
+    pub file_count: u32,
+    pub price_chi_per_month: String,
+    pub payment_tx: String,
+    pub uploaded_at: u64,
+    pub expires_at: u64,
+}
+
 pub struct CdnState {
     pub storage_dir: PathBuf,
     pub registry_path: PathBuf,
     pub registry: AsyncMutex<Vec<CdnEntry>>,
+    /// Subdirectory (`<storage_dir>/sites/<site_id>/<rel_path>`) holding
+    /// every CDN-hosted site's filesystem tree.
+    pub sites_dir: PathBuf,
+    pub sites_registry_path: PathBuf,
+    pub sites_registry: AsyncMutex<Vec<CdnSiteEntry>>,
     pub wallet_address: String,
     pub price_wei_per_mb_month: u128,
     pub dht: Arc<AsyncMutex<Option<Arc<DhtService>>>>,
@@ -78,15 +105,38 @@ impl CdnState {
         let storage_dir = network::data_dir().join("cdn");
         let registry_path = network::data_dir().join("cdn_registry.json");
         let registry = load_registry(&registry_path).await;
+        let sites_dir = storage_dir.join("sites");
+        let sites_registry_path = network::data_dir().join("cdn_sites_registry.json");
+        let sites_registry = load_sites_registry(&sites_registry_path).await;
         let price_wei_per_mb_month = read_price_env();
         Self {
             storage_dir,
             registry_path,
             registry: AsyncMutex::new(registry),
+            sites_dir,
+            sites_registry_path,
+            sites_registry: AsyncMutex::new(sites_registry),
             wallet_address,
             price_wei_per_mb_month,
             dht,
         }
+    }
+
+    /// Mirror of `with_registry` for the sites registry. Acquires the
+    /// per-sites lock, lets the closure mutate the in-memory vec, and
+    /// re-persists to disk before releasing.
+    async fn with_sites_registry<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Vec<CdnSiteEntry>) -> R,
+    {
+        let mut guard = self.sites_registry.lock().await;
+        let result = f(&mut guard);
+        save_sites_registry(&self.sites_registry_path, &guard).await;
+        result
+    }
+
+    async fn sites_snapshot(&self) -> Vec<CdnSiteEntry> {
+        self.sites_registry.lock().await.clone()
     }
 
     /// Run a closure with mutable access to the registry, re-persisting
@@ -123,6 +173,22 @@ async fn save_registry(path: &PathBuf, entries: &[CdnEntry]) {
     }
 }
 
+async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+async fn save_sites_registry(path: &PathBuf, entries: &[CdnSiteEntry]) {
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Ok(json) = serde_json::to_string_pretty(entries) {
+        let _ = tokio::fs::write(path, json).await;
+    }
+}
+
 /// Price per MB per month, in wei. Operator sets `CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH`
 /// as a CHI decimal (e.g. `0.001`); default 0.001 CHI = 1e15 wei.
 fn read_price_env() -> u128 {
@@ -139,6 +205,11 @@ fn read_price_env() -> u128 {
 
 /// `axum::Router` with every `/api/cdn/*` route mounted. `chiral_daemon`
 /// composes this into its top-level router.
+///
+/// CDN-hosted sites use a `/cdn/sites/<id>/*` URL prefix to avoid
+/// colliding with the daemon's existing `/sites/<id>/*` route, which is
+/// served by `hosting_server.rs` against the local-only `hosted_sites.json`
+/// (empty on a CDN-only deployment, but the route slot is still claimed).
 pub fn router(state: Arc<CdnState>) -> Router {
     Router::new()
         .route(
@@ -149,6 +220,16 @@ pub fn router(state: Arc<CdnState>) -> Router {
         .route("/api/cdn/files/:file_hash", delete(delete_file).put(update_price))
         .route("/api/cdn/pricing", get(pricing))
         .route("/api/cdn/status", get(status))
+        // ── CDN-hosted sites ──────────────────────────────────────────
+        .route(
+            "/api/cdn/sites/upload",
+            post(upload_site).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+        )
+        .route("/api/cdn/sites", get(list_sites))
+        .route("/api/cdn/sites/:site_id", delete(delete_site))
+        .route("/cdn/sites/:site_id", get(serve_site_redirect))
+        .route("/cdn/sites/:site_id/", get(serve_site_root))
+        .route("/cdn/sites/:site_id/*path", get(serve_site_file))
         .with_state(state)
 }
 
@@ -521,17 +602,36 @@ pub async fn expiration_loop(state: Arc<CdnState>) {
                 expired
             })
             .await;
-        if expired.is_empty() {
-            continue;
-        }
-        let dht = state.dht.lock().await.as_ref().cloned();
-        for entry in &expired {
-            let _ = tokio::fs::remove_file(state.storage_dir.join(&entry.file_hash)).await;
-            if let Some(ref d) = dht {
-                unregister_in_dht(d, &entry.file_hash).await;
+        if !expired.is_empty() {
+            let dht = state.dht.lock().await.as_ref().cloned();
+            for entry in &expired {
+                let _ = tokio::fs::remove_file(state.storage_dir.join(&entry.file_hash)).await;
+                if let Some(ref d) = dht {
+                    unregister_in_dht(d, &entry.file_hash).await;
+                }
             }
+            println!("[CDN] Expiration cleanup removed {} files", expired.len());
         }
-        println!("[CDN] Expiration cleanup removed {} files", expired.len());
+
+        // Same housekeeping for hosted sites — drop expired registry rows
+        // and rm -rf each site's directory so we don't pay disk for sites
+        // whose hosting term is up.
+        let expired_sites = state
+            .with_sites_registry(|r| {
+                let expired: Vec<CdnSiteEntry> = r.iter().filter(|e| e.expires_at <= now).cloned().collect();
+                r.retain(|e| e.expires_at > now);
+                expired
+            })
+            .await;
+        if !expired_sites.is_empty() {
+            for site in &expired_sites {
+                let _ = tokio::fs::remove_dir_all(state.sites_dir.join(&site.site_id)).await;
+            }
+            println!(
+                "[CDN] Expiration cleanup removed {} sites",
+                expired_sites.len()
+            );
+        }
     }
 }
 
@@ -600,6 +700,351 @@ async fn unregister_in_dht(dht: &Arc<DhtService>, file_hash: &str) {
 
     // Stage 2: stop being a Kademlia provider for this file.
     let _ = crate::remove_seeder_entry(dht, file_hash).await;
+}
+
+// ============================================================================
+// Site hosting on the CDN — always-on counterpart to local hosting_server.
+//
+// Wire format for `POST /api/cdn/sites/upload`:
+//   - X-Site-Id          (required) opaque id (8+ chars [a-z0-9-_])
+//   - X-Site-Name        (optional) display name
+//   - X-Owner-Wallet     (required)
+//   - X-Payment-Tx       (required)
+//   - X-Duration-Days    (default 30)
+//   - body: multipart/form-data with one or more `file` fields. Each
+//     field's `filename` is the file's path relative to the site root
+//     (e.g. "index.html", "assets/style.css"). Path traversal is rejected.
+// ============================================================================
+
+fn validate_site_id(id: &str) -> Result<&str, &'static str> {
+    if id.is_empty() || id.len() > 64 {
+        return Err("Invalid site id");
+    }
+    let ok = id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !ok {
+        return Err("Site id may only contain a-z, 0-9, '-', '_'");
+    }
+    Ok(id)
+}
+
+/// Reject `..`, null, absolute paths, and Windows drive letters from
+/// site-relative file paths during upload + serve.
+fn validate_site_rel_path(path: &str) -> Result<&str, &'static str> {
+    if path.is_empty() {
+        return Err("Empty file path");
+    }
+    if path.contains('\0') || path.starts_with('/') || path.starts_with('\\') {
+        return Err("Invalid file path");
+    }
+    for component in path.split(&['/', '\\']) {
+        if component == ".." || component.is_empty() {
+            return Err("Path traversal not allowed");
+        }
+    }
+    Ok(path)
+}
+
+/// POST /api/cdn/sites/upload — multipart upload of every file in a site.
+async fn upload_site(
+    State(s): State<Arc<CdnState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Response {
+    let site_id_raw = hdr(&headers, "X-Site-Id");
+    let site_id = match validate_site_id(&site_id_raw) {
+        Ok(id) => id.to_string(),
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let site_name = {
+        let n = hdr(&headers, "X-Site-Name");
+        if n.is_empty() { site_id.clone() } else { n }
+    };
+    let owner_wallet = hdr(&headers, "X-Owner-Wallet");
+    let payment_tx = hdr(&headers, "X-Payment-Tx");
+    let duration_days: u64 = hdr(&headers, "X-Duration-Days").parse().unwrap_or(30);
+
+    if owner_wallet.is_empty() || payment_tx.is_empty() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "X-Owner-Wallet and X-Payment-Tx headers required",
+        );
+    }
+    if s.wallet_address.is_empty() {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "CDN wallet not configured");
+    }
+
+    // Verify-mining runs in parallel with reading the multipart body.
+    let tx_for_task = payment_tx.clone();
+    let mined_task = tokio::spawn(async move {
+        crate::wallet::wait_for_tx_mined(&tx_for_task).await
+    });
+
+    // Buffer all files in memory so we can compute the total size + verify
+    // payment before we touch disk. Per-file 50 MB and total 500 MB caps
+    // mirror the file-upload path's body limits.
+    const MAX_TOTAL: u64 = 500 * 1024 * 1024;
+    const MAX_PER_FILE: u64 = 50 * 1024 * 1024;
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total: u64 = 0;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")),
+        };
+        if field.name() != Some("file") {
+            continue;
+        }
+        let rel_path = match field.file_name().map(String::from) {
+            Some(name) if !name.is_empty() => name,
+            _ => return err(StatusCode::BAD_REQUEST, "Multipart file missing filename"),
+        };
+        if let Err(e) = validate_site_rel_path(&rel_path) {
+            return err(StatusCode::BAD_REQUEST, e);
+        }
+        let bytes = match field.bytes().await {
+            Ok(b) => b.to_vec(),
+            Err(e) => return err(StatusCode::BAD_REQUEST, &format!("Read file: {e}")),
+        };
+        if bytes.is_empty() {
+            return err(StatusCode::BAD_REQUEST, "Empty file in upload");
+        }
+        if bytes.len() as u64 > MAX_PER_FILE {
+            return err(StatusCode::BAD_REQUEST, "File exceeds 50 MB per-file limit");
+        }
+        total += bytes.len() as u64;
+        if total > MAX_TOTAL {
+            return err(StatusCode::BAD_REQUEST, "Site exceeds 500 MB total limit");
+        }
+        entries.push((rel_path, bytes));
+    }
+    if entries.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "No files in upload");
+    }
+
+    let total_mb = total as f64 / (1024.0 * 1024.0);
+    let months = duration_days as f64 / 30.0;
+    let required_wei = (s.price_wei_per_mb_month as f64 * total_mb * months) as u128;
+    let min_accepted_wei = required_wei * 95 / 100;
+
+    // Wait for the tx to mine.
+    let mined = match mined_task.await {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Verify failed: {e}")),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Verify task panicked: {e}")),
+    };
+    if !mined {
+        return err(
+            StatusCode::PAYMENT_REQUIRED,
+            &format!("Payment not confirmed in time. Tx: {payment_tx}"),
+        );
+    }
+
+    // Then sender / recipient / amount.
+    match crate::wallet::verify_tx_details(
+        &payment_tx,
+        &owner_wallet,
+        &s.wallet_address,
+        min_accepted_wei,
+    )
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return err(
+                StatusCode::PAYMENT_REQUIRED,
+                &format!(
+                    "Payment details mismatch. Expected from={owner_wallet} to={} amount>={min_accepted_wei}",
+                    s.wallet_address
+                ),
+            );
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Detail check: {e}")),
+    }
+
+    // Write the entire tree under <sites_dir>/<site_id>/. Any pre-existing
+    // copy of this site is replaced (re-publish overwrites).
+    let site_root = s.sites_dir.join(&site_id);
+    let _ = tokio::fs::remove_dir_all(&site_root).await;
+    if let Err(e) = tokio::fs::create_dir_all(&site_root).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Create site dir: {e}"));
+    }
+    for (rel_path, bytes) in &entries {
+        let dest = site_root.join(rel_path);
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Create dir: {e}"));
+            }
+        }
+        if let Err(e) = tokio::fs::write(&dest, bytes).await {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write file: {e}"));
+        }
+    }
+
+    let now = now_secs();
+    let expires = now + duration_days * 86400;
+    let entry = CdnSiteEntry {
+        site_id: site_id.clone(),
+        name: site_name,
+        owner_wallet: owner_wallet.clone(),
+        total_size_bytes: total,
+        file_count: entries.len() as u32,
+        price_chi_per_month: wei_to_chi(s.price_wei_per_mb_month),
+        payment_tx: payment_tx.clone(),
+        uploaded_at: now,
+        expires_at: expires,
+    };
+    let entry_for_resp = entry.clone();
+    s.with_sites_registry(|r| {
+        r.retain(|e| e.site_id != site_id);
+        r.push(entry);
+    })
+    .await;
+
+    Json(json!({
+        "status": "uploaded",
+        "siteId": site_id,
+        "fileCount": entry_for_resp.file_count,
+        "totalSizeBytes": entry_for_resp.total_size_bytes,
+        "expiresAt": expires,
+        "pricing": {
+            "pricePerMbMonthChi": wei_to_chi(s.price_wei_per_mb_month),
+            "totalCostChi": wei_to_chi(required_wei),
+            "totalCostWei": required_wei.to_string(),
+            "durationDays": duration_days,
+            "source": "fixed",
+        }
+    }))
+    .into_response()
+}
+
+/// GET /api/cdn/sites?owner=0xABC — list non-expired sites, optionally
+/// scoped to one owner.
+async fn list_sites(
+    State(s): State<Arc<CdnState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
+    let now = now_secs();
+    let sites: Vec<CdnSiteEntry> = s
+        .sites_snapshot()
+        .await
+        .into_iter()
+        .filter(|e| {
+            e.expires_at > now
+                && (owner_filter.is_empty() || e.owner_wallet.to_lowercase() == owner_filter)
+        })
+        .collect();
+    let total_bytes: u64 = sites.iter().map(|e| e.total_size_bytes).sum();
+    Json(json!({
+        "sites": sites,
+        "totalSites": sites.len(),
+        "storageUsedBytes": total_bytes,
+    }))
+    .into_response()
+}
+
+/// DELETE /api/cdn/sites/:site_id?owner=0xABC — remove site files + registry.
+async fn delete_site(
+    State(s): State<Arc<CdnState>>,
+    AxumPath(site_id): AxumPath<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let owner = params.get("owner").cloned().unwrap_or_default().to_lowercase();
+    if owner.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "owner query param required");
+    }
+    let removed = s
+        .with_sites_registry(|r| {
+            let before = r.len();
+            r.retain(|e| !(e.site_id == site_id && e.owner_wallet.to_lowercase() == owner));
+            before != r.len()
+        })
+        .await;
+    if !removed {
+        return err(StatusCode::NOT_FOUND, "Site not found or not owned by this wallet");
+    }
+    let site_root = s.sites_dir.join(&site_id);
+    let _ = tokio::fs::remove_dir_all(&site_root).await;
+    Json(json!({ "status": "deleted", "siteId": site_id })).into_response()
+}
+
+async fn serve_site_redirect(AxumPath(site_id): AxumPath<String>) -> Response {
+    (
+        StatusCode::PERMANENT_REDIRECT,
+        [("Location", format!("/cdn/sites/{}/", site_id))],
+    )
+        .into_response()
+}
+
+async fn serve_site_root(
+    State(s): State<Arc<CdnState>>,
+    AxumPath(site_id): AxumPath<String>,
+) -> Response {
+    serve_site_path_inner(&s, &site_id, "index.html").await
+}
+
+async fn serve_site_file(
+    State(s): State<Arc<CdnState>>,
+    AxumPath((site_id, file_path)): AxumPath<(String, String)>,
+) -> Response {
+    let path = if file_path.is_empty() || file_path == "/" {
+        "index.html"
+    } else {
+        &file_path
+    };
+    serve_site_path_inner(&s, &site_id, path).await
+}
+
+async fn serve_site_path_inner(s: &CdnState, site_id: &str, requested_path: &str) -> Response {
+    if validate_site_id(site_id).is_err() {
+        return err(StatusCode::BAD_REQUEST, "Invalid site id");
+    }
+    if let Err(e) = validate_site_rel_path(requested_path) {
+        return err(StatusCode::BAD_REQUEST, e);
+    }
+    // Verify the site is in the registry and not expired.
+    let now = now_secs();
+    let known = s
+        .sites_snapshot()
+        .await
+        .into_iter()
+        .any(|e| e.site_id == site_id && e.expires_at > now);
+    if !known {
+        return err(StatusCode::NOT_FOUND, "Site not found");
+    }
+
+    let site_root = s.sites_dir.join(site_id);
+    let resolved = site_root.join(requested_path);
+    let canonical = match resolved.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
+    };
+    let canonical_root = match site_root.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "Site dir error"),
+    };
+    if !canonical.starts_with(&canonical_root) {
+        return err(StatusCode::FORBIDDEN, "Path traversal not allowed");
+    }
+    let data = match tokio::fs::read(&canonical).await {
+        Ok(d) => d,
+        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
+    };
+    let ext = canonical.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let content_type = crate::hosting::mime_from_extension(ext);
+    (
+        StatusCode::OK,
+        [
+            ("Content-Type", content_type.to_string()),
+            ("Content-Length", data.len().to_string()),
+            ("Cache-Control", "public, max-age=3600".to_string()),
+        ],
+        data,
+    )
+        .into_response()
 }
 
 // ============================================================================

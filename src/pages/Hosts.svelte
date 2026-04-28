@@ -39,10 +39,20 @@
   interface HostedSite {
     id: string; name: string; directory: string; createdAt: number;
     files: SiteFile[]; relayUrl?: string | null;
+    /** Always-on CDN URL (persists when client is offline). */
+    cdnUrl?: string | null;
     /** Human-readable name registered in the network site directory, if any. */
     directoryName?: string | null;
   }
   interface ServerStatus { running: boolean; address: string | null; }
+  interface CdnSitePublishResult {
+    siteId: string;
+    cdnUrl: string;
+    fileCount: number;
+    totalSizeBytes: number;
+    expiresAt: number;
+    paymentTx: string;
+  }
   interface SiteDirectoryEntry {
     name: string;
     description: string;
@@ -91,6 +101,17 @@
   let directoryLoading = $state(false);
   let directoryError = $state<string | null>(null);
   let directorySearch = $state('');
+
+  // CDN site hosting state
+  // ─ Per-site upload form: which site is being uploaded, which CDN, for
+  //   how long, plus the in-flight quote we got back from the CDN. The
+  //   default URL is filled in inside `openCdnUpload` since CDN_SERVERS is
+  //   declared later in the file.
+  let cdnUploadSiteId = $state<string | null>(null);
+  let cdnUploadServerUrl = $state('');
+  let cdnUploadDurationDays = $state(30);
+  let cdnUploadQuote = $state<{ totalCostChi: string; sizeMb: number } | null>(null);
+  let cdnUploadSubmitting = $state(false);
 
   // ---------------------------------------------------------------------------
   // Marketplace / agreements state
@@ -652,6 +673,92 @@
       toasts.detail('Failed to unpublish', String(err), 'error');
     } finally {
       publishingStates = { ...publishingStates, [siteId]: false };
+    }
+  }
+
+  // ──── Always-on CDN hosting for sites ─────────────────────────────────
+
+  function totalSiteSize(site: HostedSite): number {
+    return (site.files || []).reduce((acc, f) => acc + (f.size || 0), 0);
+  }
+
+  async function openCdnUpload(site: HostedSite) {
+    cdnUploadSiteId = site.id;
+    cdnUploadServerUrl = CDN_SERVERS[0]?.url ?? '';
+    cdnUploadDurationDays = 30;
+    cdnUploadQuote = null;
+    await refreshCdnUploadQuote(site);
+  }
+
+  function cancelCdnUpload() {
+    cdnUploadSiteId = null;
+    cdnUploadQuote = null;
+    cdnUploadSubmitting = false;
+  }
+
+  async function refreshCdnUploadQuote(site: HostedSite) {
+    if (!cdnUploadServerUrl) return;
+    const sizeMb = totalSiteSize(site) / (1024 * 1024);
+    try {
+      const url = `${cdnUploadServerUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=${cdnUploadDurationDays}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`CDN pricing returned ${r.status}`);
+      const j = await r.json();
+      cdnUploadQuote = {
+        totalCostChi: String(j.totalCostChi ?? '0'),
+        sizeMb: Number(j.sizeMb ?? sizeMb),
+      };
+    } catch (err) {
+      cdnUploadQuote = null;
+      log.error('CDN pricing request failed:', err);
+    }
+  }
+
+  async function submitCdnUpload(site: HostedSite) {
+    if (!isTauri || !cdnUploadSiteId) return;
+    if (!$walletAccount?.address || !$walletAccount?.privateKey) {
+      toasts.show('Connect your wallet before uploading to a CDN', 'warning');
+      return;
+    }
+    cdnUploadSubmitting = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<CdnSitePublishResult>('publish_site_to_cdn', {
+        siteId: site.id,
+        cdnUrl: cdnUploadServerUrl,
+        durationDays: cdnUploadDurationDays,
+        ownerWallet: $walletAccount.address,
+        privateKey: $walletAccount.privateKey,
+      });
+      toasts.detail(
+        'Site uploaded to CDN',
+        `${result.fileCount} file(s) — ${result.cdnUrl}`,
+        'success',
+      );
+      cancelCdnUpload();
+      await loadSites();
+    } catch (err: any) {
+      toasts.detail('CDN upload failed', String(err), 'error');
+    } finally {
+      cdnUploadSubmitting = false;
+    }
+  }
+
+  async function unpublishFromCdn(site: HostedSite) {
+    if (!isTauri || !site.cdnUrl) return;
+    const owner = $walletAccount?.address || '';
+    if (!owner) { toasts.show('No wallet connected', 'error'); return; }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('unpublish_site_from_cdn', {
+        siteId: site.id,
+        cdnUrl: site.cdnUrl,
+        ownerWallet: owner,
+      });
+      toasts.show('Site removed from CDN', 'info');
+      await loadSites();
+    } catch (err: any) {
+      toasts.detail('CDN delete failed', String(err), 'error');
     }
   }
 
@@ -1414,8 +1521,114 @@
       onDeleteSite={deleteSite}
     />
 
+    <!-- Always-on CDN hosting: upload site files so visitors keep getting -->
+    <!-- served when the local client closes. Costs CHI per MB-month.    -->
+    {#if sites.length > 0}
+      <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5">
+        <div class="flex items-center gap-2 mb-1">
+          <Cloud class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Always-on hosting (CDN)</h3>
+        </div>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Upload a site's files to a CDN so it stays online when your app is closed. You're charged per MB × duration.
+        </p>
+        <div class="space-y-3">
+          {#each sites as site (site.id)}
+            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-gray-900 dark:text-white truncate">{site.name}</p>
+                  {#if site.cdnUrl}
+                    <a
+                      href={site.cdnUrl}
+                      target="_blank"
+                      rel="noopener"
+                      class="text-xs text-emerald-600 dark:text-emerald-400 hover:underline mt-0.5 inline-flex items-center gap-1"
+                    >
+                      <ExternalLink class="w-3 h-3" /> {site.cdnUrl}
+                    </a>
+                  {:else}
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      Not on a CDN — only reachable while your app is running
+                    </p>
+                  {/if}
+                </div>
+                {#if site.cdnUrl}
+                  <button
+                    onclick={() => unpublishFromCdn(site)}
+                    class="text-xs px-3 py-1.5 rounded-md border border-red-200 dark:border-red-700 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition"
+                  >
+                    Remove from CDN
+                  </button>
+                {:else if cdnUploadSiteId === site.id}
+                  <button
+                    onclick={cancelCdnUpload}
+                    class="text-xs px-3 py-1.5 rounded-md border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                  >
+                    Cancel
+                  </button>
+                {:else}
+                  <button
+                    onclick={() => openCdnUpload(site)}
+                    disabled={!$walletAccount}
+                    class="text-xs px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white transition flex items-center gap-1"
+                  >
+                    <Upload class="w-3 h-3" /> Upload to CDN
+                  </button>
+                {/if}
+              </div>
+
+              {#if cdnUploadSiteId === site.id && !site.cdnUrl}
+                <div class="grid sm:grid-cols-[2fr_1fr_auto] gap-2 mt-3">
+                  <select
+                    bind:value={cdnUploadServerUrl}
+                    onchange={() => refreshCdnUploadQuote(site)}
+                    class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {#each CDN_SERVERS as cdn}
+                      <option value={cdn.url}>{cdn.name}</option>
+                    {/each}
+                  </select>
+                  <input
+                    type="number"
+                    min="1"
+                    max="365"
+                    step="1"
+                    bind:value={cdnUploadDurationDays}
+                    onchange={() => refreshCdnUploadQuote(site)}
+                    placeholder="days"
+                    class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    onclick={() => submitCdnUpload(site)}
+                    disabled={cdnUploadSubmitting}
+                    class="px-3 py-2 text-sm rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition flex items-center gap-1"
+                  >
+                    {#if cdnUploadSubmitting}
+                      <Loader2 class="w-3.5 h-3.5 animate-spin" /> Uploading
+                    {:else}
+                      Pay & Upload
+                    {/if}
+                  </button>
+                </div>
+                <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  Site size:
+                  <span class="font-mono">{(totalSiteSize(site) / (1024 * 1024)).toFixed(2)} MB</span>
+                  {#if cdnUploadQuote}
+                    <span class="mx-1">·</span>
+                    Cost for {cdnUploadDurationDays} day{cdnUploadDurationDays === 1 ? '' : 's'}:
+                    <span class="font-mono text-amber-700 dark:text-amber-300 font-medium">{cdnUploadQuote.totalCostChi} CHI</span>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <!-- Site directory: claim a name so other peers can find this site -->
-    {#if sites.some(s => s.relayUrl)}
+    {#if sites.some(s => s.relayUrl || s.cdnUrl)}
       <div class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5">
         <div class="flex items-center gap-2 mb-1">
           <Tag class="w-4 h-4 text-blue-600 dark:text-blue-400" />
@@ -1425,7 +1638,7 @@
           Pick a short name so other Chiral users can find this site in the Browse tab.
         </p>
         <div class="space-y-3">
-          {#each sites.filter(s => s.relayUrl) as site (site.id)}
+          {#each sites.filter(s => s.relayUrl || s.cdnUrl) as site (site.id)}
             <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
               <div class="flex items-center justify-between gap-2 mb-2">
                 <div class="min-w-0">
