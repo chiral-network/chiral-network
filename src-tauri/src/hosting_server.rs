@@ -70,12 +70,14 @@ async fn health_check() -> impl IntoResponse {
     (StatusCode::OK, "OK")
 }
 
-/// GET /api/version-policy — returns the bundled `VersionPolicy` for
-/// this build. Clients fetch this on startup to learn whether they're
-/// out of date relative to the network.
+/// GET /api/version-policy — returns the currently-effective policy on
+/// this server. Defaults to the build's bundled snapshot and stays there
+/// unless something explicitly promotes a different policy via
+/// `version::update_effective_policy()`. Clients fetch this on startup
+/// to learn whether they're out of date relative to the network.
 async fn version_policy_handler() -> impl IntoResponse {
     use axum::Json;
-    Json(crate::version::bundled_policy())
+    Json(crate::version::effective_policy())
 }
 
 /// Phase 3 of version enforcement: every `/api/*` request (other than
