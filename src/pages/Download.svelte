@@ -38,6 +38,7 @@
   import { withTimeout } from '$lib/utils/withTimeout';
   import { formatSpeed } from '$lib/speedTiers';
   import { toasts } from '$lib/toastStore';
+  import { fetchWithVersion } from '$lib/versionFetch';
   import { logger } from '$lib/logger';
   const log = logger('Download');
 
@@ -590,7 +591,7 @@
     const queries = CDN_SEARCH_URLS.map(async (cdnUrl) => {
       try {
         const resp = await withTimeout(
-          fetch(`${cdnUrl}/api/headless/file/search`, {
+          fetchWithVersion(`${cdnUrl}/api/headless/file/search`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ fileHash }),

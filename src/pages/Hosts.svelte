@@ -4,6 +4,7 @@
   import { settings, walletAccount, networkConnected } from '$lib/stores';
   import { get } from 'svelte/store';
   import { toasts } from '$lib/toastStore';
+  import { fetchWithVersion } from '$lib/versionFetch';
   import { logger } from '$lib/logger';
   import { hostingService } from '$lib/services/hostingService';
   import { ratingApi } from '$lib/services/ratingApiService';
@@ -190,9 +191,9 @@
       CDN_SERVERS.map(async (server): Promise<CdnServerInfo> => {
         try {
           const [statusResp, filesResp] = await Promise.all([
-            fetch(`${server.url}/api/cdn/status`),
+            fetchWithVersion(`${server.url}/api/cdn/status`),
             myWallet
-              ? fetch(`${server.url}/api/cdn/files?owner=${myWallet}`)
+              ? fetchWithVersion(`${server.url}/api/cdn/files?owner=${myWallet}`)
               : Promise.resolve(null),
           ]);
           const status = await statusResp.json();
@@ -237,7 +238,7 @@
     if (!myWallet) { toasts.show('No wallet connected', 'error'); return; }
 
     try {
-      const resp = await fetch(`${serverUrl}/api/cdn/files/${fileHash}?owner=${myWallet}`, { method: 'DELETE' });
+      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/files/${fileHash}?owner=${myWallet}`, { method: 'DELETE' });
       if (resp.ok) {
         toasts.show('File removed from CDN', 'success');
         await loadCdnServers();
@@ -254,7 +255,7 @@
     const owner = $walletAccount?.address || '';
     if (!owner) return;
     try {
-      const resp = await fetch(`${serverUrl}/api/cdn/files/${fileHash}`, {
+      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/files/${fileHash}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ owner, downloadPriceChi: newPrice }),
@@ -330,7 +331,7 @@
 
     const sizeMb = Math.max((file.size || 1) / (1024 * 1024), 0.001);
     try {
-      const resp = await fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`);
+      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`);
       cdnConfirmPricing = await resp.json();
     } catch {
       cdnConfirmPricing = { totalCostChi: '?', pricePerMbMonthChi: '?' };
@@ -355,12 +356,12 @@
       const sizeMb = (file.size || 1) / (1024 * 1024);
       let totalCostChi = cdnConfirmPricing?.totalCostChi;
       let cdnWallet: string | undefined;
-      const statusReq = fetch(`${serverUrl}/api/cdn/status`);
+      const statusReq = fetchWithVersion(`${serverUrl}/api/cdn/status`);
       if (totalCostChi && totalCostChi !== '?' && totalCostChi !== '...') {
         cdnWallet = (await (await statusReq).json()).walletAddress;
       } else {
         const [pricingResp, statusResp] = await Promise.all([
-          fetch(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`),
+          fetchWithVersion(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`),
           statusReq,
         ]);
         const pricing = await pricingResp.json();
@@ -393,7 +394,7 @@
       const formData = new FormData();
       formData.append('file', new Blob([fileBytes], { type: 'application/octet-stream' }), file.name);
 
-      const resp = await fetch(`${serverUrl}/api/cdn/upload`, {
+      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/upload`, {
         method: 'POST',
         headers: {
           'X-Payment-Tx': paymentTx,
@@ -701,7 +702,7 @@
     const sizeMb = totalSiteSize(site) / (1024 * 1024);
     try {
       const url = `${cdnUploadServerUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=${cdnUploadDurationDays}`;
-      const r = await fetch(url);
+      const r = await fetchWithVersion(url);
       if (!r.ok) throw new Error(`CDN pricing returned ${r.status}`);
       const j = await r.json();
       cdnUploadQuote = {
