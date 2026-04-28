@@ -212,7 +212,15 @@ pub fn is_acceptable_remote_policy(remote: &VersionPolicy, current: &VersionPoli
     if !remote.signature.is_empty() {
         return verify_policy(remote);
     }
-    // Unsigned: accept only if it doesn't tighten the floor.
+    // Unsigned remote: never allowed to replace a previously-adopted
+    // signed policy (otherwise an attacker could ship an unsigned policy
+    // with a fresh `issued_at` and silently disable enforcement).
+    if !current.signature.is_empty() {
+        return false;
+    }
+    // Otherwise accept only if it doesn't tighten beyond the bundled
+    // floor. The binary's bundled `min_required` is the hard floor —
+    // unsigned policies can relax / nudge but never raise it.
     let bundled = bundled_policy();
     !version_is_below(&bundled.min_required, &remote.min_required)
 }
@@ -247,4 +255,200 @@ pub fn update_effective_policy(new: VersionPolicy) -> bool {
     }
     *slot.write() = new;
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use rand::rngs::OsRng;
+
+    fn policy(min: &str, rec: &str, issued: u64) -> VersionPolicy {
+        VersionPolicy {
+            min_required: min.into(),
+            recommended: rec.into(),
+            download_url: "https://x".into(),
+            message: None,
+            issued_at: issued,
+            valid_until: 0,
+            signature: String::new(),
+        }
+    }
+
+    #[test]
+    fn version_is_below_basic_ordering() {
+        assert!(version_is_below("1.0.0", "1.0.1"));
+        assert!(version_is_below("1.0.0", "1.1.0"));
+        assert!(version_is_below("1.0.0", "2.0.0"));
+        assert!(!version_is_below("1.0.0", "1.0.0"));
+        assert!(!version_is_below("2.0.0", "1.9.9"));
+    }
+
+    #[test]
+    fn version_is_below_padding_and_v_prefix() {
+        // "1.0" should equal "1.0.0", not be below it.
+        assert!(!version_is_below("1.0", "1.0.0"));
+        assert!(!version_is_below("1.0.0", "1.0"));
+        // Leading 'v' tolerated on either side.
+        assert!(version_is_below("v1.0.0", "v1.0.1"));
+        assert!(version_is_below("1.0.0", "v1.0.1"));
+    }
+
+    #[test]
+    fn version_is_below_strips_pre_release_suffix() {
+        // "1.0.0-rc1" parses as 1.0.0, equal to "1.0.0".
+        assert!(!version_is_below("1.0.0-rc1", "1.0.0"));
+        assert!(version_is_below("1.0.0+build", "1.0.1"));
+    }
+
+    #[test]
+    fn version_is_below_handles_empty_and_garbage() {
+        // Garbage should not panic and should parse as zero.
+        assert!(!version_is_below("", "0.0.0"));
+        assert!(version_is_below("garbage", "0.0.1"));
+    }
+
+    #[test]
+    fn compare_to_policy_three_states() {
+        let p = policy("1.0.0", "2.0.0", 0);
+        assert_eq!(compare_to_policy("0.9.0", &p), "required");
+        assert_eq!(compare_to_policy("1.0.0", &p), "recommended");
+        assert_eq!(compare_to_policy("1.5.0", &p), "recommended");
+        assert_eq!(compare_to_policy("2.0.0", &p), "ok");
+        assert_eq!(compare_to_policy("3.0.0", &p), "ok");
+    }
+
+    #[test]
+    fn compare_to_policy_misconfigured_min_above_recommended_fails_safe() {
+        // Misconfigured policy where min_required > recommended must
+        // still treat versions below min as "required" (fail-safe).
+        let p = policy("2.0.0", "1.0.0", 0);
+        assert_eq!(compare_to_policy("1.5.0", &p), "required");
+    }
+
+    #[test]
+    fn agent_version_string_format() {
+        let s = agent_version_string();
+        assert!(s.starts_with("chiral/"));
+        assert_eq!(s, format!("chiral/{}", CURRENT_VERSION));
+    }
+
+    #[test]
+    fn canonical_payload_distinguishes_field_changes() {
+        let a = policy("1.0.0", "2.0.0", 100);
+        let mut b = a.clone();
+        b.recommended = "2.0.1".into();
+        assert_ne!(canonical_signing_payload(&a), canonical_signing_payload(&b));
+    }
+
+    #[test]
+    fn canonical_payload_is_deterministic() {
+        let a = policy("1.0.0", "2.0.0", 100);
+        assert_eq!(canonical_signing_payload(&a), canonical_signing_payload(&a));
+    }
+
+    #[test]
+    fn verify_policy_rejects_empty_signature() {
+        let p = policy("1.0.0", "2.0.0", 100);
+        assert!(!verify_policy(&p));
+    }
+
+    #[test]
+    fn verify_policy_rejects_malformed_hex() {
+        let mut p = policy("1.0.0", "2.0.0", 100);
+        p.signature = "not-hex!".into();
+        assert!(!verify_policy(&p));
+    }
+
+    #[test]
+    fn verify_policy_rejects_wrong_length() {
+        let mut p = policy("1.0.0", "2.0.0", 100);
+        p.signature = "deadbeef".into();
+        assert!(!verify_policy(&p));
+    }
+
+    #[test]
+    fn verify_policy_rejects_against_placeholder_zero_key() {
+        // While POLICY_PUBLIC_KEY is all zeros, even a properly-shaped
+        // 64-byte hex signature must not verify.
+        let mut p = policy("1.0.0", "2.0.0", 100);
+        p.signature = hex::encode([1u8; 64]);
+        assert!(!verify_policy(&p));
+    }
+
+    #[test]
+    fn is_acceptable_rejects_rollback_by_issued_at() {
+        let current = policy("0.0.0", "1.0.0", 200);
+        let older = policy("0.0.0", "1.0.0", 100);
+        assert!(!is_acceptable_remote_policy(&older, &current));
+    }
+
+    #[test]
+    fn is_acceptable_unsigned_at_or_below_bundled_floor() {
+        let bundled = bundled_policy();
+        let mut remote = bundled.clone();
+        remote.recommended = "9.9.9".into();
+        remote.issued_at = bundled.issued_at + 1;
+        assert!(is_acceptable_remote_policy(&remote, &bundled));
+    }
+
+    #[test]
+    fn is_acceptable_unsigned_rejects_tightening() {
+        // Unsigned policy raising min_required above bundled floor (0.0.0)
+        // must be rejected.
+        let bundled = bundled_policy();
+        let mut remote = bundled.clone();
+        remote.min_required = "9.9.9".into();
+        remote.issued_at = bundled.issued_at + 1;
+        assert!(!is_acceptable_remote_policy(&remote, &bundled));
+    }
+
+    #[test]
+    fn is_acceptable_unsigned_cannot_replace_signed_current() {
+        // Once a signed policy is in effect, an unsigned remote (even with
+        // a fresher issued_at and no tightening) must not be accepted —
+        // otherwise an attacker can disable enforcement by publishing
+        // unsigned "0.0.0" updates.
+        let mut current = policy("1.0.0", "1.0.0", 100);
+        current.signature = hex::encode([1u8; 64]); // marker: signed
+        let mut remote = policy("0.0.0", "0.0.0", 200);
+        remote.signature = String::new();
+        assert!(!is_acceptable_remote_policy(&remote, &current));
+    }
+
+    #[test]
+    fn is_acceptable_signed_round_trip_with_real_key() {
+        // The bundled POLICY_PUBLIC_KEY is zeros, so we can't actually
+        // exercise the "signed accept" branch end-to-end here. But we can
+        // verify the canonical payload is what gets signed: an Ed25519
+        // signature produced over `canonical_signing_payload` verifies
+        // with the matching public key.
+        use ed25519_dalek::{Verifier, VerifyingKey};
+        let signing = SigningKey::generate(&mut OsRng);
+        let verifying: VerifyingKey = signing.verifying_key();
+        let p = policy("1.0.0", "2.0.0", 100);
+        let payload = canonical_signing_payload(&p);
+        let sig = signing.sign(&payload);
+        assert!(verifying.verify(&payload, &sig).is_ok());
+    }
+
+    #[test]
+    fn effective_policy_round_trip() {
+        // The slot is process-global; just check that an acceptable
+        // unsigned update is reflected back. Use a far-future issued_at
+        // so we don't collide with whatever the current snapshot is.
+        let mut p = bundled_policy();
+        p.recommended = "9999.0.0".into();
+        p.issued_at = u64::MAX / 2;
+        let before = effective_policy();
+        assert!(update_effective_policy(p.clone()));
+        let after = effective_policy();
+        assert_eq!(after.recommended, "9999.0.0");
+        // Restore so we don't poison sibling tests.
+        let restore = VersionPolicy {
+            issued_at: after.issued_at, // same timestamp is allowed (>=)
+            ..before
+        };
+        update_effective_policy(restore);
+    }
 }
