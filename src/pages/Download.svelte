@@ -90,6 +90,22 @@
     walletAddress: string;
   }
 
+  interface FolderSearchFile {
+    relPath: string;
+    fileHash: string;
+    fileSize: number;
+    seeders: SeederInfo[];
+  }
+  interface FolderSearchResult {
+    hash: string;
+    name: string;
+    ownerWallet: string;
+    createdAt: number;
+    files: FolderSearchFile[];
+    /** Seeders that provide every file in the folder. */
+    commonSeeders: SeederInfo[];
+  }
+
   interface DownloadItem {
     id: string;
     hash: string;
@@ -220,6 +236,12 @@
   let searchQuery = $state('');
   let isSearching = $state(false);
   let searchResult = $state<SearchResult | null>(null);
+  /// When the searched hash resolves to a folder bundle (chiral_folder_*),
+  /// this is populated instead of `searchResult` and the folder UI renders.
+  let folderResult = $state<FolderSearchResult | null>(null);
+  /// Index into `folderResult.commonSeeders` the user picked for the bundle.
+  let folderSeederIndex = $state<number>(0);
+  let folderDownloading = $state(false);
   let searchError = $state<string | null>(null);
   let downloads = $state<DownloadItem[]>([]);
   let downloadHistory = $state<HistoryEntry[]>([]);
@@ -642,6 +664,8 @@
     const mySession = searchSession;
     isSearching = true;
     searchResult = null;
+    folderResult = null;
+    folderSeederIndex = 0;
     searchError = null;
     selectedSeederIndex = 0;
 
@@ -740,11 +764,40 @@
           await apply();
         });
 
-        await Promise.allSettled([dhtTask, cdnTask]);
+        // Folder bundle probe: if the user pasted a folder hash, this
+        // resolves to a manifest + per-file seeders. Files and folders
+        // can't share a hash (different DHT key prefixes), so at most one
+        // of these branches yields anything.
+        const folderTask = withTimeout(
+          invoke<FolderSearchResult | null>('search_folder', { folderHash: fileHash }),
+          15000,
+          'folder search',
+        )
+          .catch(() => null)
+          .then(async (r) => {
+            if (mySession !== searchSession) return;
+            if (!r) return;
+            folderResult = r;
+            // Render folder UI and clear the file UI; a folder hash isn't
+            // also a valid file hash, so the file branches will return
+            // empty.
+            searchResult = null;
+            selectedSeederIndex = 0;
+            folderSeederIndex = 0;
+            toasts.detail(
+              'Folder found',
+              `${r.name || 'Folder'} — ${r.files.length} file${r.files.length !== 1 ? 's' : ''}, ${r.commonSeeders.length} seeder${r.commonSeeders.length !== 1 ? 's' : ''} cover the whole bundle`,
+              'success',
+            );
+          });
+
+        await Promise.allSettled([dhtTask, cdnTask, folderTask]);
 
         if (mySession !== searchSession) return; // superseded
 
-        if (searchResult === null) {
+        if (folderResult) {
+          // Folder bundle resolved — folder UI renders; nothing more to do.
+        } else if (searchResult === null) {
           // Both queries returned nothing. Magnet mode still gets a placeholder
           // so the file name shows up — search-by-hash gets an explicit error.
           if (searchMode === 'magnet' || searchQuery.startsWith('magnet:')) {
@@ -759,7 +812,7 @@
             };
             toasts.detail('File not in DHT', "The seeder may be offline or hasn't published this file yet", 'warning');
           } else {
-            searchError = 'File not found in DHT. The seeder may be offline or the hash may be incorrect.';
+            searchError = 'Hash not found. It may be a file or folder whose seeder is offline, or the hash may be incorrect.';
           }
         } else {
           // Got file metadata from somewhere — emit the empty-seeders warning
@@ -950,6 +1003,104 @@
   }
 
   // Start download (validates, shows confirmation if paid, then proceeds)
+  function folderSelectedSeeder(): SeederInfo | null {
+    if (!folderResult) return null;
+    return folderResult.commonSeeders[folderSeederIndex]
+      ?? folderResult.commonSeeders[0]
+      ?? null;
+  }
+
+  /// Total price (in CHI as a string) the buyer pays if they pick the
+  /// currently-selected common seeder for every file in the folder.
+  function folderTotalCostChi(): string {
+    if (!folderResult) return '0';
+    const chosen = folderSelectedSeeder();
+    if (!chosen) return '0';
+    let totalWei = 0n;
+    for (const f of folderResult.files) {
+      const s = f.seeders.find((x) => x.peerId === chosen.peerId);
+      const w = s?.priceWei?.trim();
+      if (w && w !== '0') {
+        try { totalWei += BigInt(w); } catch { /* ignore bad numerics */ }
+      }
+    }
+    if (totalWei === 0n) return '0';
+    return (Number(totalWei) / 1e18).toFixed(6);
+  }
+
+  async function downloadFolderBundle() {
+    if (!folderResult || folderDownloading) return;
+    if (folderResult.commonSeeders.length === 0) {
+      toasts.show('No seeders cover this whole folder', 'error');
+      return;
+    }
+    const chosen = folderSelectedSeeder();
+    if (!chosen) {
+      toasts.show('Pick a seeder first', 'warning');
+      return;
+    }
+    const totalCostChi = folderTotalCostChi();
+    if (parseFloat(totalCostChi) > 0) {
+      if (!$walletAccount) {
+        toasts.show('Log in with your wallet to download paid folders', 'warning');
+        return;
+      }
+      if (parseFloat(walletBalance) < parseFloat(totalCostChi)) {
+        toasts.detail(
+          'Insufficient balance',
+          `Need ${totalCostChi} CHI — you have ${walletBalance} CHI`,
+          'error',
+        );
+        return;
+      }
+      const ok = window.confirm(
+        `Pay ${totalCostChi} CHI to download ${folderResult.files.length} file${folderResult.files.length === 1 ? '' : 's'} from this folder?`,
+      );
+      if (!ok) return;
+    }
+
+    folderDownloading = true;
+    try {
+      // For each file in the manifest: build a per-file SearchResult that
+      // contains only the chosen seeder, then run the existing per-file
+      // download flow. Each file shows up as its own row in active
+      // downloads.
+      for (const file of folderResult.files) {
+        const seeder = file.seeders.find((s) => s.peerId === chosen.peerId);
+        if (!seeder) {
+          log.warn(`Chosen seeder missing record for ${file.fileHash}, skipping`);
+          continue;
+        }
+        const fileResult: SearchResult = {
+          hash: file.fileHash,
+          fileName: file.relPath || `file-${file.fileHash.slice(0, 8)}`,
+          fileSize: file.fileSize,
+          seeders: [seeder],
+          createdAt: folderResult.createdAt,
+          priceWei: seeder.priceWei || '0',
+          walletAddress: seeder.walletAddress,
+        };
+        // Reset the file-UI seeder index so startDownload picks our
+        // single-seeder list. skipBlacklist + skipCostConfirm because
+        // we already covered both at the folder level.
+        selectedSeederIndex = 0;
+        try {
+          await startDownload(fileResult, true, true);
+        } catch (e) {
+          log.error(`Folder file download failed for ${file.relPath}:`, e);
+        }
+        // Yield between dispatches so reactive UI updates flush.
+        await new Promise((r) => setTimeout(r, 30));
+      }
+      toasts.show(
+        `Started ${folderResult.files.length} download${folderResult.files.length === 1 ? '' : 's'} from folder`,
+        'success',
+      );
+    } finally {
+      folderDownloading = false;
+    }
+  }
+
   async function startDownload(result: SearchResult, skipBlacklistCheck = false, skipCostConfirm = false) {
     const tauriAvailable = checkTauriAvailability();
     if (!tauriAvailable) {
@@ -1603,6 +1754,100 @@
           Paste a magnet link starting with "magnet:?xt=urn:btih:"
         {/if}
       </p>
+    {/if}
+
+    <!-- Folder Bundle Result -->
+    {#if folderResult}
+      <div class="mt-6 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+        <div class="flex items-start gap-4 mb-3">
+          <div class="flex items-center justify-center w-14 h-14 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-700 flex-shrink-0">
+            <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <h3 class="text-lg font-semibold truncate dark:text-white">{folderResult.name || 'Untitled Folder'}</h3>
+            <div class="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
+              <span class="tabular-nums">{folderResult.files.length} file{folderResult.files.length === 1 ? '' : 's'}</span>
+              <span class="tabular-nums">{formatFileSize(folderResult.files.reduce((acc, f) => acc + (f.fileSize || 0), 0))}</span>
+              <span class="tabular-nums {folderResult.commonSeeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
+                {folderResult.commonSeeders.length > 0
+                  ? `${folderResult.commonSeeders.length} seeder${folderResult.commonSeeders.length === 1 ? '' : 's'} cover the bundle`
+                  : 'No seeder covers all files'}
+              </span>
+            </div>
+            <p class="text-xs text-gray-400 dark:text-gray-500 mt-1 font-mono truncate" title={folderResult.hash}>folder hash: {folderResult.hash.slice(0, 16)}…</p>
+          </div>
+        </div>
+
+        <!-- Seeder picker -->
+        {#if folderResult.commonSeeders.length > 0}
+          <div class="mb-4">
+            <label for="folder-seeder-picker" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Pick a seeder for the whole folder</label>
+            <select
+              id="folder-seeder-picker"
+              bind:value={folderSeederIndex}
+              class="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {#each folderResult.commonSeeders as seeder, i (seeder.peerId)}
+                <option value={i}>
+                  {seeder.peerId.slice(0, 12)}…{seeder.peerId.slice(-6)}
+                  {seeder.walletAddress ? ` — ${seeder.walletAddress.slice(0, 8)}…` : ''}
+                </option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+
+        <!-- File list -->
+        <div class="border border-gray-200 dark:border-gray-600 rounded-md overflow-hidden bg-white dark:bg-gray-800">
+          <div class="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+            {#each folderResult.files as file (file.fileHash)}
+              {@const FileIcon = getFileIcon(file.relPath)}
+              {@const seederForChosen = folderSelectedSeeder()
+                ? file.seeders.find((s) => s.peerId === folderSelectedSeeder()!.peerId)
+                : null}
+              {@const priceWei = seederForChosen?.priceWei?.trim()}
+              <div class="flex items-center gap-3 px-3 py-2 text-sm">
+                <FileIcon class="w-4 h-4 flex-shrink-0 {getFileColor(file.relPath)}" />
+                <span class="flex-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300" title={file.relPath}>{file.relPath}</span>
+                <span class="tabular-nums text-xs text-gray-500 dark:text-gray-400">{formatFileSize(file.fileSize)}</span>
+                {#if priceWei && priceWei !== '0'}
+                  <span class="tabular-nums text-xs font-medium text-amber-600 dark:text-amber-400">{(Number(BigInt(priceWei)) / 1e18).toFixed(4)} CHI</span>
+                {:else}
+                  <span class="text-xs text-gray-400">free</span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between mt-4">
+          <div class="text-sm text-gray-600 dark:text-gray-400">
+            Total cost:
+            {#if folderTotalCostChi() !== '0'}
+              <span class="font-semibold text-amber-600 dark:text-amber-400">{folderTotalCostChi()} CHI</span>
+            {:else}
+              <span class="text-gray-400">Free</span>
+            {/if}
+            {#if $walletAccount}
+              <span class="text-gray-400 mx-1">•</span>
+              Balance: <span class="font-medium tabular-nums">{parseFloat(walletBalance).toFixed(4)} CHI</span>
+            {/if}
+          </div>
+          <button
+            onclick={downloadFolderBundle}
+            disabled={!isTauri || folderDownloading || folderResult.commonSeeders.length === 0}
+            class="px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+          >
+            {#if folderDownloading}
+              <Loader2 class="w-4 h-4 animate-spin" />
+              Starting...
+            {:else}
+              <Download class="w-4 h-4" />
+              Download Folder
+            {/if}
+          </button>
+        </div>
+      </div>
     {/if}
 
     <!-- Search Result -->

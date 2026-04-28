@@ -5434,6 +5434,68 @@ struct DriveFolderFileError {
     error: String,
 }
 
+/// One file as it appears in a folder bundle. Buyers download each entry
+/// individually using the per-file price the seeder advertises in their
+/// per-seeder DHT record — this struct just enumerates what's *in* the
+/// folder.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FolderManifestFile {
+    /// Path relative to the folder root, e.g. "lecture-1.pdf" or
+    /// "src/main.rs". Slash-separated, no leading slash.
+    rel_path: String,
+    file_hash: String,
+    file_size: u64,
+}
+
+/// Folder bundle published at `chiral_folder_{folder_hash}`. The folder hash
+/// is content-addressed (deterministic from owner + sorted file list) so
+/// republishing the same folder produces the same hash, and a buyer with a
+/// folder hash can reach the same content from any seeder of those files.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct FolderManifest {
+    /// Same as the DHT key suffix.
+    hash: String,
+    /// Display name copied from the seller's local Drive item.
+    name: String,
+    /// Wallet that published this folder bundle (informational).
+    owner_wallet: String,
+    created_at: u64,
+    files: Vec<FolderManifestFile>,
+    /// ECDSA signature of the canonical folder digest by `owner_wallet`.
+    /// Empty until we wire the wallet private key through (the per-seeder
+    /// records have the same TODO).
+    #[serde(default)]
+    publisher_signature: String,
+}
+
+/// Deterministic content hash for a folder bundle. Combines the owner
+/// wallet (so two sellers with the same files don't collide on the same
+/// folder hash) with the SHA-256 over a canonical ordering of
+/// `rel_path \0 file_hash \0` lines.
+///
+/// `files` does not need to be pre-sorted — we sort here.
+fn compute_folder_hash(owner_wallet: &str, files: &[FolderManifestFile]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut sorted: Vec<&FolderManifestFile> = files.iter().collect();
+    sorted.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    let mut hasher = Sha256::new();
+    hasher.update(owner_wallet.to_lowercase().as_bytes());
+    hasher.update([0u8]);
+    for f in sorted {
+        hasher.update(f.rel_path.as_bytes());
+        hasher.update([0u8]);
+        hasher.update(f.file_hash.as_bytes());
+        hasher.update([0u8]);
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn folder_manifest_key(folder_hash: &str) -> String {
+    format!("chiral_folder_{}", folder_hash)
+}
+
 /// Walk the manifest from `folder_id` and return the IDs (in arbitrary order)
 /// of every descendant file owned by `owner`.
 fn collect_descendant_files(
@@ -5518,10 +5580,101 @@ async fn publish_drive_folder(
         }
     }
 
+    // Build a folder manifest from every successfully-seeded child file so
+    // a buyer can search by *one* hash and download the whole bundle. The
+    // folder hash is content-addressed (same files → same hash) so it's
+    // stable across re-publishes.
+    let folder_name = {
+        let m = state.drive_state.manifest.read().await;
+        m.items
+            .iter()
+            .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
+            .map(|i| i.name.clone())
+            .unwrap_or_default()
+    };
+    let folder_root_path = std::path::PathBuf::from(
+        state
+            .drive_state
+            .manifest
+            .read()
+            .await
+            .items
+            .iter()
+            .find(|i| i.id == folder_id && i.owner == owner)
+            .and_then(|i| i.storage_path.clone())
+            .unwrap_or_default(),
+    );
+    let manifest_files: Vec<FolderManifestFile> = {
+        let m = state.drive_state.manifest.read().await;
+        files
+            .iter()
+            .filter_map(|(file_id, _name)| {
+                let item = m.items.iter().find(|i| i.id == *file_id)?;
+                let hash = item.merkle_root.clone()?;
+                if hash.trim().is_empty() {
+                    return None;
+                }
+                // Build rel_path from the file's storage_path under the
+                // folder root, falling back to the bare filename so we
+                // always have *something*.
+                let rel = item
+                    .storage_path
+                    .as_ref()
+                    .and_then(|sp| {
+                        let sp = std::path::PathBuf::from(sp);
+                        if folder_root_path.as_os_str().is_empty() {
+                            None
+                        } else {
+                            sp.strip_prefix(&folder_root_path)
+                                .ok()
+                                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                        }
+                    })
+                    .unwrap_or_else(|| item.name.clone());
+                Some(FolderManifestFile {
+                    rel_path: rel,
+                    file_hash: hash,
+                    file_size: item.size.unwrap_or(0),
+                })
+            })
+            .collect()
+    };
+
+    let folder_hash_opt = if manifest_files.is_empty() {
+        None
+    } else {
+        let hash = compute_folder_hash(&owner, &manifest_files);
+        let manifest = FolderManifest {
+            hash: hash.clone(),
+            name: folder_name,
+            owner_wallet: owner.clone(),
+            created_at: ds::now_secs(),
+            files: manifest_files,
+            publisher_signature: String::new(),
+        };
+        let dht = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+        if let Some(dht) = dht {
+            if let Ok(json) = serde_json::to_string(&manifest) {
+                if let Err(e) = dht.put_dht_value(folder_manifest_key(&hash), json).await {
+                    println!("[DRIVE] Folder manifest publish failed for {}: {}", hash, e);
+                }
+            }
+            // Register as a Kademlia provider for the folder hash so other
+            // peers' get_providers calls find this seller.
+            let _ = dht.start_providing_file(hash.clone()).await;
+        }
+        Some(hash)
+    };
+
     // Mark the folder itself as seeding + record the price so the UI can
     // display the sale state on the folder card. seed_enabled is purely a
     // UI hint here — auto-reseed iterates files, not folders, and each
-    // child file already has its own seed_enabled flag set.
+    // child file already has its own seed_enabled flag set. We also stash
+    // the folder hash on `merkle_root` so the existing "Copy Merkle Hash"
+    // context-menu item works for sold folders too.
     let folder = {
         let mut m = state.drive_state.manifest.write().await;
         let item = m
@@ -5533,6 +5686,9 @@ async fn publish_drive_folder(
         item.protocol = protocol;
         item.seed_enabled = true;
         item.seeding = succeeded > 0;
+        if folder_hash_opt.is_some() {
+            item.merkle_root = folder_hash_opt.clone();
+        }
         item.modified_at = ds::now_secs();
         item.clone()
     };
@@ -5583,6 +5739,28 @@ async fn unpublish_drive_folder(
         }
     }
 
+    // Tear down the folder manifest: stop providing the folder hash and
+    // purge the local KV record so we no longer republish it. The folder
+    // hash lives in `merkle_root` (set by publish_drive_folder).
+    let folder_hash = {
+        let m = state.drive_state.manifest.read().await;
+        m.items
+            .iter()
+            .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
+            .and_then(|i| i.merkle_root.clone())
+            .filter(|h| !h.trim().is_empty())
+    };
+    if let Some(hash) = folder_hash.clone() {
+        let dht = {
+            let dht_guard = state.dht.lock().await;
+            dht_guard.as_ref().cloned()
+        };
+        if let Some(dht) = dht {
+            let _ = dht.remove_dht_record(folder_manifest_key(&hash)).await;
+            let _ = dht.stop_providing_file(hash).await;
+        }
+    }
+
     let folder = {
         let mut m = state.drive_state.manifest.write().await;
         let item = m
@@ -5592,6 +5770,9 @@ async fn unpublish_drive_folder(
             .ok_or("Drive folder not found in manifest")?;
         item.seed_enabled = false;
         item.seeding = false;
+        if folder_hash.is_some() {
+            item.merkle_root = None;
+        }
         item.modified_at = ds::now_secs();
         item.clone()
     };
@@ -5604,6 +5785,105 @@ async fn unpublish_drive_folder(
         files_failed: failures.len(),
         failures,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Folder bundle search — buyer pastes a folder hash, we resolve the
+// manifest + per-file seeders and report which seeders provide *every* file
+// in the bundle (so the buyer's choice of seeder works for the whole
+// folder, not just some files).
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderSearchFile {
+    rel_path: String,
+    file_hash: String,
+    file_size: u64,
+    /// All seeders for this file (subset of `common_seeders` shows in the
+    /// UI for "everyone covered" rows).
+    seeders: Vec<SeederInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderSearchResult {
+    hash: String,
+    name: String,
+    owner_wallet: String,
+    created_at: u64,
+    files: Vec<FolderSearchFile>,
+    /// Peer IDs that appear in `seeders` for *every* file. These are the
+    /// seeders the buyer should pick — anyone in this set will reliably
+    /// serve every file in the folder.
+    common_seeders: Vec<SeederInfo>,
+}
+
+#[tauri::command]
+async fn search_folder(
+    state: tauri::State<'_, AppState>,
+    folder_hash: String,
+) -> Result<Option<FolderSearchResult>, String> {
+    if folder_hash.trim().is_empty() {
+        return Ok(None);
+    }
+    let dht = match state.dht.lock().await.as_ref().cloned() {
+        Some(d) => d,
+        None => return Err("DHT not running".into()),
+    };
+
+    let key = folder_manifest_key(&folder_hash);
+    let manifest_json = match dht.get_dht_value(key).await {
+        Ok(Some(j)) => j,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let manifest: FolderManifest = match serde_json::from_str(&manifest_json) {
+        Ok(m) => m,
+        Err(e) => return Err(format!("Invalid folder manifest: {}", e)),
+    };
+
+    // For every file in the bundle, fetch its seeders in parallel.
+    let fetches = manifest.files.iter().cloned().map(|f| {
+        let dht = dht.clone();
+        async move {
+            let seeders = fetch_seeders(&dht, &f.file_hash).await.unwrap_or_default();
+            FolderSearchFile {
+                rel_path: f.rel_path,
+                file_hash: f.file_hash,
+                file_size: f.file_size,
+                seeders,
+            }
+        }
+    });
+    let files: Vec<FolderSearchFile> = futures::future::join_all(fetches).await;
+
+    // Common seeders = intersection of per-file seeder peer-ID sets, with
+    // the price/wallet/multiaddrs from the FIRST file's record (any seeder
+    // who provides every file should advertise consistent metadata across
+    // them, but we keep the first-record values to give the UI something
+    // concrete to render).
+    let mut common: Vec<SeederInfo> = Vec::new();
+    if let Some(first) = files.first() {
+        for s in &first.seeders {
+            let in_all = files
+                .iter()
+                .skip(1)
+                .all(|f| f.seeders.iter().any(|x| x.peer_id == s.peer_id));
+            if in_all {
+                common.push(s.clone());
+            }
+        }
+    }
+
+    Ok(Some(FolderSearchResult {
+        hash: manifest.hash,
+        name: manifest.name,
+        owner_wallet: manifest.owner_wallet,
+        created_at: manifest.created_at,
+        files,
+        common_seeders: common,
+    }))
 }
 
 #[tauri::command]
@@ -6023,6 +6303,7 @@ pub fn run() {
             publish_drive_file,
             publish_drive_folder,
             unpublish_drive_folder,
+            search_folder,
             seed_hosted_file,
             drive_stop_seeding,
             drive_export_torrent,
