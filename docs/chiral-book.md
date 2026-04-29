@@ -124,13 +124,48 @@ The application consists of three layers:
 - Desktop app: Hosts → CDN Servers tab → Upload from Drive with payment confirmation.
 
 ### Security
-- ECDSA-signed file metadata (prevents seeder list poisoning and DHT tampering).
-- ECDSA-signed seeder entries (prevents payment address redirection).
-- On-chain payment verification before serving file chunks.
-- On-chain payment verification for CDN uploads (with 5% rounding tolerance).
-- 0.5% platform fee on all transactions (99.5% to seller, 0.5% to platform).
+
+Trust boundaries are enforced cryptographically end-to-end. Every long-lived record on the DHT and every stateful HTTP endpoint goes through ECDSA verification before its contents are trusted.
+
+**Signed records (writers refuse to publish unsigned; readers drop unsigned/invalid):**
+
+- File metadata (`chiral_file_<hash>`) — signed by publisher wallet over a length-prefixed canonical payload. `search_file` rejects unsigned/invalid metadata as not-found.
+- Seeder entries (`chiral_seeder_<hash>_<peer>`) — signed by the seeder's wallet, binding peer ID + file hash + wallet address. `fetch_seeders` drops empty-signature non-stub entries.
+- Folder manifests (`chiral_folder_<hash>`) — signed by `owner_wallet`. `search_folder` drops unsigned/invalid bundles.
+- Site-directory entries (`chiral_sitename_<name>`) — signed by `owner_wallet`. `resolve_site_name` / `list_directory_sites` drop unverifiable entries; first-claim-wins is enforced by refusing overwrites whose existing record verifies under a different wallet.
+- Chunked-transfer `FileInfo` envelopes — signed by the seeder's wallet. The downloader verifies before consuming the seeder's claimed `wallet_address` / `price_wei` and fails over to other seeders on bad signatures (closes the payment-redirection vector where a hostile seeder could substitute its own wallet).
+
+**HTTP authentication (replaces the previously-trusted bare `X-Owner` header):**
+
+- Authenticated routes require both `X-Owner: 0x<wallet>` and `X-Owner-Sig: <unix_ts>:<hex_signature>` headers.
+- Signed payload is length-prefixed canonical bytes binding wallet ↔ HTTP method ↔ path-with-query ↔ timestamp; a captured proof can't be replayed against a different endpoint within its ±5-minute window.
+- Server-side `auth::owner_proof_middleware` recovers the secp256k1 signer and rejects with 401 on mismatch / expiry.
+- Applied to: `/api/drive/*`, `POST /api/ratings/transfer`, and the unregister DELETEs on relay register routes.
+- Tauri command `compute_owner_proof` produces the header in-process; wallet private keys never leave the desktop app.
+
+**Relay registration (FM-A04/A05):**
+
+- `register_share` / `register_site` POST bodies carry an ECDSA signature by `owner_wallet` over `(operation, id, owner_wallet, origin_url)`. Captured proofs can't be reused with a substituted origin URL.
+- First-claim-wins is enforced: an existing record can only be overwritten by the wallet that originally signed it.
+- Origin-URL allowlist rejects RFC1918, CGNAT, link-local (incl. AWS / GCP cloud metadata at `169.254.169.254`), unique-local IPv6, multicast, broadcast, IPv4-mapped IPv6 variants of any of those, and anything outside `http(s)://`. Loopback stays accepted because `fix_origin_url` substitutes the registrant's public IP at request time.
+
+**Payment verification:**
+
+- On-chain tx receipt checked before serving file chunks. Chain ID is verified so cross-chain replays of signed txs are rejected.
+- Spent-tx ledger keys on `(tx_hash, file_hash)` so one payment ↔ one file delivery (no replay across different priced files seeded by the same wallet).
+- Drive shares additionally bind each redeemed `tx_hash` to the first share token it unlocks, so a publicly-shared `?access=<tx>` URL can't unlock any of the wallet's other shares.
+- `wait_for_tx_mined` is checked separately from `verify_tx_details` so the seeder can return a retryable "not yet confirmed" answer when chain propagation is slow.
+- CDN payment uses exact `u128` ceil-rounded math — no `f64` truncation, no percentage tolerance.
+
+**Operational hardening:**
+
+- Local-daemon CORS allowlists only Tauri webview origins (blocks CSRF from arbitrary websites visited by the user); relay-mode keeps `Any`.
+- `dht_put` headless route refuses raw writes to reserved-namespace keys (returns 403); each namespace has its own dedicated signed-publication command.
+- Drive multipart upload caps body at 500 MiB before allocation; `is_item_under_shared_root` short-circuits parent cycles.
+- ECDSA signatures enforce low-`s` (EIP-2), so signature hex is unique per (key, message).
 - Relay filters private IPs from Kademlia routing table.
 - Stop seeding removes peer from DHT seeder list (prevents ghost seeders).
+- 0.5% platform fee on all transactions (99.5% to seller, 0.5% to platform); `split_payment` is the single source of truth and `seller + fee == total` exactly.
 
 ---
 
@@ -415,7 +450,7 @@ The on-the-wire policy (`src-tauri/src/version.rs`) carries:
 | `message` | Optional human-readable reason (e.g. "fixes payment bug"). |
 | `issuedAt` | Unix-seconds the policy was issued (used for rollback protection). |
 | `validUntil` | Unix-seconds after which clients should re-fetch. `0` = no expiry. |
-| `signature` | Hex Ed25519 signature over a canonical NUL-separated payload. |
+| `signature` | Hex Ed25519 signature over a length-prefixed canonical payload. |
 
 Comparing the running build's `CARGO_PKG_VERSION` against the effective policy returns one of three states:
 
@@ -461,7 +496,7 @@ chiral-policy-sign sign --key <secret-hex> --in policy.json --out policy.signed.
 chiral-policy-sign verify --in policy.signed.json
 ```
 
-`POLICY_PUBLIC_KEY` is currently a 32-byte zero placeholder. Until it is replaced with a real public key, signed policies cannot verify and only the unsigned-transitional path is active.
+The compile-time `POLICY_PUBLIC_KEY` constant is a 32-byte zero placeholder. Operators activate signed policies at deploy time without recompiling by setting the `CHIRAL_POLICY_PUBLIC_KEY` environment variable to the 32-byte public key (hex, with or without `0x` prefix); `version::policy_public_key()` resolves the env var on first access and caches it. All three binaries (desktop, daemon, relay) print a `[VERSION]` line on startup confirming whether signed policies are enabled or warning that the placeholder is still in use. Until a real key is wired in, only the unsigned-transitional path can promote a remote policy.
 
 ---
 
@@ -526,7 +561,7 @@ All headless paths are prefixed with `/api/headless/` except health, ready, driv
 | Site directory | Tauri-only: `publish_site_to_directory`, `unpublish_site_from_directory`, `resolve_site_name`, `list_directory_sites` (DHT-backed name claims, first-claim-wins) |
 | Folder bundles | Tauri-only: `publish_drive_folder`, `unpublish_drive_folder`, `search_folder` (one content-addressed hash per folder) |
 | CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash`; `PUT cdn/files/:hash` |
-| Drive | Full CRUD via `/api/drive/*` (requires `X-Owner` header) |
+| Drive | Full CRUD via `/api/drive/*` (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_signature>` headers; see Authentication below) |
 | Diagnostics | `GET bootstrap-health` |
 
 ### CLI
@@ -746,6 +781,7 @@ chiral-network/
 | `CHIRAL_GPU_MINER_PATH` | auto-detected | Path to ethminer binary |
 | `CHIRAL_WALLET_EMAIL_SMTP_HOST` | none | SMTP server for email backup |
 | `CHIRAL_WALLET_EMAIL_FROM` | none | Sender address for email backup |
+| `CHIRAL_POLICY_PUBLIC_KEY` | placeholder zeros | 32-byte hex (with or without `0x` prefix) of the project's Ed25519 policy-signing public key. Setting this activates signed `VersionPolicy` updates without recompiling. Generate the matching keypair with `chiral-policy-sign keygen`. |
 
 ### Local Storage Keys
 
