@@ -74,16 +74,16 @@ gap).
 |----|-------|------|--------|
 | FM-A22 | Chunk position not verified against requested index; final SHA-256 catches the discrepancy so it's a bandwidth-waste DoS, not an integrity violation | `dht.rs:4097-4223` | **Fixed** — chunk-receive path rejects out-of-sequence chunks (`chunk_index != current_chunk_index` → drop). Bounds bandwidth waste before the full-file hash catches it. |
 | FM-A23 | `chiral_site_directory` registry blindly trusts whatever JSON is at the registry key, allowing soft DoS via a giant array | `lib.rs:4504-4522` | **Fixed** — `list_directory_sites` truncates the registry list to `MAX_DIRECTORY_LISTING = 4096` before fanning out per-name fetches. |
-| FM-A24 | `compute_total_with_fee(base) → split_payment(total)` round-trip drifts seller share by 1 wei on most inputs (rounding direction asymmetry) | `speed_tiers.rs:14-38` | Filed — invariant violation, not exploitable. |
-| FM-A25 | No deferred re-verification / refund path when chain propagation > 28s during paid downloads; buyer's funds are gone | `dht.rs:3587-3700, wallet.rs:610-635` | Filed — UX issue. |
-| FM-A26 | `version::POLICY_PUBLIC_KEY = [0u8; 32]` makes the signed-policy branch unreachable today; operator-deploy footgun | `version.rs:145, 190-194` | Acknowledged in code; not a bug. |
+| FM-A24 | `compute_total_with_fee(base) → split_payment(total)` round-trip drifts seller share by 1 wei on most inputs (rounding direction asymmetry) | `speed_tiers.rs:14-38` | **Fixed** — `calculate_total_with_fee` (the unused `#[allow(dead_code)]` helper that introduced the inconsistency) is removed. The runtime convention is now stated explicitly: the platform fee is a CUT of the listed price, not a markup added on top, and `split_payment` is the single source of truth. New invariant test (`test_split_payment_invariant_holds_across_inputs`) asserts `seller + fee == total` across diverse inputs. |
+| FM-A25 | No deferred re-verification / refund path when chain propagation > 28s during paid downloads; buyer's funds are gone | `dht.rs:3587-3700, wallet.rs:610-635` | **Fixed** — the seeder's PaymentProof handler now distinguishes "tx not yet mined" (retryable) from "wrong amount/recipient" (permanent) by calling `wait_for_tx_mined` separately from `verify_tx_details`. The retryable error message tells the buyer to retry in 30s; the spent-tx ledger only records on success, so resending PaymentProof with the same `tx_hash` is safe and the seeder simply re-runs `wait_for_tx_mined` against the current chain state. |
+| FM-A26 | `version::POLICY_PUBLIC_KEY = [0u8; 32]` makes the signed-policy branch unreachable today; operator-deploy footgun | `version.rs:145, 190-194` | **Fixed** — added `policy_public_key()` resolver that reads `CHIRAL_POLICY_PUBLIC_KEY` env var (32-byte hex, with or without `0x` prefix) at first call and caches it. Operators can activate signed policies without recompiling. `verify_policy` uses the resolved key. New `log_policy_key_status()` runs once at startup of the desktop app, headless daemon, and relay server — emits a clear warning when the placeholder is still in use, or a confirmation when a real key is configured. |
 
 ## Summary of disposition
 
 After two sessions of FM-Agent application:
 
-- **25 fixed** total: BUG-001, BUG-002, FM-A01–FM-A23 except the three minors (every catastrophic / high / medium finding is closed).
-- **1 group still filed**: FM-A24/A25/A26 (low-severity / UX): `split_payment` round-trip drifts seller share by 1 wei on rounding edges; no automatic re-verify / refund path when chain propagation exceeds 28 s during a paid download; `version::POLICY_PUBLIC_KEY` is the 32-byte zero placeholder until an operator wires a real signing key (operational footgun, not exploitable).
+- **All 28 findings fixed** (BUG-001, BUG-002, FM-A01 through FM-A26). Every catastrophic, high, medium, and low-severity finding is closed.
+- **No false positives.** Every finding was confirmed by direct code reading at the cited line ranges before fixing.
 - **No false positives.** Every finding was confirmed by direct code reading at the cited line ranges.
 
 ## Methodology notes

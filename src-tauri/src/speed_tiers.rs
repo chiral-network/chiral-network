@@ -19,19 +19,23 @@ pub fn calculate_cost(file_size_bytes: u64) -> u128 {
     (size * COST_PER_MB_WEI + 999_999) / 1_000_000 // Round up to nearest wei
 }
 
-/// Calculate the platform fee (0.5%) on a given amount in wei.
+/// Calculate the platform fee (0.5%) on a given amount in wei. The fee
+/// is a CUT of the listed price, not a markup added on top — i.e.
+/// buyer pays `total`, seller receives `total - fee`, platform receives
+/// `fee`. Always rounded up so the platform never under-collects.
 pub fn calculate_platform_fee(amount_wei: u128) -> u128 {
-    (amount_wei * PLATFORM_FEE_BPS + 9999) / 10000 // Round up
+    (amount_wei * PLATFORM_FEE_BPS + 9999) / 10000
 }
 
-/// Calculate total cost including platform fee.
-#[allow(dead_code)]
-pub fn calculate_total_with_fee(base_cost_wei: u128) -> u128 {
-    base_cost_wei + calculate_platform_fee(base_cost_wei)
-}
-
-/// Split a payment amount into seller portion and platform fee.
-/// Returns (seller_amount, platform_fee).
+/// Split a payment into `(seller_amount, platform_fee)`. The two
+/// components always sum to `total_wei` exactly — `split_payment` is
+/// the single source of truth for how the listed price is divided.
+///
+/// (FM-A24: a previous `calculate_total_with_fee` helper added a fee on
+/// top of the base cost, producing a non-invertible round-trip with
+/// `split_payment`. It was unused in the runtime payment flow — the
+/// real convention has always been "buyer pays the listed price, the
+/// fee is a cut" — and was removed to eliminate the inconsistency.)
 pub fn split_payment(total_wei: u128) -> (u128, u128) {
     let fee = calculate_platform_fee(total_wei);
     (total_wei.saturating_sub(fee), fee)
@@ -128,11 +132,19 @@ mod tests {
     }
 
     #[test]
-    fn test_total_with_fee() {
-        let base = 10_000_000_000_000_000u128; // 0.01 CHI
-        let total = calculate_total_with_fee(base);
-        assert!(total > base);
-        assert_eq!(total, base + calculate_platform_fee(base));
+    fn test_split_payment_invariant_holds_across_inputs() {
+        // FM-A24 regression: seller + fee must equal total exactly.
+        for total in [
+            0u128,
+            1,
+            199,
+            20_099,
+            10_000_000_000_000_000,
+            1_234_567_890_987_654_321,
+        ] {
+            let (seller, fee) = split_payment(total);
+            assert_eq!(seller + fee, total, "split_payment({}) breaks invariant", total);
+        }
     }
 
     #[test]

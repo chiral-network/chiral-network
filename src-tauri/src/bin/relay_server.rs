@@ -45,6 +45,7 @@ fn keypair_from_secret(secret: &str) -> libp2p::identity::Keypair {
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().collect();
 
+    chiral_network::version::log_policy_key_status();
     let mut port: u16 = 4001;
     let mut http_port: u16 = 8080;
     let mut secret = String::from("chiral-relay-server-default");

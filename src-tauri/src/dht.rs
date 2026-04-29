@@ -3741,6 +3741,58 @@ async fn handle_behaviour_event(
                                                     ),
                                                 }
                                             } else {
+                                            // FM-A25: check mined-vs-not separately so the buyer
+                                            // gets a retryable "not yet confirmed" answer instead
+                                            // of a generic "verification failed" when the tx is
+                                            // valid but hasn't propagated to the seeder's RPC node
+                                            // yet. The spent-tx ledger only records on success, so
+                                            // resending PaymentProof with the same tx_hash is safe.
+                                            let mined = match crate::wallet::wait_for_tx_mined(&payment_tx).await {
+                                                Ok(v) => v,
+                                                Err(e) => {
+                                                    println!("❌ wait_for_tx_mined error: {}", e);
+                                                    let resp = ChunkResponse::PaymentAck {
+                                                        request_id,
+                                                        file_hash,
+                                                        accepted: false,
+                                                        error: Some(format!(
+                                                            "Payment verification error: {} (please retry)",
+                                                            e
+                                                        )),
+                                                    };
+                                                    if let Err(e) = swarm
+                                                        .behaviour_mut()
+                                                        .file_request
+                                                        .send_response(channel, resp)
+                                                    {
+                                                        println!("Failed to send PaymentAck: {:?}", e);
+                                                    }
+                                                    return;
+                                                }
+                                            };
+                                            if !mined {
+                                                println!(
+                                                    "⏳ Payment tx {} not yet mined — buyer should retry shortly",
+                                                    payment_tx
+                                                );
+                                                let resp = ChunkResponse::PaymentAck {
+                                                    request_id,
+                                                    file_hash,
+                                                    accepted: false,
+                                                    error: Some(
+                                                        "Payment not yet confirmed on-chain (retryable) — please retry in 30s"
+                                                            .to_string(),
+                                                    ),
+                                                };
+                                                if let Err(e) = swarm
+                                                    .behaviour_mut()
+                                                    .file_request
+                                                    .send_response(channel, resp)
+                                                {
+                                                    println!("Failed to send PaymentAck: {:?}", e);
+                                                }
+                                                return;
+                                            }
                                             match verify_payment_on_chain(
                                                 &payment_tx,
                                                 &payer_address,

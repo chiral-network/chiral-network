@@ -6605,6 +6605,9 @@ pub fn run() {
             use tauri::Manager;
             let app_handle = app.handle().clone();
 
+            // Log policy-key status on startup so operators see whether
+            // signed policies are enabled (FM-A26).
+            version::log_policy_key_status();
             // Background probe of the relay's /api/version-policy. The
             // result is funnelled into the global EFFECTIVE_POLICY slot
             // in version.rs, which backs get_version_status() (Tauri),

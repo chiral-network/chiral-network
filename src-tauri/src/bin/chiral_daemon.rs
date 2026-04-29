@@ -1223,6 +1223,7 @@ async fn main() {
     if let Some(port) = args.p2p_port {
         std::env::set_var("CHIRAL_P2P_PORT", port.to_string());
     }
+    chiral_network::version::log_policy_key_status();
     let pid_file = args.pid_file.unwrap_or_else(default_pid_file);
 
     if let Err(e) = write_pid_file(&pid_file) {

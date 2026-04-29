@@ -137,12 +137,79 @@ pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str 
 // stays offline / in a CI secret and only feeds the
 // `chiral-policy-sign` operator CLI.
 
-/// Project policy-signing public key. **Placeholder zeros until the real
-/// key is generated.** No signature can verify against an all-zero key,
-/// so signed policies are always rejected until a real key is wired in
-/// — and the unsigned-but-permissive transition path (see below) is the
-/// only way for a relay-served policy to take effect today.
+/// Compile-time fallback for the project policy-signing public key.
+/// **Placeholder zeros until the real key is generated.** Operators
+/// override this at runtime via the `CHIRAL_POLICY_PUBLIC_KEY` env var
+/// (32-byte hex, with or without leading `0x`) so a deployment can
+/// activate signed policies without recompiling. Generate a key with
+/// `chiral-policy-sign keygen`.
 pub const POLICY_PUBLIC_KEY: [u8; 32] = [0u8; 32];
+
+/// Resolve the active policy public key. Reads the
+/// `CHIRAL_POLICY_PUBLIC_KEY` env var on first call and caches it; if
+/// the env var is absent or malformed, falls back to the compile-time
+/// `POLICY_PUBLIC_KEY` constant.
+pub fn policy_public_key() -> [u8; 32] {
+    use once_cell::sync::OnceCell;
+    static RESOLVED: OnceCell<[u8; 32]> = OnceCell::new();
+    *RESOLVED.get_or_init(|| {
+        let raw = match std::env::var("CHIRAL_POLICY_PUBLIC_KEY") {
+            Ok(v) => v,
+            Err(_) => return POLICY_PUBLIC_KEY,
+        };
+        let cleaned = raw.trim().trim_start_matches("0x");
+        match hex::decode(cleaned) {
+            Ok(bytes) if bytes.len() == 32 => {
+                let mut out = [0u8; 32];
+                out.copy_from_slice(&bytes);
+                println!(
+                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY override active: {}",
+                    cleaned
+                );
+                out
+            }
+            Ok(_) => {
+                eprintln!(
+                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY must decode to 32 bytes — falling back to compile-time placeholder"
+                );
+                POLICY_PUBLIC_KEY
+            }
+            Err(e) => {
+                eprintln!(
+                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY not valid hex ({}) — falling back to compile-time placeholder",
+                    e
+                );
+                POLICY_PUBLIC_KEY
+            }
+        }
+    })
+}
+
+/// Print a one-shot warning if the active policy public key is the
+/// 32-byte zero placeholder. Call this once at process startup.
+/// Activates `verify_policy` requires a real key; until then only
+/// the unsigned-but-permissive transition path can promote a remote
+/// policy.
+pub fn log_policy_key_status() {
+    use once_cell::sync::OnceCell;
+    static LOGGED: OnceCell<()> = OnceCell::new();
+    LOGGED.get_or_init(|| {
+        let key = policy_public_key();
+        if key == [0u8; 32] {
+            eprintln!(
+                "[VERSION] WARNING: policy-signing public key is the placeholder zeros. \
+                 Signed policies cannot verify until a real key is generated \
+                 (chiral-policy-sign keygen) and wired in via the CHIRAL_POLICY_PUBLIC_KEY \
+                 env var or the POLICY_PUBLIC_KEY constant. Only the unsigned-but-permissive \
+                 transition path is active."
+            );
+        } else {
+            println!(
+                "[VERSION] policy-signing public key configured (signed policies enabled)"
+            );
+        }
+    });
+}
 
 /// Canonical bytes that get fed to Ed25519 sign/verify. Each field is
 /// length-prefixed with a little-endian `u32` byte length so that field
@@ -187,7 +254,8 @@ pub fn verify_policy(p: &VersionPolicy) -> bool {
         Ok(s) => s,
         Err(_) => return false,
     };
-    let key = match VerifyingKey::from_bytes(&POLICY_PUBLIC_KEY) {
+    let key_bytes = policy_public_key();
+    let key = match VerifyingKey::from_bytes(&key_bytes) {
         Ok(k) => k,
         Err(_) => return false,
     };
