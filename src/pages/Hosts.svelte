@@ -789,6 +789,12 @@
       toasts.show("Names use a-z, 0-9, and '-' (1–63 chars, no leading/trailing dash)", 'warning');
       return;
     }
+    const ownerWallet = $walletAccount?.address || '';
+    const privateKey = $walletAccount?.privateKey || '';
+    if (!ownerWallet || !privateKey) {
+      toasts.show('Unlock your wallet before claiming a site name', 'warning');
+      return;
+    }
     directoryClaimSubmitting = true;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -796,7 +802,8 @@
         siteId,
         name,
         description: directoryClaimDescription.trim() || null,
-        ownerWallet: $walletAccount?.address ?? null,
+        ownerWallet,
+        privateKey,
       });
       toasts.show(`Listed as "${name}" in the network directory`, 'success');
       cancelDirectoryClaim();

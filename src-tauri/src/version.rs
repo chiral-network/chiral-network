@@ -144,9 +144,13 @@ pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str 
 /// only way for a relay-served policy to take effect today.
 pub const POLICY_PUBLIC_KEY: [u8; 32] = [0u8; 32];
 
-/// Canonical bytes that get fed to Ed25519 sign/verify. Stable order +
-/// NUL separators so any other implementation can reproduce the payload
-/// without a JSON canonicaliser.
+/// Canonical bytes that get fed to Ed25519 sign/verify. Each field is
+/// length-prefixed with a little-endian `u32` byte length so that field
+/// boundaries are unambiguous regardless of field contents — in
+/// particular, embedded NUL bytes inside a field cannot shift the
+/// parse, which would otherwise let one signature attest to multiple
+/// distinct policies. Stable order so any other implementation can
+/// reproduce the payload without a JSON canonicaliser.
 pub fn canonical_signing_payload(p: &VersionPolicy) -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
     let issued = p.issued_at.to_string();
@@ -159,10 +163,8 @@ pub fn canonical_signing_payload(p: &VersionPolicy) -> Vec<u8> {
         issued.as_bytes(),
         valid.as_bytes(),
     ];
-    for (i, part) in parts.iter().enumerate() {
-        if i > 0 {
-            out.push(0);
-        }
+    for part in parts.iter() {
+        out.extend_from_slice(&(part.len() as u32).to_le_bytes());
         out.extend_from_slice(part);
     }
     out
@@ -338,6 +340,19 @@ mod tests {
         let a = policy("1.0.0", "2.0.0", 100);
         let mut b = a.clone();
         b.recommended = "2.0.1".into();
+        assert_ne!(canonical_signing_payload(&a), canonical_signing_payload(&b));
+    }
+
+    #[test]
+    fn canonical_payload_is_injective_under_nul_shift() {
+        // Regression: BUG-002. Two policies that differ only by where a
+        // NUL byte sits within their string fields used to produce
+        // byte-equal canonical payloads under a separator-based
+        // encoding. The length-prefixed encoding keeps them distinct.
+        let mut a = policy("1.0.0\0relaxed", "9.9.9", 1700000000);
+        a.download_url = String::new();
+        let mut b = policy("1.0.0", "relaxed\09.9.9", 1700000000);
+        b.download_url = String::new();
         assert_ne!(canonical_signing_payload(&a), canonical_signing_payload(&b));
     }
 

@@ -4327,7 +4327,10 @@ async fn unpublish_site_from_cdn(
 //   chiral_site_directory   → JSON array of registered names
 //
 // First claim wins for a given name — on conflict the publish command
-// returns an error rather than overwriting.
+// returns an error rather than overwriting. The "first claim" rule is
+// enforced by ECDSA signatures over each entry: only the wallet that
+// signed the existing entry can replace it, and any reader rejects an
+// entry whose signature does not match its `owner_wallet`.
 // ---------------------------------------------------------------------------
 
 const SITE_DIRECTORY_REGISTRY_KEY: &str = "chiral_site_directory";
@@ -4340,7 +4343,8 @@ struct SiteDirectoryEntry {
     /// Optional human-readable summary shown in the directory listing.
     #[serde(default)]
     description: String,
-    /// Wallet that registered the name (informational, not authoritative).
+    /// Wallet that registered the name. Authoritative — verified via
+    /// `signature` below before this entry is trusted.
     #[serde(default)]
     owner_wallet: String,
     /// Site ID on the publisher's local Drive — used to remove the
@@ -4350,6 +4354,47 @@ struct SiteDirectoryEntry {
     public_url: String,
     /// Unix timestamp (seconds).
     created_at: u64,
+    /// ECDSA signature by `owner_wallet` over the canonical payload of
+    /// every other field. Empty on legacy entries; readers must reject
+    /// entries that fail to verify.
+    #[serde(default)]
+    signature: String,
+}
+
+impl SiteDirectoryEntry {
+    /// Length-prefixed canonical bytes — see `version::canonical_signing_payload`
+    /// for the rationale (no separator-injection collisions).
+    fn sign_payload(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(256);
+        for part in [
+            self.name.as_bytes(),
+            self.description.as_bytes(),
+            self.owner_wallet.as_bytes(),
+            self.site_id.as_bytes(),
+            self.public_url.as_bytes(),
+        ] {
+            out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+            out.extend_from_slice(part);
+        }
+        out.extend_from_slice(&self.created_at.to_le_bytes());
+        out
+    }
+
+    fn sign(&mut self, private_key: &str) {
+        let payload = self.sign_payload();
+        self.signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
+    }
+
+    /// Verifies that this entry was signed by the wallet it claims.
+    /// Empty signatures and empty owner addresses are treated as failures
+    /// (legacy unsigned entries cannot be trusted).
+    fn verify(&self) -> bool {
+        if self.signature.is_empty() || self.owner_wallet.is_empty() {
+            return false;
+        }
+        let payload = self.sign_payload();
+        wallet::verify_signature(&payload, &self.signature, &self.owner_wallet)
+    }
 }
 
 fn validate_site_name(name: &str) -> Result<String, String> {
@@ -4382,10 +4427,15 @@ async fn publish_site_to_directory(
     site_id: String,
     name: String,
     description: Option<String>,
-    owner_wallet: Option<String>,
+    owner_wallet: String,
+    private_key: String,
 ) -> Result<SiteDirectoryEntry, String> {
     let name = validate_site_name(&name)?;
     let description = description.unwrap_or_default();
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("Wallet must be unlocked before claiming a site name".to_string());
+    }
+    let owner_wallet = owner_wallet.to_lowercase();
 
     // Site must exist locally and must already have a public relay URL —
     // visitors need somewhere to be sent when they pick the name.
@@ -4414,32 +4464,39 @@ async fn publish_site_to_directory(
             .ok_or_else(|| "DHT is not running. Connect to the network first.".to_string())?
     };
 
-    // First-claim wins: if the name already resolves to someone else's
-    // site, refuse. If it resolves to OUR own site_id, we treat it as an
-    // update.
+    // First-claim wins: a previously-claimed name can only be replaced by
+    // the wallet that originally signed the entry. An existing entry that
+    // fails to verify is treated as if no claim exists — a polite client
+    // that just fetched garbage / a forged value should be free to take
+    // the name with a real signed claim.
     let key = site_name_key(&name);
     if let Ok(Some(existing_json)) = dht.get_dht_value(key.clone()).await {
         if let Ok(existing) = serde_json::from_str::<SiteDirectoryEntry>(&existing_json) {
-            if existing.site_id != site_id {
+            if existing.verify() && existing.owner_wallet != owner_wallet {
                 return Err(format!(
-                    "Name '{}' is already taken by another site",
+                    "Name '{}' is already taken by another wallet",
                     name
                 ));
             }
         }
     }
 
-    let entry = SiteDirectoryEntry {
+    let mut entry = SiteDirectoryEntry {
         name: name.clone(),
         description,
-        owner_wallet: owner_wallet.unwrap_or_default(),
+        owner_wallet: owner_wallet.clone(),
         site_id: site_id.clone(),
         public_url,
         created_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
+        signature: String::new(),
     };
+    entry.sign(&private_key);
+    if !entry.verify() {
+        return Err("Failed to sign directory entry — check wallet key".to_string());
+    }
     let entry_json = serde_json::to_string(&entry)
         .map_err(|e| format!("Serialise directory entry: {}", e))?;
     dht.put_dht_value(key, entry_json).await?;
@@ -4537,7 +4594,12 @@ async fn resolve_site_name(
     };
     match dht.get_dht_value(site_name_key(&name)).await {
         Ok(Some(json)) => match serde_json::from_str::<SiteDirectoryEntry>(&json) {
-            Ok(entry) => Ok(Some(entry)),
+            // Reject entries whose signature does not verify against the
+            // claimed `owner_wallet`. Returning `None` here means a forged
+            // entry effectively hides the name rather than redirecting
+            // users to an attacker-chosen URL.
+            Ok(entry) if entry.verify() => Ok(Some(entry)),
+            Ok(_) => Ok(None),
             Err(e) => Err(format!("Invalid directory entry for '{}': {}", name, e)),
         },
         Ok(None) => Ok(None),
@@ -4571,7 +4633,11 @@ async fn list_directory_sites(
         async move {
             let key = site_name_key(&name);
             match dht.get_dht_value(key).await {
-                Ok(Some(json)) => serde_json::from_str::<SiteDirectoryEntry>(&json).ok(),
+                // Drop entries that fail to verify so the directory listing
+                // never carries forged or unsigned records.
+                Ok(Some(json)) => serde_json::from_str::<SiteDirectoryEntry>(&json)
+                    .ok()
+                    .filter(|e| e.verify()),
                 _ => None,
             }
         }
