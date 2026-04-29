@@ -1178,8 +1178,21 @@ struct FileMetadata {
 
 impl FileMetadata {
     /// Create the message bytes that are signed by the publisher.
+    /// Length-prefixed canonical encoding so an attacker-controlled
+    /// `file_name` containing a colon cannot shift content across field
+    /// boundaries (same defect class as the historical
+    /// `canonical_signing_payload` and `SiteDirectoryEntry::sign_payload`
+    /// bugs — see `fm_agent/bug_validation/`).
     fn sign_payload(hash: &str, file_name: &str, file_size: u64) -> Vec<u8> {
-        format!("file:{}:{}:{}", hash, file_name, file_size).into_bytes()
+        let mut out = Vec::with_capacity(64 + hash.len() + file_name.len());
+        out.extend_from_slice(b"file");
+        out.push(0);
+        for part in [hash.as_bytes(), file_name.as_bytes()] {
+            out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+            out.extend_from_slice(part);
+        }
+        out.extend_from_slice(&file_size.to_le_bytes());
+        out
     }
 
     /// Sign this file metadata with the publisher's wallet key.

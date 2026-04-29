@@ -1,0 +1,366 @@
+{
+  "phase": 6,
+  "phase_name": "Persistent Storage",
+  "total_functions": 29,
+  "total_layers": 5,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::drive_storage-rs::collect_descendants",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/collect_descendants.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::drive_storage-rs::default_share_price",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/default_share_price.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::drive_storage-rs::default_true",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/default_true.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::drive_storage-rs::drive_files_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/drive_files_dir.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::drive_base_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::drive_base_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::drive_storage-rs::generate_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/generate_id.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::drive_storage-rs::generate_share_token",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/generate_share_token.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::drive_storage-rs::mime_from_name",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/mime_from_name.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::drive_storage-rs::now_secs",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/now_secs.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::hosting-rs::generate_site_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/hosting-rs/generate_site_id.rs",
+          "unit": "hosting-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::hosting-rs::load_sites",
+          "file": "fm_agent/extracted_functions/src-tauri/src/hosting-rs/load_sites.rs",
+          "unit": "hosting-rs",
+          "phase6_callers": [],
+          "phase6_callees": [
+            "src-tauri::src::hosting-rs::metadata_path",
+            "src-tauri::src::rating_storage-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::hosting-rs::metadata_path",
+            "src-tauri::src::rating_storage-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::hosting-rs::mime_from_extension",
+          "file": "fm_agent/extracted_functions/src-tauri/src/hosting-rs/mime_from_extension.rs",
+          "unit": "hosting-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::hosting-rs::save_sites",
+          "file": "fm_agent/extracted_functions/src-tauri/src/hosting-rs/save_sites.rs",
+          "unit": "hosting-rs",
+          "phase6_callers": [],
+          "phase6_callees": [
+            "src-tauri::src::hosting-rs::metadata_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::hosting-rs::metadata_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::hosting-rs::sites_base_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/hosting-rs/sites_base_dir.rs",
+          "unit": "hosting-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::compute_reputation_for_wallet",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/compute_reputation_for_wallet.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [
+            "src-tauri::src::rating_storage-rs::clamp_elo",
+            "src-tauri::src::rating_storage-rs::wei_to_chi_f64"
+          ],
+          "all_callees": [
+            "src-tauri::src::rating_storage-rs::clamp_elo",
+            "src-tauri::src::rating_storage-rs::wei_to_chi_f64"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::generate_event_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/generate_event_id.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [
+            "src-tauri::src::rating_storage-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::rating_storage-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::now_secs",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/now_secs.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::persist",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/persist.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::save_manifest",
+            "src-tauri::src::rating_storage-rs::save_manifest"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::save_manifest",
+            "src-tauri::src::rating_storage-rs::save_manifest"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::drive_storage-rs::save_manifest",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/save_manifest.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::rating_storage-rs::persist"
+          ],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::hosting-rs::metadata_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/hosting-rs/metadata_path.rs",
+          "unit": "hosting-rs",
+          "phase6_callers": [
+            "src-tauri::src::hosting-rs::load_sites",
+            "src-tauri::src::hosting-rs::save_sites"
+          ],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::clamp_elo",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/clamp_elo.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::rating_storage-rs::compute_reputation_for_wallet"
+          ],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::new",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/new.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::hosting-rs::load_sites",
+            "src-tauri::src::rating_storage-rs::generate_event_id"
+          ],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::load_manifest",
+            "src-tauri::src::rating_storage-rs::load_manifest"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::load_manifest",
+            "src-tauri::src::rating_storage-rs::load_manifest"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::save_manifest",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/save_manifest.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::rating_storage-rs::persist"
+          ],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::wei_to_chi_f64",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/wei_to_chi_f64.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::rating_storage-rs::compute_reputation_for_wallet"
+          ],
+          "phase6_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::drive_storage-rs::load_manifest",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/load_manifest.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::rating_storage-rs::new"
+          ],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::load_manifest",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/load_manifest.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::rating_storage-rs::new"
+          ],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::manifest_path",
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "functions": [
+        {
+          "name": "src-tauri::src::drive_storage-rs::manifest_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/manifest_path.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::drive_storage-rs::load_manifest",
+            "src-tauri::src::drive_storage-rs::save_manifest",
+            "src-tauri::src::rating_storage-rs::load_manifest",
+            "src-tauri::src::rating_storage-rs::save_manifest"
+          ],
+          "phase6_callees": [
+            "src-tauri::src::drive_storage-rs::drive_base_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::drive_storage-rs::drive_base_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::manifest_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/manifest_path.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::drive_storage-rs::load_manifest",
+            "src-tauri::src::drive_storage-rs::save_manifest",
+            "src-tauri::src::rating_storage-rs::load_manifest",
+            "src-tauri::src::rating_storage-rs::save_manifest"
+          ],
+          "phase6_callees": [
+            "src-tauri::src::rating_storage-rs::ratings_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::rating_storage-rs::ratings_dir"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 4,
+      "functions": [
+        {
+          "name": "src-tauri::src::drive_storage-rs::drive_base_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/drive_storage-rs/drive_base_dir.rs",
+          "unit": "drive_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::drive_storage-rs::drive_files_dir",
+            "src-tauri::src::drive_storage-rs::manifest_path"
+          ],
+          "phase6_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rating_storage-rs::ratings_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rating_storage-rs/ratings_dir.rs",
+          "unit": "rating_storage-rs",
+          "phase6_callers": [
+            "src-tauri::src::rating_storage-rs::manifest_path"
+          ],
+          "phase6_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}

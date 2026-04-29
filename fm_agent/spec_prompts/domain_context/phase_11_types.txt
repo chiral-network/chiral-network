@@ -1,0 +1,193 @@
+PHASE 11: BINARIES
+==================
+
+MODULE SUMMARY
+--------------
+Four compiled binaries each instantiate different subsets of the Chiral
+runtime. main.rs delegates to lib.rs::run() for GUI; daemon, relay_server,
+and chiral CLI provide headless operation for server/orchestration/scripting.
+
+
+BINARY: main.rs (chiral-gui)
+----------------------------
+Role: Desktop GUI entrypoint. Prevents console window on Windows.
+  Delegates all logic to lib.rs::run()
+
+CLI flags: None (Tauri handles window/menu)
+
+Default ports: 9419 (Drive/Rating/Hosting API)
+               4001 (P2P DHT, OS-assigned if not pinned)
+               8545 (Geth JSON-RPC)
+
+Runtime components assembled:
+  - AppState with DHT, FileTransfer, Geth, GPU mining, Drive, Hosting
+  - Tauri event loop with invoke handlers for 100+ commands
+  - Async task: fetch_and_log_remote_version_policy()
+  - Signal handlers (SIGINT) for clean DHT/Geth shutdown
+  - Hosting server start/stop (optional, via GUI command)
+
+
+BINARY: bin/chiral.rs (chiral-cli)
+----------------------------------
+Role: Headless CLI for scripting and operator workflows (no Tauri).
+  Provides nested subcommands organized by domain.
+
+CLI structure:
+  chiral daemon [start | stop | status]
+  chiral settings [get | set | reset | path]
+  chiral network [bootstrap | status]
+  chiral reputation [show | batch]
+  chiral diagnostics [report]
+  chiral wallet [create | import | login | export | info]
+  chiral account [create | import | list | use]
+  chiral dht [start | stop | publish | search | get-providers | get-value | put-value]
+  chiral download [start | list | resume | cancel]
+  chiral drive [list | mkdir | upload | share | revoke-share]
+  chiral drop [upload | download | ... (drop-specific operations)]
+  chiral hosting [create | list | delete | publish-relay | publish-cdn]
+  chiral market [publish-host | unpublish-host | list-hosts]
+  chiral mining [start | stop | status | set-miner-address]
+  chiral geth [install | start | stop | status]
+
+Default ports: 9419 (same as daemon for API calls)
+
+Runtime components assembled (minimal):
+  - DHT (start/stop/operations)
+  - Geth (mining control, balance queries)
+  - Rating/Reputation operations
+  - Drive operations (local-only, no hosting server)
+  - Wallet operations (create, sign, send)
+
+
+BINARY: bin/chiral_daemon.rs (chiral-daemon)
+---------------------------------------------
+Role: Standalone headless service for servers/k3s/Docker.
+  Single long-running process with HTTP API (no GUI, no Tauri).
+
+CLI flags (all with env var equivalents):
+  --port PORT                   Local HTTP gateway port (default: 9419)
+  --pid-file PATH               Write PID file at startup
+  --auto-start-dht              Start DHT on startup
+  --auto-start-geth             Start Geth node on startup
+  --auto-mine                   Start mining (implies --auto-start-geth/dht)
+  --miner-address ADDR          Wallet address for mining rewards
+  --mining-threads N            CPU mining threads (default: 1)
+  --p2p-port PORT               Pin libp2p TCP port (for k3s NodePort)
+
+Environment variables (override flags):
+  CHIRAL_DAEMON_PORT
+  CHIRAL_DAEMON_PID_FILE
+  CHIRAL_AUTO_START_DHT
+  CHIRAL_AUTO_START_GETH
+  CHIRAL_AUTO_MINE
+  CHIRAL_MINER_ADDRESS
+  CHIRAL_MINING_THREADS
+  CHIRAL_P2P_PORT
+
+Default ports: 9419 (HTTP gateway)
+               4001 (P2P DHT, or --p2p-port if pinned)
+               8545 (Geth JSON-RPC)
+
+Runtime components assembled (full):
+  - HeadlessRuntimeState: DHT, FileTransfer, Geth, wallet (optional)
+  - HTTP router: Hosting/Drive/Rating/CDN APIs, relay share proxy
+  - Auto-start logic for DHT/Geth/mining based on flags
+  - PID file lifecycle (create on startup, remove on exit)
+  - Host advertisement publishing (auto, if wallet/DHT running)
+  - CORS-enabled gateway router for remote clients
+
+
+BINARY: bin/relay_server.rs (relay-server)
+-------------------------------------------
+Role: Standalone relay bootstrap node for Chiral Network v2.
+  libp2p 0.53 + relay 0.17, HTTP gateway for CDN/rating/site proxying.
+
+CLI flags (positional args, no parser):
+  --port PORT           libp2p TCP listen port (default: 4001)
+  --http-port PORT      HTTP gateway port (default: 8080)
+  --secret SECRET       Deterministic keypair seed (default: "chiral-relay-server-default")
+
+Default ports: 4001 (P2P libp2p)
+               8080 (HTTP gateway for uploads/sites)
+
+Runtime components assembled:
+  - RelayServerBehaviour: relay::Behaviour, kad, ping, identify
+  - HostingServerState: site serving
+  - RatingState: reputation tracking
+  - RelayShareRegistry: share/site metadata registry (no file storage)
+  - HTTP gateway: /api/version-policy (always-on), hosting, rating,
+    relay share proxy (sites/<id>, drive/<token>), CDN (opt in via env)
+  - Deterministic peer ID derivation from --secret (SHA-256 → ed25519)
+
+No auto-start of DHT or mining (relay is bootstrap only).
+
+
+BINARY: bin/chiral_policy_sign.rs (chiral-policy-sign)
+-------------------------------------------------------
+Role: Offline operator CLI for Phase 5 version-policy signing.
+  Signs/verifies VersionPolicy JSON with Ed25519 offline key.
+  (Not deployed, runs on operator workstation only.)
+
+Subcommands:
+  keygen                         Print fresh Ed25519 keypair (hex)
+  sign --key HEX [--in | --out]  Sign policy JSON from stdin/file
+  verify [--pub HEX] [--in]      Verify signed policy (default pubkey
+                                  or custom --pub override)
+
+CLI flags:
+  --key HEX                       64-hex-char Ed25519 secret key
+  --in PATH                       Input file (default: stdin)
+  --out PATH                      Output file (default: stdout)
+  --pub HEX                       Public key override for verify
+
+Environment variables:
+  CHIRAL_POLICY_SECRET            --key equivalent for signing
+
+Workflow:
+  1. keygen on offline machine → public + secret hex
+  2. Paste public into src-tauri/src/version.rs::POLICY_PUBLIC_KEY
+  3. Distribute secret to CI via GitHub Actions secret
+  4. In CI: sign --key $CHIRAL_POLICY_SECRET < policy.json > policy_signed.json
+  5. Upload signed policy to relay's /api/version-policy endpoint
+  6. Clients fetch + validate signature via verify_policy()
+
+No DHT, Geth, or network runtime (pure crypto utility).
+
+
+INVARIANTS
+----------
+- Each binary is a separate cargo binary target (Cargo.toml [bin] sections).
+  They share src/lib.rs for core types/business logic.
+
+- Daemon and relay_server use hosting_server::start_gateway_server()
+  (composed router with Drive/Rating/Relay routes), while chiral CLI
+  directly invokes DHT/Geth commands without serving HTTP.
+
+- All services that bind sockets (daemon, relay_server, GUI hosting server)
+  use the same Axum-based HTTP routing layer but wire different
+  optional components (e.g., relay_server omits Drive state).
+
+- DHT startup always gates through ensure_version_supported(); if bundled
+  version is below network min_required, operation fails before joining.
+
+- Shutdown handlers (SIGINT on Unix, app exit on GUI) call
+  cleanup_dht_on_shutdown() to unpublish files and remove host
+  advertisement before the peer fully leaves the network.
+
+- PID file usage (daemon only): created before main loop, removed on
+  graceful shutdown; useful for systemd/Docker health checks.
+
+- libp2p 0.53 TCP port binding: daemon can pin with --p2p-port (for k3s
+  NodePort stability); relay_server always uses --port flag; GUI/CLI
+  default to OS-assigned (0) and DHT announces actual port after bind.
+
+
+CONSTANTS & DEFAULTS
+--------------------
+CHIRAL_DAEMON_PORT_DEFAULT      9419
+RELAY_P2P_PORT_DEFAULT          4001
+RELAY_HTTP_PORT_DEFAULT         8080
+RELAY_SECRET_DEFAULT            "chiral-relay-server-default"
+MINING_THREADS_DEFAULT          1
+GETH_RPC_PORT_DEFAULT           8545
+FETCH_POLICY_TIMEOUT_SECS       8

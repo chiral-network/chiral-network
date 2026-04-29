@@ -1,0 +1,377 @@
+{
+  "phase": 3,
+  "phase_name": "Wallet",
+  "total_functions": 31,
+  "total_layers": 4,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::wallet-rs::get_balance",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/get_balance.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::get_receipt",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/get_receipt.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::get_transaction_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/get_transaction_history.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::classify_transaction"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::classify_transaction"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::load_tx_metadata",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/load_tx_metadata.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::tx_metadata_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::tx_metadata_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::record_meta",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/record_meta.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::save_tx_metadata"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::save_tx_metadata"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::request_faucet",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/request_faucet.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::send_payment",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/send_payment.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::send_transaction"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::send_transaction"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::sign_message",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/sign_message.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::verify_payment",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/verify_payment.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::verify_tx_details",
+            "src-tauri::src::wallet-rs::wait_for_tx_mined"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::verify_tx_details",
+            "src-tauri::src::wallet-rs::wait_for_tx_mined"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::verify_signature",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/verify_signature.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::recover_signer"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::recover_signer"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet_backup_api-rs::send_wallet_backup_email",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet_backup_api-rs/send_wallet_backup_email.rs",
+          "unit": "wallet_backup_api-rs",
+          "phase3_callers": [],
+          "phase3_callees": [
+            "src-tauri::src::wallet_backup_api-rs::build_email_body",
+            "src-tauri::src::wallet_backup_api-rs::is_valid_private_key",
+            "src-tauri::src::wallet_backup_api-rs::is_valid_recovery_phrase",
+            "src-tauri::src::wallet_backup_api-rs::is_valid_wallet_address",
+            "src-tauri::src::wallet_backup_api-rs::parse_smtp_settings"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet_backup_api-rs::build_email_body",
+            "src-tauri::src::wallet_backup_api-rs::is_valid_private_key",
+            "src-tauri::src::wallet_backup_api-rs::is_valid_recovery_phrase",
+            "src-tauri::src::wallet_backup_api-rs::is_valid_wallet_address",
+            "src-tauri::src::wallet_backup_api-rs::parse_smtp_settings"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet_backup_api-rs::wallet_backup_routes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet_backup_api-rs/wallet_backup_routes.rs",
+          "unit": "wallet_backup_api-rs",
+          "phase3_callers": [],
+          "phase3_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::wallet-rs::classify_transaction",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/classify_transaction.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::get_transaction_history"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::recover_signer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/recover_signer.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::verify_signature"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::save_tx_metadata",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/save_tx_metadata.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::record_meta"
+          ],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::tx_metadata_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::tx_metadata_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::send_transaction",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/send_transaction.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::send_payment"
+          ],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::broadcast_signed_tx",
+            "src-tauri::src::wallet-rs::encode_signed_tx",
+            "src-tauri::src::wallet-rs::encode_unsigned_tx",
+            "src-tauri::src::wallet-rs::invalidate_balance_cache",
+            "src-tauri::src::wallet-rs::parse_chi_to_wei"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::broadcast_signed_tx",
+            "src-tauri::src::wallet-rs::encode_signed_tx",
+            "src-tauri::src::wallet-rs::encode_unsigned_tx",
+            "src-tauri::src::wallet-rs::invalidate_balance_cache",
+            "src-tauri::src::wallet-rs::parse_chi_to_wei"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::verify_tx_details",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/verify_tx_details.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::verify_payment"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::wait_for_tx_mined",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/wait_for_tx_mined.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::verify_payment"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet_backup_api-rs::build_email_body",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet_backup_api-rs/build_email_body.rs",
+          "unit": "wallet_backup_api-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet_backup_api-rs::send_wallet_backup_email"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet_backup_api-rs::is_valid_private_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet_backup_api-rs/is_valid_private_key.rs",
+          "unit": "wallet_backup_api-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet_backup_api-rs::send_wallet_backup_email"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet_backup_api-rs::is_valid_recovery_phrase",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet_backup_api-rs/is_valid_recovery_phrase.rs",
+          "unit": "wallet_backup_api-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet_backup_api-rs::send_wallet_backup_email"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet_backup_api-rs::is_valid_wallet_address",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet_backup_api-rs/is_valid_wallet_address.rs",
+          "unit": "wallet_backup_api-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet_backup_api-rs::send_wallet_backup_email"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet_backup_api-rs::parse_smtp_settings",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet_backup_api-rs/parse_smtp_settings.rs",
+          "unit": "wallet_backup_api-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet_backup_api-rs::send_wallet_backup_email"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::wallet-rs::broadcast_signed_tx",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/broadcast_signed_tx.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::send_transaction"
+          ],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::compute_tx_hash"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::compute_tx_hash"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::encode_signed_tx",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/encode_signed_tx.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::send_transaction"
+          ],
+          "phase3_callees": [
+            "src-tauri::src::wallet-rs::rlp_append_bytes_as_uint"
+          ],
+          "all_callees": [
+            "src-tauri::src::wallet-rs::rlp_append_bytes_as_uint"
+          ]
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::encode_unsigned_tx",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/encode_unsigned_tx.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::send_transaction"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::invalidate_balance_cache",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/invalidate_balance_cache.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::send_transaction"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::parse_chi_to_wei",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/parse_chi_to_wei.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::send_transaction"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::tx_metadata_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/tx_metadata_path.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::load_tx_metadata",
+            "src-tauri::src::wallet-rs::save_tx_metadata"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "functions": [
+        {
+          "name": "src-tauri::src::wallet-rs::compute_tx_hash",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/compute_tx_hash.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::broadcast_signed_tx"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::wallet-rs::rlp_append_bytes_as_uint",
+          "file": "fm_agent/extracted_functions/src-tauri/src/wallet-rs/rlp_append_bytes_as_uint.rs",
+          "unit": "wallet-rs",
+          "phase3_callers": [
+            "src-tauri::src::wallet-rs::encode_signed_tx"
+          ],
+          "phase3_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}

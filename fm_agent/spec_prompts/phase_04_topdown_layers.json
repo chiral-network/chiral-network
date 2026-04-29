@@ -1,0 +1,819 @@
+{
+  "phase": 4,
+  "phase_name": "Geth Lifecycle and Mining",
+  "total_functions": 48,
+  "total_layers": 9,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth-rs::default__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/default__1.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::default",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::default",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::default",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::default",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::download_geth",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/download_geth.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::bin_dir",
+            "src-tauri::src::geth-rs::download_url",
+            "src-tauri::src::geth-rs::extract_geth_binary",
+            "src-tauri::src::geth-rs::geth_path",
+            "src-tauri::src::geth-rs::is_geth_installed",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::status"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::bin_dir",
+            "src-tauri::src::geth-rs::download_url",
+            "src-tauri::src::geth-rs::extract_geth_binary",
+            "src-tauri::src::geth-rs::geth_path",
+            "src-tauri::src::geth-rs::is_geth_installed",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::status"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::effective_rpc_endpoint__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/effective_rpc_endpoint__1.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::get_mined_blocks",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/get_mined_blocks.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::get_mining_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/get_mining_status.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::as_hex_u64",
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::as_hex_u64",
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::get_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/get_status.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::as_hex_u64",
+            "src-tauri::src::geth-rs::chain_id",
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_installed",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth-rs::parse_syncing",
+            "src-tauri::src::geth_gpu-rs::is_installed",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::as_hex_u64",
+            "src-tauri::src::geth-rs::chain_id",
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_installed",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth-rs::parse_syncing",
+            "src-tauri::src::geth_gpu-rs::is_installed",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::geth_path__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/geth_path__1.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::geth_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::geth_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::new__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/new__1.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::cleanup_previous_run",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::cleanup_previous_run",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::set_miner_address",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/set_miner_address.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::start",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/start.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::cleanup_previous_run",
+            "src-tauri::src::geth-rs::geth_path",
+            "src-tauri::src::geth-rs::init_genesis_if_needed",
+            "src-tauri::src::geth-rs::is_installed",
+            "src-tauri::src::geth-rs::network_id",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::is_installed",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::cleanup_previous_run",
+            "src-tauri::src::geth-rs::geth_path",
+            "src-tauri::src::geth-rs::init_genesis_if_needed",
+            "src-tauri::src::geth-rs::is_installed",
+            "src-tauri::src::geth-rs::network_id",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::is_installed",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::start_mining",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/start_mining.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::stop_fast",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/stop_fast.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth-rs::stop_mining",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/stop_mining.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::wallet_rpc_endpoint",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/wallet_rpc_endpoint.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::rpc_endpoint"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::rpc_endpoint"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::capabilities",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/capabilities.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::is_installed",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::is_installed",
+            "src-tauri::src::geth_gpu-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::list_devices",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::is_installed",
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::is_installed",
+            "src-tauri::src::geth_gpu-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::list_devices",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::drop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/drop.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::stop",
+            "src-tauri::src::geth_gpu-rs::stop"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::stop",
+            "src-tauri::src::geth_gpu-rs::stop"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::start",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/start.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::looks_like_error",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::parse_hashrate_line"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::looks_like_error",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::parse_hashrate_line"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth-rs::as_hex_u64",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/as_hex_u64.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::get_mining_status",
+            "src-tauri::src::geth-rs::get_status"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth-rs::chain_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/chain_id.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::get_status"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth-rs::cleanup_previous_run",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/cleanup_previous_run.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::new__1",
+            "src-tauri::src::geth-rs::start"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth-rs::wipe_lock_files",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::status"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth-rs::wipe_lock_files",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::status"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::default",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/default.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::default__1"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::download_url",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/download_url.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::download_geth"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth-rs::effective_rpc_endpoint",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/effective_rpc_endpoint.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint__1",
+            "src-tauri::src::geth-rs::get_mined_blocks",
+            "src-tauri::src::geth-rs::get_mining_status",
+            "src-tauri::src::geth-rs::get_status",
+            "src-tauri::src::geth-rs::set_miner_address",
+            "src-tauri::src::geth-rs::start_mining",
+            "src-tauri::src::geth-rs::stop_mining"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::rpc_endpoint"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::rpc_endpoint"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::extract_geth_binary",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/extract_geth_binary.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::download_geth"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::init_genesis_if_needed",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/init_genesis_if_needed.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::start"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::geth_path",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::geth_path",
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::is_installed",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/is_installed.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::get_status",
+            "src-tauri::src::geth-rs::start",
+            "src-tauri::src::geth_gpu-rs::capabilities"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::is_geth_installed"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::is_geth_installed"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::network_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/network_id.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::start"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth-rs::parse_syncing",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/parse_syncing.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::get_status"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth-rs::stop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/stop.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::drop"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::status"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::status"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::default",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/default.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::default__1"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::is_installed",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/is_installed.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::get_status",
+            "src-tauri::src::geth-rs::start",
+            "src-tauri::src::geth_gpu-rs::capabilities"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::list_devices",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/list_devices.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::capabilities"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::parse_device_list"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new",
+            "src-tauri::src::geth_gpu-rs::parse_device_list"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::looks_like_error",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/looks_like_error.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::start"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::parse_hashrate_line",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/parse_hashrate_line.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::start"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::stop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/stop.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::drop"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth-rs::is_geth_installed",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/is_geth_installed.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::download_geth",
+            "src-tauri::src::geth-rs::is_installed"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::geth_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::geth_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::rpc_endpoint",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/rpc_endpoint.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::effective_rpc_endpoint",
+            "src-tauri::src::geth-rs::wallet_rpc_endpoint"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth-rs::wipe_lock_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/wipe_lock_files.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::cleanup_previous_run"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::parse_device_list",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/parse_device_list.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::list_devices"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/status.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::cleanup_previous_run",
+            "src-tauri::src::geth-rs::download_geth",
+            "src-tauri::src::geth-rs::stop"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::is_running",
+            "src-tauri::src::geth_gpu-rs::is_running"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth-rs::geth_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/geth_path.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::download_geth",
+            "src-tauri::src::geth-rs::geth_path__1",
+            "src-tauri::src::geth-rs::init_genesis_if_needed",
+            "src-tauri::src::geth-rs::is_geth_installed",
+            "src-tauri::src::geth-rs::start"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::bin_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::bin_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth-rs::is_running",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/is_running.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::get_mined_blocks",
+            "src-tauri::src::geth-rs::get_mining_status",
+            "src-tauri::src::geth-rs::get_status",
+            "src-tauri::src::geth-rs::set_miner_address",
+            "src-tauri::src::geth-rs::start_mining",
+            "src-tauri::src::geth-rs::stop_mining",
+            "src-tauri::src::geth_gpu-rs::capabilities",
+            "src-tauri::src::geth_gpu-rs::status"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::is_running",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/is_running.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::get_mined_blocks",
+            "src-tauri::src::geth-rs::get_mining_status",
+            "src-tauri::src::geth-rs::get_status",
+            "src-tauri::src::geth-rs::set_miner_address",
+            "src-tauri::src::geth-rs::start_mining",
+            "src-tauri::src::geth-rs::stop_mining",
+            "src-tauri::src::geth_gpu-rs::capabilities",
+            "src-tauri::src::geth_gpu-rs::status"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 4,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth-rs::bin_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/bin_dir.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::download_geth",
+            "src-tauri::src::geth-rs::geth_path"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 5,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth_gpu-rs::find_ethminer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/find_ethminer.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::ethminer_filename",
+            "src-tauri::src::geth_gpu-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth-rs::new",
+            "src-tauri::src::geth_gpu-rs::ethminer_filename",
+            "src-tauri::src::geth_gpu-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::geth_gpu-rs::new",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/new.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::cleanup_previous_run",
+            "src-tauri::src::geth-rs::default",
+            "src-tauri::src::geth-rs::default__1",
+            "src-tauri::src::geth-rs::download_geth",
+            "src-tauri::src::geth-rs::extract_geth_binary",
+            "src-tauri::src::geth-rs::get_mined_blocks",
+            "src-tauri::src::geth-rs::init_genesis_if_needed",
+            "src-tauri::src::geth-rs::new__1",
+            "src-tauri::src::geth-rs::start",
+            "src-tauri::src::geth-rs::stop",
+            "src-tauri::src::geth_gpu-rs::capabilities",
+            "src-tauri::src::geth_gpu-rs::default",
+            "src-tauri::src::geth_gpu-rs::find_ethminer",
+            "src-tauri::src::geth_gpu-rs::list_devices",
+            "src-tauri::src::geth_gpu-rs::parse_device_list",
+            "src-tauri::src::geth_gpu-rs::start"
+          ],
+          "phase4_callees": [
+            "src-tauri::src::geth_gpu-rs::find_ethminer"
+          ],
+          "all_callees": [
+            "src-tauri::src::geth_gpu-rs::find_ethminer"
+          ]
+        }
+      ],
+      "cycle_resolution": true
+    },
+    {
+      "layer": 6,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth-rs::new",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth-rs/new.rs",
+          "unit": "geth-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth-rs::cleanup_previous_run",
+            "src-tauri::src::geth-rs::default",
+            "src-tauri::src::geth-rs::default__1",
+            "src-tauri::src::geth-rs::download_geth",
+            "src-tauri::src::geth-rs::extract_geth_binary",
+            "src-tauri::src::geth-rs::get_mined_blocks",
+            "src-tauri::src::geth-rs::init_genesis_if_needed",
+            "src-tauri::src::geth-rs::new__1",
+            "src-tauri::src::geth-rs::start",
+            "src-tauri::src::geth-rs::stop",
+            "src-tauri::src::geth_gpu-rs::capabilities",
+            "src-tauri::src::geth_gpu-rs::default",
+            "src-tauri::src::geth_gpu-rs::find_ethminer",
+            "src-tauri::src::geth_gpu-rs::list_devices",
+            "src-tauri::src::geth_gpu-rs::parse_device_list",
+            "src-tauri::src::geth_gpu-rs::start"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 7,
+      "functions": [
+        {
+          "name": "src-tauri::src::geth_gpu-rs::ethminer_filename",
+          "file": "fm_agent/extracted_functions/src-tauri/src/geth_gpu-rs/ethminer_filename.rs",
+          "unit": "geth_gpu-rs",
+          "phase4_callers": [
+            "src-tauri::src::geth_gpu-rs::find_ethminer"
+          ],
+          "phase4_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 8,
+      "functions": [],
+      "cycle_resolution": true
+    }
+  ]
+}

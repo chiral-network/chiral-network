@@ -1,0 +1,220 @@
+PHASE 6: Persistent Storage
+
+=== MODULE SUMMARY ===
+
+Three independent persistent storage layers: Drive (file metadata + share links), Hosting
+(static websites), and Reputation (seeder transfer history). All three use JSON on disk
+with missing-file tolerance (return defaults, no crash). No signing or encryption; data
+is user-local metadata only. Save/load round-trips are lossless via serde_json.
+
+
+=== PUBLIC TYPES ===
+
+DriveItem (drive_storage.rs)
+  id: String (UUID)
+  name: String
+  item_type: String ("file" or "folder")
+  parent_id: Option<String>
+  size: Option<u64> (bytes, files only)
+  mime_type: Option<String> ("text/html", "image/png", etc.)
+  created_at: u64 (Unix seconds)
+  modified_at: u64 (Unix seconds)
+  starred: bool
+  storage_path: Option<String> (relative path within drive_files_dir)
+  owner: String (wallet address)
+  is_public: bool (default true; when false, all share links blocked)
+  merkle_root: Option<String> (SHA-256 Merkle root from DHT publish)
+  protocol: Option<String> ("WebRTC" or "BitTorrent")
+  price_chi: Option<String> ("0" = free)
+  seed_enabled: bool (user intent to auto-seed)
+  seeding: bool (runtime state, false if DHT offline)
+
+ShareLink (drive_storage.rs)
+  id: String (16-char alphanumeric token)
+  item_id: String (DriveItem.id being shared)
+  created_at: u64 (Unix seconds)
+  expires_at: Option<u64> (Unix seconds, None = no expiry)
+  price_chi: String (required payment in CHI, default "0")
+  recipient_wallet: String (wallet receiving share payments)
+  is_public: bool
+  download_count: u64
+
+DriveManifest (drive_storage.rs)
+  items: Vec<DriveItem>
+  shares: Vec<ShareLink>
+
+SiteFile (hosting.rs)
+  path: String (relative, e.g. "index.html", "css/style.css")
+  size: u64 (bytes)
+
+HostedSite (hosting.rs)
+  id: String (8-char alphanumeric)
+  name: String (user-given)
+  directory: String (absolute path on disk)
+  created_at: u64 (Unix seconds)
+  files: Vec<SiteFile>
+  relay_url: Option<String> (e.g. "http://130.245.173.73:8080/sites/a1b2c3d4/")
+  cdn_url: Option<String> (e.g. "http://130.245.173.73:9420/cdn/sites/a1b2c3d4/", always-on)
+  directory_name: Option<String> (registered name in site directory, e.g. "alice")
+
+TransferOutcome (rating_storage.rs)
+  enum: Completed | Failed (camelCase: "completed" or "failed")
+
+ReputationEvent (rating_storage.rs)
+  id: String (SHA-256 hash of transfer_id|seeder|downloader|file_hash, deterministic)
+  transfer_id: String
+  seeder_wallet: String (wallet receiving payment)
+  downloader_wallet: String
+  file_hash: String (SHA-256)
+  amount_wei: String (u128 as string for CBOR safety)
+  outcome: TransferOutcome
+  tx_hash: Option<String> (blockchain transaction ID if paid)
+  rating_score: Option<u8> (deprecated, unused in Elo calculation)
+  rating_comment: Option<String> (deprecated)
+  created_at: u64 (Unix seconds)
+  updated_at: u64 (Unix seconds)
+
+RatingManifest (rating_storage.rs)
+  events: Vec<ReputationEvent>
+
+ReputationSnapshot (rating_storage.rs)
+  elo: f64 (0.0 to 100.0, base 50.0, rounded to 0.1)
+  base_elo: f64 (50.0, constant)
+  completed_count: usize (transfers with Completed outcome)
+  failed_count: usize (transfers with Failed outcome)
+  transaction_count: usize (total events in lookback window)
+  total_earned_wei: String (sum of amount_wei for Completed transfers)
+
+
+=== PUBLIC FUNCTION ENTRY POINTS ===
+
+(Drive storage)
+
+drive_base_dir() -> Option<PathBuf>
+  Returns data_dir().join("chiral-drive").
+
+drive_files_dir() -> Option<PathBuf>
+  Returns drive_base_dir().join("files").
+
+load_manifest() -> DriveManifest
+  Reads manifest_path() (data_dir/chiral-drive/manifest.json).
+  Missing file: returns DriveManifest::default() (empty items, empty shares).
+  Parse error: returns default. No panic.
+
+save_manifest(manifest: &DriveManifest)
+  Writes manifest_path() as pretty-printed JSON.
+  Creates parent dirs automatically. Ignores write errors (best-effort).
+
+generate_id() -> String
+  UUID v4 (random, globally unique).
+
+generate_share_token() -> String
+  16-char alphanumeric (alphas [a-z][A-Z], digits [0-9]).
+
+now_secs() -> u64
+  Current Unix timestamp in seconds (SystemTime::now()).
+
+mime_from_name(name: &str) -> String
+  Guesses MIME type from file extension.
+  Returns standard MIME string: "text/html", "image/png", "application/octet-stream", etc.
+
+collect_descendants(parent_id: &str, items: &[DriveItem]) -> Vec<String>
+  BFS to find all descendant IDs (including parent_id itself).
+  Used for recursive delete/move operations.
+
+(Hosting storage)
+
+sites_base_dir() -> Option<PathBuf>
+  Returns data_dir().join("sites").
+
+load_sites() -> Vec<HostedSite>
+  Reads metadata_path() (data_dir/hosted_sites.json).
+  Missing file: returns Vec::new(). Parse error: returns default.
+
+save_sites(sites: &[HostedSite])
+  Writes metadata_path() as pretty-printed JSON.
+  Creates parent dirs automatically. Ignores write errors.
+
+generate_site_id() -> String
+  8-char alphanumeric (lowercase only), random.
+
+mime_from_extension(ext: &str) -> &'static str
+  Returns static &str MIME type based on extension.
+  Examples: "html" -> "text/html; charset=utf-8", "png" -> "image/png".
+
+(Reputation storage)
+
+RatingState::new(data_dir: PathBuf) -> Self
+  Initializes RatingState with manifest loaded from data_dir.
+  Wraps manifest in Arc<RwLock> for async sharing.
+
+RatingState::persist() [async]
+  Writes manifest to data_dir/chiral-reputation-v2/reputation.json.
+  Creates parent dirs. Ignores errors.
+
+compute_reputation_for_wallet(events: &[ReputationEvent], seeder_wallet: &str, now: u64) -> ReputationSnapshot
+  Computes Elo for a seeder based on transfer outcomes in last 180 days.
+  Base Elo = 50.0. Min = 0.0, Max = 100.0.
+  Filters events by seeder_wallet (case-insensitive) and lookback window (now - 180 days).
+  Weight formula: w_time = (1 - age_days / 180).max(0), w_amount = 1 + ln(chi) / ln(51).
+  K-factor per event = 4.0 * w_time * w_amount.
+  Expected = 1 / (1 + 10^((50 - current_elo) / 12)).
+  Updates: elo += K * (actual - expected), clamped [0, 100].
+  Returns snapshot with final elo (rounded to 0.1), counts, total_earned_wei.
+
+generate_event_id(transfer_id: &str, seeder_wallet: &str, downloader_wallet: &str, file_hash: &str) -> String
+  SHA-256(transfer_id | seeder_wallet.lower() | downloader_wallet.lower() | file_hash).
+  Deterministic: same inputs produce same event_id.
+  Used to deduplicate replay events by same parties on same file.
+
+
+=== INVARIANTS ===
+
+1. Missing-file tolerance: load_* functions never crash; missing JSON returns empty defaults.
+   Corruption (parse error) also returns default. Corrupted files are silently ignored.
+
+2. Save/load round-trip: serialize + deserialize preserves all fields exactly.
+   Serde-json with #[serde(default)] on optional fields ensures backward compat.
+
+3. No signing: JSON is user-local metadata. No blockchain verification, no signatures.
+   Reputation events reference tx_hash but verification is done in dht.rs (claim_spent_tx).
+
+4. Directory names immutable: once a drive item or site ID is generated, it never changes.
+   Rename operations replace the struct, not the filesystem path (user rescan required).
+
+5. Event ID determinism: generate_event_id always produces same ID for same input quintuple.
+   No timestamps in ID; used to detect replay attacks (same tx_hash used twice).
+
+6. Lookback window: reputation computed only on events within (now - 180*86400) seconds.
+   Events older than 180 days are completely ignored (zero weight).
+
+7. Elo bounded [0, 100]: clamp_elo enforces hard bounds. No Elo above 100 or below 0.
+   Very high success rate -> Elo approaches 100. Complete failure -> Elo approaches 0.
+
+
+=== CONSTANTS ===
+
+(Drive storage)
+
+manifest_path = data_dir/chiral-drive/manifest.json
+drive_files_dir = data_dir/chiral-drive/files/
+Default MIME types for ~30 common extensions (HTML, JS, JSON, PNG, JPEG, GIF, SVG, PDF, ZIP, MP4, etc.)
+
+(Hosting storage)
+
+sites_base_dir = data_dir/sites/
+metadata_path = data_dir/hosted_sites.json
+Default MIME types include charset=utf-8 for text/* and application/javascript
+
+(Reputation storage)
+
+BASE_ELO = 50.0 (starting Elo for a new wallet)
+MIN_ELO = 0.0 (floor)
+MAX_ELO = 100.0 (ceiling)
+LOOKBACK_DAYS = 180 (only consider transfers from last 6 months)
+LOOKBACK_SECS = 180 * 24 * 60 * 60 = 15_552_000 seconds
+
+ratings_dir = data_dir/chiral-reputation-v2/ (v2 ignores legacy star ratings)
+manifest_path = data_dir/chiral-reputation-v2/reputation.json
+
+Event ID derivation: SHA-256(transfer_id | seeder_wallet_lower | downloader_wallet_lower | file_hash)

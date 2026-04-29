@@ -1,0 +1,261 @@
+PHASE 7: Network and File Transfer
+
+=== MODULE SUMMARY ===
+
+Chunked file transfer protocol over libp2p request-response with per-chunk SHA-256
+verification. Protocol: /chiral/file-request/3.0.0 (cbor codec). 256 KB chunks, 3 retry
+attempts per chunk with exponential backoff (150ms, 400ms, 900ms + jitter). Full-file
+hash verified on completion. Rate limiting applied per speed tier. No encryption (content
+is already published via DHT); all payment verification on-chain via spent tx guard.
+
+
+=== PUBLIC TYPES ===
+
+ChunkRequest (dht.rs)
+  enum {
+    FileInfo {
+      request_id: String,
+      file_hash: String,
+    },
+    Chunk {
+      request_id: String,
+      file_hash: String,
+      chunk_index: u32,
+    },
+    PaymentProof {
+      request_id: String,
+      file_hash: String,
+      payment_tx: String,
+      payer_address: String,
+    }
+  }
+Encoding: CBOR. Requests small (< 1 MB max per codec), 12s timeout per request-response.
+
+ChunkResponse (dht.rs)
+  enum {
+    FileInfo {
+      request_id: String,
+      file_hash: String,
+      file_name: String,
+      file_size: u64,
+      chunk_size: u32 (always 256 KB on sender),
+      total_chunks: u32,
+      chunk_hashes: Vec<String> (SHA-256 hex of each chunk),
+      price_wei: String (u128 as string for CBOR),
+      wallet_address: String (seeder's wallet),
+      error: Option<String>,
+    },
+    Chunk {
+      request_id: String,
+      file_hash: String,
+      chunk_index: u32,
+      chunk_data: Option<Vec<u8>> (exactly 256 KB except last chunk),
+      chunk_hash: String (SHA-256 hex of chunk_data),
+      error: Option<String>,
+    },
+    PaymentAck {
+      request_id: String,
+      file_hash: String,
+      accepted: bool,
+      error: Option<String>,
+    }
+  }
+Encoding: CBOR, responses up to 32 MB (for FileInfo with large chunk_hashes arrays).
+
+ActiveChunkedDownload (dht.rs)
+  request_id: String
+  file_hash: String
+  file_name: String
+  file_size: u64
+  total_chunks: u32
+  chunk_hashes: Vec<String> (received from seeder, used to verify each chunk)
+  received_chunks: Vec<bool> (progress tracker)
+  output_path: PathBuf
+  bytes_written: u64 (cumulative)
+  peer_id: PeerId (primary seeder)
+  backup_peers: Vec<PeerId> (fallback seeders from get_providers query)
+  retry_counts: Vec<u8> (retries per chunk, max 3)
+  current_chunk_index: u32
+  start_time: Instant
+  payment_confirmed: bool (set after PaymentAck accepted)
+Encoding: Not serialized; runtime state machine only.
+
+PendingTransfer (file_transfer.rs)
+  transfer_id: String
+  peer_id: String
+  file_name: String
+  file_data: Vec<u8>
+  status: TransferStatus (Pending, Accepted, Declined, InProgress, Completed, Failed)
+Encoding: camelCase JSON for frontend display (file_transfer module).
+
+DhtHealthInfo (dht.rs)
+  running: bool
+  peer_id: Option<String>
+  listening_addresses: Vec<String> (multiaddrs we're listening on)
+  connected_peer_count: usize
+  kademlia_peers: usize
+  bootstrap_nodes: Vec<BootstrapNodeStatus> (reachability per bootstrap)
+  shared_files: usize (count of files we're seeding)
+  protocols: Vec<String> (list of enabled protocols)
+
+
+=== PUBLIC FUNCTION ENTRY POINTS ===
+
+(DHT service methods for chunked download)
+
+request_file(peer_id: String, file_hash: String, request_id: String,
+             multiaddrs: Vec<String>) -> Result<(), String> [async]
+  Initiates chunked download. Sends FileInfo request, awaits seeder's metadata response.
+  Starts ActiveChunkedDownload state machine. Error on first unreachable seeder is
+  synchronously returned; caller tries another provider from DHT.
+  Contract: file_hash must be valid SHA-256 (32 bytes hex), request_id must be unique.
+
+get_file_providers(file_hash: String) -> Result<Vec<String>, String> [async]
+  DHT provider lookup for a file hash. Returns union of peer IDs across all query results.
+  Query timeout implicit via swarm event loop; if no results within ~20s, returns empty.
+
+start_providing_file(file_hash: String) -> Result<(), String> [async]
+  Registers this node as a Kademlia provider for file_hash. Auto-republishes every 3 min.
+  TTL: 10 minutes (provider record expires if seeder goes offline).
+
+stop_providing_file(file_hash: String) -> Result<(), String> [async]
+  Unregisters as provider. Stops auto-republish for that hash.
+
+register_shared_file(file_hash: String, file_path: String, file_name: String,
+                     file_size: u64, price_wei: u128, wallet_address: String) [async]
+  Registers a file for seeding. Instant return (chunkhashes computed in background).
+  chunk_hashes cached in SharedFileInfo for fast FileInfo responses.
+
+(Chunk management)
+
+compute_chunk_hashes(file_path: &str) -> Result<Vec<String>, String>
+  Reads file, computes SHA-256 per chunk (256 KB chunks).
+  Returns Vec of hex-encoded chunk hashes, one per chunk (final chunk may be < 256 KB).
+  Blocking I/O; typically spawned via tokio::task::spawn_blocking.
+
+Chunk size = 256 * 1024 = 262_144 bytes (constant CHUNK_SIZE)
+  Last chunk of file may be smaller. All intermediate chunks exactly 256 KB.
+  Receiver MUST verify each chunk_data length matches expected (256 KB or final size).
+
+(Payment and verification)
+
+verify_payment_on_chain(tx_hash: &str, expected_sender: &str, expected_recipient: &str,
+                        expected_min_wei: u128) -> Result<bool, String> [async]
+  Checks blockchain: transaction sent from expected_sender to expected_recipient with
+  value >= expected_min_wei. Returns true iff transaction mined, receipt status success,
+  and value constraint satisfied. False if transaction failed, reverted, or insufficient.
+
+claim_spent_tx(tx_hash: &str) -> bool [async]
+  One-payment enforcement: records tx_hash as spent. Returns true iff newly recorded
+  (first claim). Returns false if already claimed (replay detected).
+  Seeder MUST reject chunk requests if claim_spent_tx returns false.
+  Storage: data_dir/seeder_spent_tx.json (JSON {"spent": [...]}, lossy on crash OK).
+
+(Retry logic and state machine)
+
+MAX_CHUNK_RETRIES = 3 (attempts 1..=3)
+CHUNK_RETRY_BASE_MS = [150, 400, 900] (ms per attempt)
+  Attempt 1: 150ms + jitter. Attempt 2: 400ms + jitter. Attempt 3: 900ms + jitter.
+  After 3 failed attempts on one chunk, downloader falls back to backup_peers.
+  If no backup peers, chunk request fails (download aborted).
+
+Retry protocol:
+  1. Send ChunkRequest(chunk_index).
+  2. Await ChunkResponse(chunk_data, chunk_hash) within 12s timeout.
+  3. Verify chunk_hash == SHA-256(chunk_data) locally.
+  4. On mismatch or timeout: increment retry_counts[chunk_index], sleep, retry.
+  5. After 3 failures: try_next_backup_peer() to request same chunk from backup seeder.
+  6. If all backup peers exhausted: chunk fails, download aborted.
+
+Rate limiting (per speed tier, applied at write_file level):
+  Tier "standard": full speed (no limit)
+  Tier "economy": TBD (deferred to speed_tiers module phase updates)
+  Applied to downloaded chunk assembly, not to individual chunk fetches.
+
+(Protocol details)
+
+Protocol name = "/chiral/file-request/3.0.0" (cbor codec, immutable version)
+Request timeout = 12 seconds (per individual request-response)
+Request size limit = 1 MB (requests are small metadata, rarely > 100 bytes)
+Response size limit = 32 MB (for FileInfo on very large files with 100k+ chunks)
+Codec = cbor4ii with async read/write, custom size limits
+
+Full-file hash verification (post-download):
+  After all chunks received, downloader computes SHA-256 of concatenated file.
+  Compares against seeder's declared file_hash from FileInfo.
+  Mismatch: entire download is INVALID, file is not written to disk.
+  Contract: full-file hash prevents any single chunk corruption from going undetected.
+
+(Event emission)
+
+EventSink emits during download lifecycle:
+  - "file-request-sent" when FileInfo request dispatched
+  - "download-progress" on each chunk received (bytesWritten, totalBytes, speedBps, progress %)
+  - "file-transfer-complete" when download finishes (success or failure)
+Protocol: events serialized to JSON, sent to frontend or event log as-is.
+
+
+=== INVARIANTS ===
+
+1. 256 KB chunks immutable: all chunk sizes hardcoded to 256 * 1024. Never renegotiated.
+   Last chunk may be smaller (file_size % 256KB). Verifier MUST accept variable final size.
+
+2. Per-chunk SHA-256 verification: every chunk_data is hashed; mismatch fails download.
+   Full-file hash checked post-assembly. Both are mandatory (belt + suspenders).
+
+3. One payment per file: claim_spent_tx(payment_tx) enforced per download.
+   Same tx can't unlock file twice (replay prevention). Free files skip payment entirely.
+
+4. 3 retry attempts per chunk: hard limit, no jitter on final timeout.
+   Backoff is exponential: 150ms -> 400ms -> 900ms (each can fail independently).
+
+5. Backup peer failover: if primary seeder fails 3 times on chunk N, next backup is tried
+   for the SAME chunk (no re-request of previous chunks). Minimizes redundant transfer.
+
+6. Rate limiting orthogonal to chunking: speed tier delays applied at disk-write stage,
+   not at chunk fetch. Download session continues; writes are throttled per tier.
+
+7. Request ID uniqueness: each download gets unique request_id for full session.
+   Used to correlate FileInfo/Chunk/PaymentProof in streaming multi-peer scenario.
+
+8. No on-disk corruption: file written only after full-file hash verified.
+   Partial downloads are held in memory or temp file, never persisted until complete.
+
+
+=== CONSTANTS ===
+
+Protocol version = 3.0.0 (matches /chiral/file-request/3.0.0)
+
+CHUNK_SIZE = 256 * 1024 = 262_144 bytes
+
+MAX_CHUNK_RETRIES = 3 (attempts 1, 2, 3)
+CHUNK_RETRY_BASE_MS = [150, 400, 900] (exponential backoff)
+  Note: jitter added independently; exact delay = base + rand(0..base/2).
+
+Request timeout = 12 seconds (12000 ms per individual request-response interaction)
+
+AUTO_HOST_REGISTRY_REFRESH_SECS = 20 (how often to re-query DHT for seeders)
+AUTO_PEER_DIAL_COOLDOWN_SECS = 20 (minimum delay between dials to same peer)
+
+DHT provider record TTL = 10 minutes (10 * 60 seconds)
+DHT provider republish interval = 3 minutes (3 * 60 seconds)
+
+Kademlia record TTL = 22 minutes (22 * 60 seconds, larger than publication interval)
+Kademlia publication interval = 3 minutes (3 * 60 seconds)
+Kademlia replication interval = 3 minutes (3 * 60 seconds)
+
+Bootstrap dial + Kademlia bootstrap query = deferred to event loop (not in create_swarm)
+  Rationale: swarm polls behaviours before transport; early bootstrap would race relay RESERVE.
+
+Relay client reservation: one listen_on per unique relay peer ID
+  Do NOT call swarm.dial() before relay RESERVE completes.
+
+File transfer protocol (non-chunked, for direct peer-to-peer):
+  Protocol name = "/chiral/file-transfer/1.0.0"
+  Timeout = 30 seconds
+  Used for small direct transfers (e.g., ChiralDrop), not for large seeded files.
+
+Echo protocol (heartbeat / diagnostics):
+  Protocol name = "/chiral/echo/1.0.0"
+  Timeout = 5 seconds
+  Payload: arbitrary Vec<u8>, echoed back exactly.

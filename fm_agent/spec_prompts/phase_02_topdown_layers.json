@@ -1,0 +1,195 @@
+{
+  "phase": 2,
+  "phase_name": "RPC Infrastructure",
+  "total_functions": 17,
+  "total_layers": 3,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::chain_rpc_api-rs::chain_rpc_routes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/chain_rpc_api-rs/chain_rpc_routes.rs",
+          "unit": "chain_rpc_api-rs",
+          "phase2_callers": [],
+          "phase2_callees": [
+            "src-tauri::src::rpc_client-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::rpc_client-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::chain_rpc_api-rs::proxy_chain_rpc",
+          "file": "fm_agent/extracted_functions/src-tauri/src/chain_rpc_api-rs/proxy_chain_rpc.rs",
+          "unit": "chain_rpc_api-rs",
+          "phase2_callers": [],
+          "phase2_callees": [
+            "src-tauri::src::rpc_client-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::rpc_client-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::add",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/add.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [
+            "src-tauri::src::rpc_client-rs::next_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::rpc_client-rs::next_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::batch",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/batch.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [
+            "src-tauri::src::rpc_client-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::rpc_client-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::clear",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/clear.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::client",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/client.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::execute",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/execute.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [
+            "src-tauri::src::rpc_client-rs::call",
+            "src-tauri::src::rpc_client-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::rpc_client-rs::call",
+            "src-tauri::src::rpc_client-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::get",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/get.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::hex_to_u128",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/hex_to_u128.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::hex_to_u64",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/hex_to_u64.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::invalidate",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/invalidate.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::set",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/set.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::wei_to_chi",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/wei_to_chi.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::wei_to_chi_string",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/wei_to_chi_string.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [],
+          "phase2_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::rpc_client-rs::call",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/call.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [
+            "src-tauri::src::rpc_client-rs::execute"
+          ],
+          "phase2_callees": [
+            "src-tauri::src::rpc_client-rs::next_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::rpc_client-rs::next_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::rpc_client-rs::new",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/new.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [
+            "src-tauri::src::chain_rpc_api-rs::chain_rpc_routes",
+            "src-tauri::src::chain_rpc_api-rs::proxy_chain_rpc",
+            "src-tauri::src::rpc_client-rs::batch",
+            "src-tauri::src::rpc_client-rs::execute"
+          ],
+          "phase2_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::rpc_client-rs::next_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/rpc_client-rs/next_id.rs",
+          "unit": "rpc_client-rs",
+          "phase2_callers": [
+            "src-tauri::src::rpc_client-rs::add",
+            "src-tauri::src::rpc_client-rs::call"
+          ],
+          "phase2_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}

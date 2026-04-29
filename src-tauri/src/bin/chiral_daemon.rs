@@ -458,6 +458,30 @@ async fn dht_put(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<KeyValueRequest>,
 ) -> Response {
+    // Reserved namespaces are interpreted by every other peer as
+    // authoritative metadata (file metadata, seeder records, folder
+    // manifests, site directory, etc). Each namespace has its own
+    // dedicated publication command that signs the record; allowing a
+    // raw `put` here lets any HTTP client forge those records, the
+    // same defect class that originally enabled BUG-001.
+    const RESERVED_PREFIXES: &[&str] = &[
+        "chiral_file_",
+        "chiral_seeder_",
+        "chiral_folder_",
+        "chiral_sitename_",
+        "chiral_site_directory",
+        "chiral_drive_share_",
+        "chiral_host_ad_",
+    ];
+    if RESERVED_PREFIXES.iter().any(|p| req.key.starts_with(p)) {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            format!(
+                "Key '{}' is in a reserved namespace; use the dedicated signed-publication command",
+                req.key
+            ),
+        );
+    }
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };

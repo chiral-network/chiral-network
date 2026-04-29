@@ -1,0 +1,172 @@
+PHASE 9: HTTP GATEWAY AND APIS
+===============================
+
+MODULE SUMMARY
+--------------
+HTTP gateway layer (Axum-based) serving Drive, Rating, Hosting, and Relay
+APIs with version-policy middleware and X-Owner header authentication.
+Handles: shared file uploads/downloads, reputation tracking, site proxying,
+relay tunnel registration, CDN file hosting with payment verification.
+
+
+PUBLIC TYPES
+------------
+DriveState {
+  manifest: Arc<RwLock<DriveManifest>>
+}
+  Methods: load_from_disk(), load_from_disk_async(), persist()
+
+HostingServerState {
+  sites: Arc<RwLock<HashMap<String, HostedSite>>>
+}
+  Methods: load_from_disk(), register_site(), unregister_site()
+
+RatingState {
+  manifest: Arc<RwLock<RatingManifest>>
+  (fields: events: Vec<ReputationEvent>)
+}
+
+RelayShareRegistry {
+  shares: Arc<RwLock<HashMap<String, ShareRegistration>>>
+  sites: Arc<RwLock<HashMap<String, SiteRegistration>>>
+  persist_path: PathBuf
+}
+
+CdnState {
+  storage_dir: PathBuf
+  registry_path: PathBuf
+  registry: AsyncMutex<Vec<CdnEntry>>
+  sites_dir: PathBuf
+  sites_registry_path: PathBuf
+  sites_registry: AsyncMutex<Vec<CdnSiteEntry>>
+  wallet_address: String
+  price_wei_per_mb_month: u128
+  dht: Arc<AsyncMutex<Option<Arc<DhtService>>>>
+}
+
+CdnEntry {
+  file_hash: String
+  file_name: String
+  file_size: u64
+  owner_wallet: String
+  price_chi_per_month: String
+  download_price_chi: String
+  payment_tx: String
+  uploaded_at: u64
+  expires_at: u64
+}
+
+CdnSiteEntry {
+  site_id: String
+  name: String
+  owner_wallet: String
+  total_size_bytes: u64
+  file_count: u32
+  price_chi_per_month: String
+  payment_tx: String
+  uploaded_at: u64
+  expires_at: u64
+}
+
+TunnelRegistry {
+  tunnels: RwLock<HashMap<String, TunnelSender>>
+}
+  Methods: register(), unregister(), request()
+
+EventSink {
+  Tauri(tauri::AppHandle) | Noop
+}
+
+
+PUBLIC FUNCTION ENTRY POINTS
+-----------------------------
+drive_api::drive_routes(state: Arc<DriveState>) -> Router
+  Routes: /api/drive/items, /api/drive/folders, /api/drive/upload,
+  /api/drive/items/:id, /api/drive/view/:id/:filename,
+  /api/drive/download/:id/:filename, /api/drive/share,
+  /api/drive/share/:token, /api/drive/shares,
+  /drive/:token, /drive/:token/*path
+
+rating_api::rating_routes(state: Arc<RatingState>) -> Router
+  Routes: /api/ratings/transfer (POST), /api/ratings/batch (POST),
+  /api/ratings/:wallet (GET)
+
+hosting_server::create_router(state: Arc<HostingServerState>) -> Router
+  Routes: /health, /sites/:site_id, /sites/:site_id/, /sites/:site_id/*path
+
+hosting_server::create_gateway_router(
+  state: Arc<HostingServerState>,
+  drive_state: Option<Arc<DriveState>>,
+  rating_state: Option<Arc<RatingState>>,
+  relay_share_state: Option<Arc<RelayShareRegistry>>,
+) -> Router
+  Returns composed router with version_gate_middleware as outermost layer.
+  Routes: /health, /api/version-policy (exempt from version gate),
+  all Drive/Rating/Hosting/Relay routes conditionally merged.
+
+hosting_server::start_server(
+  state: Arc<HostingServerState>,
+  port: u16,
+  shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> Result<SocketAddr, String>
+
+hosting_server::start_gateway_server(
+  state: Arc<HostingServerState>,
+  drive_state: Option<Arc<DriveState>>,
+  rating_state: Option<Arc<RatingState>>,
+  relay_share_state: Option<Arc<RelayShareRegistry>>,
+  port: u16,
+  shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) -> Result<SocketAddr, String>
+
+cdn_server::router(state: Arc<CdnState>) -> Router
+  Routes: /api/cdn/upload (500 MB body limit), /api/cdn/files,
+  /api/cdn/files/:file_hash, /api/cdn/pricing, /api/cdn/status,
+  /api/cdn/sites/upload, /api/cdn/sites, /api/cdn/sites/:site_id,
+  /cdn/sites/:site_id, /cdn/sites/:site_id/, /cdn/sites/:site_id/*path
+
+relay_share_proxy::relay_share_routes(
+  state: Arc<RelayShareRegistry>,
+  tunnel_reg: Arc<TunnelRegistry>,
+) -> Router
+  Routes: /api/drive/relay-register, /api/drive/relay-register/:token,
+  /drive/:token, /drive/:token/*path,
+  /api/sites/relay-register, /api/sites/relay-register/:site_id,
+  /sites/:site_id, /sites/:site_id/, /sites/:site_id/*path,
+  /api/tunnel/ws (WebSocket)
+
+version_gate_middleware(
+  req: axum::extract::Request,
+  next: axum::middleware::Next,
+) -> axum::response::Response
+  Enforces X-Chiral-Client-Version header against bundled min_required.
+  Exempts: /api/version-policy, /api/health, /api/ready, non-/api/* paths.
+  Returns 426 Upgrade Required if client version is below policy floor.
+
+
+INVARIANTS
+----------
+- X-Owner header (wallet address 0x + 40 hex digits) is required on all
+  mutating Drive and Rating routes; missing header returns 400 Bad Request.
+
+- /api/version-policy endpoint is always reachable (no version gate) so
+  outdated clients can discover the network's min_required and download
+  newer builds; all other /api/* routes are gated by version_gate_middleware.
+
+- CDN payment tolerance is 5% (lines 380 in cdn_server.rs):
+  min_accepted_wei = required_wei * 95 / 100 for CHI→wei rounding.
+
+- Relay share proxy uses WebSocket tunnels for NAT traversal; if tunnel is
+  down, requests are proxied to origin_url; origin URL host/port are
+  replaced if they are 0.0.0.0, 127.0.0.1, or localhost (fix_origin_url).
+
+- Rating API caches event history per wallet with 90-day LOOKBACK_SECS
+  (computed dynamically on every GET /api/ratings/:wallet request).
+
+
+CONSTANTS
+---------
+MAX_SITE_BYTES              50 * 1024 * 1024     # Hosting upload limit
+CDN_UPLOAD_BODY_LIMIT       500 * 1024 * 1024    # CDN multipart limit
+TUNNEL_REQUEST_TIMEOUT_SECS 15                   # Relay proxy tunnel wait
+CDN_PAYMENT_TOLERANCE       5%                   # Wei rounding margin

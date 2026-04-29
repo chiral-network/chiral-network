@@ -1,0 +1,197 @@
+PHASE 8: DHT SERVICE
+====================
+
+MODULE SUMMARY
+--------------
+The DHT Service implements the distributed hash table layer for Chiral Network
+using libp2p's Kademlia protocol (custom /chiral/kad/1.0.0). It manages:
+  - File discovery and seeding via provider records
+  - Key-value storage for metadata and host registry
+  - P2P file transfers with chunked downloads (256 KB chunks)
+  - Payment verification for paid transfers
+  - Peer lifecycle management with version-policy enforcement
+
+
+PUBLIC TYPES
+------------
+DhtService {
+  peers: Arc<Mutex<Vec<PeerInfo>>>
+  is_running: Arc<Mutex<bool>>
+  local_peer_id: Arc<Mutex<Option<String>>>
+  command_sender: Arc<Mutex<Option<mpsc::UnboundedSender<SwarmCommand>>>>
+  file_transfer_service: Option<Arc<Mutex<FileTransferService>>>
+  shared_files: SharedFilesMap [Arc<Mutex<HashMap<String, SharedFileInfo>>>]
+  download_directory: DownloadDirectoryRef [Arc<Mutex<Option<String>>>]
+  active_downloads: Arc<Mutex<ActiveDownloadsMap>>
+  download_credentials: DownloadCredentialsMap [Arc<Mutex<HashMap<String, DownloadCredentials>>>]
+}
+
+SharedFileInfo {
+  file_path: String
+  file_name: String
+  file_size: u64
+  chunk_hashes: Option<Vec<String>>        # Lazily computed; warmed in background
+  price_wei: u128                          # 0 = free seeding
+  wallet_address: String                   # Seeder's payment address
+}
+
+DownloadCredentials {
+  wallet_address: String
+  private_key: String
+}
+
+PeerInfo {
+  id: String
+  address: String
+  multiaddrs: Vec<String>
+  last_seen: i64
+}
+
+NetworkStats {
+  connected_peers: usize
+  total_peers: usize
+}
+
+DhtBehaviour (libp2p NetworkBehaviour) {
+  relay_client: relay::client::Behaviour
+  dcutr: dcutr::Behaviour
+  kad: kad::Behaviour<kad::store::MemoryStore>
+  mdns: mdns::tokio::Behaviour
+  ping: ping::Behaviour
+  identify: identify::Behaviour
+  ping_protocol: request_response::Behaviour<PingRequest, PingResponse>
+  file_transfer: Behaviour<FileTransferRequest, FileTransferResponse>
+  file_request: Behaviour<ChunkRequest, ChunkResponse>
+  echo_protocol: request_response::Behaviour<EchoRequest, EchoResponse>
+}
+
+
+PUBLIC FUNCTION ENTRY POINTS
+-----------------------------
+DhtService::new(
+  file_transfer_service: Arc<Mutex<FileTransferService>>,
+  download_directory: DownloadDirectoryRef,
+  download_credentials: DownloadCredentialsMap,
+) -> Self
+
+DhtService::start(
+  &self,
+  app: tauri::AppHandle,
+) -> Result<String, String>
+
+DhtService::start_headless(&self) -> Result<String, String>
+
+DhtService::stop(&self) -> Result<(), String>
+
+DhtService::register_shared_file(
+  &self,
+  file_hash: String,
+  file_path: String,
+  file_name: String,
+  file_size: u64,
+  price_wei: u128,
+  wallet_address: String,
+)
+
+DhtService::unregister_shared_file(&self, file_hash: &str)
+
+DhtService::get_shared_files(&self) -> SharedFilesMap
+
+DhtService::put_dht_value(
+  &self,
+  key: String,
+  value: String,
+) -> Result<(), String>
+
+DhtService::get_dht_value(
+  &self,
+  key: String,
+) -> Result<Option<String>, String>
+
+DhtService::remove_dht_record(&self, key: String) -> Result<(), String>
+
+DhtService::start_providing_file(
+  &self,
+  file_hash: String,
+) -> Result<(), String>
+
+DhtService::stop_providing_file(&self, file_hash: String) -> Result<(), String>
+
+DhtService::get_file_providers(
+  &self,
+  file_hash: String,
+) -> Result<Vec<String>, String>
+
+DhtService::get_peers(&self) -> Vec<PeerInfo>
+
+DhtService::get_stats(&self) -> NetworkStats
+
+DhtService::get_peer_id(&self) -> Option<String>
+
+DhtService::is_running(&self) -> bool
+
+DhtService::ping_peer(&self, peer_id: String) -> Result<String, String>
+
+DhtService::ping_peer_headless(&self, peer_id: String) -> Result<String, String>
+
+DhtService::send_file(
+  &self,
+  peer_id: String,
+  file_path: String,
+) -> Result<String, String>
+
+DhtService::request_file(
+  &self,
+  file_hash: String,
+  peer_ids: Vec<String>,
+) -> Result<String, String>
+
+DhtService::get_listening_addresses(&self) -> Vec<String>
+
+DhtService::is_peer_connected(&self, peer_id: &str) -> Result<bool, String>
+
+DhtService::echo(&self, peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String>
+
+get_bootstrap_nodes() -> Vec<String>
+
+get_relay_nodes() -> Vec<String>
+
+get_bootstrap_peer_ids() -> Vec<String>
+
+
+INVARIANTS
+----------
+- Chunk size is fixed at 256 KB; files are split deterministically; chunk
+  hashes are SHA-256 and precomputed at registration (warming in background).
+
+- Provider TTL is 10 minutes with a 3-minute republish cycle; offline seeders
+  drop out within 10 minutes, and healthy seeders refresh ~3x before expiry.
+
+- KV record TTL is 22 minutes with 3-minute replication and publication intervals;
+  records are gated by both replication_interval and publication_interval timers.
+
+- Signed-record verification: Identify handler stamps agent_version (with semver)
+  into the peer's agent_version field; on inbound identify, peers below
+  version::effective_policy().min_required trigger disconnect_peer_id().
+
+- Payment verification for paid downloads: seeder signs chunk delivery with
+  Ethereum transaction hash; downloader's wallet is checked against the
+  verifyPaymentTx RPC call before subsequent chunks are sent.
+
+
+CONSTANTS
+---------
+CHUNK_SIZE                      256 * 1024           # 256 KB per file chunk
+MAX_CHUNK_RETRIES               3                    # Max attempts per chunk
+CHUNK_RETRY_BASE_MS             [150, 400, 900]      # Backoff timings
+PROVIDER_RECORD_TTL             10 * 60 seconds      # 10 minutes
+PROVIDER_PUBLICATION_INTERVAL   3 * 60 seconds       # 3 minutes
+RECORD_TTL                      22 * 60 seconds      # 22 minutes
+REPLICATION_INTERVAL            3 * 60 seconds       # 3 minutes
+PUBLICATION_INTERVAL            3 * 60 seconds       # 3 minutes
+REQUEST_SIZE_MAXIMUM            1 MB                 # Max request CBOR
+RESPONSE_SIZE_MAXIMUM           32 MB                # Max response CBOR
+AUTO_HOST_REGISTRY_REFRESH_SECS 20                   # Registry refresh window
+AUTO_PEER_DIAL_COOLDOWN_SECS    20                   # Dial rate limiting
+HOST_REGISTRY_KEY               "chiral_host_registry"
+CHUNK_PROTOCOL_VERSION          "/chiral/file-request/3.0.0"
