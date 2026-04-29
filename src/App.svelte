@@ -123,7 +123,9 @@
               // Register as seeder and publish to DHT
               await invoke('republish_shared_file', {
                 fileHash, filePath, fileName, fileSize,
-                priceChi: null, walletAddress: $walletAccount?.address ?? null,
+                priceChi: null,
+                walletAddress: $walletAccount?.address ?? null,
+                privateKey: $walletAccount?.privateKey ?? null,
               });
               console.log(`✅ Auto-registered hosted file ${fileHash} as seeder`);
 
@@ -228,6 +230,7 @@
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
     const { invoke } = await import('@tauri-apps/api/core');
     const walletAddress = $walletAccount?.address ?? null;
+    const privateKey = $walletAccount?.privateKey ?? null;
 
     // 1. Re-register uploaded files from localStorage
     try {
@@ -246,6 +249,7 @@
               fileSize: file.size,
               priceChi: file.priceChi && file.priceChi !== '0' ? file.priceChi : null,
               walletAddress,
+              privateKey,
             });
             count++;
           } catch {
@@ -275,6 +279,7 @@
               fileSize: 0,
               priceChi: null,
               walletAddress,
+              privateKey,
             });
             count++;
           } catch {

@@ -574,6 +574,24 @@ pub fn recover_signer(data: &[u8], signature_hex: &str) -> Result<String, String
     prefixed.extend_from_slice(data);
     let hash = keccak256(&prefixed);
 
+    // EIP-2 low-s enforcement. secp256k1 signatures are malleable —
+    // for any valid `(r, s)`, `(r, n - s)` recovers the same pubkey,
+    // producing two valid signatures over the same payload. Reject
+    // high-s so signature hex is unique per (key, message) and any
+    // future caller using the hex as a dedup key is sound.
+    // n / 2 = 0x7FFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF 5D576E73 57A4501D DFE92F46 681B20A0
+    const SECP256K1_HALF_N: [u8; 32] = [
+        0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+        0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B,
+        0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x40,
+    ];
+    {
+        let s_bytes: &[u8] = &sig_bytes[32..64];
+        if s_bytes > &SECP256K1_HALF_N[..] {
+            return Err("Signature has non-canonical (high-s) form".to_string());
+        }
+    }
     let recovery_id = secp256k1::ecdsa::RecoveryId::from_i32((sig_bytes[64] as i32) - 27)
         .map_err(|_| "Invalid recovery ID")?;
     let recoverable = secp256k1::ecdsa::RecoverableSignature::from_compact(&sig_bytes[..64], recovery_id)
@@ -654,6 +672,19 @@ pub async fn verify_tx_details(
     let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
     let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
     let tx_value = tx.get("value").and_then(|v| v.as_str()).map(rpc_client::hex_to_u128).unwrap_or(0);
+    // EIP-155 / chain-id check: a tx mined on the chiral chain must
+    // carry the chiral chainId. Without this, a signed tx replayed from
+    // any other EVM chain with the same address pair would pass.
+    let expected_chain_id = crate::geth::chain_id() as u128;
+    let tx_chain_id = tx
+        .get("chainId")
+        .and_then(|v| v.as_str())
+        .map(rpc_client::hex_to_u128);
+    if let Some(observed) = tx_chain_id {
+        if observed != expected_chain_id {
+            return Ok(false);
+        }
+    }
     let from_match = expected_from.is_empty() || tx_from == expected_from.to_lowercase();
     let to_match = tx_to == expected_to.to_lowercase();
     let amount_match = tx_value >= expected_amount_wei;
