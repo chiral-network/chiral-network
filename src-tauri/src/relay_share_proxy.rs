@@ -258,6 +258,12 @@ struct RegisterRequest {
     token: String,
     origin_url: String,
     owner_wallet: String,
+    /// ECDSA signature by `owner_wallet` over `register_payload("share",
+    /// token, owner_wallet, origin_url)`. Required: without it, any HTTP
+    /// caller could overwrite a known token to redirect visitors to an
+    /// attacker-chosen URL (FM-A05).
+    #[serde(default)]
+    signature: String,
 }
 
 #[derive(Deserialize)]
@@ -265,6 +271,135 @@ struct SiteRegisterRequest {
     site_id: String,
     origin_url: String,
     owner_wallet: String,
+    /// ECDSA signature by `owner_wallet` over `register_payload("site",
+    /// site_id, owner_wallet, origin_url)`. See `RegisterRequest`.
+    #[serde(default)]
+    signature: String,
+}
+
+const REGISTER_TAG: &[u8] = b"chiral-relay-register-v1";
+
+/// Length-prefixed canonical bytes that the registrant must sign.
+/// Binds operation kind, the resource id, the owner wallet, and the
+/// declared origin URL together so a captured signature for one
+/// (token, origin) pair can't be replayed for a different one.
+pub fn register_payload(
+    operation: &str,
+    id: &str,
+    owner_wallet: &str,
+    origin_url: &str,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64 + origin_url.len());
+    out.extend_from_slice(REGISTER_TAG);
+    for part in [
+        operation.as_bytes(),
+        id.as_bytes(),
+        owner_wallet.as_bytes(),
+        origin_url.as_bytes(),
+    ] {
+        out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+        out.extend_from_slice(part);
+    }
+    out
+}
+
+fn is_valid_wallet(s: &str) -> bool {
+    s.len() == 42 && s.starts_with("0x") && s[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Reject origin URLs that point at private/link-local infrastructure.
+/// Loopback is permitted at registration time because `fix_origin_url`
+/// substitutes the registrant's public IP at request handling.
+fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    let lower = origin_url.trim().to_lowercase();
+    let rest = if let Some(r) = lower.strip_prefix("http://") {
+        r
+    } else if let Some(r) = lower.strip_prefix("https://") {
+        r
+    } else {
+        return Err("origin_url scheme must be http:// or https://".to_string());
+    };
+    // Strip any user-info, path, port to isolate the host.
+    let after_userinfo = rest.rsplit_once('@').map(|(_, h)| h).unwrap_or(rest);
+    let host_with_port = after_userinfo
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('#')
+        .next()
+        .unwrap_or("");
+    if host_with_port.is_empty() {
+        return Err("origin_url has no host".to_string());
+    }
+    // Strip port — careful with IPv6 literal brackets.
+    let host = if let Some(rest) = host_with_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        host_with_port.split(':').next().unwrap_or("")
+    };
+    if host.is_empty() {
+        return Err("origin_url has no host".to_string());
+    }
+    // If the host is an IP literal, block private / link-local ranges.
+    // DNS names pass — DNS rebinding is a separate attack we don't
+    // address here (would need proxy-time IP re-validation).
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        match ip {
+            IpAddr::V4(v4) => {
+                if v4 == Ipv4Addr::UNSPECIFIED {
+                    return Err("origin_url 0.0.0.0 is not routable".to_string());
+                }
+                if v4.is_loopback() {
+                    // Allowed — fix_origin_url substitutes at request time.
+                    return Ok(());
+                }
+                if v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_multicast()
+                {
+                    return Err(format!(
+                        "origin_url IP {} is private / link-local / broadcast / multicast — not allowed",
+                        v4
+                    ));
+                }
+                // Block CGNAT 100.64.0.0/10 (carrier-grade NAT, rfc6598).
+                let oct = v4.octets();
+                if oct[0] == 100 && (oct[1] & 0xC0) == 64 {
+                    return Err(format!("origin_url IP {} is CGNAT — not allowed", v4));
+                }
+            }
+            IpAddr::V6(v6) => {
+                if v6.is_loopback() {
+                    return Ok(());
+                }
+                if v6.is_unspecified() || v6.is_multicast() {
+                    return Err(format!("origin_url IPv6 {} is not routable", v6));
+                }
+                let seg0 = v6.segments()[0];
+                // Unique-local fc00::/7
+                if (seg0 & 0xfe00) == 0xfc00 {
+                    return Err(format!("origin_url IPv6 {} is unique-local", v6));
+                }
+                // Link-local fe80::/10
+                if (seg0 & 0xffc0) == 0xfe80 {
+                    return Err(format!("origin_url IPv6 {} is link-local", v6));
+                }
+                // Detect IPv4-mapped (::ffff:0:0/96) and walk into v4 rules.
+                if let Some(mapped) = v6.to_ipv4() {
+                    return is_safe_origin_url(&origin_url.replace(
+                        host_with_port,
+                        &mapped.to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -313,32 +448,82 @@ async fn register_share(
     if req.token.is_empty() || req.origin_url.is_empty() {
         return (StatusCode::BAD_REQUEST, "token and origin_url required").into_response();
     }
+    let owner = req.owner_wallet.trim().to_lowercase();
+    if !is_valid_wallet(&owner) {
+        return (StatusCode::BAD_REQUEST, "owner_wallet must be 0x-hex (42 chars)").into_response();
+    }
+    if let Err(e) = is_safe_origin_url(&req.origin_url) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    if req.signature.is_empty() {
+        return (StatusCode::UNAUTHORIZED, "signature required").into_response();
+    }
+    let payload = register_payload("share", &req.token, &owner, &req.origin_url);
+    if !crate::wallet::verify_signature(&payload, &req.signature, &owner) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "signature did not verify against owner_wallet",
+        )
+            .into_response();
+    }
+    // First-claim-wins: only the wallet that owns the existing record
+    // (verified at registration time) may overwrite it.
+    if let Some(existing) = state.lookup(&req.token).await {
+        if existing.owner_wallet.to_lowercase() != owner {
+            return (
+                StatusCode::FORBIDDEN,
+                format!("token {} is already claimed by another wallet", req.token),
+            )
+                .into_response();
+        }
+    }
     let origin = fix_origin_url(&req.origin_url, addr.ip());
     println!(
-        "[RELAY-SHARE] Registering share token={} origin={} (raw={})",
-        req.token, origin, req.origin_url
+        "[RELAY-SHARE] Registering share token={} origin={} (raw={}) owner={}",
+        req.token, origin, req.origin_url, owner
     );
     state
         .register(ShareRegistration {
             token: req.token,
             origin_url: origin,
-            owner_wallet: req.owner_wallet,
+            owner_wallet: owner,
             registered_at: now_secs(),
         })
         .await;
     (StatusCode::OK, "Registered").into_response()
 }
 
-/// DELETE /api/drive/relay-register/:token — unregister a share
+/// DELETE /api/drive/relay-register/:token — unregister a share. Only
+/// the wallet that originally registered the share may unregister it
+/// — verified via the X-Owner / X-Owner-Sig owner-proof headers
+/// (`auth::verify_owner_proof`). Without this, any HTTP caller could
+/// delete another peer's claim.
 async fn unregister_share(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
     Path(token): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
-    if state.unregister(&token).await {
-        println!("[RELAY-SHARE] Unregistered share token={}", token);
-        (StatusCode::OK, "Unregistered").into_response()
-    } else {
-        (StatusCode::NOT_FOUND, "Share not found").into_response()
+    let path_for_proof = format!("/api/drive/relay-register/{}", token);
+    let claimant = match crate::auth::verify_owner_proof(
+        &headers,
+        &axum::http::Method::DELETE,
+        &path_for_proof,
+    ) {
+        Ok(addr) => addr,
+        Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
+    };
+    match state.lookup(&token).await {
+        Some(existing) if existing.owner_wallet.to_lowercase() == claimant => {
+            state.unregister(&token).await;
+            println!("[RELAY-SHARE] Unregistered share token={}", token);
+            (StatusCode::OK, "Unregistered").into_response()
+        }
+        Some(_) => (
+            StatusCode::FORBIDDEN,
+            "only the registered owner may unregister this share",
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "Share not found").into_response(),
     }
 }
 
@@ -598,27 +783,79 @@ async fn register_site(
     if req.site_id.is_empty() || req.origin_url.is_empty() {
         return (StatusCode::BAD_REQUEST, "site_id and origin_url required").into_response();
     }
+    let owner = req.owner_wallet.trim().to_lowercase();
+    if !is_valid_wallet(&owner) {
+        return (StatusCode::BAD_REQUEST, "owner_wallet must be 0x-hex (42 chars)").into_response();
+    }
+    if let Err(e) = is_safe_origin_url(&req.origin_url) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    if req.signature.is_empty() {
+        return (StatusCode::UNAUTHORIZED, "signature required").into_response();
+    }
+    let payload = register_payload("site", &req.site_id, &owner, &req.origin_url);
+    if !crate::wallet::verify_signature(&payload, &req.signature, &owner) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "signature did not verify against owner_wallet",
+        )
+            .into_response();
+    }
+    if let Some(existing) = state.lookup_site(&req.site_id).await {
+        if existing.owner_wallet.to_lowercase() != owner {
+            return (
+                StatusCode::FORBIDDEN,
+                format!(
+                    "site_id {} is already claimed by another wallet",
+                    req.site_id
+                ),
+            )
+                .into_response();
+        }
+    }
     let origin = fix_origin_url(&req.origin_url, addr.ip());
     println!(
-        "[RELAY-SITE] Registering site={} origin={} (raw={})",
-        req.site_id, origin, req.origin_url
+        "[RELAY-SITE] Registering site={} origin={} (raw={}) owner={}",
+        req.site_id, origin, req.origin_url, owner
     );
     state
         .register_site(SiteRegistration {
             site_id: req.site_id,
             origin_url: origin,
-            owner_wallet: req.owner_wallet,
+            owner_wallet: owner,
             registered_at: now_secs(),
         })
         .await;
     (StatusCode::OK, "Registered").into_response()
 }
 
-/// DELETE /api/sites/relay-register/:site_id — unregister a site
+/// DELETE /api/sites/relay-register/:site_id — unregister a site. Only
+/// the wallet that originally registered the site may unregister it.
 async fn unregister_site(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
     Path(site_id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
+    let path_for_proof = format!("/api/sites/relay-register/{}", site_id);
+    let claimant = match crate::auth::verify_owner_proof(
+        &headers,
+        &axum::http::Method::DELETE,
+        &path_for_proof,
+    ) {
+        Ok(addr) => addr,
+        Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
+    };
+    match state.lookup_site(&site_id).await {
+        Some(existing) if existing.owner_wallet.to_lowercase() != claimant => {
+            return (
+                StatusCode::FORBIDDEN,
+                "only the registered owner may unregister this site",
+            )
+                .into_response();
+        }
+        None => return (StatusCode::NOT_FOUND, "Site not found").into_response(),
+        Some(_) => {}
+    }
     if state.unregister_site(&site_id).await {
         println!("[RELAY-SITE] Unregistered site={}", site_id);
         (StatusCode::OK, "Unregistered").into_response()
@@ -742,6 +979,71 @@ pub fn relay_share_routes(
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+
+    // -----------------------------------------------------------------------
+    // is_safe_origin_url — FM-A04
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn safe_origin_accepts_public_dns_and_loopback() {
+        assert!(is_safe_origin_url("http://example.com:9419/").is_ok());
+        assert!(is_safe_origin_url("https://chiral.network/path").is_ok());
+        assert!(is_safe_origin_url("http://127.0.0.1:9419").is_ok());
+        assert!(is_safe_origin_url("http://localhost:9419").is_ok());
+        assert!(is_safe_origin_url("http://203.0.113.5:9419").is_ok());
+    }
+
+    #[test]
+    fn safe_origin_rejects_private_link_local_and_metadata() {
+        // RFC1918
+        assert!(is_safe_origin_url("http://10.0.0.1:8500").is_err());
+        assert!(is_safe_origin_url("http://192.168.1.1:8080").is_err());
+        assert!(is_safe_origin_url("http://172.16.1.1:8080").is_err());
+        // Link-local (AWS / cloud metadata, etc.)
+        assert!(is_safe_origin_url("http://169.254.169.254/").is_err());
+        // CGNAT
+        assert!(is_safe_origin_url("http://100.64.0.1/").is_err());
+        // 0.0.0.0
+        assert!(is_safe_origin_url("http://0.0.0.0:8080/").is_err());
+        // Multicast
+        assert!(is_safe_origin_url("http://224.0.0.1/").is_err());
+        // IPv6 unique-local + link-local
+        assert!(is_safe_origin_url("http://[fc00::1]:8080/").is_err());
+        assert!(is_safe_origin_url("http://[fe80::1]:8080/").is_err());
+    }
+
+    #[test]
+    fn safe_origin_rejects_unsupported_schemes() {
+        assert!(is_safe_origin_url("file:///etc/passwd").is_err());
+        assert!(is_safe_origin_url("ftp://attacker.com/").is_err());
+        assert!(is_safe_origin_url("gopher://1.2.3.4/").is_err());
+    }
+
+    #[test]
+    fn safe_origin_handles_userinfo_and_brackets() {
+        // Userinfo is stripped before host check.
+        assert!(is_safe_origin_url("http://user:pass@10.0.0.1/").is_err());
+        assert!(is_safe_origin_url("http://user:pass@example.com/").is_ok());
+        // IPv4-mapped IPv6 walks into v4 rules.
+        assert!(is_safe_origin_url("http://[::ffff:10.0.0.1]/").is_err());
+        assert!(is_safe_origin_url("http://[::ffff:203.0.113.5]/").is_ok());
+    }
+
+    #[test]
+    fn register_payload_distinguishes_share_vs_site() {
+        let a = register_payload("share", "abc", "0xowner", "http://example/");
+        let b = register_payload("site", "abc", "0xowner", "http://example/");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn register_payload_is_injective_under_field_shift() {
+        // Length-prefix protects against attacker-controlled NUL/colon
+        // shifts across (id, owner_wallet, origin_url).
+        let a = register_payload("share", "abc:def", "0xowner", "http://x/");
+        let b = register_payload("share", "abc", "def:0xowner", "http://x/");
+        assert_ne!(a, b);
+    }
 
     // -----------------------------------------------------------------------
     // fix_origin_url

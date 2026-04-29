@@ -649,10 +649,21 @@
 
   async function publishToRelay(siteId: string) {
     if (!isTauri) return;
+    const ownerWallet = $walletAccount?.address || '';
+    const privateKey = $walletAccount?.privateKey || '';
+    if (!ownerWallet || !privateKey) {
+      toasts.show('Unlock your wallet before publishing a site to the relay', 'warning');
+      return;
+    }
     publishingStates = { ...publishingStates, [siteId]: true };
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const relayUrl = await invoke<string>('publish_site_to_relay', { siteId, relayUrl: RELAY_GATEWAY });
+      const relayUrl = await invoke<string>('publish_site_to_relay', {
+        siteId,
+        relayUrl: RELAY_GATEWAY,
+        ownerWallet,
+        privateKey,
+      });
       await loadSites();
       toasts.detail('Site published', relayUrl, 'success');
     } catch (err: any) {
@@ -664,10 +675,16 @@
 
   async function unpublishFromRelay(siteId: string) {
     if (!isTauri) return;
+    const ownerWallet = $walletAccount?.address || '';
+    const privateKey = $walletAccount?.privateKey || '';
+    if (!ownerWallet || !privateKey) {
+      toasts.show('Unlock your wallet before unpublishing a site from the relay', 'warning');
+      return;
+    }
     publishingStates = { ...publishingStates, [siteId]: true };
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('unpublish_site_from_relay', { siteId });
+      await invoke('unpublish_site_from_relay', { siteId, ownerWallet, privateKey });
       await loadSites();
       // Silent — publish state reflected in UI
     } catch (err: any) {

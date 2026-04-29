@@ -368,11 +368,17 @@ function createDriveStore() {
 
         // Publish share metadata to relay so the share URL works via proxy
         try {
+          const account = get(walletAccount);
+          const privateKey = account?.privateKey ?? '';
+          if (!owner || !privateKey) {
+            throw new Error('wallet locked');
+          }
           const { invoke } = await import('@tauri-apps/api/core');
           await invoke('publish_drive_share', {
             shareToken: share.id,
             relayUrl: 'http://130.245.173.73:8080',
             ownerWallet: owner,
+            privateKey,
           });
         } catch (e) {
           console.warn('Failed to publish share to relay (share works locally only):', e);
@@ -386,7 +392,7 @@ function createDriveStore() {
     },
 
     async revokeShareLink(token: string) {
-      syncOwner();
+      const owner = syncOwner();
       try {
         await driveApi.revokeShareLink(token);
         update(m => {
@@ -406,10 +412,17 @@ function createDriveStore() {
 
         // Best-effort: remove share registration from relay
         try {
+          const account = get(walletAccount);
+          const privateKey = account?.privateKey ?? '';
+          if (!owner || !privateKey) {
+            throw new Error('wallet locked');
+          }
           const { invoke } = await import('@tauri-apps/api/core');
           await invoke('unpublish_drive_share', {
             shareToken: token,
             relayUrl: 'http://130.245.173.73:8080',
+            ownerWallet: owner,
+            privateKey,
           });
         } catch {
           // Relay cleanup failure is non-critical
