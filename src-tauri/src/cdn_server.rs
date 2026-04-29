@@ -107,6 +107,13 @@ pub struct CdnState {
     pub sites_registry_path: PathBuf,
     pub sites_registry: AsyncMutex<Vec<CdnSiteEntry>>,
     pub wallet_address: String,
+    /// Hex-encoded private key matching `wallet_address`. Required so
+    /// the CDN can sign `ChunkResponse::FileInfo` envelopes (FM-A09);
+    /// without it, downloaders reject every CDN-served file as
+    /// unsigned. Operators set it via the `CHIRAL_CDN_PRIVATE_KEY`
+    /// env var at process start. Empty string means "unsigned mode" —
+    /// CDN serves only free files until the operator wires a key.
+    pub wallet_private_key: String,
     pub price_wei_per_mb_month: u128,
     pub dht: Arc<AsyncMutex<Option<Arc<DhtService>>>>,
 }
@@ -114,10 +121,12 @@ pub struct CdnState {
 impl CdnState {
     /// Load the registry from disk at construction so later requests don't
     /// have to. `wallet_address` is the receiver for user CDN payments;
-    /// `dht` is the shared DHT handle so uploads can register the CDN as a
-    /// seeder after writing a file.
+    /// `wallet_private_key` is the matching ECDSA private key used to
+    /// sign `FileInfo` envelopes; `dht` is the shared DHT handle so
+    /// uploads can register the CDN as a seeder after writing a file.
     pub async fn new(
         wallet_address: String,
+        wallet_private_key: String,
         dht: Arc<AsyncMutex<Option<Arc<DhtService>>>>,
     ) -> Self {
         let storage_dir = network::data_dir().join("cdn");
@@ -135,6 +144,7 @@ impl CdnState {
             sites_registry_path,
             sites_registry: AsyncMutex::new(sites_registry),
             wallet_address,
+            wallet_private_key,
             price_wei_per_mb_month,
             dht,
         }
@@ -458,6 +468,7 @@ async fn upload(
             file_size,
             download_price_wei,
             &s.wallet_address,
+            &s.wallet_private_key,
             now,
         )
         .await;
@@ -569,6 +580,7 @@ async fn update_price(
                 entry.file_size,
                 new_price_wei,
                 &s.wallet_address,
+                &s.wallet_private_key,
                 entry.uploaded_at,
             )
             .await;
@@ -606,6 +618,7 @@ pub async fn reseed_on_startup(state: Arc<CdnState>) {
             entry.file_size,
             download_price_wei,
             &state.wallet_address,
+            &state.wallet_private_key,
             entry.uploaded_at,
         )
         .await;
@@ -673,6 +686,7 @@ async fn register_in_dht(
     file_size: u64,
     download_price_wei: u128,
     cdn_wallet: &str,
+    cdn_private_key: &str,
     created_at: u64,
 ) {
     dht.register_shared_file(
@@ -682,6 +696,7 @@ async fn register_in_dht(
         file_size,
         download_price_wei,
         cdn_wallet.to_string(),
+        cdn_private_key.to_string(),
     )
     .await;
     let peer_id = dht.get_peer_id().await.unwrap_or_default();

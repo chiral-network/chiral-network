@@ -299,6 +299,13 @@ pub enum ChunkResponse {
         price_wei: String,
         /// Seeder's wallet address for payment
         wallet_address: String,
+        /// ECDSA signature by `wallet_address` over the canonical
+        /// payload of every other field (see `file_info_sign_payload`).
+        /// Empty string means "unsigned" — readers reject unsigned
+        /// FileInfo so a hostile seeder cannot substitute its own
+        /// `wallet_address` to divert the buyer's payment (FM-A09).
+        #[serde(default)]
+        signature: String,
         error: Option<String>,
     },
     /// A single chunk of file data
@@ -317,6 +324,45 @@ pub enum ChunkResponse {
         accepted: bool,
         error: Option<String>,
     },
+}
+
+/// Length-prefixed canonical bytes for the FileInfo signature. Same
+/// encoding pattern as `version::canonical_signing_payload` and
+/// `SiteDirectoryEntry::sign_payload`: every variable-length field is
+/// preceded by its `u32` LE byte length so an attacker can't shift
+/// content across field boundaries by embedding NUL or other separator
+/// bytes. `chunk_hashes` is encoded as a count followed by each
+/// length-prefixed element.
+pub fn file_info_sign_payload(
+    file_hash: &str,
+    file_name: &str,
+    file_size: u64,
+    chunk_size: u32,
+    total_chunks: u32,
+    chunk_hashes: &[String],
+    price_wei: &str,
+    wallet_address: &str,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(256 + chunk_hashes.len() * 36);
+    out.extend_from_slice(b"file-info-v1");
+    for part in [
+        file_hash.as_bytes(),
+        file_name.as_bytes(),
+        price_wei.as_bytes(),
+        wallet_address.as_bytes(),
+    ] {
+        out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+        out.extend_from_slice(part);
+    }
+    out.extend_from_slice(&file_size.to_le_bytes());
+    out.extend_from_slice(&chunk_size.to_le_bytes());
+    out.extend_from_slice(&total_chunks.to_le_bytes());
+    out.extend_from_slice(&(chunk_hashes.len() as u32).to_le_bytes());
+    for h in chunk_hashes {
+        out.extend_from_slice(&(h.len() as u32).to_le_bytes());
+        out.extend_from_slice(h.as_bytes());
+    }
+    out
 }
 
 enum SwarmCommand {
@@ -450,6 +496,14 @@ pub struct SharedFileInfo {
     pub price_wei: u128,
     /// Seeder's wallet address for receiving payment
     pub wallet_address: String,
+    /// Seeder's private key (hex, 0x-prefixed) used to sign the
+    /// `ChunkResponse::FileInfo` envelope. Without this signature, a
+    /// hostile peer could answer the FileInfo request with their own
+    /// `wallet_address` substituted and divert the buyer's payment
+    /// (FM-A09). Empty string means "this seeder has not unlocked a
+    /// wallet" — FileInfo responses for that file refuse to serve
+    /// rather than send an unsigned envelope.
+    pub private_key: String,
 }
 
 /// Shared reference to the custom download directory setting
@@ -552,6 +606,7 @@ impl DhtService {
         file_size: u64,
         price_wei: u128,
         wallet_address: String,
+        private_key: String,
     ) {
         println!("=== REGISTERING SHARED FILE ===");
         println!("  Name: {}", file_name);
@@ -577,6 +632,7 @@ impl DhtService {
                 chunk_hashes: None,
                 price_wei,
                 wallet_address,
+                private_key,
             },
         );
         println!("  Total shared files now: {}", shared.len());
@@ -3447,6 +3503,7 @@ async fn handle_behaviour_event(
                                                         chunk_hashes: vec![],
                                                         price_wei: "0".to_string(),
                                                         wallet_address: String::new(),
+                                                        signature: String::new(),
                                                         error: Some(format!(
                                                             "Failed to read file: {}",
                                                             e
@@ -3465,20 +3522,62 @@ async fn handle_behaviour_event(
                                         let chunk_hashes = file_info.chunk_hashes.as_ref().unwrap();
                                         let price_str = file_info.price_wei.to_string();
                                         let wallet = file_info.wallet_address.clone();
+                                        let private_key = file_info.private_key.clone();
+                                        let file_name_owned = file_info.file_name.clone();
+                                        let file_size_owned = file_info.file_size;
                                         println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
-                                                 file_info.file_name, file_info.file_size, chunk_hashes.len(), price_str, peer);
+                                                 file_name_owned, file_size_owned, chunk_hashes.len(), price_str, peer);
 
-                                        ChunkResponse::FileInfo {
-                                            request_id,
-                                            file_hash,
-                                            file_name: file_info.file_name.clone(),
-                                            file_size: file_info.file_size,
-                                            chunk_size: CHUNK_SIZE as u32,
-                                            total_chunks: chunk_hashes.len() as u32,
-                                            chunk_hashes: chunk_hashes.clone(),
-                                            price_wei: price_str,
-                                            wallet_address: wallet,
-                                            error: None,
+                                        // Sign the FileInfo envelope with the seeder's
+                                        // wallet key so the downloader can verify the
+                                        // wallet_address claim. Without this, a hostile
+                                        // seeder could substitute its own wallet here
+                                        // and divert payment.
+                                        if private_key.is_empty() || wallet.is_empty() {
+                                            ChunkResponse::FileInfo {
+                                                request_id,
+                                                file_hash,
+                                                file_name: file_name_owned,
+                                                file_size: 0,
+                                                chunk_size: CHUNK_SIZE as u32,
+                                                total_chunks: 0,
+                                                chunk_hashes: vec![],
+                                                price_wei: "0".to_string(),
+                                                wallet_address: String::new(),
+                                                signature: String::new(),
+                                                error: Some(
+                                                    "Seeder cannot sign FileInfo (wallet not unlocked)"
+                                                        .to_string(),
+                                                ),
+                                            }
+                                        } else {
+                                            let payload = file_info_sign_payload(
+                                                &file_hash,
+                                                &file_name_owned,
+                                                file_size_owned,
+                                                CHUNK_SIZE as u32,
+                                                chunk_hashes.len() as u32,
+                                                chunk_hashes,
+                                                &price_str,
+                                                &wallet,
+                                            );
+                                            let signature = crate::wallet::sign_message(
+                                                &private_key, &payload,
+                                            )
+                                            .unwrap_or_default();
+                                            ChunkResponse::FileInfo {
+                                                request_id,
+                                                file_hash,
+                                                file_name: file_name_owned,
+                                                file_size: file_size_owned,
+                                                chunk_size: CHUNK_SIZE as u32,
+                                                total_chunks: chunk_hashes.len() as u32,
+                                                chunk_hashes: chunk_hashes.clone(),
+                                                price_wei: price_str,
+                                                wallet_address: wallet,
+                                                signature,
+                                                error: None,
+                                            }
                                         }
                                     } else {
                                         println!("File not found: {}", file_hash);
@@ -3492,6 +3591,7 @@ async fn handle_behaviour_event(
                                             chunk_hashes: vec![],
                                             price_wei: "0".to_string(),
                                             wallet_address: String::new(),
+                                            signature: String::new(),
                                             error: Some("File not found".to_string()),
                                         }
                                     };
@@ -3762,6 +3862,7 @@ async fn handle_behaviour_event(
                                     chunk_hashes,
                                     price_wei,
                                     wallet_address,
+                                    signature,
                                     error,
                                 } => {
                                     // Another seeder may have already started this download request.
@@ -3808,6 +3909,59 @@ async fn handle_behaviour_event(
                                                 "requestId": request_id,
                                                 "fileHash": file_hash,
                                                 "error": err
+                                            }),
+                                        );
+                                        return;
+                                    }
+
+                                    // Verify the seeder's FileInfo signature. Without
+                                    // this, a hostile seeder can substitute its own
+                                    // wallet_address into the response and divert the
+                                    // buyer's payment (FM-A09). An invalid signature
+                                    // is treated like a seeder-side error so the
+                                    // downloader fails over to other seeders.
+                                    let payload = file_info_sign_payload(
+                                        &file_hash,
+                                        &file_name,
+                                        file_size,
+                                        CHUNK_SIZE as u32,
+                                        total_chunks,
+                                        &chunk_hashes,
+                                        &price_wei,
+                                        &wallet_address,
+                                    );
+                                    let sig_ok = !signature.is_empty()
+                                        && !wallet_address.is_empty()
+                                        && crate::wallet::verify_signature(
+                                            &payload,
+                                            &signature,
+                                            &wallet_address,
+                                        );
+                                    if !sig_ok {
+                                        let reason = if signature.is_empty() {
+                                            "unsigned FileInfo"
+                                        } else {
+                                            "FileInfo signature did not verify against wallet_address"
+                                        };
+                                        println!("❌ {} from peer {} for {}", reason, peer, file_hash);
+                                        let remaining = decrement_file_request_attempt(
+                                            pending_file_attempts,
+                                            &request_id,
+                                        );
+                                        if remaining > 0 {
+                                            println!(
+                                                "🔁 Trying {} other seeder(s) for request {}",
+                                                remaining, request_id
+                                            );
+                                            return;
+                                        }
+                                        pending_file_hashes.remove(&request_id);
+                                        let _ = events.emit(
+                                            "file-download-failed",
+                                            serde_json::json!({
+                                                "requestId": request_id,
+                                                "fileHash": file_hash,
+                                                "error": reason,
                                             }),
                                         );
                                         return;
@@ -5025,6 +5179,7 @@ mod tests {
             ],
             price_wei: "1000000000000000".to_string(),
             wallet_address: "0x1234567890abcdef".to_string(),
+            signature: String::new(),
             error: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -5089,6 +5244,7 @@ mod tests {
             chunk_hashes: vec![],
             price_wei: "0".to_string(),
             wallet_address: String::new(),
+            signature: String::new(),
             error: Some("File not found".to_string()),
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -5098,6 +5254,38 @@ mod tests {
         } else {
             panic!("Expected FileInfo variant");
         }
+    }
+
+    #[test]
+    fn file_info_sign_payload_is_injective_under_field_shift() {
+        // Regression: FM-A09. The FileInfo signing payload uses
+        // length-prefixed encoding so two distinct field tuples
+        // produce distinct payloads. Without the prefix, an attacker-
+        // controlled `file_name` containing the same bytes a different
+        // `wallet_address` starts with could shift content across
+        // boundaries and let one signature attest to multiple envelopes.
+        let a = file_info_sign_payload(
+            "abc", "report:0xVICTIM", 100, 256_000, 1, &["h1".to_string()],
+            "1000", "0xATTACKER",
+        );
+        let b = file_info_sign_payload(
+            "abc", "report", 100, 256_000, 1, &["h1".to_string()],
+            "1000", "0xVICTIM:0xATTACKER",
+        );
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn file_info_sign_payload_is_deterministic() {
+        let p1 = file_info_sign_payload(
+            "abc", "doc.pdf", 1024, 256_000, 1, &["h1".to_string()],
+            "100", "0x1234",
+        );
+        let p2 = file_info_sign_payload(
+            "abc", "doc.pdf", 1024, 256_000, 1, &["h1".to_string()],
+            "100", "0x1234",
+        );
+        assert_eq!(p1, p2);
     }
 
     #[test]
@@ -5137,6 +5325,7 @@ mod tests {
             chunk_hashes: None,
             price_wei: 0,
             wallet_address: String::new(),
+            private_key: String::new(),
         };
         assert_eq!(info.file_name, "file.txt");
         assert_eq!(info.file_size, 1024);
@@ -5153,6 +5342,7 @@ mod tests {
             chunk_hashes: None,
             price_wei: 5_000_000_000_000_000,
             wallet_address: "0xabc123".to_string(),
+            private_key: String::new(),
         };
         assert_eq!(info.price_wei, 5_000_000_000_000_000);
         assert_eq!(info.wallet_address, "0xabc123");

@@ -280,6 +280,10 @@ struct RegisterSharedFileRequest {
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
+    /// Hex private key for signing FileInfo envelopes. Empty = unsigned
+    /// (downloaders will reject; use for free-only or proxy seeding).
+    #[serde(default)]
+    private_key: String,
 }
 
 #[derive(Deserialize)]
@@ -625,6 +629,7 @@ async fn dht_register_shared_file(
         req.file_size,
         price_wei,
         req.wallet_address,
+        req.private_key,
     )
     .await;
 
@@ -1262,13 +1267,20 @@ async fn main() {
     // CDN server owns its own registry + price config. We build it here so
     // both the router and the reseed/expiration tasks share the same state.
     let cdn_state = {
-        let wallet_address = {
+        let (wallet_address, wallet_private_key) = {
             let guard = runtime_state.wallet.lock().await;
-            guard.as_ref().map(|w| w.address.clone()).unwrap_or_default()
+            guard
+                .as_ref()
+                .map(|w| (w.address.clone(), w.private_key.clone()))
+                .unwrap_or_default()
         };
         Arc::new(
-            chiral_network::cdn_server::CdnState::new(wallet_address, Arc::clone(&runtime_state.dht))
-                .await,
+            chiral_network::cdn_server::CdnState::new(
+                wallet_address,
+                wallet_private_key,
+                Arc::clone(&runtime_state.dht),
+            )
+            .await,
         )
     };
 

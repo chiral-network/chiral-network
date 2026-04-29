@@ -351,6 +351,9 @@ async fn auto_reseed_drive_files(state: &AppState) {
             continue;
         }
 
+        // auto-reseed has no unlocked wallet — pass empty private_key so
+        // the seeder responder refuses to sign FileInfo (FM-A09). The
+        // user re-seeds via the signed publishers when they unlock.
         dht.register_shared_file(
             file_hash.clone(),
             full_path.to_string_lossy().to_string(),
@@ -358,6 +361,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
             file_size,
             price_wei,
             wallet_addr.clone(),
+            String::new(),
         )
         .await;
 
@@ -1437,6 +1441,7 @@ async fn publish_file(
             file_size,
             price_wei_val,
             wallet_addr.clone(),
+            private_key.clone().unwrap_or_default(),
         )
         .await;
 
@@ -1550,6 +1555,7 @@ async fn publish_file_data(
             file_size,
             price_wei_val,
             wallet_addr.clone(),
+            private_key.clone().unwrap_or_default(),
         )
         .await;
 
@@ -1728,6 +1734,11 @@ async fn try_repair_local_drive_seed(
         file_size,
         price_wei,
         wallet_addr.clone(),
+        // try_repair has no unlocked wallet — empty private_key means
+        // the seeder responder won't sign FileInfo; downloader will
+        // fail this seeder and try another. User can re-seed
+        // explicitly via the signed publishers.
+        String::new(),
     )
     .await;
 
@@ -2429,6 +2440,7 @@ async fn register_shared_file(
     file_size: u64,
     price_chi: Option<String>,
     wallet_address: Option<String>,
+    private_key: Option<String>,
 ) -> Result<(), String> {
     println!(
         "Re-registering shared file: {} (hash: {})",
@@ -2462,6 +2474,7 @@ async fn register_shared_file(
             file_size,
             price_wei,
             wallet_addr,
+            private_key.unwrap_or_default(),
         )
         .await;
         Ok(())
@@ -2515,6 +2528,7 @@ async fn republish_shared_file(
             file_size,
             price_wei,
             wallet_addr.clone(),
+            private_key.clone().unwrap_or_default(),
         )
         .await;
 
@@ -5297,6 +5311,7 @@ async fn publish_drive_file_inner(
         actual_size,
         price_wei_val,
         wallet_addr.clone(),
+        private_key.clone().unwrap_or_default(),
     )
     .await;
 
@@ -5422,6 +5437,7 @@ async fn seed_hosted_file(
     dht.register_shared_file(
         file_hash.clone(), full_path_str, file_name.clone(),
         file_size, price_wei_val, wallet_address.clone(),
+        private_key.clone().unwrap_or_default(),
     ).await;
 
     // Update DHT record to add ourselves as a seeder
@@ -6769,6 +6785,7 @@ mod multi_seeder_tests {
             "hello.bin".to_string(),
             5,
             0,
+            String::new(),
             String::new(),
         )
         .await;
