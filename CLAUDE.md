@@ -129,7 +129,7 @@ Headless daemon API endpoints (port 9419 by default):
 - **Mining**: POST `mining/start`, `mining/stop`, `mining/miner-address`; GET `mining/status`, `mining/blocks`
 - **Hosting**: POST `hosting/publish-ad`; GET `hosting/registry`
 - **CDN**: POST `cdn/upload`; GET `cdn/files`, `cdn/pricing`, `cdn/status`; DELETE `cdn/files/:hash`; PUT `cdn/files/:hash` (update price)
-- **Drive**: Full CRUD via `/api/drive/*` routes (requires `X-Owner` header)
+- **Drive**: Full CRUD via `/api/drive/*` routes (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_sig>` headers — see Owner-proof auth below)
 - **Diagnostics**: GET `bootstrap-health`
 
 All headless paths are prefixed with `/api/headless/` except health, ready, and drive routes.
@@ -211,7 +211,7 @@ SMTP env vars: `CHIRAL_WALLET_EMAIL_SMTP_HOST`, `CHIRAL_WALLET_EMAIL_FROM` (requ
 - Logout has 5s timeout on DHT stop + loading state to prevent hanging.
 - Download cost: 0.01 CHI per MB. Platform fee: 0.5% on all transactions.
 - Platform fee split: 99.5% to seller/burn, 0.5% to platform wallet.
-- File metadata and seeder entries are ECDSA-signed (prevents DHT tampering).
+- File metadata, seeder entries, folder manifests, site-directory entries, and the chunked-transfer FileInfo envelope are all ECDSA-signed by the publisher / seeder wallet. Readers verify before consuming and drop unsigned/invalid records — every Tauri publisher refuses to write a record unless `private_key` is provided.
 - Payment verification: on-chain tx receipt checked before serving file chunks.
 - CDN server at `130.245.173.73:9420` — always-on file hosting with market-based pricing.
 - CDN pricing: `max(floor, median_peer_price × 1.2)` — adapts to marketplace.
@@ -224,4 +224,43 @@ SMTP env vars: `CHIRAL_WALLET_EMAIL_SMTP_HOST`, `CHIRAL_WALLET_EMAIL_FROM` (requ
 - Site directory: name claims at `chiral_site_directory` (DHT registry of names) plus per-name records. First-claim-wins, names are `[a-z0-9-]{1,63}`. Tauri commands: `publish_site_to_directory`, `unpublish_site_from_directory`, `resolve_site_name`, `list_directory_sites`.
 - Version enforcement (`src-tauri/src/version.rs`): bundled `VersionPolicy` embedded at compile time; effective policy held in a global `OnceCell<RwLock<VersionPolicy>>` so libp2p Identify, HTTP middleware, and Tauri commands all read the same value. `/api/version-policy` is mounted by the gateway router (relay, daemon, desktop hosting). On startup the desktop fetches the relay's policy and promotes it via `update_effective_policy` if `is_acceptable_remote_policy` accepts (rollback by `issuedAt`, signed accept against `POLICY_PUBLIC_KEY`, or unsigned-not-tightening if no signed policy is in effect).
 - Version enforcement layers: `UpdateGate.svelte` UI (soft banner / hard modal), `ensure_version_supported` Tauri gate, `X-Chiral-Client-Version` HTTP middleware (426 Upgrade Required below `minRequired`), libp2p Identify `agent_version="chiral/<v>"` with peer disconnect on mismatch.
-- `chiral-policy-sign` operator binary: keygen / sign / verify policies with the project's offline Ed25519 key. `POLICY_PUBLIC_KEY` is currently 32 zero bytes — replace before relying on signed policies.
+- `chiral-policy-sign` operator binary: keygen / sign / verify policies with the project's offline Ed25519 key. The compile-time `POLICY_PUBLIC_KEY` is 32 zero bytes (placeholder); operators activate signed policies at deploy time by setting the `CHIRAL_POLICY_PUBLIC_KEY` env var (32-byte hex, with or without `0x` prefix). All three binaries (desktop, daemon, relay) print a one-shot `[VERSION]` line at startup confirming whether signed policies are enabled or warning that the placeholder is still in use.
+
+## Owner-proof HTTP auth
+
+Every authenticated HTTP route uses a stateless signed-challenge scheme (replaces the previously-trusted bare `X-Owner` header):
+
+- Headers: `X-Owner: 0x<40 hex>` + `X-Owner-Sig: <unix_ts>:<hex_signature>`.
+- Signed bytes: `auth::owner_proof_payload(wallet_lowercased, ts, method, path_and_query)` — length-prefixed canonical, tagged `chiral-owner-proof-v1`. Binds wallet ↔ exact request, so a captured proof can't be replayed against a different endpoint within its ±5-minute validity window.
+- Server: `auth::owner_proof_middleware` recovers the secp256k1 signer and rejects with 401 on mismatch / expired / missing.
+- Applied to: `/api/drive/*` (every route), `POST /api/ratings/transfer`, and the unregister DELETEs on relay register routes. Public visitor routes (`/drive/:token`, `/sites/:site_id`) stay unauthenticated.
+- Tauri command: `compute_owner_proof(method, path, walletAddress, privateKey)` — frontend calls it before each authenticated fetch; private keys never leave the process.
+
+## Trust boundary specifics
+
+- **Site directory**: `SiteDirectoryEntry` carries an ECDSA signature by `owner_wallet`. `publish_site_to_directory` requires `private_key` and refuses overwrites whose existing record verifies under a different wallet. `resolve_site_name` / `list_directory_sites` drop entries that fail to verify.
+- **Folder bundles**: `FolderManifest` is signed by `owner_wallet`. `publish_drive_folder` skips the publish if the wallet is locked. `search_folder` drops unsigned/invalid manifests. `list_directory_sites` truncates the registry array to 4096 entries before fan-out.
+- **Chunked transfer**: `ChunkResponse::FileInfo` is signed by the seeder's wallet over `dht::file_info_sign_payload`. The downloader verifies before consuming `wallet_address` / `price_wei` and fails over to other seeders on signature failure. `SharedFileInfo` carries the seeder's `private_key`; if absent the seeder responder refuses to serve.
+- **Drive shares**: `verify_share_access` binds each `tx_hash` to the first share token it unlocks via a persisted ledger at `<data_dir>/drive_share_spent_tx.json`. One tx ↔ one share forever; the buyer can reload their page, but the URL doesn't unlock unrelated shares.
+- **Seeder spent-tx**: `claim_spent_tx(tx_hash, file_hash)` keys on the *(tx, file)* pair, so one payment to a wallet that seeds many priced files redeems exactly one delivery.
+- **CDN payment math**: exact `u128` ceil-rounded `required_upload_wei`. No `f64`, no 5% tolerance — `min_accepted_wei == required_wei`.
+
+## Relay register signing
+
+Relay `register_share` / `register_site` POSTs require an ECDSA `signature` field over `relay_share_proxy::register_payload(operation, id, owner_wallet, origin_url)` (length-prefixed, tagged `chiral-relay-register-v1`). First-claim-wins is enforced cryptographically: an existing record can only be overwritten by the wallet that originally signed it. The relay also runs `is_safe_origin_url` to reject:
+
+- non-http(s) schemes
+- RFC1918 (10/8, 172.16/12, 192.168/16), CGNAT (100.64/10)
+- link-local (169.254/16, fe80::/10) — blocks AWS / GCP cloud metadata IPs
+- unique-local IPv6 (fc00::/7), multicast, broadcast, unspecified
+- IPv4-mapped IPv6 variants of any of the above
+
+Loopback (127.0.0.0/8, ::1) stays accepted because `fix_origin_url` substitutes the registrant's public IP at request time. The Tauri commands `publish_drive_share` / `publish_site_to_relay` (and unpublish counterparts) take `private_key`, sign locally, and refuse if the wallet is locked. New `compute_relay_register_signature` Tauri command for external callers.
+
+## Other defense-in-depth
+
+- `dht_put` headless route refuses keys in reserved namespaces (`chiral_file_*`, `chiral_seeder_*`, `chiral_folder_*`, `chiral_sitename_*`, `chiral_site_directory`, `chiral_drive_share_*`, `chiral_host_ad_*`) with 403 — those records are written through their dedicated signed-publication commands.
+- Local-daemon CORS allowlists Tauri webview origins only (relay-mode keeps `Any`); blocks CSRF from any visited webpage. `/api/drive/*` has `DefaultBodyLimit::max(500 MiB)`. `is_item_under_shared_root` tracks visited IDs to short-circuit parent cycles.
+- `wallet::verify_tx_details` checks `tx.chainId == geth::chain_id()` so cross-chain replays of signed txs are rejected. `wallet::recover_signer` enforces low-`s` (EIP-2) so no caller using sig hex as a dedup key gets fooled by malleable variants.
+- Chunked downloader rejects out-of-sequence chunks (`chunk_index != current_chunk_index`) before bandwidth waste; the full-file hash still backstops integrity.
+- Seeder `PaymentProof` handler distinguishes "tx not yet mined" (retryable, the buyer is told to retry in 30s) from "wrong amount/recipient" (permanent). The spent-tx ledger only records on success, so the same `tx_hash` can be presented again safely.
