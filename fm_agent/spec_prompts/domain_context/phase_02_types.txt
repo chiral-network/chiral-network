@@ -1,0 +1,177 @@
+================================================================================
+PHASE 2: RPC INFRASTRUCTURE
+================================================================================
+
+FILE MODULES
+================================================================================
+
+src-tauri/src/rpc_client.rs
+  Provides a singleton, connection-pooled JSON-RPC HTTP client for Geth
+  communication. Implements batch request support, response caching with TTL,
+  and helper functions for numeric conversions (hex to u64/u128, wei to CHI).
+
+src-tauri/src/chain_rpc_api.rs
+  Minimal same-origin JSON-RPC proxy for browser share pages. Routes all
+  incoming JSON-RPC requests to the configured Geth endpoint without
+  modification, enabling browser wallet flows while protecting private keys
+  from server-side exposure.
+
+
+PUBLIC TYPES
+================================================================================
+
+BatchEntry (rpc_client.rs)
+  struct BatchEntry {
+      pub method: String,
+      pub params: serde_json::Value,
+      id: u64,  // private, auto-assigned by next_id()
+  }
+  Single request within a batch; method name, JSON-RPC params, and
+  server-assigned ID.
+
+BatchBuilder (rpc_client.rs)
+  struct BatchBuilder {
+      entries: Vec<BatchEntry>,
+  }
+  Builder for constructing multiple RPC calls executed as a single HTTP POST.
+  Returns Vec<Result<serde_json::Value, String>> indexed by add order.
+
+RpcCache (rpc_client.rs)
+  pub struct RpcCache {
+      entries: RwLock<HashMap<String, CacheEntry>>,
+      ttl: Duration,
+  }
+  TTL-based response cache. Key: String, Value: serde_json::Value with
+  expiration timestamp. Thread-safe via RwLock.
+
+CacheEntry (rpc_client.rs, internal)
+  struct CacheEntry {
+      value: serde_json::Value,
+      expires: Instant,
+  }
+  Single cached value with absolute expiration time.
+
+RpcRequest (rpc_client.rs, internal)
+  #[derive(Debug, Serialize)]
+  struct RpcRequest {
+      jsonrpc: &'static str,  // "2.0"
+      method: String,
+      params: serde_json::Value,
+      id: u64,
+  }
+  JSON-RPC 2.0 request envelope for wire encoding.
+
+RpcResponse (rpc_client.rs, internal)
+  #[derive(Debug, Deserialize)]
+  struct RpcResponse {
+      id: u64,
+      result: Option<serde_json::Value>,
+      error: Option<serde_json::Value>,
+  }
+  JSON-RPC 2.0 response envelope; result and error are mutually exclusive,
+  though both are Option fields.
+
+
+PUBLIC FUNCTION ENTRY POINTS
+================================================================================
+
+fn client() -> &'static reqwest::Client
+  Returns reference to the singleton connection-pooled HTTP client.
+
+async fn call(endpoint: &str, method: &str, params: serde_json::Value)
+    -> Result<serde_json::Value, String>
+  Single JSON-RPC call; returns result or error string. Auto-increments request ID.
+
+fn batch() -> BatchBuilder
+  Constructor for a new batch request builder.
+
+impl BatchBuilder {
+    pub fn add(&mut self, method: &str, params: serde_json::Value) -> usize
+      Append a method call to the batch; returns 0-based index for result
+      retrieval after execution.
+
+    pub async fn execute(self, endpoint: &str)
+        -> Result<Vec<Result<serde_json::Value, String>>, String>
+      Send all queued calls to endpoint as single HTTP request. Returns
+      results in add() order. Single-entry batches bypass array overhead.
+}
+
+impl RpcCache {
+    pub fn new(ttl: Duration) -> Self
+      Create a new cache with given TTL.
+
+    pub async fn get(&self, key: &str) -> Option<serde_json::Value>
+      Retrieve cached value if not expired; None otherwise.
+
+    pub async fn set(&self, key: String, value: serde_json::Value)
+      Store value with expiration = now + ttl.
+
+    pub async fn invalidate(&self, key: &str)
+      Remove single key.
+
+    pub async fn clear(&self)
+      Truncate entire cache.
+}
+
+fn hex_to_u64(hex: &str) -> u64
+  Parse hex string (0x prefix optional) to u64; returns 0 on error.
+
+fn hex_to_u128(hex: &str) -> u128
+  Parse hex string (0x prefix optional) to u128; returns 0 on error.
+
+fn wei_to_chi_string(wei: u128) -> String
+  Convert wei amount to CHI with 6 decimal places as string.
+
+fn wei_to_chi(wei: u128) -> f64
+  Convert wei amount to CHI as f64 (1 CHI = 1e18 wei).
+
+async fn proxy_chain_rpc(body: Bytes) -> Response
+  Axum handler: forward incoming JSON-RPC request body to Geth endpoint,
+  return upstream response with status/headers/body unmodified.
+
+fn chain_rpc_routes() -> Router
+  Axum router with single POST route /api/chain/rpc mapped to proxy_chain_rpc.
+
+
+INVARIANTS
+================================================================================
+
+• Connection pooling: SHARED_CLIENT is a static Lazy<reqwest::Client> with
+  pool_max_idle_per_host(4) and pool_idle_timeout(30s). All RPC calls
+  (single, batch, proxy) reuse the same client to amortize connection
+  overhead.
+
+• Default timeout: All outgoing RPC requests have 5s timeout
+  (client().timeout). Proxy handler uses 20s timeout. Calls exceeding these
+  durations return request error strings.
+
+• Request ID uniqueness: REQUEST_ID AtomicU64 auto-increments with
+  Relaxed ordering, guaranteeing unique IDs per call within a process
+  lifetime (no wraparound handling). Batch responses matched by ID.
+
+• Batch ordering guarantee: Results returned in same order as add() calls,
+  not response arrival order. Single-call batches forward directly to call()
+  without array overhead, preserving semantic equivalence.
+
+• Cache expiration: RpcCache entries expire at Instant::now() + ttl.
+  get() checks expiration before returning; expired entries are not
+  lazily evicted (returned None, remain in HashMap until invalidate/clear).
+
+• Error semantics: Single call returns Err(String) on HTTP error, parse
+  error, or RPC error response. Batch returns Vec<Result<...>> with per-call
+  Err or Ok; missing response for a queued call becomes Err("No response").
+  Proxy forwards upstream status/body without reinterpretation.
+
+
+CONSTANTS
+================================================================================
+
+pool_max_idle_per_host: 4
+pool_idle_timeout: 30 seconds
+call() request timeout: 5 seconds
+proxy_chain_rpc() request timeout: 20 seconds
+REQUEST_ID starting value: 1 (AtomicU64::new)
+default CHI unit: 1e18 wei per CHI
+default hex parsing fallback: 0 on parse error
+hex parsing: Supports with or without "0x" prefix
+

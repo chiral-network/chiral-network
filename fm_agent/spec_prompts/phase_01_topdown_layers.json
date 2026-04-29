@@ -1,0 +1,235 @@
+{
+  "phase": 1,
+  "phase_name": "Crypto Primitives",
+  "total_functions": 18,
+  "total_layers": 4,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::encryption-rs::decrypt_with_keypair",
+          "file": "fm_agent/extracted_functions/src-tauri/src/encryption-rs/decrypt_with_keypair.rs",
+          "unit": "encryption-rs",
+          "phase1_callers": [],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::encryption-rs::encrypt_for_recipient_hex",
+          "file": "fm_agent/extracted_functions/src-tauri/src/encryption-rs/encrypt_for_recipient_hex.rs",
+          "unit": "encryption-rs",
+          "phase1_callers": [],
+          "phase1_callees": [
+            "src-tauri::src::encryption-rs::encrypt_for_recipient"
+          ],
+          "all_callees": [
+            "src-tauri::src::encryption-rs::encrypt_for_recipient"
+          ]
+        },
+        {
+          "name": "src-tauri::src::encryption-rs::from_wallet_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/encryption-rs/from_wallet_key.rs",
+          "unit": "encryption-rs",
+          "phase1_callers": [],
+          "phase1_callees": [
+            "src-tauri::src::encryption-rs::from_secret_bytes"
+          ],
+          "all_callees": [
+            "src-tauri::src::encryption-rs::from_secret_bytes"
+          ]
+        },
+        {
+          "name": "src-tauri::src::encryption-rs::generate",
+          "file": "fm_agent/extracted_functions/src-tauri/src/encryption-rs/generate.rs",
+          "unit": "encryption-rs",
+          "phase1_callers": [],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::encryption-rs::public_key_hex",
+          "file": "fm_agent/extracted_functions/src-tauri/src/encryption-rs/public_key_hex.rs",
+          "unit": "encryption-rs",
+          "phase1_callers": [],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::version-rs::agent_version_string",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/agent_version_string.rs",
+          "unit": "version-rs",
+          "phase1_callers": [],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::version-rs::compare_to_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/compare_to_policy.rs",
+          "unit": "version-rs",
+          "phase1_callers": [],
+          "phase1_callees": [
+            "src-tauri::src::version-rs::version_is_below"
+          ],
+          "all_callees": [
+            "src-tauri::src::version-rs::version_is_below"
+          ]
+        },
+        {
+          "name": "src-tauri::src::version-rs::effective_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/effective_policy.rs",
+          "unit": "version-rs",
+          "phase1_callers": [],
+          "phase1_callees": [
+            "src-tauri::src::version-rs::effective_slot"
+          ],
+          "all_callees": [
+            "src-tauri::src::version-rs::effective_slot"
+          ]
+        },
+        {
+          "name": "src-tauri::src::version-rs::update_effective_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/update_effective_policy.rs",
+          "unit": "version-rs",
+          "phase1_callers": [],
+          "phase1_callees": [
+            "src-tauri::src::version-rs::effective_slot",
+            "src-tauri::src::version-rs::is_acceptable_remote_policy"
+          ],
+          "all_callees": [
+            "src-tauri::src::version-rs::effective_slot",
+            "src-tauri::src::version-rs::is_acceptable_remote_policy"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::encryption-rs::encrypt_for_recipient",
+          "file": "fm_agent/extracted_functions/src-tauri/src/encryption-rs/encrypt_for_recipient.rs",
+          "unit": "encryption-rs",
+          "phase1_callers": [
+            "src-tauri::src::encryption-rs::encrypt_for_recipient_hex"
+          ],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::encryption-rs::from_secret_bytes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/encryption-rs/from_secret_bytes.rs",
+          "unit": "encryption-rs",
+          "phase1_callers": [
+            "src-tauri::src::encryption-rs::from_wallet_key"
+          ],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::version-rs::effective_slot",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/effective_slot.rs",
+          "unit": "version-rs",
+          "phase1_callers": [
+            "src-tauri::src::version-rs::effective_policy",
+            "src-tauri::src::version-rs::update_effective_policy"
+          ],
+          "phase1_callees": [
+            "src-tauri::src::version-rs::bundled_policy"
+          ],
+          "all_callees": [
+            "src-tauri::src::version-rs::bundled_policy"
+          ]
+        },
+        {
+          "name": "src-tauri::src::version-rs::is_acceptable_remote_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/is_acceptable_remote_policy.rs",
+          "unit": "version-rs",
+          "phase1_callers": [
+            "src-tauri::src::version-rs::update_effective_policy"
+          ],
+          "phase1_callees": [
+            "src-tauri::src::version-rs::bundled_policy",
+            "src-tauri::src::version-rs::verify_policy",
+            "src-tauri::src::version-rs::version_is_below"
+          ],
+          "all_callees": [
+            "src-tauri::src::version-rs::bundled_policy",
+            "src-tauri::src::version-rs::verify_policy",
+            "src-tauri::src::version-rs::version_is_below"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::version-rs::bundled_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/bundled_policy.rs",
+          "unit": "version-rs",
+          "phase1_callers": [
+            "src-tauri::src::version-rs::effective_slot",
+            "src-tauri::src::version-rs::is_acceptable_remote_policy"
+          ],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::version-rs::verify_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/verify_policy.rs",
+          "unit": "version-rs",
+          "phase1_callers": [
+            "src-tauri::src::version-rs::is_acceptable_remote_policy"
+          ],
+          "phase1_callees": [
+            "src-tauri::src::version-rs::canonical_signing_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::version-rs::canonical_signing_payload"
+          ]
+        },
+        {
+          "name": "src-tauri::src::version-rs::version_is_below",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/version_is_below.rs",
+          "unit": "version-rs",
+          "phase1_callers": [
+            "src-tauri::src::version-rs::compare_to_policy",
+            "src-tauri::src::version-rs::is_acceptable_remote_policy"
+          ],
+          "phase1_callees": [
+            "src-tauri::src::version-rs::parts"
+          ],
+          "all_callees": [
+            "src-tauri::src::version-rs::parts"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "functions": [
+        {
+          "name": "src-tauri::src::version-rs::canonical_signing_payload",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/canonical_signing_payload.rs",
+          "unit": "version-rs",
+          "phase1_callers": [
+            "src-tauri::src::version-rs::verify_policy"
+          ],
+          "phase1_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::version-rs::parts",
+          "file": "fm_agent/extracted_functions/src-tauri/src/version-rs/parts.rs",
+          "unit": "version-rs",
+          "phase1_callers": [
+            "src-tauri::src::version-rs::version_is_below"
+          ],
+          "phase1_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}

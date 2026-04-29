@@ -220,7 +220,101 @@ async fn verify_share_access(share: &ShareLink, access: Option<&str>) -> Result<
     if tx_hash.is_empty() {
         return Err("Payment is required to unlock this shared content.".to_string());
     }
-    verify_payment_tx(tx_hash, &share.recipient_wallet, required_wei).await
+
+    // Bind the tx hash to the first share it unlocks. A tx redeemed for
+    // share A cannot later unlock share B — even if B's `recipient_wallet`
+    // matches A's. Without this guard, any historical on-chain payment
+    // to the recipient wallet unlocks any share to that wallet, and a
+    // single ?access=<tx> URL leaks all of that wallet's shares forever.
+    match claim_share_tx(tx_hash, &share.id).await {
+        ShareTxClaim::FirstUse => {
+            // Validate on-chain BEFORE accepting the binding becomes
+            // permanent. If on-chain check fails, the binding is rolled
+            // back so a transient RPC error doesn't permanently waste
+            // the buyer's tx.
+            match verify_payment_tx(tx_hash, &share.recipient_wallet, required_wei).await {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    release_share_tx(tx_hash).await;
+                    Err(e)
+                }
+            }
+        }
+        ShareTxClaim::SameShare => Ok(()),
+        ShareTxClaim::DifferentShare => Err(
+            "This payment was already used to unlock a different share. Please pay again."
+                .to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-share spent-tx ledger — see verify_share_access above.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+enum ShareTxClaim {
+    FirstUse,
+    SameShare,
+    DifferentShare,
+}
+
+static SHARE_TX_STORE: tokio::sync::OnceCell<tokio::sync::Mutex<std::collections::HashMap<String, String>>> =
+    tokio::sync::OnceCell::const_new();
+
+fn share_tx_path() -> std::path::PathBuf {
+    crate::network::data_dir().join("drive_share_spent_tx.json")
+}
+
+async fn load_share_tx_map() -> std::collections::HashMap<String, String> {
+    let path = share_tx_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(_) => std::collections::HashMap::new(),
+    }
+}
+
+async fn share_tx_store() -> &'static tokio::sync::Mutex<std::collections::HashMap<String, String>> {
+    SHARE_TX_STORE
+        .get_or_init(|| async { tokio::sync::Mutex::new(load_share_tx_map().await) })
+        .await
+}
+
+async fn persist_share_tx_map(map: &std::collections::HashMap<String, String>) {
+    let path = share_tx_path();
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    if let Ok(json) = serde_json::to_string(map) {
+        let _ = tokio::fs::write(&path, json).await;
+    }
+}
+
+async fn claim_share_tx(tx_hash: &str, share_id: &str) -> ShareTxClaim {
+    let key = tx_hash.to_lowercase();
+    let store = share_tx_store().await;
+    let mut guard = store.lock().await;
+    match guard.get(&key) {
+        Some(existing) if existing == share_id => ShareTxClaim::SameShare,
+        Some(_) => ShareTxClaim::DifferentShare,
+        None => {
+            guard.insert(key, share_id.to_string());
+            let snapshot = guard.clone();
+            drop(guard);
+            persist_share_tx_map(&snapshot).await;
+            ShareTxClaim::FirstUse
+        }
+    }
+}
+
+async fn release_share_tx(tx_hash: &str) {
+    let key = tx_hash.to_lowercase();
+    let store = share_tx_store().await;
+    let mut guard = store.lock().await;
+    guard.remove(&key);
+    let snapshot = guard.clone();
+    drop(guard);
+    persist_share_tx_map(&snapshot).await;
 }
 
 // ---------------------------------------------------------------------------

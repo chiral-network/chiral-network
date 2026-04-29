@@ -1,0 +1,164 @@
+PHASE 1: CRYPTO PRIMITIVES
+==========================
+
+File: src-tauri/src/encryption.rs
+---------------------------------
+Module summary:
+Implements end-to-end file encryption using the ECIES (Elliptic Curve Integrated
+Encryption Scheme) pattern. Provides X25519-based ECDH key exchange, AES-256-GCM
+symmetric encryption, and HKDF-SHA256 key derivation. Symmetric keys are never
+exposed to callers; all operations are performed on opaque keypair and bundle objects.
+
+
+Public types:
+
+EncryptedFileBundle (struct, serializable to JSON as camelCase)
+  - ephemeral_public_key: String, hex-encoded 32-byte X25519 public key (64 hex chars)
+  - ciphertext: String, hex-encoded AES-GCM output including authentication tag
+  - nonce: String, hex-encoded 12-byte AES-GCM nonce (24 hex chars)
+
+EncryptionKeypair (struct, Clone-able)
+  - secret: StaticSecret (not public, accessed via secret_key_bytes())
+  - public: PublicKey (not public, accessed via public_key_hex() or public_key_bytes())
+
+
+Public function entry points:
+
+pub fn generate() -> EncryptionKeypair
+  Generate a fresh random X25519 keypair.
+
+pub fn from_secret_bytes(bytes: [u8; 32]) -> EncryptionKeypair
+  Construct keypair from existing 32-byte secret (deterministic, no validation).
+
+pub fn from_wallet_key(wallet_private_key: &[u8]) -> EncryptionKeypair
+  Derive keypair deterministically from wallet private key via SHA256(prefix || key).
+
+pub fn public_key_hex(&self) -> String
+  Return the public key as a 64-character hex string suitable for sharing.
+
+pub fn public_key_bytes(&self) -> [u8; 32]
+  Return the raw 32-byte X25519 public key.
+
+pub fn secret_key_bytes(&self) -> [u8; 32]
+  Return the raw 32-byte X25519 secret key (handle with care).
+
+pub fn encrypt_for_recipient(plaintext: &[u8], recipient_public_key: &[u8; 32]) -> Result<EncryptedFileBundle, String>
+  Perform ECIES encryption: generate ephemeral keypair, ECDH with recipient, HKDF derive
+  AES-256-GCM key, encrypt plaintext, return bundle containing ephemeral key, ciphertext, nonce.
+
+pub fn decrypt_with_keypair(bundle: &EncryptedFileBundle, keypair: &EncryptionKeypair) -> Result<Vec<u8>, String>
+  Perform ECIES decryption: parse bundle hex fields, ECDH with ephemeral key using recipient
+  secret, HKDF derive AES-256-GCM key, decrypt ciphertext; returns plaintext or error string.
+
+pub fn encrypt_for_recipient_hex(plaintext: &[u8], recipient_public_key_hex: &str) -> Result<EncryptedFileBundle, String>
+  Convenience wrapper: decode hex public key string and call encrypt_for_recipient.
+
+
+Invariants:
+
+- Every encryption produces cryptographically-unique ephemeral_public_key and nonce; plaintext-identical
+  encryptions to the same recipient will produce different ciphertext, ephemeral_public_key, and nonce.
+- Decryption fails with error if the bundle was encrypted for a different recipient (deterministic
+  failure due to authentication tag mismatch, not padding oracle).
+- All hex strings in EncryptedFileBundle are valid lowercase hex; ephemeral_public_key is always
+  64 chars (32 bytes), nonce is always 24 chars (12 bytes), ciphertext length varies by plaintext.
+- The HKDF domain separator "chiral-network-v2-e2ee" is hardcoded and must match between encrypt
+  and decrypt; changing it breaks all ciphertexts in the wild.
+- EncryptionKeypair.public_key_bytes() always returns the X25519 public key corresponding to the
+  stored secret_key_bytes().
+- Encryption never fails due to input size; plaintext can be empty, arbitrarily large, or contain
+  any byte sequence.
+
+
+Constants:
+
+const HKDF_INFO: &[u8] = b"chiral-network-v2-e2ee"
+  Domain separator for HKDF key derivation; hardcoded to prevent cross-context attacks.
+
+
+File: src-tauri/src/version.rs
+------------------------------
+Module summary:
+Manages the semver-based version policy for the Chiral Network client. Phase 1 embeds a bundled
+permissive policy (min_required = "0.0.0") in the binary; phases 2-5 will add UI enforcement,
+network rejection, and Ed25519 signature verification. Provides policy comparison, acceptance
+logic, and a global effective-policy slot updated via version fetch tasks.
+
+
+Public types:
+
+VersionPolicy (struct, serializable to JSON as camelCase, Clone-able)
+  - min_required: String, semver string; versions below this are eventually blocked (Phase 2+)
+  - recommended: String, semver string; versions below this show soft "update available" nudge
+  - download_url: String, URL pointing users to release page
+  - message: Option<String>, optional human-readable explanation for blocking/nudging
+  - issued_at: u64, Unix seconds at which policy was issued; used for rollback protection
+  - valid_until: u64, Unix seconds after which policy is stale (0 = no expiry, Phase 1 default)
+  - signature: String, hex-encoded Ed25519 signature over canonical payload (empty in Phase 1)
+
+
+Public function entry points:
+
+pub const CURRENT_VERSION: &str
+  Compile-time semantic version from Cargo.toml (e.g. "1.0.0").
+
+pub fn agent_version_string() -> String
+  Return version formatted as "chiral/{CURRENT_VERSION}" for libp2p Identify and HTTP headers.
+
+pub fn bundled_policy() -> VersionPolicy
+  Return the permissive Phase-1 policy embedded in the binary: min_required="0.0.0",
+  recommended=CURRENT_VERSION, issued_at=0, valid_until=0, signature="".
+
+pub fn version_is_below(a: &str, b: &str) -> bool
+  Three-way semver comparison (ignoring pre-release suffixes): parse as dot-separated
+  integers, pad to same length with zeros, return true iff a < b lexicographically.
+
+pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str
+  Return one of: "required" (current < min_required), "recommended" (min_required <= current < recommended), "ok" (current >= recommended).
+
+pub fn verify_policy(p: &VersionPolicy) -> bool
+  Ed25519 verification against POLICY_PUBLIC_KEY; returns false for empty signature,
+  malformed hex, malformed signature, or signature mismatch.
+
+pub fn canonical_signing_payload(p: &VersionPolicy) -> Vec<u8>
+  Canonical length-prefixed encoding of all VersionPolicy fields except signature, suitable
+  for Ed25519 signing; each field is prefixed with little-endian u32 byte length.
+
+pub fn is_acceptable_remote_policy(remote: &VersionPolicy, current: &VersionPolicy) -> bool
+  Accept remote policy iff: (1) issued_at >= current.issued_at (rollback protection),
+  (2) valid Ed25519 signature against POLICY_PUBLIC_KEY, or (3) unsigned but doesn't
+  tighten min_required above the bundled floor (permissive transitional path for Phase 1).
+
+pub fn effective_policy() -> VersionPolicy
+  Snapshot the currently-effective policy from the global slot (initialized to bundled if
+  not yet overridden); multiple calls may return different values if update_effective_policy
+  is called concurrently.
+
+pub fn update_effective_policy(new: VersionPolicy) -> bool
+  Atomically attempt to replace the effective policy; returns true iff new is acceptable
+  per is_acceptable_remote_policy, false otherwise (policy unchanged on rejection).
+
+
+Invariants:
+
+- CURRENT_VERSION is a compile-time constant and never changes within a running binary.
+- agent_version_string() always returns a string of the form "chiral/" followed by CURRENT_VERSION.
+- version_is_below() is transitive and antisymmetric: if a < b and b < c then a < c;
+  it is not antisymmetric in the traditional sense (a < b and b < a cannot both be true).
+- Bundled policy embedded in every binary has min_required="0.0.0" and no signature;
+  it is the floor for all unsigned remote policies and the initial value of effective_policy().
+- POLICY_PUBLIC_KEY is [0u8; 32] (placeholder); no signature can verify against it until
+  replaced with the real project Ed25519 public key.
+- Effective policy is guarded by a RwLock; concurrent reads and updates are serialized
+  and never deadlock.
+- Unsigned remote policies can never replace a previously-accepted signed policy, preventing
+  downgrade to permissive "0.0.0" after enforcement.
+
+
+Constants:
+
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION")
+  Compile-time version string from Cargo.toml, embedded in the binary.
+
+pub const POLICY_PUBLIC_KEY: [u8; 32] = [0u8; 32]
+  Ed25519 public key for verifying signed policies; placeholder zeros until Phase 5.

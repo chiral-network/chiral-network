@@ -1,0 +1,269 @@
+================================================================================
+PHASE 3: WALLET MODULE TYPES AND INVARIANTS
+================================================================================
+
+MODULE SUMMARIES
+================================================================================
+
+1. src-tauri/src/wallet.rs
+   - Core wallet operations: balance queries, transaction signing/broadcast
+   - EIP-155 transaction encoding and secp256k1 ECDSA signing
+   - Transaction history retrieval from the chain (3000-block window max)
+   - Transaction metadata persistence (tx_hash → TransactionMeta map in JSON)
+   - Message signing for DHT records: personal_sign style with Ethereum prefix
+   - On-chain payment verification: poll for receipt and validate details
+   - CHI/Wei conversion (decimal 18)
+   - Balance cache with 5-second TTL
+
+2. src-tauri/src/wallet_backup_api.rs
+   - One-time wallet backup email delivery (recovery phrase + private key)
+   - Email validation and encryption envelope construction
+   - SMTP transport with configurable STARTTLS, auth, port
+   - Input validation: wallet address (42-char hex), private key (64-char hex),
+     recovery phrase (12 words)
+   - Axum route: POST /api/wallet/backup-email
+   - Response: { ok: bool }
+
+
+PUBLIC TYPES
+================================================================================
+
+wallet.rs:
+---------
+
+WalletBalanceResult {
+  balance: String          // CHI as decimal string (e.g., "1.5")
+  balance_wei: String      // Wei as decimal string (e.g., "1500000000000000000")
+}
+
+TransactionMeta {
+  tx_hash: String
+  tx_type: String          // "send" | "receive" | "download_payment" | "unknown"
+  description: String
+  file_name: Option<String>
+  file_hash: Option<String>
+  speed_tier: Option<String>
+  recipient_label: Option<String>
+  balance_before: Option<String>
+  balance_after: Option<String>
+}
+
+Transaction {
+  hash: String             // 0x-prefixed tx hash
+  from: String             // lowercase 0x-address
+  to: String               // lowercase 0x-address
+  value: String            // CHI decimal string
+  value_wei: String        // Wei as decimal string
+  block_number: u64
+  timestamp: u64           // Unix seconds
+  status: String           // "confirmed" | "pending"
+  gas_used: u64
+  tx_type: String
+  description: String
+  file_name: Option<String>
+  file_hash: Option<String>
+  speed_tier: Option<String>
+  recipient_label: Option<String>
+  balance_before: Option<String>
+  balance_after: Option<String>
+}
+
+TransactionHistoryResult {
+  transactions: Vec<Transaction>  // max 50, newest first by block_number
+}
+
+SendTransactionResult {
+  hash: String             // 0x-prefixed tx hash
+  status: String           // "pending"
+  balance_before: String   // CHI decimal
+  balance_after: String    // CHI decimal
+}
+
+PaymentResult {
+  tx_hash: String
+  balance_before: String   // CHI decimal
+  balance_after: String    // CHI decimal
+}
+
+wallet_backup_api.rs:
+---------------------
+
+WalletBackupEmailRequest {
+  email: String            // valid email format
+  recovery_phrase: String  // exactly 12 whitespace-separated words
+  wallet_address: String   // 42-char hex: "0x" + 40 hex digits
+  private_key: String      // 64-char hex (with or without "0x" prefix)
+}
+
+WalletBackupEmailResponse {
+  ok: bool
+}
+
+SmtpSettings (internal) {
+  host: String
+  port: u16                // default 587
+  username: String         // optional, empty if not set
+  password: String         // optional, empty if not set
+  from: String             // sender email address
+  starttls: bool           // defaults to true
+}
+
+
+PUBLIC FUNCTION ENTRY POINTS
+================================================================================
+
+wallet.rs:
+---------
+
+pub async fn get_balance(endpoint: &str, address: &str)
+  -> Result<WalletBalanceResult, String>
+  - Fetch balance from RPC; cache miss queries via eth_getBalance at "latest" block
+  - Cache key is lowercase address; 5s TTL
+
+pub async fn send_transaction(endpoint: &str, from_address: &str, to_address: &str,
+  amount: &str, private_key: &str) -> Result<SendTransactionResult, String>
+  - Sign and broadcast a CHI transfer (EIP-155)
+  - Validates sufficient balance (amount + gas)
+  - Returns hash, balance_before/after, status="pending"
+
+pub async fn get_receipt(endpoint: &str, tx_hash: &str)
+  -> Result<Option<serde_json::Value>, String>
+  - Single RPC call to eth_getTransactionReceipt; returns null or full receipt object
+
+pub async fn request_faucet(address: &str) -> Result<SendTransactionResult, String>
+  - Dev only: sends 1 CHI from hardcoded faucet (0x0000...1337)
+  - Unlocks faucet account with empty password
+
+pub async fn send_payment(from: &str, to: &str, amount_chi: &str, private_key: &str)
+  -> Result<PaymentResult, String>
+  - Wrapper around send_transaction using wallet_rpc_endpoint() (public canonical RPC)
+  - Used by dht.rs for peer payment flows
+
+pub async fn get_transaction_history(endpoint: &str, address: &str,
+  metadata: &HashMap<String, TransactionMeta>) -> Result<TransactionHistoryResult, String>
+  - Scan last 3000 blocks in batches of 50 (max 20 batches, 4s timeout)
+  - Queries eth_getBlockByNumber with full tx details
+  - Filters to txs where address is sender OR receiver (case-insensitive)
+  - Returns max 50 txs, newest blocks first; classifies type from metadata or heuristic
+
+pub fn load_tx_metadata() -> HashMap<String, TransactionMeta>
+  - Deserialize tx_metadata.json from data_dir; returns empty map if missing
+
+pub fn save_tx_metadata(metadata: &HashMap<String, TransactionMeta>)
+  - Serialize metadata map to JSON and write to tx_metadata_path()
+
+pub fn record_meta(metadata: &mut HashMap<String, TransactionMeta>, meta: TransactionMeta)
+  - Insert meta by tx_hash and persist via save_tx_metadata()
+
+pub fn sign_message(private_key_hex: &str, data: &[u8]) -> Result<String, String>
+  - Sign data with Ethereum personal_sign: keccak256("\x19Ethereum Signed Message:\n" + len + data)
+  - Returns 65-byte signature as hex string (r[32] + s[32] + v[1])
+  - v = recovery_id + 27 (Ethereum convention)
+
+pub fn recover_signer(data: &[u8], signature_hex: &str) -> Result<String, String>
+  - Recover signer's address from signature and data
+  - Returns lowercase 0x-prefixed 20-byte address
+
+pub fn verify_signature(data: &[u8], signature_hex: &str, expected_address: &str) -> bool
+  - True iff recover_signer(data, sig) matches expected_address (case-insensitive)
+
+pub async fn wait_for_tx_mined(tx_hash: &str) -> Result<bool, String>
+  - Poll eth_getTransactionReceipt until status=0x1 or timeout (~28s)
+  - Fast early: 500ms x4, 1s x6, 2s x10
+  - Returns Ok(false) if never mines or status != 0x1
+
+pub async fn verify_tx_details(tx_hash: &str, expected_from: &str, expected_to: &str,
+  expected_amount_wei: u128) -> Result<bool, String>
+  - One eth_getTransactionByHash call; compares from/to/value (case-insensitive)
+  - Amount match: tx value >= expected (allows overpayment)
+
+pub async fn verify_payment(tx_hash: &str, expected_from: &str, expected_to: &str,
+  expected_amount_wei: u128) -> Result<bool, String>
+  - Calls wait_for_tx_mined, then verify_tx_details; true iff both pass
+
+pub fn parse_chi_to_wei(amount: &str) -> Result<u128, String>
+  - Parse CHI decimal string ("1.5", "0.001") to wei (u128)
+  - Handles up to 18 fractional digits; caps at u128 max
+
+pub async fn invalidate_balance_cache(address: &str)
+  - Clear cached balance for lowercase(address); called after tx broadcast
+
+wallet_backup_api.rs:
+---------------------
+
+pub fn wallet_backup_routes() -> Router
+  - Returns Router with POST /api/wallet/backup-email handler
+  - Handler calls send_wallet_backup_email
+
+
+INVARIANTS
+================================================================================
+
+1. All signing operations use secp256k1 with keccak256(message) as the digest.
+   - Transaction signing: unsigned tx RLP-encoded, hashed with keccak256, signed
+   - Message signing: Ethereum personal_sign prefix + data, hashed with keccak256, signed
+   - Recovery: extract public key, derive address as keccak256(uncompressed_pubkey[1..])[12..]
+
+2. Transactions are EIP-155 compliant:
+   - Unsigned tx: [nonce, gasprice, gaslimit, to, value, data, chain_id, 0, 0] (RLP)
+   - Signed tx: [nonce, gasprice, gaslimit, to, value, data, v, r, s] (RLP)
+   - v = chain_id * 2 + 35 + recovery_id (never 27/28 directly)
+   - Active chain_id = 98763 (FRESHNET) or 98765 (TESTNET); resolved via network::active()
+
+3. All wallet addresses are stored and compared lowercase (0x + 40 lowercase hex chars).
+   - Balance cache key: address.to_lowercase()
+   - Transaction from/to: normalized to lowercase on retrieval
+   - Signature recovery: returns lowercase address
+   - Verification: expected_address.to_lowercase() == recovered
+
+4. Balance queries and transaction broadcast route through effective_rpc_endpoint():
+   - If LOCAL_GETH_RUNNING: http://127.0.0.1:8545
+   - Else: network::rpc_endpoint() (or env override CHIRAL_RPC_ENDPOINT)
+   - send_payment() uses wallet_rpc_endpoint() (canonical public RPC, never local)
+
+5. Signatures are 65-byte format (0x + 130 hex chars):
+   - Structure: r[32] || s[32] || v[1] where v = recovery_id + 27
+   - Serialized as compact (64 bytes) then appended with 1-byte v
+   - Validation: signature_hex must be exactly 65 bytes after hex decode
+
+6. Transaction backup envelope: recovery_phrase, private_key, and wallet_address
+   are validated and sent in plaintext SMTP email (no on-the-wire encryption;
+   STARTTLS TLS encrypts the SMTP channel itself).
+
+
+CONSTANTS
+================================================================================
+
+From geth.rs and network.rs:
+
+  FRESHNET chain_id:      98763
+  TESTNET chain_id:       98765
+  Default RPC endpoint:   http://127.0.0.1:8545 (if local geth running)
+  Remote RPC fallback:    network::rpc_fallback for active network (or env CHIRAL_RPC_ENDPOINT)
+  Faucet address:         0x0000000000000000000000000000000000001337
+
+From wallet.rs:
+
+  BURN_ADDRESS:           0x000000000000000000000000000000000000dEaD
+  Gas limit (transfer):   21000
+  Balance cache TTL:      5 seconds
+  Max transaction blocks: 3000 (history scan)
+  Max history txs:        50
+  Tx history batches:     max 20, max 4s wall-clock
+  Tx polling:             ~28s ceiling (500ms x4, 1s x6, 2s x10)
+
+From speed_tiers.rs:
+
+  CHI decimals:           18
+  PLATFORM_FEE_BPS:       50 (0.5% basis points)
+  COST_PER_MB_WEI:        10_000_000_000_000_000 (0.01 CHI per MB)
+  PLATFORM_WALLET:        0x9ad90a2f8b72092154a5b5259295e33df3541ede
+
+From wallet_backup_api.rs:
+
+  SMTP default port:      587
+  Email validation:       lettre::Mailbox::parse()
+  Recovery phrase words:  exactly 12
+  Wallet address format:  42 chars, "0x" + 40 hex
+  Private key format:     64 hex chars (with or without "0x" prefix)
+

@@ -121,7 +121,10 @@ async fn version_gate_middleware(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("0.0.0");
 
-    let policy = crate::version::bundled_policy();
+    // Use the live effective policy, not the build-time bundled snapshot,
+    // so an updated min_required actually enforces. Earlier code read
+    // bundled_policy() and silently bypassed any policy promotion.
+    let policy = crate::version::effective_policy();
     if crate::version::version_is_below(client_version, &policy.min_required) {
         let body = serde_json::json!({
             "error": "client version below network minimum",

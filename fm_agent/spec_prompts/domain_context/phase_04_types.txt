@@ -1,0 +1,175 @@
+PHASE 4: Geth Lifecycle and Mining
+
+=== MODULE SUMMARY ===
+
+Core-geth child process lifecycle management with mining controls. Single instance per
+app. Exposes download, init, start, stop, mining control (CPU), GPU mining delegation,
+and batched RPC status queries. Three key invariants: idempotent start, single-instance
+enforcement, and full-sync + archive mode to prevent block regression on restart.
+GPU mining is delegated to geth_gpu module; this module only coordinates launch/stop.
+
+
+=== PUBLIC TYPES ===
+
+DownloadProgress
+  downloaded: u64
+  total: u64
+  percentage: f32
+  status: String
+Encoding: camelCase JSON for download progress callbacks
+
+GethStatus
+  installed: bool
+  running: bool
+  local_running: bool
+  syncing: bool
+  current_block: u64
+  highest_block: u64
+  peer_count: u32
+  chain_id: u64
+Encoding: camelCase JSON. local_running true iff LOCAL_GETH_RUNNING atomic is set.
+
+MiningStatus
+  mining: bool
+  hash_rate: u64
+  miner_address: Option<String>
+  total_mined_wei: String
+  total_mined_chi: f64
+Encoding: camelCase JSON. total_mined_wei = wei string; total_mined_chi = wei/1e18.
+
+MinedBlock
+  block_number: u64
+  timestamp: u64
+  reward_wei: String = "5000000000000000000" (5 CHI fixed)
+  reward_chi: f64 = 5.0
+  difficulty: u64
+Encoding: camelCase JSON. reward_wei hardcoded for Freshnet/Testnet.
+
+GpuDevice, GpuMiningCapabilities, GpuMiningStatus
+  Re-exported from geth_gpu module (see geth_gpu.rs for details).
+  GpuMiningCapabilities.supported: bool (ethminer binary found on PATH or ./bin)
+  GpuMiningCapabilities.running: bool (child process alive)
+
+
+=== PUBLIC FUNCTION ENTRY POINTS ===
+
+chain_id() -> u64
+  Returns network().chain_id (98763 Freshnet, 98765 Testnet, read-only).
+
+network_id() -> u64
+  Returns network().network_id, same as chain_id.
+
+rpc_endpoint() -> String
+  "http://127.0.0.1:8545" if LOCAL_GETH_RUNNING, else CHIRAL_RPC_ENDPOINT env or network fallback.
+  Contract: Local node has priority; fallback never overrides a running local instance.
+
+effective_rpc_endpoint() -> String
+  Ditto rpc_endpoint(). Used for chain operations (mining status, block sync).
+  Invariant: always local when LOCAL_GETH_RUNNING=true, preventing fork isolation.
+
+wallet_rpc_endpoint() -> String
+  Always network().rpc_fallback or CHIRAL_RPC_ENDPOINT, never local.
+  Contract: wallet ops always see canonical chain, preventing user fork payment mistakes.
+
+GethDownloader::new() -> Self
+  Locates geth binary relative to app executable.
+
+GethDownloader::is_geth_installed() -> bool
+  geth_path() exists.
+
+GethDownloader::download_geth<F: Fn(DownloadProgress)>(on_progress: F) -> Result<(), String>
+  Idempotent: if already installed, returns Ok immediately with 100% progress.
+  Otherwise: downloads core-geth v1.12.20 ZIP, extracts binary, chmod +x on Unix, caches version.
+
+GethProcess::new() -> Self
+  Calls cleanup_previous_run() once to reap crashed processes and wipe stale LevelDB LOCKs.
+  Single-instance invariant: only one child can be active per app instance.
+
+GethProcess::start(miner_address: Option<&str>) -> Result<(), String>
+  Precondition: is_installed() == true AND is_running() == false.
+  Calls init_genesis_if_needed(), spawns geth with --syncmode full --gcmode archive,
+  sets LOCAL_GETH_RUNNING = true, writes PID file.
+  Postcondition: sleeps 2s then try_wait() to surface startup crashes before returning.
+  Invariant: miner.etherbase only set if miner_address provided (solo mining or pooled).
+
+GethProcess::stop() -> Result<(), String>
+  Sends SIGTERM, waits 3s with 500ms polls, then SIGKILL. Clears LOCAL_GETH_RUNNING.
+  Removes PID file. Idempotent: ok if already stopped.
+
+GethProcess::stop_fast()
+  Fast kill for app shutdown (no graceful wait). Unconditional kill().
+
+GethProcess::get_status() -> Result<GethStatus, String>
+  Batched RPC: eth_blockNumber, net_peerCount, eth_syncing in one HTTP call.
+  Parses polymorphic eth_syncing response (bool or object with currentBlock/highestBlock).
+  Returns GethStatus with running=true iff child exists AND try_wait() == None.
+
+GethProcess::start_mining(threads: u32) -> Result<(), String>
+  Calls miner_start RPC if running, precondition: is_running() == true.
+
+GethProcess::stop_mining() -> Result<(), String>
+  Calls miner_stop RPC if running.
+
+GethProcess::get_mining_status() -> Result<MiningStatus, String>
+  Batched RPC: eth_mining, eth_hashrate, eth_coinbase.
+  Falls back to cached miner_address if RPC returns null.
+  Calls eth_getBalance(coinbase, "latest") to compute total_mined; cheap approximation.
+
+GethProcess::set_miner_address(&mut self, address: &str) -> Result<(), String>
+  Updates self.miner_address, calls miner_setEtherbase RPC if running.
+
+GethProcess::get_mined_blocks(max_blocks: u64) -> Result<Vec<MinedBlock>, String>
+  Scans last min(max_blocks, 500) blocks by height, filters for blocks where
+  miner == self.miner_address (lowercased), extracts timestamp/difficulty.
+  reward_wei and reward_chi always 5 CHI (hardcoded).
+
+
+=== INVARIANTS ===
+
+1. Idempotent start/stop: calling start() twice returns "already running" error;
+   calling stop() twice returns Ok (no-op). Start always cleans up crashed processes first.
+
+2. Single instance: only one Child can live in GethProcess at a time. Spawning fails
+   if child.is_some(). Orphan kill on new start prevents stale lock files.
+
+3. Full-sync + archive mode: --syncmode full --gcmode archive immutable in start().
+   Previous snap/fast sync implementations regressed block height on restart (root cause fixed).
+
+4. RPC endpoint routing: effective_rpc_endpoint() routes to local (127.0.0.1:8545) iff
+   LOCAL_GETH_RUNNING.load(Relaxed) == true; wallet_rpc_endpoint() always uses fallback.
+   Prevents user fork isolation where wallet payments land on unreachable chain.
+
+5. Graceful miner setup: miner.etherbase and --mine only set if miner_address provided.
+   Mining disabled by default; user must explicitly set address before start_mining().
+
+6. Log file rotation: geth.log truncated on each start; 20 lines from tail shown on crash.
+   Log path: data_dir/geth/geth.log. Parent dirs created automatically.
+
+
+=== CONSTANTS ===
+
+CHUNK_SIZE = not in this module (see dht.rs for 256 KB chunks)
+
+LOCAL_GETH_RUNNING = static AtomicBool, initially false
+  Set true after successful spawn, false after stop/kill.
+  Read by RPC callers (Relaxed ordering, no synchronization cost).
+
+HTTP RPC bind address = 127.0.0.1 (desktop), overridable to 0.0.0.0 via CHIRAL_GETH_HTTP_ADDR
+HTTP RPC port = 8545 (immutable, core-geth standard)
+P2P port = 30303 (immutable)
+Max peers = 25
+Cache = 256 MB
+Gas price = 0 (free mining on private chain)
+Miner threads = 1 (CPU mining only; GPU via geth_gpu module)
+
+Bootstrap enode = network().geth_bootstrap_enode (testnet/freshnet specific)
+  Empty string = solo mining (--nodiscover), no peer discovery
+  Non-empty = bootnodes multiaddr for syncing with network
+
+Network ID = same as chain ID (98763 freshnet, 98765 testnet, immutable per network preset)
+
+Core-geth version = 1.12.20 (locked, pre-compiled release ZIP)
+Platform-specific binaries: macos, linux x86_64/aarch64, windows x86_64
+
+Genesis init = --datadir + geth init genesis.json, exact once per chaindata/
+  Idempotent: skipped if chaindata/ already exists (never re-initialize, prevent wipes)

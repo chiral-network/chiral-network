@@ -1,0 +1,87 @@
+PHASE 5: Pricing and Cost Tiers
+
+=== MODULE SUMMARY ===
+
+Simple per-MB download pricing with platform fee calculation. Fixed cost: 0.01 CHI per MB.
+Platform fee: 0.5% (50 basis points) on all transactions. Small focused module; all
+functions are pure math with no I/O. Invariant: seller + platform_fee == total_cost exactly.
+
+
+=== PUBLIC TYPES ===
+
+(No public struct types; module exports only utility functions.)
+All amounts represented as u128 wei (1 CHI = 10^18 wei).
+
+
+=== PUBLIC FUNCTION ENTRY POINTS ===
+
+calculate_cost(file_size_bytes: u64) -> u128
+  Returns cost in wei for a file of given size.
+  Formula: (size_mb * 0.01 CHI * 10^18 wei/CHI) with round-up.
+  Exact: 1_000_000 bytes = 1 MB costs exactly 10^16 wei.
+  Edge case: 0 bytes -> 0 wei.
+  Rounding: ((size_bytes * 10^16 wei/MB + 999_999) / 1_000_000) ensures ceil.
+
+calculate_platform_fee(amount_wei: u128) -> u128
+  Returns 0.5% fee on amount_wei.
+  Formula: ((amount_wei * 50 bps + 9999) / 10000) with round-up.
+  Invariant: fee is always >= amount_wei / 20000 (0.005%), never 0 for nonzero amount.
+  1 CHI (10^18 wei) -> fee = 5*10^15 wei (0.005 CHI).
+
+calculate_total_with_fee(base_cost_wei: u128) -> u128
+  Contract: seller_receives + platform_fee == total_payment exactly.
+  Returns base_cost_wei + calculate_platform_fee(base_cost_wei).
+  Invariant: result > base_cost_wei for all nonzero base_cost.
+
+split_payment(total_wei: u128) -> (u128, u128)
+  Inverse of calculate_total_with_fee(): given total payment, split into (seller, fee).
+  Returns (total.saturating_sub(fee), fee) where fee = calculate_platform_fee(total).
+  Invariant: seller + fee == total (exactly, assuming no underflow).
+  Safety: saturating_sub prevents panic if total < fee (edge case for very small amounts).
+
+format_wei_as_chi(wei: u128) -> String
+  Human-readable display formatting.
+  Whole CHI = wei / 10^18. Fractional = wei % 10^18, right-padded to 18 digits, trim trailing zeros.
+  Cap decimal places to 6 (max 6 sig figs for UI clarity).
+  Examples: 10^18 wei -> "1", 10^16 wei -> "0.01", 1 wei -> "0.000000000000000001".
+
+write_file(app: AppHandle, file_path: &Path, file_data: &[u8], request_id: &str,
+           file_hash: &str, file_name: &str) -> Result<(), String>
+  Writes file to disk at full speed (no rate limiting in this phase).
+  Emits single "download-progress" event with bytesWritten=totalBytes, progress=100.0.
+  Used in speed_tiers for completing paid file transfers (rate limits apply upstream).
+
+
+=== INVARIANTS ===
+
+1. Fixed cost per MB: 0.01 CHI = 10^16 wei per 1_000_000 bytes, never negotiated or tiered.
+
+2. Platform fee exactly 0.5%: 50 basis points on all amounts, including the fee itself
+   is NOT compounded (fee calculated on base, not on base+fee).
+
+3. Seller + fee == total: split_payment and calculate_total_with_fee are inverses.
+   UI must never display seller != total - fee to the user.
+
+4. Rounding policy: both cost and fee round up (ceil) to prevent seller/platform
+   underpayment. Asymmetry: rounding always favors the network, never the user.
+
+5. No negotiation: price is not a parameter to any function. Hard-coded per network.
+
+6. Wei arithmetic only: no f64 conversion in payment logic. u128 string serialization
+   for CBOR safety (JSON can't precisely represent u128 > 2^53).
+
+
+=== CONSTANTS ===
+
+COST_PER_MB_WEI = 10_000_000_000_000_000 (0.01 CHI in wei, 10^16)
+
+PLATFORM_FEE_BPS = 50 (basis points = 50/10000 = 0.5%)
+
+PLATFORM_WALLET = "0x9ad90a2f8b72092154a5b5259295e33df3541ede"
+  Hardcoded Ethereum-style address (20 bytes hex, checksummed lowercase).
+  All platform fees go to this wallet. Read-only, immutable.
+
+File size 0 -> cost 0 (no charge for empty downloads)
+File size 1 byte -> cost ceil((1 * 10^16) / 1_000_000) = 10_010 wei ≈ 0.00000001 CHI
+File size 1 MB (10^6 bytes) -> cost 10^16 wei = 0.01 CHI
+File size 1 GB (10^9 bytes) -> cost 10^19 wei = 10 CHI

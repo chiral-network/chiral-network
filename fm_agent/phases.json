@@ -1,0 +1,122 @@
+{
+  "project": "chiral-network",
+  "languages": ["rust"],
+  "file_extensions": ["rs"],
+  "phases": [
+    {
+      "phase": 1,
+      "name": "Crypto Primitives",
+      "description": "AES-GCM/X25519 file encryption and Ed25519 version-policy signing — foundational cryptographic operations consumed by every higher phase.",
+      "modules": [
+        { "name": "encryption", "source_files": ["src-tauri/src/encryption.rs"] },
+        { "name": "version", "source_files": ["src-tauri/src/version.rs"] }
+      ],
+      "depends_on_phases": []
+    },
+    {
+      "phase": 2,
+      "name": "RPC Infrastructure",
+      "description": "Connection-pooled JSON-RPC client and chain-RPC proxy used by every blockchain-facing operation.",
+      "modules": [
+        { "name": "rpc_client", "source_files": ["src-tauri/src/rpc_client.rs"] },
+        { "name": "chain_rpc_api", "source_files": ["src-tauri/src/chain_rpc_api.rs"] }
+      ],
+      "depends_on_phases": []
+    },
+    {
+      "phase": 3,
+      "name": "Wallet",
+      "description": "secp256k1-based wallet operations — keypair management, transaction signing (EIP-155), balance queries, and email-backup envelope.",
+      "modules": [
+        { "name": "wallet", "source_files": ["src-tauri/src/wallet.rs"] },
+        { "name": "wallet_backup_api", "source_files": ["src-tauri/src/wallet_backup_api.rs"] }
+      ],
+      "depends_on_phases": [2]
+    },
+    {
+      "phase": 4,
+      "name": "Geth Lifecycle and Mining",
+      "description": "Manages the embedded Core-Geth process, CPU and GPU mining controls, and the JSON-RPC port routing between local and remote endpoints.",
+      "modules": [
+        { "name": "geth", "source_files": ["src-tauri/src/geth.rs"] },
+        { "name": "geth_gpu", "source_files": ["src-tauri/src/geth_gpu.rs"] }
+      ],
+      "depends_on_phases": [2]
+    },
+    {
+      "phase": 5,
+      "name": "Pricing and Cost Tiers",
+      "description": "Computes the per-MB download price, platform-fee split, and seller/burn distribution for paid transfers.",
+      "modules": [
+        { "name": "speed_tiers", "source_files": ["src-tauri/src/speed_tiers.rs"] }
+      ],
+      "depends_on_phases": []
+    },
+    {
+      "phase": 6,
+      "name": "Persistent Storage",
+      "description": "On-disk persistence for Drive items, hosting sites, and reputation events. Pure data layer — no network, no signing.",
+      "modules": [
+        { "name": "drive_storage", "source_files": ["src-tauri/src/drive_storage.rs"] },
+        { "name": "hosting", "source_files": ["src-tauri/src/hosting.rs"] },
+        { "name": "rating_storage", "source_files": ["src-tauri/src/rating_storage.rs"] }
+      ],
+      "depends_on_phases": []
+    },
+    {
+      "phase": 7,
+      "name": "Network and File Transfer",
+      "description": "libp2p NetworkBehaviour scaffolding and the chunked file-transfer protocol (256 KB chunks, per-chunk SHA-256, full-file hash verification).",
+      "modules": [
+        { "name": "network", "source_files": ["src-tauri/src/network.rs"] },
+        { "name": "file_transfer", "source_files": ["src-tauri/src/file_transfer.rs"] }
+      ],
+      "depends_on_phases": [1]
+    },
+    {
+      "phase": 8,
+      "name": "DHT Service",
+      "description": "Kademlia DHT, peer management, file/seeder publishing and discovery, signed file metadata, identify-based version enforcement.",
+      "modules": [
+        { "name": "dht", "source_files": ["src-tauri/src/dht.rs"] }
+      ],
+      "depends_on_phases": [1, 3, 7]
+    },
+    {
+      "phase": 9,
+      "name": "HTTP Gateway and APIs",
+      "description": "Axum HTTP gateway: Drive CRUD, reputation, relay share proxy, hosting/CDN endpoints, version-policy endpoint, version-based middleware.",
+      "modules": [
+        { "name": "drive_api", "source_files": ["src-tauri/src/drive_api.rs"] },
+        { "name": "rating_api", "source_files": ["src-tauri/src/rating_api.rs"] },
+        { "name": "hosting_server", "source_files": ["src-tauri/src/hosting_server.rs"] },
+        { "name": "relay_share_proxy", "source_files": ["src-tauri/src/relay_share_proxy.rs"] },
+        { "name": "cdn_server", "source_files": ["src-tauri/src/cdn_server.rs"] },
+        { "name": "event_sink", "source_files": ["src-tauri/src/event_sink.rs"] }
+      ],
+      "depends_on_phases": [1, 3, 5, 6, 8]
+    },
+    {
+      "phase": 10,
+      "name": "Tauri Command Surface",
+      "description": "Top-level Tauri command wrappers, AppState, startup orchestration, all user-invokable commands. Aggregates every other phase.",
+      "modules": [
+        { "name": "lib", "source_files": ["src-tauri/src/lib.rs"] }
+      ],
+      "depends_on_phases": [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    },
+    {
+      "phase": 11,
+      "name": "Binaries",
+      "description": "Process entry points: desktop app, CLI, headless daemon, relay server, policy-sign operator CLI.",
+      "modules": [
+        { "name": "chiral_desktop", "source_files": ["src-tauri/src/main.rs"] },
+        { "name": "chiral_cli", "source_files": ["src-tauri/src/bin/chiral.rs"] },
+        { "name": "chiral_daemon", "source_files": ["src-tauri/src/bin/chiral_daemon.rs"] },
+        { "name": "relay_server", "source_files": ["src-tauri/src/bin/relay_server.rs"] },
+        { "name": "chiral_policy_sign", "source_files": ["src-tauri/src/bin/chiral_policy_sign.rs"] }
+      ],
+      "depends_on_phases": [10]
+    }
+  ]
+}

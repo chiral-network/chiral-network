@@ -1,0 +1,154 @@
+CHIRAL NETWORK — ENGINE OVERVIEW
+================================
+
+Chiral Network is a peer-to-peer file-sharing desktop application with a
+companion always-on CDN, a reputation system, a private Ethereum-compatible
+blockchain (chain ID 98765, Ethash PoW, 5 CHI block reward) for payments,
+and a network-wide site directory. The Rust backend is the unit under
+analysis here.
+
+ARCHITECTURE — PIPELINE STAGES
+------------------------------
+
+The 11 phases in `phases.json` form a directed acyclic dependency graph:
+
+  Phase 1 Crypto Primitives        — encryption.rs, version.rs
+  Phase 2 RPC Infrastructure       — rpc_client.rs, chain_rpc_api.rs
+  Phase 3 Wallet                   — wallet.rs, wallet_backup_api.rs
+  Phase 4 Geth Lifecycle / Mining  — geth.rs, geth_gpu.rs
+  Phase 5 Pricing                  — speed_tiers.rs
+  Phase 6 Persistent Storage       — drive_storage.rs, hosting.rs, rating_storage.rs
+  Phase 7 Network / File Transfer  — network.rs, file_transfer.rs
+  Phase 8 DHT Service              — dht.rs
+  Phase 9 HTTP Gateway / APIs      — drive_api.rs, rating_api.rs, hosting_server.rs,
+                                      relay_share_proxy.rs, cdn_server.rs, event_sink.rs
+  Phase 10 Tauri Command Surface   — lib.rs
+  Phase 11 Binaries                — main.rs, bin/*.rs
+
+Data flows roughly as:
+  user → Tauri command (lib.rs) → wallet ↔ rpc_client → geth (local or remote)
+                                ↘ DHT (dht.rs) ↔ libp2p Kademlia / request-response
+                                ↘ HTTP gateway (hosting_server.rs) → drive/rating/cdn handlers
+                                ↘ Drive disk (drive_storage.rs)
+
+The headless daemon and relay-server binaries mount the same gateway
+router as the desktop app, so the HTTP surface is identical across
+process types.
+
+ENCODING CONVENTIONS
+--------------------
+
+CHI / Wei:
+  * 1 CHI = 10^18 Wei. All on-chain math is done in `u128` or `U256` Wei.
+  * Display strings are decimal CHI with up to 18 fractional digits.
+  * Platform fee is encoded as basis points: PLATFORM_FEE_BPS = 50 (= 0.5%).
+
+Hashes:
+  * File content hash, folder hash: 32-byte SHA-256, hex-encoded
+    lowercase (64 chars). No leading "0x".
+  * Ethereum addresses: 20 bytes hex-encoded with leading "0x".
+    Stored lowercased for consistent lookup.
+  * Transaction hashes: 32-byte hex with leading "0x".
+
+Signatures:
+  * ECDSA (secp256k1) signatures over a wallet-derived key are 65 bytes
+    (r || s || v), hex-encoded with leading "0x".
+  * Ed25519 signatures (only used for `VersionPolicy`) are 64 bytes,
+    hex-encoded *without* leading "0x".
+
+Time:
+  * `created_at`, `issued_at`, `valid_until`: Unix seconds as `u64`.
+  * `0` is the sentinel for "no expiry / unknown / unset".
+
+DHT keys (ALL written through `DhtService::put_dht_value` / `get_dht_value`):
+  * `chiral_file_<hex_hash>`            — immutable per-file metadata,
+                                            ECDSA-signed by publisher wallet.
+  * `chiral_seeder_<hex_hash>_<peerId>` — one seeder's per-file entry,
+                                            ECDSA-signed by seeder wallet.
+  * `chiral_folder_<hex_hash>`          — folder-bundle manifest.
+  * `chiral_sitename_<name>`            — site-directory entry,
+                                            ECDSA-signed by owner wallet.
+  * `chiral_site_directory`             — JSON registry of claimed names
+                                            (advisory, lost-update tolerated).
+  * Kademlia provider records          — list of online peer IDs that hold
+                                            content for a given hash.
+
+KEY PRECOMPUTED INVARIANTS
+--------------------------
+
+* `version::EFFECTIVE_POLICY` (OnceCell<RwLock<VersionPolicy>>) holds the
+  live network policy. Initial value is `bundled_policy()` (compile-time
+  constant). Updated only via `update_effective_policy()`, which delegates
+  to `is_acceptable_remote_policy()` (rollback by `issued_at`, signed
+  acceptance, or unsigned-not-tightening transitional path).
+
+* `RpcCache`: 5-second TTL response cache for balance queries to avoid
+  duplicate RPC.
+
+* All seeder records and file metadata records carry an ECDSA signature
+  by the wallet that authored them. Receivers reject unsigned/invalid
+  records.
+
+* Site-directory entries carry an ECDSA signature by `owner_wallet`.
+  `resolve_site_name` and `list_directory_sites` drop entries that fail
+  to verify, so a forged DHT write hides the name rather than redirecting.
+
+* Folder hash = SHA-256(owner_wallet_lowercased ‖ 0x00 ‖ Σ
+  (rel_path ‖ 0x00 ‖ file_hash ‖ 0x00) over rel_path-sorted files).
+  Inputs cannot contain NUL on real filesystems / hex hashes.
+
+PER-PHASE INVARIANTS
+--------------------
+
+Phase 1 — every signing function returns either a valid signature in the
+documented byte format or an empty string on failure. Verifying functions
+return `false` on any malformed input (empty signature, non-hex, wrong
+length, malformed key) and only `true` on a successfully-verified
+signature against a recoverable public key matching the claimed wallet.
+
+Phase 2 — `rpc_client::call`/`call_batch` either succeed and return
+parsed JSON-RPC results, or return `Err` describing the transport / RPC
+error. Connection-pool reuse is invisible to callers. Caching is
+controlled by per-call key.
+
+Phase 3 — `wallet::send_transaction` always submits a fully-signed
+EIP-155 transaction (chain ID 98765); rejects malformed addresses or
+amounts before touching the network. Balance queries route through
+`effective_rpc_endpoint()` (local Geth if running, else remote fallback).
+
+Phase 4 — Geth process lifecycle is at-most-once (idempotent start,
+graceful stop). Mining commands return current status; status commands
+never start or stop the miner.
+
+Phase 5 — `compute_total_with_fee(amount_wei)` returns `(seller_wei,
+fee_wei)` where `seller_wei + fee_wei == amount_wei` (no rounding loss)
+and `fee_wei = amount_wei * 50 / 10000`.
+
+Phase 6 — every `*_storage` module presents a `load_*`/`save_*` pair
+that round-trips through JSON on disk; readers tolerate missing files,
+return defaults, and never panic on corrupt data.
+
+Phase 7 — `file_transfer` chunked protocol: each chunk has its own
+SHA-256, the overall file hash is verified after the last chunk; any
+mismatch aborts the transfer and the file is not delivered to disk.
+
+Phase 8 — DHT writes always carry the writer's signature for trusted
+record types (file metadata, seeder entries, site-directory entries);
+DHT reads MUST verify signatures before exposing values to higher
+layers. Failed peers (version-mismatch, invalid signature) are
+disconnected and blacklisted within the session.
+
+Phase 9 — every HTTP route under `/api/*` (except `/api/health`,
+`/api/ready`, `/api/version-policy`) is gated by the
+`X-Chiral-Client-Version` middleware, returning 426 Upgrade Required
+when the client's version is below `version::effective_policy().min_required`.
+Drive routes additionally require `X-Owner` header.
+
+Phase 10 — every Tauri `#[command]` either succeeds with a documented
+return type or returns `Err(String)`; commands that touch network or
+disk are async; commands that gate on version use
+`ensure_version_supported`.
+
+Phase 11 — binaries take CLI flags / env vars and assemble the
+runtime; they don't carry domain logic of their own beyond
+orchestration.

@@ -1,0 +1,1888 @@
+{
+  "phase": 10,
+  "phase_name": "Tauri Command Surface",
+  "total_functions": 159,
+  "total_layers": 5,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::lib-rs::accept_file_transfer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/accept_file_transfer.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::calculate_download_cost",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/calculate_download_cost.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::check_bootstrap_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/check_bootstrap_health.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::current_bootstrap_health"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::current_bootstrap_health"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::cleanup_agreement_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/cleanup_agreement_files.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::agreements_dir",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::agreements_dir",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::create_hosted_site",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/create_hosted_site.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::common_prefix"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::common_prefix"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::decline_file_transfer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/decline_file_transfer.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::decrypt_file_data",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/decrypt_file_data.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::delete_hosted_site",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/delete_hosted_site.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::download_geth",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/download_geth.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_create_folder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_create_folder.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_create_share",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_create_share.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_delete_item",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_delete_item.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_export_torrent",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_export_torrent.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::export_torrent_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::export_torrent_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_list_all_items",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_list_all_items.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_list_items",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_list_items.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_list_shares",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_list_shares.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_read_file_bytes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_read_file_bytes.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_revoke_share",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_revoke_share.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_stop_seeding",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_stop_seeding.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::drive_stop_seeding_inner"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::drive_stop_seeding_inner"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_toggle_visibility",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_toggle_visibility.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_update_item",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_update_item.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_upload_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_upload_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::echo_peer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/echo_peer.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::encrypt_file_for_recipient",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/encrypt_file_for_recipient.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::exit_app",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/exit_app.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_active_hosted_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_active_hosted_files.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::agreements_dir",
+            "src-tauri::src::lib-rs::get_peer_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::agreements_dir",
+            "src-tauri::src::lib-rs::get_peer_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_active_network",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_active_network.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::network_info"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::network_info"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_available_storage",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_available_storage.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_bootstrap_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_bootstrap_health.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::current_bootstrap_health"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::current_bootstrap_health"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_bootstrap_peer_ids",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_bootstrap_peer_ids.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_chain_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_chain_id.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_dht_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_dht_health.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_dht_peers",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_dht_peers.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_download_directory",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_download_directory.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_drive_file_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_drive_file_path.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_drive_server_url",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_drive_server_url.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_encryption_public_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_encryption_public_key.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_file_size",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_file_size.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_geth_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_geth_status.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_gpu_mining_capabilities",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_gpu_mining_capabilities.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_gpu_mining_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_gpu_mining_status.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_host_advertisement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_host_advertisement.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_host_registry",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_host_registry.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_hosting_agreement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_hosting_agreement.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::agreements_dir",
+            "src-tauri::src::lib-rs::enforce_agreement_expiration",
+            "src-tauri::src::lib-rs::get_dht_value"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::agreements_dir",
+            "src-tauri::src::lib-rs::enforce_agreement_expiration",
+            "src-tauri::src::lib-rs::get_dht_value"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_hosting_server_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_hosting_server_status.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_network_stats",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_network_stats.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_transaction_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_transaction_history.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_transaction_receipt",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_transaction_receipt.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_version_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_version_policy.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_version_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_version_status.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_wallet_balance",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_wallet_balance.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::init_encryption_keypair",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/init_encryption_keypair.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::is_geth_installed",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/is_geth_installed.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::list_directory_sites",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/list_directory_sites.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::site_name_key",
+            "src-tauri::src::lib-rs::verify"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::site_name_key",
+            "src-tauri::src::lib-rs::verify"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::list_gpu_devices",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/list_gpu_devices.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::list_hosted_sites",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/list_hosted_sites.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::list_hosting_agreements",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/list_hosting_agreements.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::agreements_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::agreements_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::list_networks",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/list_networks.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::network_info"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::network_info"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::lookup_encryption_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/lookup_encryption_key.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::open_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/open_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::open_file_dialog",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/open_file_dialog.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::parse_torrent_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/parse_torrent_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::extract_bencode_bytes",
+            "src-tauri::src::lib-rs::extract_bencode_integer",
+            "src-tauri::src::lib-rs::extract_bencode_string",
+            "src-tauri::src::lib-rs::find_bencode_key"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::extract_bencode_bytes",
+            "src-tauri::src::lib-rs::extract_bencode_integer",
+            "src-tauri::src::lib-rs::extract_bencode_string",
+            "src-tauri::src::lib-rs::find_bencode_key"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::pick_download_directory",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/pick_download_directory.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::ping_peer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/ping_peer.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_drive_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_drive_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::publish_drive_file_inner"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::publish_drive_file_inner"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_drive_folder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_drive_folder.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::collect_descendant_files",
+            "src-tauri::src::lib-rs::compute_folder_hash",
+            "src-tauri::src::lib-rs::folder_manifest_key",
+            "src-tauri::src::lib-rs::publish_drive_file_inner"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::collect_descendant_files",
+            "src-tauri::src::lib-rs::compute_folder_hash",
+            "src-tauri::src::lib-rs::folder_manifest_key",
+            "src-tauri::src::lib-rs::publish_drive_file_inner"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_drive_share",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_drive_share.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::spawn_relay_tunnel"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::spawn_relay_tunnel"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_encryption_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_encryption_key.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_peer_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_peer_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_file_data",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_file_data.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_host_advertisement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_host_advertisement.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_site_to_cdn",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_site_to_cdn.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::collect_files",
+            "src-tauri::src::lib-rs::send_transaction"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::collect_files",
+            "src-tauri::src::lib-rs::send_transaction"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_site_to_directory",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_site_to_directory.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::sign",
+            "src-tauri::src::lib-rs::site_name_key",
+            "src-tauri::src::lib-rs::validate_site_name",
+            "src-tauri::src::lib-rs::verify"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::sign",
+            "src-tauri::src::lib-rs::site_name_key",
+            "src-tauri::src::lib-rs::validate_site_name",
+            "src-tauri::src::lib-rs::verify"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_site_to_relay",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_site_to_relay.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::spawn_relay_tunnel"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::spawn_relay_tunnel"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::read_geth_log",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/read_geth_log.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::record_transaction_meta",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/record_transaction_meta.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::republish_shared_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/republish_shared_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::request_faucet",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/request_faucet.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::reseed_drive_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/reseed_drive_files.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::resolve_site_name",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/resolve_site_name.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::site_name_key",
+            "src-tauri::src::lib-rs::validate_site_name",
+            "src-tauri::src::lib-rs::verify"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::site_name_key",
+            "src-tauri::src::lib-rs::validate_site_name",
+            "src-tauri::src::lib-rs::verify"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::run",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/run.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::cleanup_dht_on_shutdown",
+            "src-tauri::src::lib-rs::fetch_and_log_remote_version_policy",
+            "src-tauri::src::lib-rs::spawn_relay_tunnel",
+            "src-tauri::src::lib-rs::start_dht_internal"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::cleanup_dht_on_shutdown",
+            "src-tauri::src::lib-rs::fetch_and_log_remote_version_policy",
+            "src-tauri::src::lib-rs::spawn_relay_tunnel",
+            "src-tauri::src::lib-rs::start_dht_internal"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::search_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/search_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::build_local_search_result",
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed",
+            "src-tauri::src::lib-rs::verify_publisher"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::build_local_search_result",
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed",
+            "src-tauri::src::lib-rs::verify_publisher"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::search_folder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/search_folder.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::folder_manifest_key",
+            "src-tauri::src::lib-rs::get_dht_value"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::folder_manifest_key",
+            "src-tauri::src::lib-rs::get_dht_value"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::seed_hosted_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/seed_hosted_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::send_encrypted_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/send_encrypted_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::send_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::send_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::send_file_by_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/send_file_by_path.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::send_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::send_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::send_wallet_backup_email",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/send_wallet_backup_email.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::set_active_network",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/set_active_network.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::set_download_directory",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/set_download_directory.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::set_miner_address",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/set_miner_address.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::show_drive_item_in_folder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/show_drive_item_in_folder.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::show_in_folder"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::show_in_folder"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::sign__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/sign__1.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign",
+            "src-tauri::src::lib-rs::sign_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign",
+            "src-tauri::src::lib-rs::sign_payload"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::sign_payload__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/sign_payload__1.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::sign_payload__2",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/sign_payload__2.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::start_dht",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/start_dht.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::start_dht_internal"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::start_dht_internal"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::start_download",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/start_download.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::ensure_version_supported",
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::get_effective_download_dir",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::ensure_version_supported",
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::get_effective_download_dir",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::start_geth",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/start_geth.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::start_gpu_mining",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/start_gpu_mining.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_mining_status"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_mining_status"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::start_hosting_server",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/start_hosting_server.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::start_mining",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/start_mining.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::stop_dht",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/stop_dht.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::stop_geth",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/stop_geth.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::stop_gpu_mining",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/stop_gpu_mining.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::stop_hosting_server",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/stop_hosting_server.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::stop_mining",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/stop_mining.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::store_dht_value",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/store_dht_value.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::store_hosting_agreement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/store_hosting_agreement.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::agreements_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::agreements_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::unpublish_all_shared_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/unpublish_all_shared_files.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::unpublish_drive_folder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/unpublish_drive_folder.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::collect_descendant_files",
+            "src-tauri::src::lib-rs::drive_stop_seeding_inner",
+            "src-tauri::src::lib-rs::folder_manifest_key"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::collect_descendant_files",
+            "src-tauri::src::lib-rs::drive_stop_seeding_inner",
+            "src-tauri::src::lib-rs::folder_manifest_key"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::unpublish_drive_share",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/unpublish_drive_share.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::unpublish_host_advertisement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/unpublish_host_advertisement.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::unpublish_site_from_cdn",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/unpublish_site_from_cdn.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::unpublish_site_from_directory",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/unpublish_site_from_directory.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::site_name_key"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::site_name_key"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::unpublish_site_from_relay",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/unpublish_site_from_relay.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::verify__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/verify__1.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign_payload",
+            "src-tauri::src::lib-rs::verify"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign_payload",
+            "src-tauri::src::lib-rs::verify"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::lib-rs::agreements_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/agreements_dir.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::cleanup_agreement_files",
+            "src-tauri::src::lib-rs::get_active_hosted_files",
+            "src-tauri::src::lib-rs::get_hosting_agreement",
+            "src-tauri::src::lib-rs::list_hosting_agreements",
+            "src-tauri::src::lib-rs::store_hosting_agreement"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::cleanup_dht_on_shutdown",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/cleanup_dht_on_shutdown.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::run"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::collect_descendant_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/collect_descendant_files.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_drive_folder",
+            "src-tauri::src::lib-rs::unpublish_drive_folder"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::collect_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/collect_files.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_site_to_cdn"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::common_prefix",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/common_prefix.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::create_hosted_site"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::compute_folder_hash",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/compute_folder_hash.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_drive_folder"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::current_bootstrap_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/current_bootstrap_health.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::check_bootstrap_health",
+            "src-tauri::src::lib-rs::get_bootstrap_health"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::drive_stop_seeding_inner",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/drive_stop_seeding_inner.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::drive_stop_seeding",
+            "src-tauri::src::lib-rs::unpublish_drive_folder"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::enforce_agreement_expiration",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/enforce_agreement_expiration.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::get_hosting_agreement"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::export_torrent_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/export_torrent_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::drive_export_torrent"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::extract_bencode_bytes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/extract_bencode_bytes.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::parse_torrent_file"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::extract_bencode_integer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/extract_bencode_integer.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::parse_torrent_file"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::extract_bencode_string",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/extract_bencode_string.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::parse_torrent_file"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::fetch_and_log_remote_version_policy",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/fetch_and_log_remote_version_policy.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::run"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::fetch_seeders",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/fetch_seeders.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::search_file",
+            "src-tauri::src::lib-rs::search_folder",
+            "src-tauri::src::lib-rs::start_download"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::seeder_entry_key",
+            "src-tauri::src::lib-rs::verify"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::seeder_entry_key",
+            "src-tauri::src::lib-rs::verify"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::find_bencode_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/find_bencode_key.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::parse_torrent_file"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::folder_manifest_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/folder_manifest_key.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_drive_folder",
+            "src-tauri::src::lib-rs::search_folder",
+            "src-tauri::src::lib-rs::unpublish_drive_folder"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_effective_download_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_effective_download_dir.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::start_download"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_mining_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_mining_status.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::start_gpu_mining"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::network_info",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/network_info.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::get_active_network",
+            "src-tauri::src::lib-rs::list_networks"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_drive_file_inner",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_drive_file_inner.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_drive_file",
+            "src-tauri::src::lib-rs::publish_drive_folder"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::make_signed_seeder",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file",
+            "src-tauri::src::lib-rs::sign"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::make_signed_seeder",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file",
+            "src-tauri::src::lib-rs::sign"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::send_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/send_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::send_encrypted_file",
+            "src-tauri::src::lib-rs::send_file_by_path"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::send_transaction",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/send_transaction.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_site_to_cdn"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::show_in_folder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/show_in_folder.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::show_drive_item_in_folder"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::site_name_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/site_name_key.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::list_directory_sites",
+            "src-tauri::src::lib-rs::publish_site_to_directory",
+            "src-tauri::src::lib-rs::resolve_site_name",
+            "src-tauri::src::lib-rs::unpublish_site_from_directory"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::spawn_relay_tunnel",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/spawn_relay_tunnel.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_drive_share",
+            "src-tauri::src::lib-rs::publish_site_to_relay",
+            "src-tauri::src::lib-rs::run"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::start_dht_internal",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/start_dht_internal.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::run",
+            "src-tauri::src::lib-rs::start_dht"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files",
+            "src-tauri::src::lib-rs::ensure_version_supported"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files",
+            "src-tauri::src::lib-rs::ensure_version_supported"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::try_repair_local_drive_seed",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/try_repair_local_drive_seed.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::search_file",
+            "src-tauri::src::lib-rs::start_download"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::build_local_search_result",
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::build_local_search_result",
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::validate_site_name",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/validate_site_name.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_site_to_directory",
+            "src-tauri::src::lib-rs::resolve_site_name"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::verify_publisher",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/verify_publisher.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::search_file"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::lib-rs::auto_reseed_drive_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/auto_reseed_drive_files.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::reseed_drive_files",
+            "src-tauri::src::lib-rs::start_dht_internal"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::compute_sha256_file",
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::compute_sha256_file",
+            "src-tauri::src::lib-rs::get_dht_value",
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::register_shared_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::build_local_search_result",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/build_local_search_result.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::search_file",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_peer_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_peer_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::ensure_version_supported",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/ensure_version_supported.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::start_dht_internal",
+            "src-tauri::src::lib-rs::start_download"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::make_signed_seeder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/make_signed_seeder.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_drive_file_inner"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::remove_seeder_entry",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/remove_seeder_entry.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::cleanup_agreement_files",
+            "src-tauri::src::lib-rs::cleanup_dht_on_shutdown",
+            "src-tauri::src::lib-rs::drive_delete_item",
+            "src-tauri::src::lib-rs::drive_stop_seeding_inner",
+            "src-tauri::src::lib-rs::stop_dht",
+            "src-tauri::src::lib-rs::unpublish_all_shared_files"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::seeder_entry_key"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::get_peer_id",
+            "src-tauri::src::lib-rs::seeder_entry_key"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::sign",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/sign.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::publish_drive_file_inner",
+            "src-tauri::src::lib-rs::publish_site_to_directory",
+            "src-tauri::src::lib-rs::sign__1"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::verify",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/verify.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::list_directory_sites",
+            "src-tauri::src::lib-rs::publish_site_to_directory",
+            "src-tauri::src::lib-rs::resolve_site_name",
+            "src-tauri::src::lib-rs::verify__1"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::sign_payload"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "functions": [
+        {
+          "name": "src-tauri::src::lib-rs::compute_sha256_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/compute_sha256_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_dht_value",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_dht_value.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files",
+            "src-tauri::src::lib-rs::cleanup_dht_on_shutdown",
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::get_host_advertisement",
+            "src-tauri::src::lib-rs::get_host_registry",
+            "src-tauri::src::lib-rs::get_hosting_agreement",
+            "src-tauri::src::lib-rs::list_directory_sites",
+            "src-tauri::src::lib-rs::lookup_encryption_key",
+            "src-tauri::src::lib-rs::publish_drive_file_inner",
+            "src-tauri::src::lib-rs::publish_file",
+            "src-tauri::src::lib-rs::publish_file_data",
+            "src-tauri::src::lib-rs::publish_host_advertisement",
+            "src-tauri::src::lib-rs::publish_site_to_directory",
+            "src-tauri::src::lib-rs::republish_shared_file",
+            "src-tauri::src::lib-rs::resolve_site_name",
+            "src-tauri::src::lib-rs::search_file",
+            "src-tauri::src::lib-rs::search_folder",
+            "src-tauri::src::lib-rs::seed_hosted_file",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed",
+            "src-tauri::src::lib-rs::unpublish_host_advertisement",
+            "src-tauri::src::lib-rs::unpublish_site_from_directory"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::get_peer_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/get_peer_id.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files",
+            "src-tauri::src::lib-rs::build_local_search_result",
+            "src-tauri::src::lib-rs::cleanup_agreement_files",
+            "src-tauri::src::lib-rs::cleanup_dht_on_shutdown",
+            "src-tauri::src::lib-rs::get_active_hosted_files",
+            "src-tauri::src::lib-rs::publish_drive_file_inner",
+            "src-tauri::src::lib-rs::publish_encryption_key",
+            "src-tauri::src::lib-rs::publish_file",
+            "src-tauri::src::lib-rs::publish_file_data",
+            "src-tauri::src::lib-rs::publish_host_advertisement",
+            "src-tauri::src::lib-rs::remove_seeder_entry",
+            "src-tauri::src::lib-rs::republish_shared_file",
+            "src-tauri::src::lib-rs::seed_hosted_file",
+            "src-tauri::src::lib-rs::stop_dht",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed",
+            "src-tauri::src::lib-rs::unpublish_all_shared_files",
+            "src-tauri::src::lib-rs::unpublish_host_advertisement"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::publish_seeder_entry",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/publish_seeder_entry.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files",
+            "src-tauri::src::lib-rs::publish_drive_file_inner",
+            "src-tauri::src::lib-rs::publish_file",
+            "src-tauri::src::lib-rs::publish_file_data",
+            "src-tauri::src::lib-rs::republish_shared_file",
+            "src-tauri::src::lib-rs::seed_hosted_file",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed"
+          ],
+          "phase10_callees": [
+            "src-tauri::src::lib-rs::seeder_entry_key"
+          ],
+          "all_callees": [
+            "src-tauri::src::lib-rs::seeder_entry_key"
+          ]
+        },
+        {
+          "name": "src-tauri::src::lib-rs::register_shared_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/register_shared_file.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::auto_reseed_drive_files",
+            "src-tauri::src::lib-rs::publish_drive_file_inner",
+            "src-tauri::src::lib-rs::publish_file",
+            "src-tauri::src::lib-rs::publish_file_data",
+            "src-tauri::src::lib-rs::republish_shared_file",
+            "src-tauri::src::lib-rs::seed_hosted_file",
+            "src-tauri::src::lib-rs::try_repair_local_drive_seed"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::lib-rs::sign_payload",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/sign_payload.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::make_signed_seeder",
+            "src-tauri::src::lib-rs::sign",
+            "src-tauri::src::lib-rs::sign__1",
+            "src-tauri::src::lib-rs::sign_payload__1",
+            "src-tauri::src::lib-rs::sign_payload__2",
+            "src-tauri::src::lib-rs::verify",
+            "src-tauri::src::lib-rs::verify__1",
+            "src-tauri::src::lib-rs::verify_publisher"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 4,
+      "functions": [
+        {
+          "name": "src-tauri::src::lib-rs::seeder_entry_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/lib-rs/seeder_entry_key.rs",
+          "unit": "lib-rs",
+          "phase10_callers": [
+            "src-tauri::src::lib-rs::fetch_seeders",
+            "src-tauri::src::lib-rs::publish_seeder_entry",
+            "src-tauri::src::lib-rs::remove_seeder_entry"
+          ],
+          "phase10_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}

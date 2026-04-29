@@ -1,0 +1,231 @@
+PHASE 10: TAURI COMMAND SURFACE
+================================
+
+MODULE SUMMARY
+--------------
+Tauri IPC command handler for the desktop GUI client. Exposes 100+ async
+commands covering DHT networking, file operations, wallet/mining, hosting,
+Drive/site management, and version enforcement. Commands invoke the shared
+AppState (DHT, Geth, FileTransfer, etc.) and run in the Tauri async runtime.
+
+
+PUBLIC TYPES
+------------
+AppState {
+  dht: Arc<Mutex<Option<Arc<DhtService>>>>
+  file_transfer: Arc<Mutex<FileTransferService>>
+  file_storage: Arc<Mutex<HashMap<String, Vec<u8>>>>
+  geth: Arc<Mutex<GethProcess>>
+  gpu_miner: Arc<Mutex<geth_gpu::GpuMiner>>
+  encryption_keypair: Arc<Mutex<Option<EncryptionKeypair>>>
+  tx_metadata: Arc<Mutex<HashMap<String, TransactionMeta>>>
+  download_directory: Arc<Mutex<Option<String>>>
+  download_credentials: dht::DownloadCredentialsMap
+  hosting_server_state: Arc<hosting_server::HostingServerState>
+  hosting_server_addr: Arc<Mutex<Option<std::net::SocketAddr>>>
+  hosting_server_shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>
+  drive_state: Arc<drive_api::DriveState>
+  tunnel_handles: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>
+}
+
+
+REPRESENTATIVE COMMAND SUBSET (by functional area)
+---------------------------------------------------
+
+DHT NETWORKING:
+  start_dht() -> Result<String, String>
+  stop_dht() -> Result<(), String>
+  reseed_drive_files() -> Result<(), String>
+  get_dht_peers() -> Vec<PeerInfo>
+  get_network_stats() -> NetworkStats
+  get_peer_id() -> Option<String>
+  get_dht_health() -> DhtHealthInfo
+  get_bootstrap_peer_ids() -> Vec<String>
+  ping_peer(peer_id: String) -> Result<String, String>
+  send_file(peer_id: String, file_path: String) -> Result<String, String>
+  send_file_by_path(peer_id: String, file_path: String) -> Result<String, String>
+  accept_file_transfer(request_id: String) -> Result<(), String>
+  decline_file_transfer(request_id: String) -> Result<(), String>
+  store_dht_value(key: String, value: String) -> Result<(), String>
+  get_dht_value(key: String) -> Result<Option<String>, String>
+  echo_peer(peer_id: String, payload: Vec<u8>) -> Result<Vec<u8>, String>
+
+FILE OPERATIONS:
+  get_available_storage() -> u64
+  get_file_size(file_path: String) -> Result<u64, String>
+  open_file_dialog() -> Option<String>
+  pick_download_directory() -> Option<String>
+  set_download_directory(path: String) -> Result<(), String>
+  get_download_directory() -> Option<String>
+  publish_file(file_path: String) -> Result<String, String>
+  publish_file_data(name: String, data: Vec<u8>) -> Result<String, String>
+  search_file(file_hash: String) -> Result<Vec<String>, String>
+  start_download(file_hash: String, peer_ids: Vec<String>) -> Result<String, String>
+  calculate_download_cost(file_size: u64) -> u128
+  register_shared_file(
+    file_hash: String,
+    file_path: String,
+    file_name: String,
+    file_size: u64,
+    price_wei: u128,
+    wallet_address: String,
+  ) -> Result<(), String>
+  parse_torrent_file(file_path: String) -> Result<TorrentInfo, String>
+  export_torrent_file(file_path: String) -> Result<String, String>
+  open_file(file_path: String) -> Result<(), String>
+  show_in_folder(file_path: String) -> Result<(), String>
+  show_drive_item_in_folder(item_id: String) -> Result<(), String>
+  get_drive_file_path(item_id: String) -> Option<String>
+
+WALLET / BLOCKCHAIN:
+  get_wallet_balance(address: String) -> Result<String, String>
+  send_transaction(
+    to_address: String,
+    amount_wei: String,
+  ) -> Result<String, String>
+  get_transaction_receipt(tx_hash: String) -> Result<Option<TxReceipt>, String>
+  get_transaction_history(address: String) -> Result<Vec<TxInfo>, String>
+  record_transaction_meta(tx_hash: String, meta: TransactionMeta) -> Result<(), String>
+  request_faucet(address: String) -> Result<String, String>
+  get_chain_id() -> u64
+
+NETWORK SELECTION:
+  get_active_network() -> NetworkConfig
+  list_networks() -> Vec<NetworkConfig>
+  set_active_network(network_id: String) -> Result<(), String>
+
+GETH / MINING:
+  is_geth_installed() -> bool
+  download_geth() -> Result<(), String>
+  start_geth() -> Result<(), String>
+  stop_geth() -> Result<(), String>
+  get_geth_status() -> GethStatus
+  start_mining() -> Result<(), String>
+  stop_mining() -> Result<(), String>
+  get_mining_status() -> MiningStatus
+  get_gpu_mining_capabilities() -> Result<Vec<GpuCapability>, String>
+  list_gpu_devices() -> Result<Vec<GpuDevice>, String>
+  start_gpu_mining(device_index: usize) -> Result<(), String>
+  stop_gpu_mining() -> Result<(), String>
+  get_gpu_mining_status() -> GpuMiningStatus
+  set_miner_address(address: String) -> Result<(), String>
+  read_geth_log() -> String
+
+VERSION & HEALTH:
+  get_version_policy() -> version::VersionPolicy
+  get_version_status() -> VersionStatus
+  check_bootstrap_health() -> Result<BootstrapHealth, String>
+  get_bootstrap_health() -> BootstrapHealth
+
+ENCRYPTION:
+  init_encryption_keypair() -> Result<String, String>
+  get_encryption_public_key() -> Option<String>
+  encrypt_file_for_recipient(
+    recipient_public_key: String,
+    file_path: String,
+  ) -> Result<String, String>
+  decrypt_file_data(
+    ciphertext: Vec<u8>,
+  ) -> Result<Vec<u8>, String>
+  send_encrypted_file(
+    recipient_public_key: String,
+    file_path: String,
+    peer_id: String,
+  ) -> Result<String, String>
+  publish_encryption_key() -> Result<(), String>
+  lookup_encryption_key(wallet: String) -> Result<Option<String>, String>
+
+HOSTING / SITES:
+  create_hosted_site(
+    id: String,
+    name: String,
+    files: Vec<HostedFile>,
+  ) -> Result<(), String>
+  list_hosted_sites() -> Vec<HostedSite>
+  delete_hosted_site(site_id: String) -> Result<(), String>
+  start_hosting_server(port: u16) -> Result<String, String>
+  stop_hosting_server() -> Result<(), String>
+  get_hosting_server_status() -> Option<HostingServerStatus>
+  publish_site_to_relay(site_id: String) -> Result<(), String>
+  unpublish_site_from_relay(site_id: String) -> Result<(), String>
+  publish_site_to_cdn(site_id: String) -> Result<(), String>
+  unpublish_site_from_cdn(site_id: String) -> Result<(), String>
+  publish_site_to_directory(name: String, site_id: String) -> Result<(), String>
+  unpublish_site_from_directory(name: String) -> Result<(), String>
+  resolve_site_name(name: String) -> Result<String, String>
+  list_directory_sites() -> Result<Vec<DirectorySite>, String>
+
+DRIVE:
+  get_drive_server_url() -> String
+  publish_drive_share(token: String) -> Result<(), String>
+  unpublish_drive_share(token: String) -> Result<(), String>
+  drive_list_items(parent_id: Option<String>) -> Result<Vec<DriveItem>, String>
+  drive_list_all_items() -> Result<Vec<DriveItem>, String>
+  drive_create_folder(parent_id: Option<String>, name: String) -> Result<DriveItem, String>
+  drive_read_file_bytes(item_id: String) -> Result<Vec<u8>, String>
+  drive_upload_file(parent_id: Option<String>, file_path: String) -> Result<DriveItem, String>
+  drive_update_item(id: String, name: Option<String>) -> Result<(), String>
+  drive_delete_item(id: String) -> Result<(), String>
+  drive_create_share(item_id: String) -> Result<ShareLink, String>
+  drive_revoke_share(token: String) -> Result<(), String>
+  drive_list_shares() -> Result<Vec<ShareLink>, String>
+  drive_toggle_visibility(item_id: String, is_public: bool) -> Result<(), String>
+  publish_drive_file(item_id: String) -> Result<(), String>
+  publish_drive_folder(item_id: String) -> Result<(), String>
+  unpublish_drive_folder(item_id: String) -> Result<(), String>
+  search_folder(parent_id: Option<String>, query: String) -> Result<Vec<DriveItem>, String>
+  seed_hosted_file(file_hash: String) -> Result<(), String>
+  drive_stop_seeding(file_hash: String) -> Result<(), String>
+  drive_export_torrent(item_id: String) -> Result<Vec<u8>, String>
+
+HOSTING MARKETPLACE:
+  publish_host_advertisement() -> Result<(), String>
+  unpublish_host_advertisement() -> Result<(), String>
+  get_host_registry() -> Result<Vec<HostRegistryEntry>, String>
+  get_host_advertisement() -> Result<Option<HostingAgreement>, String>
+  store_hosting_agreement(agreement: HostingAgreement) -> Result<(), String>
+  get_hosting_agreement() -> Result<Option<HostingAgreement>, String>
+  list_hosting_agreements() -> Result<Vec<HostingAgreement>, String>
+
+FILE LIFECYCLE:
+  republish_shared_file(file_hash: String) -> Result<(), String>
+  unpublish_all_shared_files() -> Result<(), String>
+  get_active_hosted_files() -> Result<Vec<SharedFileInfo>, String>
+  cleanup_agreement_files() -> Result<(), String>
+
+WALLET BACKUP:
+  send_wallet_backup_email(email: String) -> Result<(), String>
+
+APP LIFECYCLE:
+  exit_app() -> ()
+
+
+STARTUP ASYNC TASKS
+-------------------
+fetch_and_log_remote_version_policy() spawned via tauri::async_runtime::spawn()
+  - Fetches /api/version-policy from relay (http://130.245.173.73:8080)
+  - Parses remote VersionPolicy with 8-second timeout
+  - Calls version::update_effective_policy() to apply policy with validation
+  - Logs acceptance/rejection with signed/unsigned status and issued_at
+
+
+INVARIANTS
+----------
+- Every command gates through ensure_version_supported(state) before accessing
+  the DHT or network; client below min_required gets Error, UI shows modal.
+
+- Version policy is fetched asynchronously at startup; local build stays at
+  bundled policy until the async task updates version::EFFECTIVE_POLICY via
+  version::update_effective_policy(); RwLock gives non-blocking reads.
+
+- File transfer operations (publish, download, send) all go through DHT
+  via the shared dht::DhtService handle and command_sender channel.
+
+- Wallet operations (send_transaction, get_balance) invoke Geth RPC via
+  geth::rpc_endpoint(); mining status polls are rate-limited per UI refresh.
+
+
+CONSTANTS
+---------
+RELAY_POLICY_FETCH_URL  "http://130.245.173.73:8080/api/version-policy"
+RELAY_POLICY_TIMEOUT    8 seconds

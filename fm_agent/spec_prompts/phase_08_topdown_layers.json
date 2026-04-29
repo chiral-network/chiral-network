@@ -1,0 +1,893 @@
+{
+  "phase": 8,
+  "phase_name": "DHT Service",
+  "total_functions": 66,
+  "total_layers": 8,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::clone",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/clone.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::default"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::default"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::decode_into_io_error",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/decode_into_io_error.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::echo",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/echo.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::encode_into_io_error",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/encode_into_io_error.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_dht_value",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_dht_value.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_file_providers",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_file_providers.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_health.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::get_bootstrap_nodes"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::get_bootstrap_nodes"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_listening_addresses",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_listening_addresses.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_peer_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_peer_id.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_peers",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_peers.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_shared_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_shared_files.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_stats",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_stats.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::is_peer_connected",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/is_peer_connected.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::is_running",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/is_running.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::ping_peer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/ping_peer.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::ping_peer_with_sink"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::ping_peer_with_sink"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::ping_peer_headless",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/ping_peer_headless.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::ping_peer_with_sink"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::ping_peer_with_sink"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::put_dht_value",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/put_dht_value.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::read_request",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/read_request.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::read_response",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/read_response.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::register_shared_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/register_shared_file.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::compute_chunk_hashes"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::compute_chunk_hashes"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::remove_dht_record",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/remove_dht_record.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::request_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/request_file.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::send_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/send_file.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::start",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/start.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::start_with_sink"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::start_with_sink"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::start_headless",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/start_headless.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::start_with_sink"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::start_with_sink"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::start_providing_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/start_providing_file.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::stop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/stop.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::stop_providing_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/stop_providing_file.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::unregister_shared_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/unregister_shared_file.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::write_request",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/write_request.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::write_response",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/write_response.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::ping_peer_with_sink",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/ping_peer_with_sink.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::ping_peer",
+            "src-tauri::src::dht-rs::ping_peer_headless"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::start_with_sink",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/start_with_sink.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::start",
+            "src-tauri::src::dht-rs::start_headless"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::create_swarm",
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::create_swarm",
+            "src-tauri::src::dht-rs::event_loop"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::create_swarm",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/create_swarm.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::start_with_sink"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::default",
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_bootstrap_nodes",
+            "src-tauri::src::dht-rs::get_relay_nodes",
+            "src-tauri::src::dht-rs::load_or_generate_keypair",
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::remove_peer_id_from_multiaddr"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::default",
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_bootstrap_nodes",
+            "src-tauri::src::dht-rs::get_relay_nodes",
+            "src-tauri::src::dht-rs::load_or_generate_keypair",
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::remove_peer_id_from_multiaddr"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::event_loop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/event_loop.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::start_with_sink"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+            "src-tauri::src::dht-rs::decrement_file_request_attempt",
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_bootstrap_nodes",
+            "src-tauri::src::dht-rs::get_bootstrap_peer_ids",
+            "src-tauri::src::dht-rs::get_relay_nodes",
+            "src-tauri::src::dht-rs::handle_behaviour_event",
+            "src-tauri::src::dht-rs::load_failed_peers",
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::remove_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::save_failed_peers"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+            "src-tauri::src::dht-rs::decrement_file_request_attempt",
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_bootstrap_nodes",
+            "src-tauri::src::dht-rs::get_bootstrap_peer_ids",
+            "src-tauri::src::dht-rs::get_relay_nodes",
+            "src-tauri::src::dht-rs::handle_behaviour_event",
+            "src-tauri::src::dht-rs::load_failed_peers",
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::remove_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::save_failed_peers"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::default",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/default.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::clone",
+            "src-tauri::src::dht-rs::create_swarm"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::handle_behaviour_event",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/handle_behaviour_event.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::auto_dial_discovered_hosts_from_registry",
+            "src-tauri::src::dht-rs::chunk_retry_delay",
+            "src-tauri::src::dht-rs::claim_spent_tx",
+            "src-tauri::src::dht-rs::compute_chunk_hashes",
+            "src-tauri::src::dht-rs::decrement_file_request_attempt",
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::select_best_get_record_value",
+            "src-tauri::src::dht-rs::spent_tx_store",
+            "src-tauri::src::dht-rs::take_next_backup_peer",
+            "src-tauri::src::dht-rs::verify_payment_on_chain"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::auto_dial_discovered_hosts_from_registry",
+            "src-tauri::src::dht-rs::chunk_retry_delay",
+            "src-tauri::src::dht-rs::claim_spent_tx",
+            "src-tauri::src::dht-rs::compute_chunk_hashes",
+            "src-tauri::src::dht-rs::decrement_file_request_attempt",
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::select_best_get_record_value",
+            "src-tauri::src::dht-rs::spent_tx_store",
+            "src-tauri::src::dht-rs::take_next_backup_peer",
+            "src-tauri::src::dht-rs::verify_payment_on_chain"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::load_failed_peers",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/load_failed_peers.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::failed_peers_path",
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::failed_peers_path",
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::load_or_generate_keypair",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/load_or_generate_keypair.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::create_swarm"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::identity_key_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::identity_key_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::remove_peer_id_from_multiaddr",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/remove_peer_id_from_multiaddr.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::create_swarm",
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::save_failed_peers",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/save_failed_peers.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::failed_peers_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::failed_peers_path"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 4,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::auto_dial_discovered_hosts_from_registry",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/auto_dial_discovered_hosts_from_registry.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+            "src-tauri::src::dht-rs::get_bootstrap_peer_ids",
+            "src-tauri::src::dht-rs::parse_host_registry_peer_ids"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+            "src-tauri::src::dht-rs::get_bootstrap_peer_ids",
+            "src-tauri::src::dht-rs::parse_host_registry_peer_ids"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::chunk_retry_delay",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/chunk_retry_delay.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::claim_spent_tx",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/claim_spent_tx.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::persist_spent_tx_set",
+            "src-tauri::src::dht-rs::spent_tx_store"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::persist_spent_tx_set",
+            "src-tauri::src::dht-rs::spent_tx_store"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::compute_chunk_hashes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/compute_chunk_hashes.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::handle_behaviour_event",
+            "src-tauri::src::dht-rs::register_shared_file"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::decrement_file_request_attempt",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/decrement_file_request_attempt.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::event_loop",
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::failed_peers_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/failed_peers_path.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::load_failed_peers",
+            "src-tauri::src::dht-rs::save_failed_peers"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::identity_key_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/identity_key_path.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::load_or_generate_keypair"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::select_best_get_record_value",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/select_best_get_record_value.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::merge_file_metadata_records",
+            "src-tauri::src::dht-rs::merge_host_registry_records"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::merge_file_metadata_records",
+            "src-tauri::src::dht-rs::merge_host_registry_records"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::take_next_backup_peer",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/take_next_backup_peer.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::verify_payment_on_chain",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/verify_payment_on_chain.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 5,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/build_relay_circuit_dial_addrs.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::auto_dial_discovered_hosts_from_registry",
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_relay_nodes",
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_relay_nodes",
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_bootstrap_peer_ids",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_bootstrap_peer_ids.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::auto_dial_discovered_hosts_from_registry",
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_bootstrap_nodes",
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+            "src-tauri::src::dht-rs::get_bootstrap_nodes",
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::merge_file_metadata_records",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/merge_file_metadata_records.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::select_best_get_record_value"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::looks_like_file_metadata",
+            "src-tauri::src::dht-rs::merge_seeder_record",
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::looks_like_file_metadata",
+            "src-tauri::src::dht-rs::merge_seeder_record",
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::merge_host_registry_records",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/merge_host_registry_records.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::select_best_get_record_value"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::parse_host_registry_peer_ids",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/parse_host_registry_peer_ids.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::auto_dial_discovered_hosts_from_registry"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::persist_spent_tx_set",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/persist_spent_tx_set.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::claim_spent_tx"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::spent_tx_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::spent_tx_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::spent_tx_store",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/spent_tx_store.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::claim_spent_tx",
+            "src-tauri::src::dht-rs::handle_behaviour_event"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::load_spent_tx_set",
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::load_spent_tx_set",
+            "src-tauri::src::dht-rs::new"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 6,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::extract_peer_id_from_multiaddr",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/extract_peer_id_from_multiaddr.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+            "src-tauri::src::dht-rs::create_swarm",
+            "src-tauri::src::dht-rs::event_loop",
+            "src-tauri::src::dht-rs::get_bootstrap_peer_ids"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_bootstrap_nodes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_bootstrap_nodes.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::create_swarm",
+            "src-tauri::src::dht-rs::event_loop",
+            "src-tauri::src::dht-rs::get_bootstrap_peer_ids",
+            "src-tauri::src::dht-rs::get_health"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::get_relay_nodes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/get_relay_nodes.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+            "src-tauri::src::dht-rs::create_swarm",
+            "src-tauri::src::dht-rs::event_loop"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::load_spent_tx_set",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/load_spent_tx_set.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::spent_tx_store"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::spent_tx_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new",
+            "src-tauri::src::dht-rs::spent_tx_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::dht-rs::looks_like_file_metadata",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/looks_like_file_metadata.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::merge_file_metadata_records"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::merge_seeder_record",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/merge_seeder_record.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::merge_file_metadata_records"
+          ],
+          "phase8_callees": [
+            "src-tauri::src::dht-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::dht-rs::new"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 7,
+      "functions": [
+        {
+          "name": "src-tauri::src::dht-rs::new",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/new.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::build_relay_circuit_dial_addrs",
+            "src-tauri::src::dht-rs::compute_chunk_hashes",
+            "src-tauri::src::dht-rs::create_swarm",
+            "src-tauri::src::dht-rs::decode_into_io_error",
+            "src-tauri::src::dht-rs::encode_into_io_error",
+            "src-tauri::src::dht-rs::event_loop",
+            "src-tauri::src::dht-rs::get_bootstrap_peer_ids",
+            "src-tauri::src::dht-rs::handle_behaviour_event",
+            "src-tauri::src::dht-rs::load_failed_peers",
+            "src-tauri::src::dht-rs::load_spent_tx_set",
+            "src-tauri::src::dht-rs::merge_file_metadata_records",
+            "src-tauri::src::dht-rs::merge_host_registry_records",
+            "src-tauri::src::dht-rs::merge_seeder_record",
+            "src-tauri::src::dht-rs::parse_host_registry_peer_ids",
+            "src-tauri::src::dht-rs::read_request",
+            "src-tauri::src::dht-rs::read_response",
+            "src-tauri::src::dht-rs::spent_tx_store",
+            "src-tauri::src::dht-rs::write_request",
+            "src-tauri::src::dht-rs::write_response"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::dht-rs::spent_tx_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/dht-rs/spent_tx_path.rs",
+          "unit": "dht-rs",
+          "phase8_callers": [
+            "src-tauri::src::dht-rs::load_spent_tx_set",
+            "src-tauri::src::dht-rs::persist_spent_tx_set"
+          ],
+          "phase8_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}

@@ -39,6 +39,24 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::dht::DhtService;
 use crate::network;
 
+/// Cost of an upload in wei: `ceil(price_wei_per_mb_month * bytes * days
+/// / (1 MiB * 30 days))`. Pure u128 math — no f64 truncation, no
+/// percentage tolerance. Saturates on overflow to `u128::MAX` so an
+/// attacker cannot wrap to a small value via huge inputs (file size is
+/// already capped to 500 MiB at the call site, so saturation is
+/// defensive only).
+fn required_upload_wei(price_wei_per_mb_month: u128, bytes: u128, days: u128) -> u128 {
+    let denom: u128 = 1024 * 1024 * 30;
+    let numer = price_wei_per_mb_month
+        .saturating_mul(bytes)
+        .saturating_mul(days);
+    if numer == 0 {
+        return 0;
+    }
+    // ceil division: (numer + denom - 1) / denom.
+    numer.saturating_add(denom - 1) / denom
+}
+
 // ============================================================================
 // Types + state
 // ============================================================================
@@ -374,10 +392,18 @@ async fn upload(
     }
 
     let file_size = file_data.len() as u64;
-    let file_mb = file_data.len() as f64 / (1024.0 * 1024.0);
-    let months = duration_days as f64 / 30.0;
-    let required_wei = (s.price_wei_per_mb_month as f64 * file_mb * months) as u128;
-    let min_accepted_wei = required_wei * 95 / 100; // 5% tolerance for CHI→wei rounding
+    // Exact integer pricing — no f64. `required_wei = ceil(price * bytes * days
+    // / (1 MiB * 30 days))` so a buyer paying any sub-wei boundary still owes
+    // the next whole wei. The earlier `* 95 / 100` "5% tolerance" was a CHI→wei
+    // rounding-error excuse for a slack two thousand million times the actual
+    // physical rounding (1 wei out of 1e18); systematic 5% underpayment was
+    // the result.
+    let required_wei = required_upload_wei(
+        s.price_wei_per_mb_month,
+        file_data.len() as u128,
+        duration_days as u128,
+    );
+    let min_accepted_wei = required_wei;
 
     // Join the parallel mining wait.
     let mined = match mined_task.await {
@@ -824,10 +850,12 @@ async fn upload_site(
         return err(StatusCode::BAD_REQUEST, "No files in upload");
     }
 
-    let total_mb = total as f64 / (1024.0 * 1024.0);
-    let months = duration_days as f64 / 30.0;
-    let required_wei = (s.price_wei_per_mb_month as f64 * total_mb * months) as u128;
-    let min_accepted_wei = required_wei * 95 / 100;
+    let required_wei = required_upload_wei(
+        s.price_wei_per_mb_month,
+        total as u128,
+        duration_days as u128,
+    );
+    let min_accepted_wei = required_wei;
 
     // Wait for the tx to mine.
     let mined = match mined_task.await {

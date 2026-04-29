@@ -1,0 +1,77 @@
+{
+  "phase": 5,
+  "phase_name": "Pricing and Cost Tiers",
+  "total_functions": 6,
+  "total_layers": 2,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::speed_tiers-rs::calculate_cost",
+          "file": "fm_agent/extracted_functions/src-tauri/src/speed_tiers-rs/calculate_cost.rs",
+          "unit": "speed_tiers-rs",
+          "phase5_callers": [],
+          "phase5_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::speed_tiers-rs::calculate_total_with_fee",
+          "file": "fm_agent/extracted_functions/src-tauri/src/speed_tiers-rs/calculate_total_with_fee.rs",
+          "unit": "speed_tiers-rs",
+          "phase5_callers": [],
+          "phase5_callees": [
+            "src-tauri::src::speed_tiers-rs::calculate_platform_fee"
+          ],
+          "all_callees": [
+            "src-tauri::src::speed_tiers-rs::calculate_platform_fee"
+          ]
+        },
+        {
+          "name": "src-tauri::src::speed_tiers-rs::format_wei_as_chi",
+          "file": "fm_agent/extracted_functions/src-tauri/src/speed_tiers-rs/format_wei_as_chi.rs",
+          "unit": "speed_tiers-rs",
+          "phase5_callers": [],
+          "phase5_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::speed_tiers-rs::split_payment",
+          "file": "fm_agent/extracted_functions/src-tauri/src/speed_tiers-rs/split_payment.rs",
+          "unit": "speed_tiers-rs",
+          "phase5_callers": [],
+          "phase5_callees": [
+            "src-tauri::src::speed_tiers-rs::calculate_platform_fee"
+          ],
+          "all_callees": [
+            "src-tauri::src::speed_tiers-rs::calculate_platform_fee"
+          ]
+        },
+        {
+          "name": "src-tauri::src::speed_tiers-rs::write_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/speed_tiers-rs/write_file.rs",
+          "unit": "speed_tiers-rs",
+          "phase5_callers": [],
+          "phase5_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::speed_tiers-rs::calculate_platform_fee",
+          "file": "fm_agent/extracted_functions/src-tauri/src/speed_tiers-rs/calculate_platform_fee.rs",
+          "unit": "speed_tiers-rs",
+          "phase5_callers": [
+            "src-tauri::src::speed_tiers-rs::calculate_total_with_fee",
+            "src-tauri::src::speed_tiers-rs::split_payment"
+          ],
+          "phase5_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}

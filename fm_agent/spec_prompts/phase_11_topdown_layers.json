@@ -1,0 +1,2725 @@
+{
+  "phase": 11,
+  "phase_name": "Binaries",
+  "total_functions": 165,
+  "total_layers": 8,
+  "layers": [
+    {
+      "layer": 0,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::default__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/default__1.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::default__2",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/default__2.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::default__3",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/default__3.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::main",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/main.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::handle_account",
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::handle_dht",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+            "src-tauri::src::bin::chiral-rs::handle_download",
+            "src-tauri::src::bin::chiral-rs::handle_drive",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_geth",
+            "src-tauri::src::bin::chiral-rs::handle_hosting",
+            "src-tauri::src::bin::chiral-rs::handle_hosting_daemon_passthrough",
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::handle_mining",
+            "src-tauri::src::bin::chiral-rs::handle_network",
+            "src-tauri::src::bin::chiral-rs::handle_reputation",
+            "src-tauri::src::bin::chiral-rs::handle_settings",
+            "src-tauri::src::bin::chiral-rs::handle_wallet"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::handle_account",
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::handle_dht",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+            "src-tauri::src::bin::chiral-rs::handle_download",
+            "src-tauri::src::bin::chiral-rs::handle_drive",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_geth",
+            "src-tauri::src::bin::chiral-rs::handle_hosting",
+            "src-tauri::src::bin::chiral-rs::handle_hosting_daemon_passthrough",
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::handle_mining",
+            "src-tauri::src::bin::chiral-rs::handle_network",
+            "src-tauri::src::bin::chiral-rs::handle_reputation",
+            "src-tauri::src::bin::chiral-rs::handle_settings",
+            "src-tauri::src::bin::chiral-rs::handle_wallet"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::process_exists__1",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/process_exists__1.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::process_exists",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::process_exists",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::bootstrap_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/bootstrap_health.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_echo",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_echo.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_get",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_get.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_health.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_peers",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_peers.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_ping",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_ping.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_put",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_put.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_register_shared_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_register_shared_file.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_request_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_request_file.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_send_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_send_file.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_start",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_start.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_stop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_stop.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_unregister_shared_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_unregister_shared_file.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::drop_accept",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/drop_accept.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::drop_decline",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/drop_decline.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::drop_inbox",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/drop_inbox.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::drop_outgoing",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/drop_outgoing.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::file_search",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/file_search.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::geth_install",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/geth_install.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::geth_logs",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/geth_logs.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::read_geth_log"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::read_geth_log"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::geth_start",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/geth_start.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::geth_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/geth_status.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::geth_stop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/geth_stop.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::health_check",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/health_check.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::hosting_get_registry",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/hosting_get_registry.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::hosting_publish_ad",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/hosting_publish_ad.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::main",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/main.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::headless_routes",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::remove_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::set_miner_address",
+            "src-tauri::src::bin::chiral_daemon-rs::write_pid_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::headless_routes",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::remove_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::set_miner_address",
+            "src-tauri::src::bin::chiral_daemon-rs::write_pid_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::mining_blocks",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/mining_blocks.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::mining_start",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/mining_start.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::mining_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/mining_status.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::mining_stop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/mining_stop.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::readiness_check",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/readiness_check.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::runtime_status",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/runtime_status.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_balance",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_balance.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_chain_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_chain_id.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_create",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_create.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_faucet",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_faucet.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_history.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::get_transaction_history",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::get_transaction_history",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_import",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_import.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_receipt",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_receipt.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_send",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_send.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::send_transaction",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::send_transaction",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::wallet_show",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/wallet_show.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_policy_sign-rs::main",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_policy_sign-rs/main.rs",
+          "unit": "chiral_policy_sign-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_sign",
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_verify"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_sign",
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_verify"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::relay_server-rs::main",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/relay_server-rs/main.rs",
+          "unit": "relay_server-rs",
+          "phase11_callers": [],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::relay_server-rs::keypair_from_secret"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::relay_server-rs::keypair_from_secret"
+          ]
+        },
+        {
+          "name": "src-tauri::src::main-rs::main",
+          "file": "fm_agent/extracted_functions/src-tauri/src/main-rs/main.rs",
+          "unit": "main-rs",
+          "phase11_callers": [],
+          "phase11_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_account",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_account.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::derive_wallet_from_optional",
+            "src-tauri::src::bin::chiral-rs::get_transaction_history",
+            "src-tauri::src::bin::chiral-rs::get_wallet_balance",
+            "src-tauri::src::bin::chiral-rs::load_wallet_store",
+            "src-tauri::src::bin::chiral-rs::require_wallet",
+            "src-tauri::src::bin::chiral-rs::send_transaction"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::derive_wallet_from_optional",
+            "src-tauri::src::bin::chiral-rs::get_transaction_history",
+            "src-tauri::src::bin::chiral-rs::get_wallet_balance",
+            "src-tauri::src::bin::chiral-rs::load_wallet_store",
+            "src-tauri::src::bin::chiral-rs::require_wallet",
+            "src-tauri::src::bin::chiral-rs::send_transaction"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_dht",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_dht.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::print_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::print_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_diagnostics.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::check_gateway_health",
+            "src-tauri::src::bin::chiral-rs::default_config_path",
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::check_gateway_health",
+            "src-tauri::src::bin::chiral-rs::default_config_path",
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_download",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_download.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::calculate_download_cost_wei",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::format_wei_as_chi",
+            "src-tauri::src::bin::chiral-rs::load_download_history",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::save_download_history",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::calculate_download_cost_wei",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::format_wei_as_chi",
+            "src-tauri::src::bin::chiral-rs::load_download_history",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::save_download_history",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_drive",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_drive.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::drive_create_folder",
+            "src-tauri::src::bin::chiral-rs::drive_create_share",
+            "src-tauri::src::bin::chiral-rs::drive_delete_item",
+            "src-tauri::src::bin::chiral-rs::drive_list_items",
+            "src-tauri::src::bin::chiral-rs::drive_set_starred",
+            "src-tauri::src::bin::chiral-rs::drive_update_item",
+            "src-tauri::src::bin::chiral-rs::drive_upload_file",
+            "src-tauri::src::bin::chiral-rs::export_torrent_for_drive",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::print_drive_tree",
+            "src-tauri::src::bin::chiral-rs::print_json",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::drive_create_folder",
+            "src-tauri::src::bin::chiral-rs::drive_create_share",
+            "src-tauri::src::bin::chiral-rs::drive_delete_item",
+            "src-tauri::src::bin::chiral-rs::drive_list_items",
+            "src-tauri::src::bin::chiral-rs::drive_set_starred",
+            "src-tauri::src::bin::chiral-rs::drive_update_item",
+            "src-tauri::src::bin::chiral-rs::drive_upload_file",
+            "src-tauri::src::bin::chiral-rs::export_torrent_for_drive",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::print_drive_tree",
+            "src-tauri::src::bin::chiral-rs::print_json",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_drop",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_drop.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::load_drop_history",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::print_json",
+            "src-tauri::src::bin::chiral-rs::save_drop_history",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::load_drop_history",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::print_json",
+            "src-tauri::src::bin::chiral-rs::save_drop_history",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_geth",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_geth.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+            "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::print_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+            "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::print_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_hosting",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_hosting.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::collect_site_files",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::print_json",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::collect_site_files",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::print_json",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_hosting_daemon_passthrough",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_hosting_daemon_passthrough.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_market",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_market.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral-rs::dht_put_value",
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir",
+            "src-tauri::src::bin::chiral-rs::list_agreements",
+            "src-tauri::src::bin::chiral-rs::load_agreement",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::store_agreement",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral-rs::dht_put_value",
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir",
+            "src-tauri::src::bin::chiral-rs::list_agreements",
+            "src-tauri::src::bin::chiral-rs::load_agreement",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::store_agreement",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_mining",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_mining.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+            "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::print_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+            "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::print_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_network",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_network.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::check_gateway_health"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::check_gateway_health"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_reputation",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_reputation.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_settings",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_settings.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::config_get",
+            "src-tauri::src::bin::chiral-rs::config_set",
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral-rs::default_config_path",
+            "src-tauri::src::bin::chiral-rs::load_config",
+            "src-tauri::src::bin::chiral-rs::save_config"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::config_get",
+            "src-tauri::src::bin::chiral-rs::config_set",
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral-rs::default_config_path",
+            "src-tauri::src::bin::chiral-rs::load_config",
+            "src-tauri::src::bin::chiral-rs::save_config"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_wallet",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_wallet.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::address_from_private_key",
+            "src-tauri::src::bin::chiral-rs::generate_wallet",
+            "src-tauri::src::bin::chiral-rs::load_wallet_store",
+            "src-tauri::src::bin::chiral-rs::normalize_private_key",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::require_wallet",
+            "src-tauri::src::bin::chiral-rs::save_wallet_store",
+            "src-tauri::src::bin::chiral-rs::wallet_store_path",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::address_from_private_key",
+            "src-tauri::src::bin::chiral-rs::generate_wallet",
+            "src-tauri::src::bin::chiral-rs::load_wallet_store",
+            "src-tauri::src::bin::chiral-rs::normalize_private_key",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::require_wallet",
+            "src-tauri::src::bin::chiral-rs::save_wallet_store",
+            "src-tauri::src::bin::chiral-rs::wallet_store_path",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/auto_publish_wallet_advertisement.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_start",
+            "src-tauri::src::bin::chiral_daemon-rs::main",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_create",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_import"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::headless_routes",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/headless_routes.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::read_geth_log",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/read_geth_log.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::geth_logs"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::remove_pid_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/remove_pid_file.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::main"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::set_miner_address",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/set_miner_address.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::write_pid_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/write_pid_file.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::main"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_policy_sign-rs::run_sign",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_policy_sign-rs/run_sign.rs",
+          "unit": "chiral_policy_sign-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::parse_secret",
+            "src-tauri::src::bin::chiral_policy_sign-rs::read_input",
+            "src-tauri::src::bin::chiral_policy_sign-rs::write_output"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::parse_secret",
+            "src-tauri::src::bin::chiral_policy_sign-rs::read_input",
+            "src-tauri::src::bin::chiral_policy_sign-rs::write_output"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_policy_sign-rs::run_verify",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_policy_sign-rs/run_verify.rs",
+          "unit": "chiral_policy_sign-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::read_input",
+            "src-tauri::src::bin::chiral_policy_sign-rs::verify_against"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::read_input",
+            "src-tauri::src::bin::chiral_policy_sign-rs::verify_against"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::relay_server-rs::keypair_from_secret",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/relay_server-rs/keypair_from_secret.rs",
+          "unit": "relay_server-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::relay_server-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::calculate_download_cost_wei",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/calculate_download_cost_wei.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_download"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::collect_site_files",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/collect_site_files.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_hosting"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::config_get",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/config_get.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_settings"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::config_set",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/config_set.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_settings"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::parse_bool"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::parse_bool"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/daemon_get_json_with_query.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_geth",
+            "src-tauri::src::bin::chiral-rs::handle_mining"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/daemon_post_empty.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_dht",
+            "src-tauri::src::bin::chiral-rs::handle_geth",
+            "src-tauri::src::bin::chiral-rs::handle_mining"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::derive_wallet_from_optional",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/derive_wallet_from_optional.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_account"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::normalize_private_key",
+            "src-tauri::src::bin::chiral-rs::require_wallet"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::normalize_private_key",
+            "src-tauri::src::bin::chiral-rs::require_wallet"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drive_create_folder",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drive_create_folder.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drive_create_share",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drive_create_share.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drive_delete_item",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drive_delete_item.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drive_list_items",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drive_list_items.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drive_set_starred",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drive_set_starred.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::drive_update_item"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::drive_update_item"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drive_upload_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drive_upload_file.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::export_torrent_for_drive",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/export_torrent_for_drive.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::build_torrent_file",
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::ensure_parent_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::build_torrent_file",
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::ensure_parent_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::format_wei_as_chi",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/format_wei_as_chi.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_download"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::generate_wallet",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/generate_wallet.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_wallet"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::address_from_private_key",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::address_from_private_key",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::get_transaction_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/get_transaction_history.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_account",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_history"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::handle_daemon",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/handle_daemon.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_hosting",
+            "src-tauri::src::bin::chiral-rs::handle_hosting_daemon_passthrough",
+            "src-tauri::src::bin::chiral-rs::main"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::check_gateway_health",
+            "src-tauri::src::bin::chiral-rs::check_headless_api",
+            "src-tauri::src::bin::chiral-rs::default_pid_file",
+            "src-tauri::src::bin::chiral-rs::locate_daemon_binary",
+            "src-tauri::src::bin::chiral-rs::process_exists",
+            "src-tauri::src::bin::chiral-rs::read_pid_file",
+            "src-tauri::src::bin::chiral-rs::terminate_process",
+            "src-tauri::src::bin::chiral_daemon-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::check_gateway_health",
+            "src-tauri::src::bin::chiral-rs::check_headless_api",
+            "src-tauri::src::bin::chiral-rs::default_pid_file",
+            "src-tauri::src::bin::chiral-rs::locate_daemon_binary",
+            "src-tauri::src::bin::chiral-rs::process_exists",
+            "src-tauri::src::bin::chiral-rs::read_pid_file",
+            "src-tauri::src::bin::chiral-rs::terminate_process",
+            "src-tauri::src::bin::chiral_daemon-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::list_agreements",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/list_agreements.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_market"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::load_agreement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/load_agreement.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_market"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::load_config",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/load_config.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_settings"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral-rs::default_config_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default",
+            "src-tauri::src::bin::chiral-rs::default_config_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::load_download_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/load_download_history.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_download"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::download_history_path",
+            "src-tauri::src::bin::chiral-rs::read_json_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::download_history_path",
+            "src-tauri::src::bin::chiral-rs::read_json_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::load_drop_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/load_drop_history.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drop"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::drop_history_path",
+            "src-tauri::src::bin::chiral-rs::read_json_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::drop_history_path",
+            "src-tauri::src::bin::chiral-rs::read_json_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::print_drive_tree",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/print_drive_tree.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::encode_html_escape",
+            "src-tauri::src::bin::chiral-rs::walk"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::encode_html_escape",
+            "src-tauri::src::bin::chiral-rs::walk"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::print_json",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/print_json.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_dht",
+            "src-tauri::src::bin::chiral-rs::handle_drive",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_geth",
+            "src-tauri::src::bin::chiral-rs::handle_hosting",
+            "src-tauri::src::bin::chiral-rs::handle_mining"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::publish_drive_item",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/publish_drive_item.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::dht_listening_addresses",
+            "src-tauri::src::bin::chiral-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral-rs::dht_put_value",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::parse_chi_to_wei",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_listening_addresses",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::dht_listening_addresses",
+            "src-tauri::src::bin::chiral-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral-rs::dht_put_value",
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral-rs::parse_chi_to_wei",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_listening_addresses",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::save_config",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/save_config.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_settings"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default_config_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default_config_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::save_download_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/save_download_history.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_download"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::download_history_path",
+            "src-tauri::src::bin::chiral-rs::write_json_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::download_history_path",
+            "src-tauri::src::bin::chiral-rs::write_json_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::save_drop_history",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/save_drop_history.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drop"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::drop_history_path",
+            "src-tauri::src::bin::chiral-rs::write_json_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::drop_history_path",
+            "src-tauri::src::bin::chiral-rs::write_json_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::save_wallet_store",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/save_wallet_store.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_wallet"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::wallet_store_path",
+            "src-tauri::src::bin::chiral-rs::write_json_file"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::wallet_store_path",
+            "src-tauri::src::bin::chiral-rs::write_json_file"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::send_transaction",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/send_transaction.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_account",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_send"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::encode_signed_tx",
+            "src-tauri::src::bin::chiral-rs::encode_unsigned_tx",
+            "src-tauri::src::bin::chiral-rs::get_wallet_balance",
+            "src-tauri::src::bin::chiral-rs::parse_chi_to_wei",
+            "src-tauri::src::bin::chiral-rs::parse_hex_u64",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::encode_signed_tx",
+            "src-tauri::src::bin::chiral-rs::encode_unsigned_tx",
+            "src-tauri::src::bin::chiral-rs::get_wallet_balance",
+            "src-tauri::src::bin::chiral-rs::parse_chi_to_wei",
+            "src-tauri::src::bin::chiral-rs::parse_hex_u64",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::store_agreement",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/store_agreement.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_market"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::unpublish_drive_item",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/unpublish_drive_item.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral-rs::dht_put_value",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral-rs::dht_put_value",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_policy_sign-rs::parse_secret",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_policy_sign-rs/parse_secret.rs",
+          "unit": "chiral_policy_sign-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_sign"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_policy_sign-rs::read_input",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_policy_sign-rs/read_input.rs",
+          "unit": "chiral_policy_sign-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_sign",
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_verify"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_policy_sign-rs::verify_against",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_policy_sign-rs/verify_against.rs",
+          "unit": "chiral_policy_sign-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_verify"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_policy_sign-rs::write_output",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_policy_sign-rs/write_output.rs",
+          "unit": "chiral_policy_sign-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_policy_sign-rs::run_sign"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::address_from_private_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/address_from_private_key.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::generate_wallet",
+            "src-tauri::src::bin::chiral-rs::handle_wallet"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::build_torrent_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/build_torrent_file.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::export_torrent_for_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::now_secs",
+            "src-tauri::src::bin::chiral_daemon-rs::new",
+            "src-tauri::src::bin::chiral_daemon-rs::now_secs"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::check_gateway_health",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/check_gateway_health.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+            "src-tauri::src::bin::chiral-rs::handle_network"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::check_headless_api",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/check_headless_api.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::compute_file_hash",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/compute_file_hash.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::export_torrent_for_drive",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::default_config_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/default_config_path.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+            "src-tauri::src::bin::chiral-rs::handle_settings",
+            "src-tauri::src::bin::chiral-rs::load_config",
+            "src-tauri::src::bin::chiral-rs::save_config"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::default_pid_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/default_pid_file.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::dht_get_value",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/dht_get_value.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_download",
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::dht_listening_addresses",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/dht_listening_addresses.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::publish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::dht_peer_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/dht_peer_id.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::dht_put_value",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/dht_put_value.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_json"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::download_history_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/download_history_path.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::load_download_history",
+            "src-tauri::src::bin::chiral-rs::save_download_history"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::headless_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::headless_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drive_update_item",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drive_update_item.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::drive_set_starred",
+            "src-tauri::src::bin::chiral-rs::handle_drive"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::drop_history_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/drop_history_path.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::load_drop_history",
+            "src-tauri::src::bin::chiral-rs::save_drop_history"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::headless_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::headless_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::encode_signed_tx",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/encode_signed_tx.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::send_transaction"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::rlp_append_bytes_as_uint"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::rlp_append_bytes_as_uint"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::encode_unsigned_tx",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/encode_unsigned_tx.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::send_transaction"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::ensure_agreements_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/ensure_agreements_dir.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::list_agreements",
+            "src-tauri::src::bin::chiral-rs::load_agreement",
+            "src-tauri::src::bin::chiral-rs::store_agreement"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::agreement_dir_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::agreement_dir_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::get_wallet_balance",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/get_wallet_balance.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_account",
+            "src-tauri::src::bin::chiral-rs::send_transaction"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::rpc_call"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::rpc_call"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::locate_daemon_binary",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/locate_daemon_binary.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::normalize_private_key",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/normalize_private_key.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::derive_wallet_from_optional",
+            "src-tauri::src::bin::chiral-rs::handle_wallet"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::parse_bool",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/parse_bool.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::config_set"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::parse_chi_to_wei",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/parse_chi_to_wei.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::send_transaction"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::parse_hex_u64",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/parse_hex_u64.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::send_transaction"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::process_exists",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/process_exists.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::process_exists__1"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::read_pid_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/read_pid_file.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::require_wallet",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/require_wallet.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::derive_wallet_from_optional",
+            "src-tauri::src::bin::chiral-rs::handle_account",
+            "src-tauri::src::bin::chiral-rs::handle_wallet"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::load_wallet_store"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::load_wallet_store"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::terminate_process",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/terminate_process.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::walk",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/walk.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::print_drive_tree"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::encode_html_escape"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::encode_html_escape"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::write_json_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/write_json_file.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::save_download_history",
+            "src-tauri::src::bin::chiral-rs::save_drop_history",
+            "src-tauri::src::bin::chiral-rs::save_wallet_store"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_parent_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::ensure_parent_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::default_pid_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/default_pid_file.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_listening_addresses",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_listening_addresses.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::publish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+            "src-tauri::src::bin::chiral_daemon-rs::json_error"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_peer_id.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_service"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 4,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::agreement_dir_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/agreement_dir_path.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::ensure_agreements_dir"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::daemon_get_json",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/daemon_get_json.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::dht_listening_addresses",
+            "src-tauri::src::bin::chiral-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral-rs::handle_dht",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_geth",
+            "src-tauri::src::bin::chiral-rs::handle_mining"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::daemon_post_json",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/daemon_post_json.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::daemon_post_empty",
+            "src-tauri::src::bin::chiral-rs::dht_get_value",
+            "src-tauri::src::bin::chiral-rs::dht_put_value",
+            "src-tauri::src::bin::chiral-rs::handle_dht",
+            "src-tauri::src::bin::chiral-rs::handle_download",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_geth",
+            "src-tauri::src::bin::chiral-rs::handle_hosting",
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::handle_mining",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::unpublish_drive_item"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::gateway_base_url",
+            "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::encode_html_escape",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/encode_html_escape.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::print_drive_tree",
+            "src-tauri::src::bin::chiral-rs::walk"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::ensure_parent_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/ensure_parent_dir.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::export_torrent_for_drive",
+            "src-tauri::src::bin::chiral-rs::write_json_file"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::load_wallet_store",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/load_wallet_store.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_account",
+            "src-tauri::src::bin::chiral-rs::handle_wallet",
+            "src-tauri::src::bin::chiral-rs::require_wallet"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::read_json_file",
+            "src-tauri::src::bin::chiral-rs::wallet_store_path"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::read_json_file",
+            "src-tauri::src::bin::chiral-rs::wallet_store_path"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::now_secs",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/now_secs.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::build_torrent_file",
+            "src-tauri::src::bin::chiral-rs::generate_wallet",
+            "src-tauri::src::bin::chiral-rs::handle_download",
+            "src-tauri::src::bin::chiral-rs::handle_drive",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::handle_reputation",
+            "src-tauri::src::bin::chiral-rs::handle_wallet",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::rlp_append_bytes_as_uint",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/rlp_append_bytes_as_uint.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::encode_signed_tx"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::strip_leading_zeros"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::strip_leading_zeros"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::rpc_call",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/rpc_call.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::get_wallet_balance"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral_daemon-rs::new"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::dht_service",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/dht_service.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_echo",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_get",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_health",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_listening_addresses",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peer_id",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peers",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_ping",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_put",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_register_shared_file",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_request_file",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_send_file",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_unregister_shared_file",
+            "src-tauri::src::bin::chiral_daemon-rs::file_search",
+            "src-tauri::src::bin::chiral_daemon-rs::hosting_get_registry",
+            "src-tauri::src::bin::chiral_daemon-rs::hosting_publish_ad",
+            "src-tauri::src::bin::chiral_daemon-rs::main",
+            "src-tauri::src::bin::chiral_daemon-rs::readiness_check",
+            "src-tauri::src::bin::chiral_daemon-rs::runtime_status"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::json_error",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/json_error.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral_daemon-rs::dht_echo",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_get",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_listening_addresses",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_ping",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_put",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_register_shared_file",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_request_file",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_send_file",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_start",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_stop",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_unregister_shared_file",
+            "src-tauri::src::bin::chiral_daemon-rs::drop_accept",
+            "src-tauri::src::bin::chiral_daemon-rs::drop_decline",
+            "src-tauri::src::bin::chiral_daemon-rs::file_search",
+            "src-tauri::src::bin::chiral_daemon-rs::geth_install",
+            "src-tauri::src::bin::chiral_daemon-rs::geth_logs",
+            "src-tauri::src::bin::chiral_daemon-rs::geth_start",
+            "src-tauri::src::bin::chiral_daemon-rs::geth_status",
+            "src-tauri::src::bin::chiral_daemon-rs::geth_stop",
+            "src-tauri::src::bin::chiral_daemon-rs::hosting_get_registry",
+            "src-tauri::src::bin::chiral_daemon-rs::hosting_publish_ad",
+            "src-tauri::src::bin::chiral_daemon-rs::mining_blocks",
+            "src-tauri::src::bin::chiral_daemon-rs::mining_start",
+            "src-tauri::src::bin::chiral_daemon-rs::mining_status",
+            "src-tauri::src::bin::chiral_daemon-rs::mining_stop",
+            "src-tauri::src::bin::chiral_daemon-rs::set_miner_address",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_balance",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_create",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_faucet",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_history",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_import",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_receipt",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_send",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_show"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::now_secs",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/now_secs.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::build_torrent_file",
+            "src-tauri::src::bin::chiral-rs::generate_wallet",
+            "src-tauri::src::bin::chiral-rs::handle_download",
+            "src-tauri::src::bin::chiral-rs::handle_drive",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::handle_reputation",
+            "src-tauri::src::bin::chiral-rs::handle_wallet",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 5,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::gateway_base_url",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/gateway_base_url.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::drive_create_folder",
+            "src-tauri::src::bin::chiral-rs::drive_create_share",
+            "src-tauri::src::bin::chiral-rs::drive_delete_item",
+            "src-tauri::src::bin::chiral-rs::drive_list_items",
+            "src-tauri::src::bin::chiral-rs::drive_update_item",
+            "src-tauri::src::bin::chiral-rs::drive_upload_file",
+            "src-tauri::src::bin::chiral-rs::handle_hosting"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::parse_json_or_error",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/parse_json_or_error.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::drive_create_folder",
+            "src-tauri::src::bin::chiral-rs::drive_create_share",
+            "src-tauri::src::bin::chiral-rs::drive_list_items",
+            "src-tauri::src::bin::chiral-rs::drive_update_item",
+            "src-tauri::src::bin::chiral-rs::drive_upload_file"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::read_json_file",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/read_json_file.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::load_download_history",
+            "src-tauri::src::bin::chiral-rs::load_drop_history",
+            "src-tauri::src::bin::chiral-rs::load_wallet_store"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::strip_leading_zeros",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/strip_leading_zeros.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::rlp_append_bytes_as_uint"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::wallet_store_path",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/wallet_store_path.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::handle_wallet",
+            "src-tauri::src::bin::chiral-rs::load_wallet_store",
+            "src-tauri::src::bin::chiral-rs::save_wallet_store"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::headless_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::headless_dir"
+          ]
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::new",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/new.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::address_from_private_key",
+            "src-tauri::src::bin::chiral-rs::build_torrent_file",
+            "src-tauri::src::bin::chiral-rs::collect_site_files",
+            "src-tauri::src::bin::chiral-rs::compute_file_hash",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json",
+            "src-tauri::src::bin::chiral-rs::daemon_get_json_with_query",
+            "src-tauri::src::bin::chiral-rs::daemon_post_json",
+            "src-tauri::src::bin::chiral-rs::default__3",
+            "src-tauri::src::bin::chiral-rs::drive_upload_file",
+            "src-tauri::src::bin::chiral-rs::get_transaction_history",
+            "src-tauri::src::bin::chiral-rs::handle_daemon",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+            "src-tauri::src::bin::chiral-rs::handle_drive",
+            "src-tauri::src::bin::chiral-rs::handle_drop",
+            "src-tauri::src::bin::chiral-rs::handle_hosting",
+            "src-tauri::src::bin::chiral-rs::handle_market",
+            "src-tauri::src::bin::chiral-rs::handle_reputation",
+            "src-tauri::src::bin::chiral-rs::list_agreements",
+            "src-tauri::src::bin::chiral-rs::process_exists",
+            "src-tauri::src::bin::chiral-rs::process_exists__1",
+            "src-tauri::src::bin::chiral-rs::publish_drive_item",
+            "src-tauri::src::bin::chiral-rs::rpc_call",
+            "src-tauri::src::bin::chiral-rs::send_transaction",
+            "src-tauri::src::bin::chiral-rs::terminate_process",
+            "src-tauri::src::bin::chiral_daemon-rs::auto_publish_wallet_advertisement",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_peers",
+            "src-tauri::src::bin::chiral_daemon-rs::dht_start",
+            "src-tauri::src::bin::chiral_daemon-rs::file_search",
+            "src-tauri::src::bin::chiral_daemon-rs::geth_install",
+            "src-tauri::src::bin::chiral_daemon-rs::headless_routes",
+            "src-tauri::src::bin::chiral_daemon-rs::hosting_publish_ad",
+            "src-tauri::src::bin::chiral_daemon-rs::main",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_create",
+            "src-tauri::src::bin::chiral_daemon-rs::wallet_import",
+            "src-tauri::src::bin::chiral_policy_sign-rs::read_input",
+            "src-tauri::src::bin::relay_server-rs::keypair_from_secret",
+            "src-tauri::src::bin::relay_server-rs::main"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        }
+      ]
+    },
+    {
+      "layer": 6,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::default",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/default.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::default__1",
+            "src-tauri::src::bin::chiral-rs::default__2",
+            "src-tauri::src::bin::chiral-rs::default__3",
+            "src-tauri::src::bin::chiral-rs::handle_settings",
+            "src-tauri::src::bin::chiral-rs::load_config",
+            "src-tauri::src::bin::chiral-rs::read_json_file",
+            "src-tauri::src::bin::relay_server-rs::main"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral-rs::headless_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/headless_dir.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::download_history_path",
+            "src-tauri::src::bin::chiral-rs::drop_history_path",
+            "src-tauri::src::bin::chiral-rs::wallet_store_path"
+          ],
+          "phase11_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ],
+          "all_callees": [
+            "src-tauri::src::bin::chiral-rs::default_data_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_data_dir"
+          ]
+        }
+      ]
+    },
+    {
+      "layer": 7,
+      "functions": [
+        {
+          "name": "src-tauri::src::bin::chiral-rs::default_data_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral-rs/default_data_dir.rs",
+          "unit": "chiral-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::agreement_dir_path",
+            "src-tauri::src::bin::chiral-rs::default_pid_file",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+            "src-tauri::src::bin::chiral-rs::handle_reputation",
+            "src-tauri::src::bin::chiral-rs::headless_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::main"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        },
+        {
+          "name": "src-tauri::src::bin::chiral_daemon-rs::default_data_dir",
+          "file": "fm_agent/extracted_functions/src-tauri/src/bin/chiral_daemon-rs/default_data_dir.rs",
+          "unit": "chiral_daemon-rs",
+          "phase11_callers": [
+            "src-tauri::src::bin::chiral-rs::agreement_dir_path",
+            "src-tauri::src::bin::chiral-rs::default_pid_file",
+            "src-tauri::src::bin::chiral-rs::handle_diagnostics",
+            "src-tauri::src::bin::chiral-rs::handle_reputation",
+            "src-tauri::src::bin::chiral-rs::headless_dir",
+            "src-tauri::src::bin::chiral_daemon-rs::default_pid_file",
+            "src-tauri::src::bin::chiral_daemon-rs::main"
+          ],
+          "phase11_callees": [],
+          "all_callees": []
+        }
+      ]
+    }
+  ]
+}
