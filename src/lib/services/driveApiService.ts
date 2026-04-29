@@ -13,14 +13,21 @@ function getCrudBase(): string {
   return localBase || RELAY_BASE;
 }
 
-/** Current owner wallet address — set via setOwner() */
+/** Current owner wallet address — set via setDriveOwner() */
 let currentOwner = '';
+/** Current owner private key — set via setDriveOwner(). Used to sign
+ *  the X-Owner-Sig header (FM-A03). Never sent over the wire itself. */
+let currentOwnerPrivateKey = '';
 const REQUEST_TIMEOUT_MS = 8_000;
 const inflightGetRequests = new Map<string, Promise<unknown>>();
 
-/** Set the owner wallet address for all Drive API requests */
-export function setDriveOwner(address: string) {
+/** Set the owner wallet address (and signing key) for all Drive API
+ *  requests. The private key never leaves this process — it's only fed
+ *  into the Tauri `compute_owner_proof` command to compute the
+ *  X-Owner-Sig header per request. */
+export function setDriveOwner(address: string, privateKey: string = '') {
   currentOwner = address;
+  currentOwnerPrivateKey = privateKey;
 }
 
 export interface DriveItem {
@@ -117,12 +124,33 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const run = async (): Promise<T> => {
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
+      // Compute the owner-proof header (FM-A03). The server's middleware
+      // rejects /api/drive/* requests without a valid X-Owner-Sig.
+      let proofHeader: Record<string, string> = {};
+      if (currentOwner) {
+        proofHeader['X-Owner'] = currentOwner;
+        if (currentOwnerPrivateKey && isTauri()) {
+          try {
+            const invoke = await getInvoke();
+            const proof = await invoke('compute_owner_proof', {
+              method,
+              path,
+              walletAddress: currentOwner,
+              privateKey: currentOwnerPrivateKey,
+            });
+            proofHeader['X-Owner-Sig'] = proof.header;
+          } catch {
+            // Fall through with X-Owner only — server will 401, which
+            // is the correct behavior for an unsigned request.
+          }
+        }
+      }
       const res = await fetch(`${getCrudBase()}${path}`, {
         ...init,
         signal: controller.signal,
         headers: {
           ...(init?.headers || {}),
-          ...(currentOwner ? { 'X-Owner': currentOwner } : {}),
+          ...proofHeader,
         },
       });
       if (!res.ok) {

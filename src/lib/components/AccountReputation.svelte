@@ -68,7 +68,7 @@
     error = null;
 
     try {
-      setRatingOwner(wallet.address);
+      setRatingOwner(wallet.address, wallet.privateKey ?? '');
       const resp = await ratingApi.getReputation(wallet.address);
       events = [...resp.events].sort((a, b) => b.createdAt - a.createdAt);
       elo = resp.elo;

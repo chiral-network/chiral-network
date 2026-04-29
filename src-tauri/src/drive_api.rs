@@ -1575,8 +1575,13 @@ pub fn drive_routes(state: Arc<DriveState>) -> Router {
     // explicit-size check rejects oversized uploads, so concurrent
     // 499 MiB uploads can OOM the daemon. Mirrors the cap that
     // `cdn_server::cdn_routes` already enforces.
-    Router::new()
-        // API routes
+
+    // Protected /api/drive/* routes go behind the owner-proof
+    // middleware (FM-A03): every request must carry an X-Owner +
+    // X-Owner-Sig pair that recovers to the claimed wallet, otherwise
+    // 401. Without this, the bare X-Owner header was a string anyone
+    // could forge to act as any user.
+    let protected = Router::new()
         .route("/api/drive/items", get(list_items))
         .route("/api/drive/folders", post(create_folder))
         .route("/api/drive/upload", post(upload_file))
@@ -1586,9 +1591,18 @@ pub fn drive_routes(state: Arc<DriveState>) -> Router {
         .route("/api/drive/share", post(create_share))
         .route("/api/drive/share/:token", delete(revoke_share))
         .route("/api/drive/shares", get(list_shares))
-        // Public browse/download routes
+        .layer(axum::middleware::from_fn(crate::auth::owner_proof_middleware));
+
+    // Public browse/download routes are intentionally unauthenticated:
+    // visitors hit them with an `?access=<txhash>` query (which
+    // `verify_share_access` validates against the per-share spent-tx
+    // ledger). These never read X-Owner.
+    let public = Router::new()
         .route("/drive/:token", get(public_browse))
-        .route("/drive/:token/*path", get(public_browse_path))
+        .route("/drive/:token/*path", get(public_browse_path));
+
+    protected
+        .merge(public)
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024))
         .layer(Extension(state))
 }
