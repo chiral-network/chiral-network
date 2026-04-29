@@ -863,7 +863,7 @@
       return;
     }
     try {
-      setRatingOwner($walletAccount.address);
+      setRatingOwner($walletAccount.address, $walletAccount.privateKey ?? '');
       await ratingApi.recordTransferOutcome(
         context.transferId,
         context.seederWallet,

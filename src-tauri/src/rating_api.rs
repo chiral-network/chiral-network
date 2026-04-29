@@ -325,9 +325,19 @@ async fn batch_reputation(
 }
 
 pub fn rating_routes(state: Arc<RatingState>) -> Router {
-    Router::new()
+    // POST /api/ratings/transfer is gated by the owner-proof middleware
+    // (FM-A03 + FM-A12): the downloader's wallet must prove control of
+    // the X-Owner address, otherwise anyone could submit a "Failed"
+    // outcome against an arbitrary seeder and tank their Elo.
+    let protected = Router::new()
         .route("/api/ratings/transfer", post(submit_transfer))
+        .layer(axum::middleware::from_fn(crate::auth::owner_proof_middleware));
+
+    // Read-only routes don't need authentication — Elo scores are
+    // public anyway.
+    let public = Router::new()
         .route("/api/ratings/batch", post(batch_reputation))
-        .route("/api/ratings/:wallet", get(get_reputation))
-        .layer(Extension(state))
+        .route("/api/ratings/:wallet", get(get_reputation));
+
+    protected.merge(public).layer(Extension(state))
 }

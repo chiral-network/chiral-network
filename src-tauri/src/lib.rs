@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod chain_rpc_api;
 pub mod dht;
 pub mod drive_api;
@@ -6280,6 +6281,45 @@ pub struct VersionStatus {
     policy: version::VersionPolicy,
 }
 
+/// Compute an owner-proof signature so the frontend can attach the
+/// `X-Owner-Sig: <ts>:<sig>` header to HTTP requests against the
+/// daemon's authenticated routes. Stateless — `ts` is taken from the
+/// system clock; the resulting proof is good for ±5 min.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OwnerProof {
+    timestamp: i64,
+    signature: String,
+    /// Convenience: the value the caller should put into `X-Owner-Sig`
+    /// directly — `<ts>:<signature>`.
+    header: String,
+}
+
+#[tauri::command]
+fn compute_owner_proof(
+    method: String,
+    path: String,
+    wallet_address: String,
+    private_key: String,
+) -> Result<OwnerProof, String> {
+    if wallet_address.is_empty() || private_key.is_empty() {
+        return Err("wallet_address and private_key required".to_string());
+    }
+    let owner = wallet_address.to_lowercase();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let payload = auth::owner_proof_payload(&owner, ts, &method, &path);
+    let signature = wallet::sign_message(&private_key, &payload)
+        .map_err(|e| format!("sign_message failed: {}", e))?;
+    Ok(OwnerProof {
+        timestamp: ts,
+        header: format!("{}:{}", ts, signature),
+        signature,
+    })
+}
+
 /// Returns the active version policy (network-fetched if available, else
 /// the bundled snapshot).
 #[tauri::command]
@@ -6619,6 +6659,7 @@ pub fn run() {
             // Version policy
             get_version_policy,
             get_version_status,
+            compute_owner_proof,
             // Bootstrap health commands
             check_bootstrap_health,
             get_bootstrap_health,

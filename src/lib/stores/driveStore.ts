@@ -66,11 +66,12 @@ function normalizePriceChi(priceChi?: string | number | null): string | null {
   return raw;
 }
 
-/** Sync the current wallet address to the API service. */
+/** Sync the current wallet address + signing key to the API service. */
 function syncOwner(): string {
   const account = get(walletAccount);
   const addr = account?.address ?? '';
-  setDriveOwner(addr);
+  const privateKey = account?.privateKey ?? '';
+  setDriveOwner(addr, privateKey);
   return addr;
 }
 

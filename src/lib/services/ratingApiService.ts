@@ -2,10 +2,31 @@ const RELAY_BASE = 'http://130.245.173.73:8080';
 
 /** Current owner wallet address */
 let currentOwner = '';
+/** Current owner private key — used to sign the X-Owner-Sig header
+ *  on POST /api/ratings/transfer (FM-A03). Never sent over the wire. */
+let currentOwnerPrivateKey = '';
 
-/** Set the owner wallet for rating API requests */
-export function setRatingOwner(address: string) {
+let _isTauri: boolean | null = null;
+function isTauri(): boolean {
+  if (_isTauri === null) {
+    _isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI_INTERNALS__;
+  }
+  return _isTauri;
+}
+
+let _invoke: ((cmd: string, args?: Record<string, unknown>) => Promise<any>) | null = null;
+async function getInvoke() {
+  if (!_invoke) {
+    const mod = await import('@tauri-apps/api/core');
+    _invoke = mod.invoke;
+  }
+  return _invoke;
+}
+
+/** Set the owner wallet (and signing key) for rating API requests */
+export function setRatingOwner(address: string, privateKey: string = '') {
   currentOwner = address;
+  currentOwnerPrivateKey = privateKey;
 }
 
 export type TransferOutcome = 'completed' | 'failed';
@@ -68,11 +89,33 @@ function normalizeEvent(event: any): ReputationEvent {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || 'GET').toUpperCase();
+  // Authenticated routes (e.g. POST /api/ratings/transfer) require the
+  // X-Owner-Sig header (FM-A03 + FM-A12). Compute it via the Tauri
+  // command — the private key never leaves this process.
+  const ownerHeaders: Record<string, string> = {};
+  if (currentOwner) {
+    ownerHeaders['X-Owner'] = currentOwner;
+    if (currentOwnerPrivateKey && isTauri() && method !== 'GET') {
+      try {
+        const invoke = await getInvoke();
+        const proof = await invoke('compute_owner_proof', {
+          method,
+          path,
+          walletAddress: currentOwner,
+          privateKey: currentOwnerPrivateKey,
+        });
+        ownerHeaders['X-Owner-Sig'] = proof.header;
+      } catch {
+        // Server will 401 on a missing sig — let the response surface.
+      }
+    }
+  }
   const res = await fetch(`${RELAY_BASE}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),
-      ...(currentOwner ? { 'X-Owner': currentOwner } : {}),
+      ...ownerHeaders,
     },
   });
   if (!res.ok) {
