@@ -271,7 +271,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
     let mut activated_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut disabled_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut reseeded_local = 0usize;
-    let mut reseeded_dht_metadata = 0usize;
+    let reseeded_dht_metadata = 0usize;
 
     for (
         item_id,
@@ -280,7 +280,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
         storage_path,
         file_size_hint,
         existing_merkle_root,
-        protocol,
+        _protocol,
         price_chi,
     ) in candidates
     {
@@ -1244,7 +1244,6 @@ pub(crate) async fn remove_seeder_entry(
 /// the provider set, then fetches each provider's per-seeder record in
 /// parallel. Signature-verified entries are returned; unsigned or
 /// signature-invalid entries are logged and dropped.
-#[allow(dead_code)] // Stage 1: helper for Stage 2 callers.
 async fn fetch_seeders(
     dht: &dht::DhtService,
     file_hash: &str,

@@ -5,6 +5,11 @@
 # Tests features NOT covered by full-feature-test.sh. Run after that script.
 # Assumes 10-node cluster is running on ports 9421-9430 with wallets created.
 #
+# NOTE (FM-A03): /api/drive/* now requires a signed-challenge header
+# `X-Owner-Sig: <unix_ts>:<hex_sig>` in addition to `X-Owner`. The Drive
+# sections in this script still use bare `X-Owner` and will receive 401.
+# See full-feature-test.sh for the same caveat.
+#
 # Usage:
 #   ./scripts/extended-feature-test.sh
 # =============================================================================
