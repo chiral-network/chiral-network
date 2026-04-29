@@ -3995,7 +3995,12 @@ async fn publish_site_to_relay(
     state: tauri::State<'_, AppState>,
     site_id: String,
     relay_url: String,
+    owner_wallet: String,
+    private_key: String,
 ) -> Result<String, String> {
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("Wallet must be unlocked to publish a site to a relay".into());
+    }
     // Find the site in local metadata
     let mut all_sites = hosting::load_sites();
     let _site = all_sites
@@ -4016,12 +4021,18 @@ async fn publish_site_to_relay(
     let relay_base = relay_url.trim_end_matches('/');
     let url = format!("{}/api/sites/relay-register", relay_base);
 
+    let owner_lower = owner_wallet.to_lowercase();
+    let payload = relay_share_proxy::register_payload("site", &site_id, &owner_lower, &origin);
+    let signature = wallet::sign_message(&private_key, &payload)
+        .map_err(|e| format!("Failed to sign register payload: {}", e))?;
+
     let resp = rpc_client::client()
         .post(&url)
         .json(&serde_json::json!({
             "site_id": site_id,
             "origin_url": origin,
-            "owner_wallet": "",
+            "owner_wallet": owner_lower,
+            "signature": signature,
         }))
         .send()
         .await
@@ -4071,7 +4082,12 @@ async fn publish_site_to_relay(
 async fn unpublish_site_from_relay(
     state: tauri::State<'_, AppState>,
     site_id: String,
+    owner_wallet: String,
+    private_key: String,
 ) -> Result<(), String> {
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("Wallet must be unlocked to unpublish a site from a relay".into());
+    }
     let mut all_sites = hosting::load_sites();
     let site = all_sites
         .iter()
@@ -4091,10 +4107,24 @@ async fn unpublish_site_from_relay(
         .map(|pos| &relay_url[..pos])
         .ok_or_else(|| "Invalid relay URL format".to_string())?;
 
-    let url = format!("{}/api/sites/relay-register/{}", relay_base, site_id);
+    let path = format!("/api/sites/relay-register/{}", site_id);
+    let url = format!("{}{}", relay_base, path);
+
+    // Owner-proof header: server checks the recovered wallet matches
+    // the site's stored `owner_wallet` (FM-A04/A05).
+    let owner_lower = owner_wallet.to_lowercase();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let proof_payload = auth::owner_proof_payload(&owner_lower, ts, "DELETE", &path);
+    let signature = wallet::sign_message(&private_key, &proof_payload)
+        .map_err(|e| format!("Failed to sign unregister proof: {}", e))?;
 
     let resp = rpc_client::client()
         .delete(&url)
+        .header("X-Owner", &owner_lower)
+        .header("X-Owner-Sig", format!("{}:{}", ts, signature))
         .send()
         .await
         .map_err(|e| format!("Failed to connect to relay: {}", e))?;
@@ -6181,7 +6211,11 @@ async fn publish_drive_share(
     share_token: String,
     relay_url: String,
     owner_wallet: String,
+    private_key: String,
 ) -> Result<(), String> {
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("Wallet must be unlocked to publish a share to the relay".into());
+    }
     let origin = state
         .hosting_server_addr
         .lock()
@@ -6192,13 +6226,22 @@ async fn publish_drive_share(
     let relay_base = relay_url.trim_end_matches('/');
     let url = format!("{}/api/drive/relay-register", relay_base);
 
+    // Sign the (operation, token, owner_wallet, origin_url) tuple so
+    // the relay can verify we own `owner_wallet` and bind this
+    // signature to this exact registration (FM-A04/A05).
+    let owner_lower = owner_wallet.to_lowercase();
+    let payload = relay_share_proxy::register_payload("share", &share_token, &owner_lower, &origin);
+    let signature = wallet::sign_message(&private_key, &payload)
+        .map_err(|e| format!("Failed to sign register payload: {}", e))?;
+
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
         .json(&serde_json::json!({
             "token": share_token,
             "origin_url": origin,
-            "owner_wallet": owner_wallet,
+            "owner_wallet": owner_lower,
+            "signature": signature,
         }))
         .timeout(std::time::Duration::from_secs(30))
         .send()
@@ -6236,13 +6279,32 @@ async fn unpublish_drive_share(
     state: tauri::State<'_, AppState>,
     share_token: String,
     relay_url: String,
+    owner_wallet: String,
+    private_key: String,
 ) -> Result<(), String> {
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("Wallet must be unlocked to unpublish a share".into());
+    }
     let relay_base = relay_url.trim_end_matches('/');
-    let url = format!("{}/api/drive/relay-register/{}", relay_base, share_token);
+    let path = format!("/api/drive/relay-register/{}", share_token);
+    let url = format!("{}{}", relay_base, path);
+
+    // Owner-proof: server checks `X-Owner-Sig` and verifies the
+    // recovered wallet matches the share's stored `owner_wallet`.
+    let owner_lower = owner_wallet.to_lowercase();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let proof_payload = auth::owner_proof_payload(&owner_lower, ts, "DELETE", &path);
+    let signature = wallet::sign_message(&private_key, &proof_payload)
+        .map_err(|e| format!("Failed to sign unregister proof: {}", e))?;
 
     let client = reqwest::Client::new();
     let resp = client
         .delete(&url)
+        .header("X-Owner", &owner_lower)
+        .header("X-Owner-Sig", format!("{}:{}", ts, signature))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -6279,6 +6341,29 @@ pub struct VersionStatus {
     /// The policy that produced this status — relay-fetched if we have one,
     /// otherwise the bundled compile-time snapshot.
     policy: version::VersionPolicy,
+}
+
+/// Sign a relay register-payload (FM-A04/A05). Frontend calls this
+/// before POST /api/{drive,sites}/relay-register so the relay can
+/// verify the registrant owns `owner_wallet`.
+#[tauri::command]
+fn compute_relay_register_signature(
+    operation: String,
+    id: String,
+    owner_wallet: String,
+    origin_url: String,
+    private_key: String,
+) -> Result<String, String> {
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("owner_wallet and private_key required".to_string());
+    }
+    if operation != "share" && operation != "site" {
+        return Err("operation must be 'share' or 'site'".to_string());
+    }
+    let payload =
+        relay_share_proxy::register_payload(&operation, &id, &owner_wallet.to_lowercase(), &origin_url);
+    wallet::sign_message(&private_key, &payload)
+        .map_err(|e| format!("sign_message failed: {}", e))
 }
 
 /// Compute an owner-proof signature so the frontend can attach the
@@ -6660,6 +6745,7 @@ pub fn run() {
             get_version_policy,
             get_version_status,
             compute_owner_proof,
+            compute_relay_register_signature,
             // Bootstrap health commands
             check_bootstrap_health,
             get_bootstrap_health,
