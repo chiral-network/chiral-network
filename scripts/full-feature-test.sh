@@ -7,6 +7,15 @@
 #
 # Usage:
 #   ./scripts/full-feature-test.sh
+#
+# NOTE (FM-A03): /api/drive/* now requires a signed-challenge header
+# `X-Owner-Sig: <unix_ts>:<hex_sig>` in addition to `X-Owner`. This
+# script still uses bare `X-Owner` and will receive 401 from the Drive
+# routes. To fix, sign each request with the Tauri command
+# `compute_owner_proof` (or the wallet's secp256k1 key) over the
+# canonical payload defined in `src-tauri/src/auth.rs`. Until then,
+# the Drive sections of this script are expected to fail and the
+# script's success report should be interpreted accordingly.
 # =============================================================================
 set -uo pipefail
 

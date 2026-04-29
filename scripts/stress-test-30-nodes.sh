@@ -5,6 +5,11 @@
 # Tests EVERY feature of the application across 30 Docker instances.
 # Pushes the system to its limits with concurrent operations.
 #
+# NOTE (FM-A03): the Drive enumeration steps (curl /api/drive/items
+# with bare `X-Owner: stress_test`) will return 401 since the daemon
+# now requires `X-Owner-Sig`. Other steps (DHT, file_search,
+# CDN upload) are unaffected.
+#
 # Usage: bash scripts/stress-test-30-nodes.sh
 # =============================================================================
 

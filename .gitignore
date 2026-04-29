@@ -25,3 +25,6 @@ dist-ssr
 
 # Tauri
 src-tauri/target
+
+# Local agent-runner session metadata (apas wrapper)
+.apas

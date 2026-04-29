@@ -311,7 +311,7 @@ fn is_valid_wallet(s: &str) -> bool {
 /// Loopback is permitted at registration time because `fix_origin_url`
 /// substitutes the registrant's public IP at request handling.
 fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::net::{IpAddr, Ipv4Addr};
     let lower = origin_url.trim().to_lowercase();
     let rest = if let Some(r) = lower.strip_prefix("http://") {
         r
