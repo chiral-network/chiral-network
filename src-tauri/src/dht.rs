@@ -1085,16 +1085,22 @@ async fn persist_spent_tx_set(set: &HashSet<String>) {
     let _ = tokio::fs::write(&path, json).await;
 }
 
-/// Returns true if the tx was newly recorded, false if it had already been
-/// spent (duplicate / replay). The seeder must reject the second case.
-async fn claim_spent_tx(tx_hash: &str) -> bool {
-    let tx_lower = tx_hash.to_lowercase();
+/// Returns true if the tx was newly recorded for this file, false if it
+/// had already been spent against this file (duplicate / replay). The
+/// seeder must reject the second case.
+///
+/// Entries are keyed by `(tx_hash, file_hash)` so the same payment can
+/// only redeem one delivery of one file. Without the file binding, a
+/// single payment to a wallet that seeds many priced files could be
+/// replayed across all of them (FM-A21).
+async fn claim_spent_tx(tx_hash: &str, file_hash: &str) -> bool {
+    let key = format!("{}:{}", tx_hash.to_lowercase(), file_hash.to_lowercase());
     let store = spent_tx_store().await;
     let mut guard = store.lock().await;
-    if guard.contains(&tx_lower) {
+    if guard.contains(&key) {
         return false;
     }
-    guard.insert(tx_lower);
+    guard.insert(key);
     let snapshot = guard.clone();
     drop(guard);
     persist_spent_tx_set(&snapshot).await;
@@ -3648,7 +3654,7 @@ async fn handle_behaviour_event(
                                                     // replays can't slip through between the
                                                     // peek above and the chain verify. If the
                                                     // claim fails, another task beat us to it.
-                                                    if !claim_spent_tx(&payment_tx).await {
+                                                    if !claim_spent_tx(&payment_tx, &file_hash).await {
                                                         println!(
                                                             "❌ Race: tx {} redeemed by a concurrent request",
                                                             payment_tx
@@ -4108,6 +4114,20 @@ async fn handle_behaviour_event(
                                     // Verify chunk hash against manifest
                                     let mut downloads = active_downloads.lock().await;
                                     if let Some(dl) = downloads.get_mut(&request_id) {
+                                        // Reject out-of-sequence chunks. Without this, a hostile
+                                        // seeder can answer chunk N=last first, skipping forward
+                                        // and writing an out-of-order file. The full-file hash
+                                        // catches the corrupt result, but only after wasting
+                                        // bandwidth on the partial download. Bound the damage.
+                                        if (chunk_index as usize) >= dl.chunk_hashes.len()
+                                            || chunk_index != dl.current_chunk_index
+                                        {
+                                            println!(
+                                                "❌ Chunk {} arrived out-of-sequence (expected {}); dropping",
+                                                chunk_index, dl.current_chunk_index
+                                            );
+                                            return;
+                                        }
                                         let expected_hash = &dl.chunk_hashes[chunk_index as usize];
                                         let mut hasher = Sha256::new();
                                         hasher.update(&chunk_data);

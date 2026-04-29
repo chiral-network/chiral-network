@@ -187,8 +187,15 @@ fn is_item_under_shared_root(item: &DriveItem, root: &DriveItem, all_items: &[Dr
     if item.id == root.id {
         return true;
     }
+    // A malformed manifest (or an attacker who got write access via
+    // FM-A03) can produce a parent-cycle that hangs this loop and
+    // holds the manifest read lock — DoS amplifier. Bound the walk.
+    let mut visited: HashSet<&str> = HashSet::new();
     let mut current_parent = item.parent_id.as_deref();
     while let Some(pid) = current_parent {
+        if !visited.insert(pid) {
+            return false; // cycle detected
+        }
         if pid == root.id {
             return true;
         }
@@ -1561,6 +1568,13 @@ fn url_encode(s: &str) -> String {
 
 /// Create the Drive API router. Uses Extension for state injection.
 pub fn drive_routes(state: Arc<DriveState>) -> Router {
+    use axum::extract::DefaultBodyLimit;
+    // 500 MiB cap on every multipart upload field. Without this, axum's
+    // default body limit interacts badly with `field.bytes().await` —
+    // the entire field is buffered into a `Vec<u8>` before the
+    // explicit-size check rejects oversized uploads, so concurrent
+    // 499 MiB uploads can OOM the daemon. Mirrors the cap that
+    // `cdn_server::cdn_routes` already enforces.
     Router::new()
         // API routes
         .route("/api/drive/items", get(list_items))
@@ -1575,5 +1589,6 @@ pub fn drive_routes(state: Arc<DriveState>) -> Router {
         // Public browse/download routes
         .route("/drive/:token", get(public_browse))
         .route("/drive/:token/*path", get(public_browse_path))
+        .layer(DefaultBodyLimit::max(500 * 1024 * 1024))
         .layer(Extension(state))
 }

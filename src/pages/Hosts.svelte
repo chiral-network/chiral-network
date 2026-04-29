@@ -1271,6 +1271,7 @@
               fileSize: 0,
               priceChi: null,
               walletAddress: wallet?.address ?? null,
+              privateKey: wallet?.privateKey ?? null,
             });
           } catch { /* skip */ }
         }

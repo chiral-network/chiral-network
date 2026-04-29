@@ -370,50 +370,19 @@ async fn auto_reseed_drive_files(state: &AppState) {
             continue;
         }
 
-        // Re-publish immutable file metadata only if it's missing. The blob
-        // is per-file immutable in the provider-records model, so if a
-        // previous publish (or a different publisher) already wrote it,
-        // leave it alone — our per-seeder record carries the price/wallet.
-        let dht_key = format!("chiral_file_{}", file_hash);
-        let blob_present = matches!(
-            dht.get_dht_value(dht_key.clone()).await,
-            Ok(Some(_))
+        // Auto-reseed runs at startup without an unlocked wallet, so it
+        // has no private key to sign FileMetadata or SeederInfo. Readers
+        // drop unsigned records (FM-A07/A08), so writing them here would
+        // just spam the DHT with useless data. Skip publishing entirely
+        // — the user can re-seed from the Drive page once the wallet is
+        // unlocked, which goes through `publish_drive_file_inner` and
+        // signs properly.
+        println!(
+            "[DRIVE] Auto-reseed for {} skipped — wallet must be unlocked to re-publish signed records",
+            file_hash
         );
-        if !blob_present {
-            let metadata = FileMetadata {
-                hash: file_hash.clone(),
-                file_name: file_name.clone(),
-                file_size,
-                protocol: protocol.clone().unwrap_or_else(|| "WebRTC".to_string()),
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                wallet_address: wallet_addr.clone(),
-                publisher_signature: String::new(),
-            };
-            if let Ok(metadata_json) = serde_json::to_string(&metadata) {
-                let _ = dht.put_dht_value(dht_key, metadata_json).await;
-            }
-        }
-
-        let our_seeder = SeederInfo {
-            peer_id: peer_id.clone(),
-            price_wei: price_wei.to_string(),
-            wallet_address: wallet_addr,
-            multiaddrs: our_multiaddrs.clone(),
-            signature: String::new(),
-        };
-        if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {
-            println!(
-                "[DRIVE] Auto-reseed provider publish failed for {}: {}",
-                file_name, e
-            );
-            continue;
-        }
-
-        reseeded_dht_metadata += 1;
     }
+    let _ = (reseeded_dht_metadata, &peer_id, &our_multiaddrs);
 
     let mut manifest_changed = false;
     if !hash_updates.is_empty() || !attempted_ids.is_empty() {
@@ -1293,24 +1262,32 @@ async fn fetch_seeders(
     let mut seeders = Vec::new();
     for (peer_id, entry) in results {
         match entry {
-            Some(entry) if !entry.signature.is_empty() && !entry.verify(file_hash) => {
-                // Present-but-invalid signature is still a red flag — drop.
-                println!(
-                    "  ⚠️ Seeder entry for {} has INVALID signature — dropping",
-                    &peer_id[..20.min(peer_id.len())]
-                );
+            Some(entry) if entry.verify(file_hash) => {
+                // Signed + valid.
+                seeders.push(entry);
             }
             Some(entry) => {
-                // Unsigned entries are accepted (see signing-plumb TODO on
-                // the write sites). Signed + valid also accepted.
-                seeders.push(entry);
+                // Unsigned or invalid signature. CLAUDE.md's trust contract
+                // ("ECDSA-signed seeder entries prevent payment redirection")
+                // requires us to drop these — accepting them would let any
+                // peer redirect downloads to an attacker wallet. Empty-sig
+                // entries fall in here too.
+                let reason = if entry.signature.is_empty() { "unsigned" } else { "INVALID signature" };
+                println!(
+                    "  ⚠️ Seeder entry for {} {} — dropping",
+                    &peer_id[..20.min(peer_id.len())],
+                    reason
+                );
             }
             None => {
                 // Provider advertises the hash but their per-seeder record
                 // isn't retrievable yet (put replication lagging, or peer
-                // never got a chance to persist it). Emit a stub so the UI
-                // still surfaces the seeder; the real price/wallet come
-                // from the FileInfo response when the download starts.
+                // never got a chance to persist it). Emit a stub with empty
+                // wallet/price so the UI still surfaces the seeder; the
+                // download path treats stubs as "not yet trustworthy" —
+                // the chunked-transfer FileInfo response is what the
+                // downloader will actually use, and that path needs its
+                // own signature wiring (FM-A09).
                 seeders.push(SeederInfo {
                     peer_id,
                     price_wei: String::new(),
@@ -1324,28 +1301,80 @@ async fn fetch_seeders(
     Ok(seeders)
 }
 
-/// Build a signed SeederInfo entry.
-fn make_signed_seeder(
+/// Build a signed SeederInfo entry. Returns `None` if the wallet
+/// address or private key are missing — readers reject unsigned
+/// SeederInfo entries, so publishing one would just poison the DHT
+/// with a record nobody trusts.
+fn try_make_signed_seeder(
     peer_id: &str,
     file_hash: &str,
     price_wei: &str,
     wallet_address: &str,
     multiaddrs: Vec<String>,
     private_key: Option<&str>,
-) -> SeederInfo {
-    let signature = if let Some(key) = private_key {
-        let payload = SeederInfo::sign_payload(peer_id, file_hash, wallet_address);
-        wallet::sign_message(key, &payload).unwrap_or_default()
-    } else {
-        String::new()
+) -> Option<SeederInfo> {
+    let key = match private_key {
+        Some(k) if !k.is_empty() => k,
+        _ => return None,
     };
-    SeederInfo {
+    if wallet_address.is_empty() {
+        return None;
+    }
+    let payload = SeederInfo::sign_payload(peer_id, file_hash, wallet_address);
+    let signature = wallet::sign_message(key, &payload).unwrap_or_default();
+    if signature.is_empty() {
+        return None;
+    }
+    let entry = SeederInfo {
         peer_id: peer_id.to_string(),
         price_wei: price_wei.to_string(),
         wallet_address: wallet_address.to_string(),
         multiaddrs,
         signature,
+    };
+    if !entry.verify(file_hash) {
+        return None;
     }
+    Some(entry)
+}
+
+/// Build a signed FileMetadata blob. Returns `None` if the wallet
+/// address or private key are missing — readers reject unsigned
+/// FileMetadata, so publishing one is worse than not publishing at
+/// all (the reader's not-found path lets the user retry from a
+/// signed publisher).
+fn try_make_signed_file_metadata(
+    hash: &str,
+    file_name: &str,
+    file_size: u64,
+    protocol: &str,
+    wallet_address: &str,
+    private_key: Option<&str>,
+) -> Option<FileMetadata> {
+    let key = match private_key {
+        Some(k) if !k.is_empty() => k,
+        _ => return None,
+    };
+    if wallet_address.is_empty() {
+        return None;
+    }
+    let mut metadata = FileMetadata {
+        hash: hash.to_string(),
+        file_name: file_name.to_string(),
+        file_size,
+        protocol: protocol.to_string(),
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default(),
+        wallet_address: wallet_address.to_string(),
+        publisher_signature: String::new(),
+    };
+    metadata.sign(key);
+    if !metadata.verify_publisher() {
+        return None;
+    }
+    Some(metadata)
 }
 
 #[tauri::command]
@@ -1356,6 +1385,7 @@ async fn publish_file(
     protocol: Option<String>,
     price_chi: Option<String>,
     wallet_address: Option<String>,
+    private_key: Option<String>,
 ) -> Result<PublishResult, String> {
     // Read file and compute hash
     let file_data = std::fs::read(&file_path).map_err(|e| e.to_string())?;
@@ -1411,36 +1441,38 @@ async fn publish_file(
         .await;
 
         let our_multiaddrs = dht.get_listening_addresses().await;
-        let our_seeder = SeederInfo {
-            peer_id: peer_id.clone(),
-            price_wei: price_wei_val.to_string(),
-            wallet_address: wallet_addr.clone(),
-            multiaddrs: our_multiaddrs,
-            signature: String::new(),
-        };
+        let proto = protocol.unwrap_or_else(|| "WebRTC".to_string());
+        let our_seeder = try_make_signed_seeder(
+            &peer_id,
+            &merkle_root,
+            &price_wei_val.to_string(),
+            &wallet_addr,
+            our_multiaddrs,
+            private_key.as_deref(),
+        )
+        .ok_or_else(|| {
+            "Wallet must be unlocked (private key + address required) to publish a file".to_string()
+        })?;
 
-        // Immutable metadata write: only publish the blob if absent. This
-        // node is the publisher if nothing is there; otherwise someone else
-        // already published the name/size/signature and we just attach our
-        // per-seeder record below.
+        // Immutable metadata write: only publish the blob if absent.
         let dht_key = format!("chiral_file_{}", merkle_root);
         let blob_present = matches!(
             dht.get_dht_value(dht_key.clone()).await,
             Ok(Some(_))
         );
         if !blob_present {
-            let metadata = FileMetadata {
-                hash: merkle_root.clone(),
-                file_name: file_name.clone(),
+            let metadata = try_make_signed_file_metadata(
+                &merkle_root,
+                &file_name,
                 file_size,
-                protocol: protocol.unwrap_or_else(|| "WebRTC".to_string()),
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                wallet_address: wallet_addr,
-                publisher_signature: String::new(),
-            };
+                &proto,
+                &wallet_addr,
+                private_key.as_deref(),
+            )
+            .ok_or_else(|| {
+                "Wallet must be unlocked (private key + address required) to publish a file"
+                    .to_string()
+            })?;
             let metadata_json = serde_json::to_string(&metadata)
                 .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
             dht.put_dht_value(dht_key, metadata_json).await?;
@@ -1466,6 +1498,7 @@ async fn publish_file_data(
     file_data: Vec<u8>,
     price_chi: Option<String>,
     wallet_address: Option<String>,
+    private_key: Option<String>,
 ) -> Result<PublishResult, String> {
     let file_size = file_data.len() as u64;
 
@@ -1521,13 +1554,17 @@ async fn publish_file_data(
         .await;
 
         let our_multiaddrs = dht.get_listening_addresses().await;
-        let our_seeder = SeederInfo {
-            peer_id: peer_id.clone(),
-            price_wei: price_wei_val.to_string(),
-            wallet_address: wallet_addr.clone(),
-            multiaddrs: our_multiaddrs,
-            signature: String::new(),
-        };
+        let our_seeder = try_make_signed_seeder(
+            &peer_id,
+            &merkle_root,
+            &price_wei_val.to_string(),
+            &wallet_addr,
+            our_multiaddrs,
+            private_key.as_deref(),
+        )
+        .ok_or_else(|| {
+            "Wallet must be unlocked (private key + address required) to publish a file".to_string()
+        })?;
 
         // Immutable metadata: write only if absent.
         let dht_key = format!("chiral_file_{}", merkle_root);
@@ -1536,18 +1573,18 @@ async fn publish_file_data(
             Ok(Some(_))
         );
         if !blob_present {
-            let metadata = FileMetadata {
-                hash: merkle_root.clone(),
-                file_name: file_name.clone(),
+            let metadata = try_make_signed_file_metadata(
+                &merkle_root,
+                &file_name,
                 file_size,
-                protocol: "WebRTC".to_string(),
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                wallet_address: wallet_addr,
-                publisher_signature: String::new(),
-            };
+                "WebRTC",
+                &wallet_addr,
+                private_key.as_deref(),
+            )
+            .ok_or_else(|| {
+                "Wallet must be unlocked (private key + address required) to publish a file"
+                    .to_string()
+            })?;
             let metadata_json = serde_json::to_string(&metadata)
                 .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
             dht.put_dht_value(dht_key, metadata_json).await?;
@@ -1719,50 +1756,21 @@ async fn try_repair_local_drive_seed(
         .await
         .unwrap_or_default();
 
-        let dht_key = format!("chiral_file_{}", file_hash_for_publish);
-        let blob_present = matches!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                dht_for_publish.get_dht_value(dht_key.clone()),
-            )
-            .await,
-            Ok(Ok(Some(_)))
+        // Repair runs without an unlocked wallet, so it has no signing
+        // key. Readers reject unsigned FileMetadata / SeederInfo
+        // (FM-A07/A08), so writing them here would be useless. Don't
+        // publish — the user can re-seed manually once they unlock the
+        // wallet, which goes through the signed publishers.
+        let _ = (
+            peer_id,
+            our_multiaddrs,
+            file_hash_for_publish,
+            file_name_for_publish,
+            file_size,
+            protocol_for_publish,
+            wallet_for_publish,
+            price_wei,
         );
-        if !blob_present {
-            let metadata = FileMetadata {
-                hash: file_hash_for_publish.clone(),
-                file_name: file_name_for_publish.clone(),
-                file_size,
-                protocol: protocol_for_publish.clone(),
-                created_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                wallet_address: wallet_for_publish.clone(),
-                publisher_signature: String::new(),
-            };
-            if let Ok(json) = serde_json::to_string(&metadata) {
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    dht_for_publish.put_dht_value(dht_key, json),
-                )
-                .await;
-            }
-        }
-
-        let our_seeder = SeederInfo {
-            peer_id: peer_id.clone(),
-            price_wei: price_wei.to_string(),
-            wallet_address: wallet_for_publish,
-            multiaddrs: our_multiaddrs,
-            signature: String::new(),
-        };
-        let _ = peer_id;
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            publish_seeder_entry(&dht_for_publish, &file_hash_for_publish, &our_seeder),
-        )
-        .await;
     });
 
     // Keep runtime Drive state consistent with repaired registration.
@@ -1893,12 +1901,31 @@ async fn search_file(
                         metadata.file_name, metadata.hash
                     );
 
-                    // Verify publisher signature if present
-                    if metadata.verify_publisher() {
-                        println!("✅ File metadata signature valid (publisher: {})", metadata.wallet_address);
-                    } else if !metadata.publisher_signature.is_empty() {
-                        println!("⚠️ File metadata signature INVALID — record may be tampered");
+                    // Trust contract: file metadata MUST be signed by its
+                    // publisher's wallet. An unsigned or invalid record may
+                    // have been forged by any peer (the DHT itself accepts
+                    // anything at any key), and downstream code consumes
+                    // `metadata.file_name` / `metadata.wallet_address` —
+                    // both attacker-controllable in an unsigned record.
+                    // Drop the metadata entirely; let the local-seed and
+                    // CDN fallbacks below handle the search.
+                    if !metadata.verify_publisher() {
+                        let reason = if metadata.publisher_signature.is_empty() {
+                            "unsigned"
+                        } else {
+                            "INVALID signature"
+                        };
+                        println!(
+                            "⚠️ File metadata for {} {} — dropping. Re-publish from a wallet to make this file discoverable.",
+                            metadata.hash, reason
+                        );
+                        return if let Some(local) = local_result {
+                            Ok(Some(local))
+                        } else {
+                            Ok(None)
+                        };
                     }
+                    println!("✅ File metadata signature valid (publisher: {})", metadata.wallet_address);
 
                     // Seeder list comes exclusively from Kademlia providers +
                     // per-seeder records now. The blob is immutable metadata
@@ -2455,6 +2482,7 @@ async fn republish_shared_file(
     file_size: u64,
     price_chi: Option<String>,
     wallet_address: Option<String>,
+    private_key: Option<String>,
 ) -> Result<(), String> {
     println!(
         "Re-publishing shared file: {} (hash: {})",
@@ -2498,12 +2526,19 @@ async fn republish_shared_file(
         if !peer_id.is_empty() {
             let dht_key = format!("chiral_file_{}", file_hash);
             let our_multiaddrs = dht.get_listening_addresses().await;
-            let our_seeder = SeederInfo {
-                peer_id: peer_id.clone(),
-                price_wei: price_wei.to_string(),
-                wallet_address: wallet_addr.clone(),
-                multiaddrs: our_multiaddrs,
-                signature: String::new(),
+            let Some(our_seeder) = try_make_signed_seeder(
+                &peer_id,
+                &file_hash,
+                &price_wei.to_string(),
+                &wallet_addr,
+                our_multiaddrs,
+                private_key.as_deref(),
+            ) else {
+                println!(
+                    "Re-publish for {} skipped — wallet must be unlocked to sign records",
+                    file_hash
+                );
+                return Ok(());
             };
 
             let blob_present = matches!(
@@ -2511,20 +2546,17 @@ async fn republish_shared_file(
                 Ok(Some(_))
             );
             if !blob_present {
-                let metadata = FileMetadata {
-                    hash: file_hash.clone(),
-                    file_name: file_name.clone(),
+                if let Some(metadata) = try_make_signed_file_metadata(
+                    &file_hash,
+                    &file_name,
                     file_size,
-                    protocol: "WebRTC".to_string(),
-                    created_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                    wallet_address: wallet_addr.clone(),
-                    publisher_signature: String::new(),
-                };
-                if let Ok(metadata_json) = serde_json::to_string(&metadata) {
-                    let _ = dht.put_dht_value(dht_key, metadata_json).await;
+                    "WebRTC",
+                    &wallet_addr,
+                    private_key.as_deref(),
+                ) {
+                    if let Ok(metadata_json) = serde_json::to_string(&metadata) {
+                        let _ = dht.put_dht_value(dht_key, metadata_json).await;
+                    }
                 }
             }
 
@@ -4641,6 +4673,11 @@ async fn list_directory_sites(
     if registry.is_empty() {
         return Ok(Vec::new());
     }
+    // Cap registry size on read. The DHT key is unsigned and any peer
+    // can stuff a 100k-name array into it; without a cap, every client's
+    // `list_directory_sites` fans out 100k Kademlia GETs per call.
+    const MAX_DIRECTORY_LISTING: usize = 4096;
+    let registry: Vec<String> = registry.into_iter().take(MAX_DIRECTORY_LISTING).collect();
     let fetches = registry.into_iter().map(|name| {
         let dht = dht.clone();
         async move {
@@ -5264,10 +5301,14 @@ async fn publish_drive_file_inner(
     .await;
 
     let our_multiaddrs = dht.get_listening_addresses().await;
-    let our_seeder = make_signed_seeder(
+    let our_seeder = try_make_signed_seeder(
         &peer_id, &file_hash, &price_wei_val.to_string(),
         &wallet_addr, our_multiaddrs, private_key.as_deref(),
-    );
+    )
+    .ok_or_else(|| {
+        "Cannot publish seeder entry: wallet must be unlocked (private key + address required)"
+            .to_string()
+    })?;
 
     // Write the immutable file-metadata blob only if it doesn't already exist.
     // Seeder info lives in per-seeder records + provider registration below.
@@ -5277,21 +5318,13 @@ async fn publish_drive_file_inner(
         Ok(Some(_))
     );
     if !blob_present {
-        let mut metadata = FileMetadata {
-            hash: file_hash.clone(),
-            file_name: file_name.clone(),
-            file_size: actual_size,
-            protocol: proto.clone(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            wallet_address: wallet_addr.clone(),
-            publisher_signature: String::new(),
-        };
-        if let Some(ref key) = private_key {
-            metadata.sign(key);
-        }
+        let metadata = try_make_signed_file_metadata(
+            &file_hash, &file_name, actual_size, &proto, &wallet_addr, private_key.as_deref(),
+        )
+        .ok_or_else(|| {
+            "Cannot publish file metadata: wallet must be unlocked (private key + address required)"
+                .to_string()
+        })?;
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         dht.put_dht_value(dht_key, metadata_json).await?;
@@ -5334,6 +5367,7 @@ async fn seed_hosted_file(
     file_hash: String,
     price_chi: Option<String>,
     wallet_address: String,
+    private_key: Option<String>,
 ) -> Result<(), String> {
     if file_hash.is_empty() {
         return Err("file_hash required".into());
@@ -5392,13 +5426,18 @@ async fn seed_hosted_file(
 
     // Update DHT record to add ourselves as a seeder
     let our_addrs = dht.get_listening_addresses().await;
-    let our_seeder = SeederInfo {
-        peer_id: peer_id.clone(),
-        price_wei: price_wei_val.to_string(),
-        wallet_address: wallet_address.clone(),
-        multiaddrs: our_addrs,
-            signature: String::new(),
-    };
+    let our_seeder = try_make_signed_seeder(
+        &peer_id,
+        &file_hash,
+        &price_wei_val.to_string(),
+        &wallet_address,
+        our_addrs,
+        private_key.as_deref(),
+    )
+    .ok_or_else(|| {
+        "Wallet must be unlocked (private key + address required) to seed a hosted file"
+            .to_string()
+    })?;
 
     // Immutable metadata blob: write only if absent.
     let dht_key = format!("chiral_file_{}", file_hash);
@@ -5407,18 +5446,18 @@ async fn seed_hosted_file(
         Ok(Some(_))
     );
     if !blob_present {
-        let metadata = FileMetadata {
-            hash: file_hash.clone(),
-            file_name: file_name.clone(),
+        let metadata = try_make_signed_file_metadata(
+            &file_hash,
+            &file_name,
             file_size,
-            protocol: "WebRTC".into(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            wallet_address: wallet_address.clone(),
-            publisher_signature: String::new(),
-        };
+            "WebRTC",
+            &wallet_address,
+            private_key.as_deref(),
+        )
+        .ok_or_else(|| {
+            "Wallet must be unlocked (private key + address required) to publish file metadata"
+                .to_string()
+        })?;
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize: {}", e))?;
         dht.put_dht_value(dht_key, metadata_json).await?;
@@ -5554,15 +5593,59 @@ struct FolderManifest {
     hash: String,
     /// Display name copied from the seller's local Drive item.
     name: String,
-    /// Wallet that published this folder bundle (informational).
+    /// Wallet that published this folder bundle. Authoritative — verified
+    /// via `publisher_signature` below before this manifest is trusted.
     owner_wallet: String,
     created_at: u64,
     files: Vec<FolderManifestFile>,
-    /// ECDSA signature of the canonical folder digest by `owner_wallet`.
-    /// Empty until we wire the wallet private key through (the per-seeder
-    /// records have the same TODO).
+    /// ECDSA signature by `owner_wallet` over the canonical bytes of every
+    /// other field. Readers reject manifests that fail to verify so a
+    /// peer can't forge `name` / `owner_wallet` / `files` for a hash they
+    /// don't own.
     #[serde(default)]
     publisher_signature: String,
+}
+
+impl FolderManifest {
+    /// Length-prefixed canonical bytes — same encoding as
+    /// `version::canonical_signing_payload` and
+    /// `SiteDirectoryEntry::sign_payload`. Order: hash, name,
+    /// owner_wallet, created_at, then each file as
+    /// (rel_path, file_hash, file_size).
+    fn sign_payload(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(256);
+        for part in [
+            self.hash.as_bytes(),
+            self.name.as_bytes(),
+            self.owner_wallet.as_bytes(),
+        ] {
+            out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+            out.extend_from_slice(part);
+        }
+        out.extend_from_slice(&self.created_at.to_le_bytes());
+        out.extend_from_slice(&(self.files.len() as u32).to_le_bytes());
+        for f in &self.files {
+            for part in [f.rel_path.as_bytes(), f.file_hash.as_bytes()] {
+                out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+                out.extend_from_slice(part);
+            }
+            out.extend_from_slice(&f.file_size.to_le_bytes());
+        }
+        out
+    }
+
+    fn sign(&mut self, private_key: &str) {
+        let payload = self.sign_payload();
+        self.publisher_signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
+    }
+
+    fn verify(&self) -> bool {
+        if self.publisher_signature.is_empty() || self.owner_wallet.is_empty() {
+            return false;
+        }
+        let payload = self.sign_payload();
+        wallet::verify_signature(&payload, &self.publisher_signature, &self.owner_wallet)
+    }
 }
 
 /// Deterministic content hash for a folder bundle. Combines the owner
@@ -5739,7 +5822,7 @@ async fn publish_drive_folder(
         None
     } else {
         let hash = compute_folder_hash(&owner, &manifest_files);
-        let manifest = FolderManifest {
+        let mut manifest = FolderManifest {
             hash: hash.clone(),
             name: folder_name,
             owner_wallet: owner.clone(),
@@ -5747,21 +5830,36 @@ async fn publish_drive_folder(
             files: manifest_files,
             publisher_signature: String::new(),
         };
-        let dht = {
-            let dht_guard = state.dht.lock().await;
-            dht_guard.as_ref().cloned()
-        };
-        if let Some(dht) = dht {
-            if let Ok(json) = serde_json::to_string(&manifest) {
-                if let Err(e) = dht.put_dht_value(folder_manifest_key(&hash), json).await {
-                    println!("[DRIVE] Folder manifest publish failed for {}: {}", hash, e);
-                }
+        let signed = match private_key.as_deref() {
+            Some(key) if !key.is_empty() => {
+                manifest.sign(key);
+                manifest.verify()
             }
-            // Register as a Kademlia provider for the folder hash so other
-            // peers' get_providers calls find this seller.
-            let _ = dht.start_providing_file(hash.clone()).await;
+            _ => false,
+        };
+        if !signed {
+            println!(
+                "[DRIVE] Folder manifest publish for {} skipped — wallet must be unlocked to sign the bundle",
+                hash
+            );
+            None
+        } else {
+            let dht = {
+                let dht_guard = state.dht.lock().await;
+                dht_guard.as_ref().cloned()
+            };
+            if let Some(dht) = dht {
+                if let Ok(json) = serde_json::to_string(&manifest) {
+                    if let Err(e) = dht.put_dht_value(folder_manifest_key(&hash), json).await {
+                        println!("[DRIVE] Folder manifest publish failed for {}: {}", hash, e);
+                    }
+                }
+                // Register as a Kademlia provider for the folder hash so other
+                // peers' get_providers calls find this seller.
+                let _ = dht.start_providing_file(hash.clone()).await;
+            }
+            Some(hash)
         }
-        Some(hash)
     };
 
     // Mark the folder itself as seeding + record the price so the UI can
@@ -5937,6 +6035,21 @@ async fn search_folder(
         Ok(m) => m,
         Err(e) => return Err(format!("Invalid folder manifest: {}", e)),
     };
+    // Trust contract: folder manifests are ECDSA-signed by `owner_wallet`.
+    // Without verification, any peer could re-publish `chiral_folder_<H>`
+    // with a forged `name` / `owner_wallet` / file list (FM-A20).
+    if !manifest.verify() {
+        let reason = if manifest.publisher_signature.is_empty() {
+            "unsigned"
+        } else {
+            "INVALID signature"
+        };
+        println!(
+            "⚠️ Folder manifest for {} {} — dropping",
+            manifest.hash, reason
+        );
+        return Ok(None);
+    }
 
     // For every file in the bundle, fetch its seeders in parallel.
     let fetches = manifest.files.iter().cloned().map(|f| {

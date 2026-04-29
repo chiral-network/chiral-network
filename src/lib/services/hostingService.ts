@@ -8,7 +8,7 @@ import type {
 } from '$lib/types/hosting';
 import { ratingApi } from '$lib/services/ratingApiService';
 import { get } from 'svelte/store';
-import { peers } from '$lib/stores';
+import { peers, walletAccount } from '$lib/stores';
 
 const AGREEMENT_INDEX_KEY = 'chiral-my-agreement-ids';
 
@@ -274,12 +274,28 @@ class HostingService {
           merkleRoot: fileHash,
         });
 
-        // Register as seeder in DHT so downloaders can find us
-        await invoke('seed_hosted_file', {
-          fileHash,
-          priceChi: null, // host can change price later from Drive page
-          walletAddress: agreement.hostWalletAddress,
-        });
+        // Register as seeder in DHT so downloaders can find us. We need
+        // the host wallet's private key to ECDSA-sign the seeder entry —
+        // readers reject unsigned records (FM-A08). If the host's wallet
+        // isn't unlocked at fulfilment time, skip the publish; the host
+        // can re-seed later from the Drive page.
+        const wallet = get(walletAccount);
+        const privateKey =
+          wallet?.address?.toLowerCase() === agreement.hostWalletAddress.toLowerCase()
+            ? wallet?.privateKey ?? null
+            : null;
+        if (!privateKey) {
+          console.warn(
+            `[HOSTING] Skipping seed_hosted_file for ${fileHash} — host wallet is not unlocked`
+          );
+        } else {
+          await invoke('seed_hosted_file', {
+            fileHash,
+            priceChi: null, // host can change price later from Drive page
+            walletAddress: agreement.hostWalletAddress,
+            privateKey,
+          });
+        }
       } catch (err) {
         console.error(`Failed to seed hosted file ${fileHash}:`, err);
       }

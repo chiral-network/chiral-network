@@ -507,7 +507,14 @@ pub fn create_gateway_router(
         app = app.merge(rating_api::rating_routes(rs));
     }
 
-    // Merge relay share proxy routes if relay share state is provided (relay server)
+    // Relay mode iff a relay-share registry was provided. Used below to
+    // pick a CORS policy: the public relay needs `Any` so browsers
+    // visiting `https://relay/sites/<id>/` from any origin can fetch,
+    // but the local desktop daemon (loopback-bound, owner-trusted via
+    // `X-Owner`) must not accept cross-origin mutations from random
+    // websites the user visits, or those sites can issue authenticated
+    // Drive operations against the daemon.
+    let is_relay = relay_share_state.is_some();
     if let Some(rss) = relay_share_state {
         let tunnel_reg = Arc::new(relay_share_proxy::TunnelRegistry::new());
         app = app.merge(relay_share_proxy::relay_share_routes(rss, tunnel_reg));
@@ -516,13 +523,45 @@ pub fn create_gateway_router(
     // One-time wallet backup email endpoint (relay-backed, no persistence).
     app = app.merge(wallet_backup_api::wallet_backup_routes());
 
-    app.layer(
+    let cors = if is_relay {
         CorsLayer::new()
             .allow_origin(Any)
             .allow_methods(Any)
             .allow_headers(Any)
-            .expose_headers(Any),
-    )
+            .expose_headers(Any)
+    } else {
+        // Local daemon: only the Tauri webview origins and the dev-server
+        // origin are trusted. Cross-origin requests from arbitrary
+        // websites are rejected at preflight, blocking CSRF against
+        // X-Owner-authenticated routes.
+        let allowed = [
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+            "http://localhost:1420",
+            "http://localhost:5173",
+        ]
+        .iter()
+        .filter_map(|s| s.parse().ok())
+        .collect::<Vec<axum::http::HeaderValue>>();
+        CorsLayer::new()
+            .allow_origin(allowed)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::HeaderName::from_static("x-owner"),
+                axum::http::HeaderName::from_static("x-chiral-client-version"),
+            ])
+    };
+
+    app.layer(cors)
     // Outermost: version-gate every /api/* request. Layers run
     // last-applied-first on incoming requests, so this runs *before*
     // the CORS layer and the route handlers. Static site / drive /
