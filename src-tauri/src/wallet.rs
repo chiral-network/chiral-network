@@ -626,13 +626,20 @@ pub fn verify_signature(data: &[u8], signature_hex: &str, expected_address: &str
 /// blocks (~15s). Ceiling ~28s, after which we give up. Returns Ok(false) if
 /// the tx never mines or mines with status != 0x1.
 pub async fn wait_for_tx_mined(tx_hash: &str) -> Result<bool, String> {
-    // 500ms × 4 (2s) + 1s × 6 (6s) + 2s × 10 (20s) ≈ 28s ceiling.
-    // Compared to the old 15 × 2s schedule, this lands within ~500ms of the
-    // block confirmation instead of within ~2s.
+    // 500ms × 4 (2s) + 1s × 6 (6s) + 2s × 10 (20s) + 5s × 12 (60s)
+    // ≈ 88s ceiling. The old 28s schedule was too tight on freshnet —
+    // blocks sometimes take 15-60s to propagate from the miner to a
+    // remote relay's RPC node, and the user's CDN upload would fail
+    // with "Payment not confirmed in time" on a tx that DID land
+    // moments later, forcing a re-payment because the frontend then
+    // sent a fresh send_transaction. Tighter early polling (sub-second)
+    // catches the common fast case; the longer tail catches slow
+    // propagation without forcing the user to pay twice.
     const DELAYS_MS: &[u64] = &[
         500, 500, 500, 500,
         1000, 1000, 1000, 1000, 1000, 1000,
         2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000,
+        5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000,
     ];
     let endpoint = crate::geth::effective_rpc_endpoint();
     for (i, delay_ms) in DELAYS_MS.iter().enumerate() {
