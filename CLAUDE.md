@@ -183,13 +183,41 @@ Use `notify`/`notifyDetail` for event-driven notifications (downloads, network, 
 
 ## Relay Server
 
-The relay server runs on `130.245.173.73` as a systemd service (`relay-server.service`):
-- **P2P relay**: port 4001 (libp2p circuit relay v2, Kademlia routing)
-- **HTTP API**: port 8080 (reputation, drive proxy, wallet backup, site hosting)
-- Filters private IPs from Kademlia routing table (only stores public + relay circuit addresses)
-- Max 256 circuit reservations, 16 per peer
+The canonical box `130.245.173.73` runs **two** systemd services. Both must be updated together when shipping FM-Agent / trust-contract changes — clients reject unsigned records published by either side, so a stale binary on one of them silently breaks the network.
+
+| Service | Binary | Listens on | Role |
+|---|---|---|---|
+| `relay-server.service` | `/usr/local/bin/relay_server` | tcp/4001 (libp2p), tcp/8080 (HTTP gateway) | libp2p circuit relay v2 + same-origin HTTP API: reputation, drive proxy, wallet backup, site hosting, `/api/chain/rpc` proxy. |
+| `cdn-freshnet.service` | `/opt/chiral/chiral_daemon` | tcp/9420 (HTTP), tcp/4002 (libp2p), spawns geth on 8545/30303 | The always-on CDN node. Same `chiral_daemon` binary as desktop, just headless and pre-configured with `--auto-start-dht --auto-start-geth --auto-mine`. |
+
+Both services should be restarted together after any update to the trust contract:
+```bash
+ssh root@130.245.173.73 'systemctl restart relay-server.service cdn-freshnet.service'
+```
+
+Other notes:
+- The relay filters private IPs from the Kademlia routing table (only stores public + relay-circuit addresses). Max 256 circuit reservations, 16 per peer.
+- Geth is spawned by `chiral_daemon` (the `cdn-freshnet` unit). Its `--http.api` deliberately omits `admin` since the namespace is reachable over the public HTTP RPC and `admin_stopRPC` was used in the wild to take the RPC offline; admin remains available over the IPC socket (`<datadir>/geth/geth.ipc`).
+- The CDN's `chiral_daemon` is started with `CHIRAL_WALLET_KEY_FILE=/etc/chiral-cdn-wallet.key` (mode 0600 hex private key). Without it, the daemon can populate the CDN's `wallet_address` from `--miner-address` but has no signing key, so every CDN-served file ends up with empty `chiral_seeder_*` / `chiral_file_*` signatures — clients reject those records and the upload is unreachable. Generate a key with `chiral wallet create` (or any 32-byte hex), drop it at the path, set perms 0600.
 
 SMTP env vars: `CHIRAL_WALLET_EMAIL_SMTP_HOST`, `CHIRAL_WALLET_EMAIL_FROM` (required); `CHIRAL_WALLET_EMAIL_SMTP_USERNAME`, `CHIRAL_WALLET_EMAIL_SMTP_PASSWORD` (optional for local postfix).
+
+## k3s Test Cluster
+
+Cluster lives at `130.245.173.231` (login `debian`, sudo allowed). 30 chiral test daemons in namespace `chiral-test` as bare `Pod` objects (no Deployment / StatefulSet wrapping them). Image `docker.io/library/chiral-network-node:latest`, `imagePullPolicy: Never` — pulls aren't possible, so the image must be loaded into containerd manually:
+
+```bash
+# On the dev box, after `cargo build --release` is current:
+docker build -f Dockerfile.local -t chiral-network-node:latest .
+docker save chiral-network-node:latest -o /tmp/cnn.tar
+scp /tmp/cnn.tar debian@130.245.173.231:/tmp/
+ssh debian@130.245.173.231 'sudo k3s ctr images import /tmp/cnn.tar'
+ssh debian@130.245.173.231 'kubectl delete pods --all -n chiral-test'
+# Re-apply the manifest (it's not auto-recreated since pods are bare):
+ssh debian@130.245.173.231 'kubectl apply -f /tmp/chiral-nodes.yaml'
+```
+
+The manifest at `/tmp/chiral-nodes.yaml` on `.231` covers the 30 pods (each with default container networking, an `emptyDir` `/data` volume, livenessProbe on `/api/health`, args `--port 9419 --auto-start-dht`). Pods reach the canonical `.73` relay through libp2p circuit relay since they use container networking, not host networking.
 
 ## Implementation Notes
 
@@ -220,6 +248,8 @@ SMTP env vars: `CHIRAL_WALLET_EMAIL_SMTP_HOST`, `CHIRAL_WALLET_EMAIL_FROM` (requ
 - CDN expiration cleanup runs every 60s — removes expired files from disk + DHT.
 - Download page queries CDN servers as fallback when DHT search times out.
 - Stop seeding removes peer from DHT seeder list (not just local shared files).
+- Wallet RPC reads (`get_wallet_balance`, `verify_tx_details`) walk an ordered fallback list via `rpc_client::call_with_fallbacks`: direct canonical Geth (port 8545) first, then the relay's `/api/chain/rpc` same-origin proxy on 8080. Either path can be down (firewall, crash, etc.) without taking the wallet offline. Write paths still pin to a single endpoint to avoid double-broadcast.
+- Wallet UI surfaces RPC failures explicitly: `walletService.getBalance` populates a `walletBalanceError` Svelte store on failure (cleared on success), and the Account page renders a yellow "Balance may be stale — canonical RPC unreachable" banner with the underlying reason instead of silently rendering `0.00`. Mining page does the same with `get_mining_balance_diagnostic` — compares local-Geth balance against canonical-RPC balance for the miner address and renders an inline warning when the canonical RPC errors or the two diverge by more than ~0.001 CHI (private-fork diagnostic).
 - Folder bundles: a folder is published under one content-addressed hash (SHA-256 of owner_wallet + sorted (rel_path, file_hash) list). DHT key `chiral_folder_<hash>`; seller also registers as Kademlia provider for the folder hash. Buyers' `search_folder` returns common-seeders intersection across the bundle.
 - Site directory: name claims at `chiral_site_directory` (DHT registry of names) plus per-name records. First-claim-wins, names are `[a-z0-9-]{1,63}`. Tauri commands: `publish_site_to_directory`, `unpublish_site_from_directory`, `resolve_site_name`, `list_directory_sites`.
 - Version enforcement (`src-tauri/src/version.rs`): bundled `VersionPolicy` embedded at compile time; effective policy held in a global `OnceCell<RwLock<VersionPolicy>>` so libp2p Identify, HTTP middleware, and Tauri commands all read the same value. `/api/version-policy` is mounted by the gateway router (relay, daemon, desktop hosting). On startup the desktop fetches the relay's policy and promotes it via `update_effective_policy` if `is_acceptable_remote_policy` accepts (rollback by `issuedAt`, signed accept against `POLICY_PUBLIC_KEY`, or unsigned-not-tightening if no signed policy is in effect).
