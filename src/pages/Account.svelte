@@ -5,7 +5,7 @@
   import { get } from 'svelte/store';
   import BlacklistWarningModal from '$lib/components/BlacklistWarningModal.svelte';
   import { toasts } from '$lib/toastStore';
-  import { walletService } from '$lib/services/walletService';
+  import { walletService, walletBalanceError } from '$lib/services/walletService';
   import {
     Wallet,
     Copy,
@@ -500,6 +500,22 @@
             </button>
           </div>
         </div>
+
+        {#if $walletBalanceError}
+          <!-- The displayed balance reflects the last successful query
+               (or 0 if there's never been one). The canonical RPC is
+               currently unreachable, so it could be stale or missing
+               on-chain credit you actually have. -->
+          <div class="mt-3 px-3 py-2 rounded-lg bg-yellow-400/15 border border-yellow-300/40 text-yellow-100 text-xs">
+            <div class="flex items-start gap-2">
+              <AlertTriangle class="w-4 h-4 mt-0.5 shrink-0" />
+              <div>
+                <div class="font-semibold">Balance may be stale — canonical RPC unreachable</div>
+                <div class="opacity-90 mt-1 break-all">{$walletBalanceError}</div>
+              </div>
+            </div>
+          </div>
+        {/if}
 
         <div class="flex items-center gap-2 mt-4">
           <span class="font-mono text-lg" title={$walletAccount.address}>{formatAddress($walletAccount.address)}</span>

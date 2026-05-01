@@ -61,6 +61,74 @@ pub fn wallet_rpc_endpoint() -> String {
     rpc_endpoint()
 }
 
+/// Ordered fallback list for canonical-chain reads (`eth_getBalance`,
+/// `eth_getTransactionByHash`, etc.). The first endpoint is the direct
+/// JSON-RPC port; if that's blocked by a firewall or down, the second
+/// is the relay's same-origin proxy at `/api/chain/rpc` on port 8080,
+/// which forwards to the canonical Geth from the relay's own loopback.
+/// `rpc_client::call_with_fallbacks` walks this list in order and
+/// returns the first success. **Read paths only** — write paths
+/// (`eth_sendRawTransaction`) should still hit a single endpoint to
+/// avoid double-broadcast races.
+pub fn wallet_rpc_endpoints() -> Vec<String> {
+    let primary = rpc_endpoint();
+    // Derive the proxy URL from the primary by swapping the JSON-RPC
+    // port for 8080 (where the gateway runs) and appending the proxy
+    // path. If the user has overridden `CHIRAL_RPC_ENDPOINT` to a
+    // non-standard host, we still try the same host's :8080/api/chain/rpc
+    // — relay deployments co-locate Geth and the gateway.
+    let proxy = derive_proxy_url(&primary);
+    if let Some(p) = proxy {
+        if p != primary {
+            return vec![primary, p];
+        }
+    }
+    vec![primary]
+}
+
+fn derive_proxy_url(primary: &str) -> Option<String> {
+    // primary is something like http://130.245.173.73:8545. We want
+    // http://130.245.173.73:8080/api/chain/rpc.
+    let stripped = primary.trim_end_matches('/');
+    let scheme_end = stripped.find("://")? + 3;
+    let host_end = stripped[scheme_end..]
+        .find(|c: char| c == ':' || c == '/')
+        .map(|i| scheme_end + i)
+        .unwrap_or_else(|| stripped.len());
+    let scheme = &stripped[..scheme_end];
+    let host = &stripped[scheme_end..host_end];
+    Some(format!("{}{}:8080/api/chain/rpc", scheme, host))
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn proxy_url_derives_from_8545_default() {
+        assert_eq!(
+            derive_proxy_url("http://130.245.173.73:8545"),
+            Some("http://130.245.173.73:8080/api/chain/rpc".to_string())
+        );
+    }
+
+    #[test]
+    fn proxy_url_handles_trailing_slash() {
+        assert_eq!(
+            derive_proxy_url("http://example.com:8545/"),
+            Some("http://example.com:8080/api/chain/rpc".to_string())
+        );
+    }
+
+    #[test]
+    fn proxy_url_handles_no_port() {
+        assert_eq!(
+            derive_proxy_url("https://example.com"),
+            Some("https://example.com:8080/api/chain/rpc".to_string())
+        );
+    }
+}
+
 // ============================================================================
 // Public types — shapes preserved so the existing frontend keeps working.
 // ============================================================================

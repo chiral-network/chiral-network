@@ -2938,8 +2938,24 @@ use wallet::TransactionMeta;
 async fn get_wallet_balance(
     address: String,
 ) -> Result<wallet::WalletBalanceResult, String> {
-    let endpoint = geth::wallet_rpc_endpoint();
-    wallet::get_balance(&endpoint, &address).await
+    // Try the canonical RPC first; if it's firewall-blocked or down,
+    // fall back to the relay's `/api/chain/rpc` proxy on port 8080
+    // (which is the same chain, just same-origin-proxied through the
+    // gateway). The wallet still never touches local Geth — that's
+    // the rule that prevents private-fork balance leaks.
+    let endpoints = geth::wallet_rpc_endpoints();
+    let result = rpc_client::call_with_fallbacks(
+        &endpoints,
+        "eth_getBalance",
+        serde_json::json!([address, "latest"]),
+    )
+    .await?;
+    let hex = result.as_str().unwrap_or("0x0");
+    let wei = rpc_client::hex_to_u128(hex);
+    Ok(wallet::WalletBalanceResult {
+        balance: rpc_client::wei_to_chi_string(wei),
+        balance_wei: wei.to_string(),
+    })
 }
 
 
@@ -3281,6 +3297,84 @@ async fn stop_mining(state: tauri::State<'_, AppState>) -> Result<(), String> {
 async fn get_mining_status(state: tauri::State<'_, AppState>) -> Result<MiningStatus, String> {
     let geth = state.geth.lock().await;
     geth.get_mining_status().await
+}
+
+/// Diagnose the "mining page shows N CHI but wallet page shows 0" class
+/// of bug. Queries the same wallet address on both the local Geth node
+/// (what the mining page reports) and the canonical RPC (what the
+/// wallet page reports) and returns both balances plus a derived
+/// `diverged` flag. The Mining page surfaces a banner when these
+/// disagree, which means either:
+///   - the local node is mining on a private fork that hasn't synced
+///     to the canonical chain, or
+///   - the canonical RPC is unreachable / down.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MiningBalanceDiagnostic {
+    address: String,
+    local_balance_wei: String,
+    local_balance_chi: f64,
+    local_error: Option<String>,
+    canonical_balance_wei: String,
+    canonical_balance_chi: f64,
+    canonical_error: Option<String>,
+    diverged: bool,
+}
+
+#[tauri::command]
+async fn get_mining_balance_diagnostic(address: String) -> Result<MiningBalanceDiagnostic, String> {
+    if address.is_empty() {
+        return Err("address required".to_string());
+    }
+    async fn fetch_wei_single(endpoint: &str, addr: &str) -> Result<u128, String> {
+        let v = rpc_client::call(
+            endpoint,
+            "eth_getBalance",
+            serde_json::json!([addr, "latest"]),
+        )
+        .await?;
+        Ok(rpc_client::hex_to_u128(v.as_str().unwrap_or("0x0")))
+    }
+    async fn fetch_wei_fallback(endpoints: &[String], addr: &str) -> Result<u128, String> {
+        let v = rpc_client::call_with_fallbacks(
+            endpoints,
+            "eth_getBalance",
+            serde_json::json!([addr, "latest"]),
+        )
+        .await?;
+        Ok(rpc_client::hex_to_u128(v.as_str().unwrap_or("0x0")))
+    }
+    let local_endpoint = "http://127.0.0.1:8545";
+    let canonical_endpoints = geth::wallet_rpc_endpoints();
+    let (local_res, canonical_res) = tokio::join!(
+        fetch_wei_single(local_endpoint, &address),
+        fetch_wei_fallback(&canonical_endpoints, &address),
+    );
+    let (local_wei, local_error) = match local_res {
+        Ok(w) => (w, None),
+        Err(e) => (0u128, Some(e)),
+    };
+    let (canonical_wei, canonical_error) = match canonical_res {
+        Ok(w) => (w, None),
+        Err(e) => (0u128, Some(e)),
+    };
+    // "Diverged" when both sides answered AND the gap is meaningful
+    // (more than ~0.001 CHI to avoid noise from a single fee). If
+    // either side errored, divergence is unknowable; the UI shows an
+    // RPC-error indicator instead of a divergence banner.
+    let diverged = local_error.is_none()
+        && canonical_error.is_none()
+        && local_wei.abs_diff(canonical_wei) > 1_000_000_000_000_000u128;
+    Ok(MiningBalanceDiagnostic {
+        address: address.to_lowercase(),
+        local_balance_wei: local_wei.to_string(),
+        local_balance_chi: local_wei as f64 / 1e18,
+        local_error,
+        canonical_balance_wei: canonical_wei.to_string(),
+        canonical_balance_chi: canonical_wei as f64 / 1e18,
+        canonical_error,
+        diverged,
+    })
 }
 
 #[tauri::command]
@@ -6748,6 +6842,7 @@ pub fn run() {
             get_version_status,
             compute_owner_proof,
             compute_relay_register_signature,
+            get_mining_balance_diagnostic,
             // Bootstrap health commands
             check_bootstrap_health,
             get_bootstrap_health,

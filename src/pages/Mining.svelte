@@ -41,6 +41,19 @@
     totalMinedChi: number;
   }
 
+  interface MiningBalanceDiagnostic {
+    address: string;
+    localBalanceWei: string;
+    localBalanceChi: number;
+    localError: string | null;
+    canonicalBalanceWei: string;
+    canonicalBalanceChi: number;
+    canonicalError: string | null;
+    diverged: boolean;
+  }
+
+  let balanceDiagnostic = $state<MiningBalanceDiagnostic | null>(null);
+
   interface GpuDevice {
     id: string;
     name: string;
@@ -250,6 +263,21 @@
       gethStatus = geth;
       miningStatus = mining;
       gpuMiningStatus = gpu;
+
+      // Compare what the local Geth reports vs the canonical RPC for
+      // the miner's address. A divergence means the local node is on
+      // a private fork (or the canonical RPC is unreachable) — the
+      // user's "I mined N CHI on this page but my wallet shows 0"
+      // experience.
+      const minerAddr = mining?.minerAddress || $walletAccount?.address;
+      if (minerAddr) {
+        balanceDiagnostic = await invoke<MiningBalanceDiagnostic>(
+          'get_mining_balance_diagnostic',
+          { address: minerAddr }
+        ).catch(() => null);
+      } else {
+        balanceDiagnostic = null;
+      }
     } catch (error) {
       log.error('Failed to load status:', error);
       gethStatus = {
@@ -497,6 +525,15 @@
           <p class="text-2xl font-bold tabular-nums dark:text-white">
             {(miningStatus?.totalMinedChi ?? 0).toFixed(4)} CHI
           </p>
+          {#if balanceDiagnostic?.canonicalError}
+            <p class="text-xs mt-1 text-amber-600 dark:text-amber-400" title={balanceDiagnostic.canonicalError}>
+              ⚠ Canonical RPC unreachable — wallet page may show stale 0
+            </p>
+          {:else if balanceDiagnostic?.diverged}
+            <p class="text-xs mt-1 text-red-600 dark:text-red-400">
+              ⚠ Diverges from canonical chain ({balanceDiagnostic.canonicalBalanceChi.toFixed(4)} CHI on-chain) — likely mining on a private fork
+            </p>
+          {/if}
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
           <div class="flex items-center gap-2 mb-2">

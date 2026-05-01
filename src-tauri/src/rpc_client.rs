@@ -101,6 +101,36 @@ pub async fn call(
     Ok(json.get("result").cloned().unwrap_or(serde_json::Value::Null))
 }
 
+/// Read-only RPC call with an ordered fallback list. Tries each
+/// endpoint in turn and returns the first success; aggregates errors
+/// for the failure case. Use this for `eth_getBalance`,
+/// `eth_getTransactionByHash`, etc. when the primary RPC may be
+/// firewall-blocked or temporarily unreachable but a same-origin
+/// proxy on a different port is also an option.
+///
+/// Do NOT use this for write paths (`eth_sendRawTransaction`) — those
+/// should hit a single endpoint to avoid double-broadcast races.
+pub async fn call_with_fallbacks(
+    endpoints: &[String],
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if endpoints.is_empty() {
+        return Err("call_with_fallbacks: no endpoints".to_string());
+    }
+    let mut errors: Vec<String> = Vec::with_capacity(endpoints.len());
+    for ep in endpoints {
+        match call(ep, method, params.clone()).await {
+            Ok(v) => return Ok(v),
+            Err(e) => errors.push(format!("{}: {}", ep, e)),
+        }
+    }
+    Err(format!(
+        "all RPC endpoints failed:\n  {}",
+        errors.join("\n  ")
+    ))
+}
+
 // ============================================================================
 // Batch RPC call
 // ============================================================================
