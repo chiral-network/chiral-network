@@ -1927,9 +1927,36 @@ async fn search_file(
                             "INVALID signature"
                         };
                         println!(
-                            "⚠️ File metadata for {} {} — dropping. Re-publish from a wallet to make this file discoverable.",
+                            "⚠️ File metadata for {} {} — dropping blob. Falling back to provider-sourced seeders.",
                             metadata.hash, reason
                         );
+                        // The blob is attacker-forgeable, so we drop its
+                        // file_name / wallet_address. But provider records
+                        // (`chiral_seeder_<hash>_<peer>`) carry their own
+                        // ECDSA signatures verified inside fetch_seeders, so
+                        // they're independently trustworthy. Surface them
+                        // even when the legacy blob is bad — otherwise a
+                        // single forged blob hides every honest seeder.
+                        if !provider_seeders.is_empty() {
+                            let first = provider_seeders.first().cloned();
+                            return Ok(Some(SearchResult {
+                                hash: file_hash.clone(),
+                                file_name: local_result
+                                    .as_ref()
+                                    .map(|r| r.file_name.clone())
+                                    .unwrap_or_default(),
+                                file_size: local_result.as_ref().map(|r| r.file_size).unwrap_or(0),
+                                seeders: provider_seeders,
+                                created_at: 0,
+                                price_wei: first
+                                    .as_ref()
+                                    .map(|s| s.price_wei.clone())
+                                    .unwrap_or_default(),
+                                wallet_address: first
+                                    .map(|s| s.wallet_address)
+                                    .unwrap_or_default(),
+                            }));
+                        }
                         return if let Some(local) = local_result {
                             Ok(Some(local))
                         } else {
