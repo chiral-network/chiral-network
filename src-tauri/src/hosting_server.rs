@@ -383,7 +383,6 @@ async fn upload_site(
         files: site_files,
         relay_url: None,
         cdn_url: None,
-        directory_name: None,
     };
 
     // Register in server state
@@ -656,7 +655,6 @@ mod tests {
             files: vec![],
             relay_url: None,
             cdn_url: None,
-        directory_name: None,
         }
     }
 

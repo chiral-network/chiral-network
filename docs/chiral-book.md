@@ -104,12 +104,6 @@ The application consists of three layers:
 - Hosted files are automatically seeded to the DHT.
 - CDN Servers tab: always-on infrastructure servers separated from peer hosts.
 
-### Site Directory (DNS-like)
-- Any user can publish a static site to a relay (the relay reverse-proxies it to a public URL) and then *claim a human-readable name* for it in the network's site directory.
-- Names are `[a-z0-9-]`, 1-63 chars, lowercased. **First claim wins**: subsequent attempts to claim the same name by a different wallet are rejected.
-- Directory entries live in the DHT under `chiral_site_directory` (registry of names) and per-name records, so any peer can resolve a name to its site without going through a central server.
-- Browse the site directory from the Hosts page to discover other peers' sites. Unpublishing a site clears the claim and frees the name.
-
 ### CDN Service
 - Always-on file hosting servers that keep files available when the uploader goes offline.
 - Market-based dynamic pricing: `max(floor_price, median_peer_price × 1.2)`.
@@ -132,7 +126,6 @@ Trust boundaries are enforced cryptographically end-to-end. Every long-lived rec
 - File metadata (`chiral_file_<hash>`) — signed by publisher wallet over a length-prefixed canonical payload. `search_file` rejects unsigned/invalid metadata as not-found.
 - Seeder entries (`chiral_seeder_<hash>_<peer>`) — signed by the seeder's wallet, binding peer ID + file hash + wallet address. `fetch_seeders` drops empty-signature non-stub entries.
 - Folder manifests (`chiral_folder_<hash>`) — signed by `owner_wallet`. `search_folder` drops unsigned/invalid bundles.
-- Site-directory entries (`chiral_sitename_<name>`) — signed by `owner_wallet`. `resolve_site_name` / `list_directory_sites` drop unverifiable entries; first-claim-wins is enforced by refusing overwrites whose existing record verifies under a different wallet.
 - Chunked-transfer `FileInfo` envelopes — signed by the seeder's wallet. The downloader verifies before consuming the seeder's claimed `wallet_address` / `price_wei` and fails over to other seeders on bad signatures (closes the payment-redirection vector where a hostile seeder could substitute its own wallet).
 
 **HTTP authentication (replaces the previously-trusted bare `X-Owner` header):**
@@ -561,7 +554,6 @@ All headless paths are prefixed with `/api/headless/` except health, ready, driv
 | Geth | `POST geth/install`, `geth/start`, `geth/stop`; `GET geth/status`, `geth/logs` |
 | Mining | `POST mining/start`, `mining/stop`, `mining/miner-address`; `GET mining/status`, `mining/blocks` |
 | Hosting | `POST hosting/publish-ad`; `GET hosting/registry` |
-| Site directory | Tauri-only: `publish_site_to_directory`, `unpublish_site_from_directory`, `resolve_site_name`, `list_directory_sites` (DHT-backed name claims, first-claim-wins) |
 | Folder bundles | Tauri-only: `publish_drive_folder`, `unpublish_drive_folder`, `search_folder` (one content-addressed hash per folder) |
 | CDN | `POST cdn/upload`; `GET cdn/files`, `cdn/pricing`, `cdn/status`; `DELETE cdn/files/:hash`; `PUT cdn/files/:hash` |
 | Drive | Full CRUD via `/api/drive/*` (requires both `X-Owner` and `X-Owner-Sig: <unix_ts>:<hex_signature>` headers; see Authentication below) |

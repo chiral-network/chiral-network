@@ -32,10 +32,6 @@ pub struct HostedSite {
     /// the relay URL, this stays reachable when the local client is offline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cdn_url: Option<String>,
-    /// Human-readable name registered in the network site directory, if any
-    /// (e.g. "alice"). Shows up in the Browse Sites listing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub directory_name: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +193,6 @@ mod tests {
             ],
             relay_url: None,
             cdn_url: None,
-            directory_name: None,
         };
         let json = serde_json::to_string(&site).unwrap();
         let back: HostedSite = serde_json::from_str(&json).unwrap();

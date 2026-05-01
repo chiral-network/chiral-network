@@ -483,8 +483,6 @@ async fn dht_put(
         "chiral_file_",
         "chiral_seeder_",
         "chiral_folder_",
-        "chiral_sitename_",
-        "chiral_site_directory",
         "chiral_drive_share_",
         "chiral_host_ad_",
     ];
