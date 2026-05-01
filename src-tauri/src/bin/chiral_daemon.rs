@@ -631,18 +631,87 @@ async fn dht_register_shared_file(
     };
 
     let price_wei = req.price_wei.parse::<u128>().unwrap_or(0);
+
+    // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
-        req.file_hash,
+        req.file_hash.clone(),
         req.file_path,
-        req.file_name,
+        req.file_name.clone(),
         req.file_size,
         price_wei,
-        req.wallet_address,
-        req.private_key,
+        req.wallet_address.clone(),
+        req.private_key.clone(),
     )
     .await;
 
-    Json(json!({ "status": "ok" })).into_response()
+    // Then publish to the DHT so other peers can discover us. Without this
+    // step the file is only locally seeded and `file/search` from any
+    // remote node returns "not found".
+    if req.private_key.is_empty() || req.wallet_address.is_empty() {
+        return Json(json!({
+            "status": "ok",
+            "dhtPublished": false,
+            "warning": "No wallet/private key provided — file registered locally only; remote peers cannot discover it",
+        }))
+        .into_response();
+    }
+
+    let peer_id = svc.get_peer_id().await.unwrap_or_default();
+    if peer_id.is_empty() {
+        return Json(json!({
+            "status": "ok",
+            "dhtPublished": false,
+            "warning": "DHT peer ID unavailable",
+        }))
+        .into_response();
+    }
+
+    let multiaddrs = svc.get_listening_addresses().await;
+    let Some(seeder) = chiral_network::try_make_signed_seeder(
+        &peer_id,
+        &req.file_hash,
+        &price_wei.to_string(),
+        &req.wallet_address,
+        multiaddrs,
+        Some(&req.private_key),
+    ) else {
+        return Json(json!({
+            "status": "ok",
+            "dhtPublished": false,
+            "warning": "Failed to sign seeder entry",
+        }))
+        .into_response();
+    };
+
+    let blob_key = format!("chiral_file_{}", req.file_hash);
+    let blob_present = matches!(svc.get_dht_value(blob_key.clone()).await, Ok(Some(_)));
+    if !blob_present {
+        if let Some(metadata) = chiral_network::try_make_signed_file_metadata(
+            &req.file_hash,
+            &req.file_name,
+            req.file_size,
+            "WebRTC",
+            &req.wallet_address,
+            Some(&req.private_key),
+        ) {
+            if let Ok(blob) = serde_json::to_string(&metadata) {
+                if let Err(e) = svc.put_dht_value(blob_key, blob).await {
+                    eprintln!("[CDN] file metadata blob put failed: {}", e);
+                }
+            }
+        }
+    }
+
+    if let Err(e) = chiral_network::publish_seeder_entry(&svc, &req.file_hash, &seeder).await {
+        return Json(json!({
+            "status": "ok",
+            "dhtPublished": false,
+            "warning": format!("Seeder entry publish failed: {}", e),
+        }))
+        .into_response();
+    }
+
+    Json(json!({ "status": "ok", "dhtPublished": true })).into_response()
 }
 
 async fn dht_unregister_shared_file(
