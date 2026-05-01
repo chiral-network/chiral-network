@@ -587,7 +587,7 @@
   /// extend the overall search wait. Results that don't come back in time are
   /// simply skipped — the caller is expected to merge whatever it got with
   /// any DHT result rather than wait for CDN responses.
-  async function fetchCdnSeeders(fileHash: string, timeoutMs = 5000): Promise<SearchResult[]> {
+  async function fetchCdnSeeders(fileHash: string, timeoutMs = 12000): Promise<SearchResult[]> {
     const queries = CDN_SEARCH_URLS.map(async (cdnUrl) => {
       try {
         const resp = await withTimeout(
