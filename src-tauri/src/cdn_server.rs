@@ -39,6 +39,29 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::dht::DhtService;
 use crate::network;
 
+/// One-line description of a transaction's `from` / `to` / `value`
+/// for use in upload-mismatch error messages. Best-effort: any RPC
+/// failure becomes "<unable to fetch>" so the user still gets the
+/// "expected …" half of the message.
+async fn describe_tx(tx_hash: &str) -> String {
+    let endpoints = crate::geth::wallet_rpc_endpoints();
+    let v = match crate::rpc_client::call_with_fallbacks(
+        &endpoints,
+        "eth_getTransactionByHash",
+        serde_json::json!([tx_hash]),
+    )
+    .await
+    {
+        Ok(v) if !v.is_null() => v,
+        _ => return "<unable to fetch tx>".to_string(),
+    };
+    let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("?");
+    let to = v.get("to").and_then(|x| x.as_str()).unwrap_or("?");
+    let value_hex = v.get("value").and_then(|x| x.as_str()).unwrap_or("0x0");
+    let value_wei = crate::rpc_client::hex_to_u128(value_hex);
+    format!("from={from} to={to} amount={value_wei}")
+}
+
 /// Cost of an upload in wei: `ceil(price_wei_per_mb_month * bytes * days
 /// / (1 MiB * 30 days))`. Pure u128 math — no f64 truncation, no
 /// percentage tolerance. Saturates on overflow to `u128::MAX` so an
@@ -428,17 +451,21 @@ async fn upload(
         );
     }
 
-    // Tx is mined; now check from/to/value.
+    // Tx is mined; now check from/to/value. On mismatch we re-fetch the
+    // tx and tell the user *what* went wrong (which usually pinpoints
+    // the cause — e.g. payment sent to a stale CDN wallet address from
+    // a cached session).
     match crate::wallet::verify_tx_details(&payment_tx, &owner_wallet, &s.wallet_address, min_accepted_wei).await {
         Ok(true) => {}
         Ok(false) => {
+            let observed = describe_tx(&payment_tx).await;
             return err(
                 StatusCode::PAYMENT_REQUIRED,
                 &format!(
-                    "Payment details mismatch. Expected from={owner_wallet} to={} amount>={min_accepted_wei}",
+                    "Payment details mismatch. Expected from={owner_wallet} to={} amount>={min_accepted_wei}. Observed: {observed}",
                     s.wallet_address
                 ),
-            )
+            );
         }
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Detail check: {e}")),
     }
