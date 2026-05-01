@@ -1,8 +1,19 @@
 import { ethers } from 'ethers';
-import { get } from 'svelte/store';
+import { get, writable, type Readable } from 'svelte/store';
 import { invoke } from '@tauri-apps/api/core';
 import { walletAccount } from '$lib/stores';
 import { logger } from '$lib/logger';
+
+/**
+ * Most recent reason `getBalance` failed, or null if the last call
+ * succeeded. The wallet UI subscribes to this so it can show a clear
+ * "RPC unreachable" state instead of a misleading 0 — without this,
+ * a network/Geth outage on the canonical RPC silently turned into a
+ * fake "0 CHI" display (the symptom from the 3000-vs-0 mining/wallet
+ * discrepancy report).
+ */
+const _walletBalanceErrorStore = writable<string | null>(null);
+export const walletBalanceError: Readable<string | null> = _walletBalanceErrorStore;
 
 const log = logger('Wallet');
 
@@ -80,6 +91,9 @@ class WalletService {
         const balance = result.balance || '0.00';
         log.info('[walletService.getBalance] Got balance:', balance, 'wei:', result.balanceWei);
 
+        // Success — clear any stale RPC-error state.
+        _walletBalanceErrorStore.set(null);
+
         // Update cache
         this.balanceCache.set(address.toLowerCase(), {
           balance,
@@ -88,8 +102,14 @@ class WalletService {
 
         return balance;
       } catch (error) {
-        log.info('[walletService.getBalance] Failed to get balance:', error);
-        // Return cached value if available, otherwise 0
+        // Surface the failure on a dedicated error store so the UI can
+        // distinguish "RPC unreachable" from a genuine zero balance,
+        // rather than collapsing both to '0.00'.
+        const reason = String(error);
+        log.warn('[walletService.getBalance] Failed:', reason);
+        _walletBalanceErrorStore.set(reason);
+        // Keep returning the last cached value if we have one — better
+        // than flashing zero — but don't lie about success.
         return cached?.balance || '0.00';
       }
     }

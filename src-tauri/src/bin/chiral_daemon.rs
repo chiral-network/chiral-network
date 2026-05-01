@@ -937,11 +937,28 @@ async fn wallet_balance(
     if address.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "address required");
     }
-    let endpoint = chiral_network::geth::effective_rpc_endpoint();
-    match chiral_network::wallet::get_balance(&endpoint, &address).await {
-        Ok(result) => Json(json!(result)).into_response(),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
-    }
+    // Use the canonical-RPC fallback list so a firewall-blocked or
+    // momentarily-down direct RPC port falls through to the relay's
+    // /api/chain/rpc proxy on 8080 instead of returning a misleading
+    // 0 / 500.
+    let endpoints = chiral_network::geth::wallet_rpc_endpoints();
+    let result = match chiral_network::rpc_client::call_with_fallbacks(
+        &endpoints,
+        "eth_getBalance",
+        serde_json::json!([address, "latest"]),
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
+    let hex = result.as_str().unwrap_or("0x0");
+    let wei = chiral_network::rpc_client::hex_to_u128(hex);
+    Json(json!({
+        "balance": chiral_network::rpc_client::wei_to_chi_string(wei),
+        "balanceWei": wei.to_string(),
+    }))
+    .into_response()
 }
 
 async fn wallet_send(
