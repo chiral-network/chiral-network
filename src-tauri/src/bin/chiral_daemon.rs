@@ -61,6 +61,17 @@ struct DaemonArgs {
     /// the daemon picks won't be reachable and stale multiaddrs end up in the DHT.
     #[arg(long, env = "CHIRAL_P2P_PORT")]
     p2p_port: Option<u16>,
+
+    /// Path to a wallet-key file. The file's contents must be a hex
+    /// secp256k1 private key (with or without leading `0x`). When set,
+    /// the daemon loads it at startup and populates `state.wallet` so
+    /// the CDN module can sign FileInfo / SeederInfo records (FM-A07,
+    /// FM-A08, FM-A09). Without it, the CDN runs with empty signatures
+    /// and clients reject every record it publishes — which broke
+    /// every existing CDN upload after the FM-Agent enforcement
+    /// landed.
+    #[arg(long, env = "CHIRAL_WALLET_KEY_FILE")]
+    wallet_key_file: Option<PathBuf>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -786,6 +797,46 @@ struct ImportWalletRequest {
     private_key: String,
 }
 
+/// Derive `0x`-prefixed lowercase Ethereum address from a 32-byte
+/// secp256k1 private key.
+fn address_from_private_key(priv_bytes: &[u8; 32]) -> Result<String, String> {
+    let secp = secp256k1::Secp256k1::new();
+    let secret_key = secp256k1::SecretKey::from_slice(priv_bytes)
+        .map_err(|e| format!("invalid private key: {}", e))?;
+    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    let pub_bytes = public_key.serialize_uncompressed();
+    use tiny_keccak::{Hasher, Keccak};
+    let mut keccak = Keccak::v256();
+    keccak.update(&pub_bytes[1..]);
+    let mut hash = [0u8; 32];
+    keccak.finalize(&mut hash);
+    Ok(format!("0x{}", hex::encode(&hash[12..])))
+}
+
+/// Read a wallet-key file: trim whitespace, strip optional `0x`,
+/// require 32-byte hex. Returns `WalletInfo` populated with both
+/// address (derived) and the canonical `0x`-prefixed private key.
+fn load_wallet_from_file(path: &PathBuf) -> Result<WalletInfo, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let cleaned = raw.trim().trim_start_matches("0x");
+    let bytes = hex::decode(cleaned)
+        .map_err(|e| format!("wallet-key file is not hex: {}", e))?;
+    if bytes.len() != 32 {
+        return Err(format!(
+            "wallet-key file decoded to {} bytes, expected 32",
+            bytes.len()
+        ));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    let address = address_from_private_key(&arr)?;
+    Ok(WalletInfo {
+        address,
+        private_key: format!("0x{}", hex::encode(arr)),
+    })
+}
+
 /// POST /api/headless/wallet/create — generate a new wallet (random private key)
 async fn wallet_create(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
     // Generate a random 32-byte private key
@@ -1256,6 +1307,30 @@ async fn main() {
 
     let rating_state = Arc::new(RatingState::new(default_data_dir()));
     let runtime_state = Arc::new(HeadlessRuntimeState::new());
+
+    // Load wallet key at startup if --wallet-key-file (or
+    // CHIRAL_WALLET_KEY_FILE) was set. This populates state.wallet
+    // before CdnState::new runs so the CDN module can pull the
+    // private_key for FileInfo / SeederInfo signing.
+    if let Some(ref key_path) = args.wallet_key_file {
+        match load_wallet_from_file(key_path) {
+            Ok(wallet) => {
+                println!(
+                    "[WALLET] Loaded key from {}: address={}",
+                    key_path.display(),
+                    wallet.address
+                );
+                *runtime_state.wallet.lock().await = Some(wallet);
+            }
+            Err(e) => {
+                eprintln!(
+                    "[WALLET] Failed to load wallet from {}: {} — daemon will run without a signing key (CDN can serve only free files; signed records won't be published).",
+                    key_path.display(),
+                    e
+                );
+            }
+        }
+    }
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 

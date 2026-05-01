@@ -702,35 +702,68 @@ async fn register_in_dht(
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     let our_addrs = dht.get_listening_addresses().await;
 
+    // Without a signing key the CDN can populate its local shared_files
+    // map (so a peer that already knows where to find this hash could
+    // still receive bytes), but cannot publish DHT records that any
+    // FM-A07/A08-aware client will accept. Fail-fast and log instead of
+    // writing unsigned records — they'd just be dropped on read and
+    // confuse operators looking at DHT state.
+    if cdn_private_key.is_empty() || cdn_wallet.is_empty() {
+        println!(
+            "[CDN] DHT publish for {} skipped — wallet key not configured (set CHIRAL_WALLET_KEY_FILE)",
+            file_hash
+        );
+        let _ = (peer_id, our_addrs, created_at);
+        return;
+    }
+
     // Immutable file-metadata blob: write only if absent. The CDN is not
     // necessarily the original publisher, so we don't overwrite an existing
     // publisher-signed record.
     let key = format!("chiral_file_{file_hash}");
     let blob_present = matches!(dht.get_dht_value(key.clone()).await, Ok(Some(_)));
     if !blob_present {
-        let metadata = json!({
-            "hash": file_hash,
-            "fileName": file_name,
-            "fileSize": file_size,
-            "protocol": "WebRTC",
-            "createdAt": created_at,
-            "walletAddress": cdn_wallet,
-            "publisherSignature": "",
-        });
-        let _ = dht.put_dht_value(key, metadata.to_string()).await;
+        match crate::try_make_signed_file_metadata(
+            file_hash,
+            file_name,
+            file_size,
+            "WebRTC",
+            cdn_wallet,
+            Some(cdn_private_key),
+        ) {
+            Some(metadata) => match serde_json::to_string(&metadata) {
+                Ok(json_str) => {
+                    let _ = dht.put_dht_value(key, json_str).await;
+                }
+                Err(e) => println!("[CDN] Failed to serialize FileMetadata for {}: {}", file_hash, e),
+            },
+            None => println!(
+                "[CDN] Failed to sign FileMetadata for {} — record not published",
+                file_hash
+            ),
+        }
     }
+    let _ = created_at;
 
     // The CDN is just another seeder in the provider-records model: publish
-    // a per-seeder record + register as a Kademlia provider.
-    let seeder_entry = crate::SeederInfo {
-        peer_id: peer_id.clone(),
-        price_wei: download_price_wei.to_string(),
-        wallet_address: cdn_wallet.to_string(),
-        multiaddrs: our_addrs,
-        signature: String::new(),
-    };
-    if let Err(e) = crate::publish_seeder_entry(dht, file_hash, &seeder_entry).await {
-        println!("[CDN] Provider publish failed for {}: {}", file_hash, e);
+    // a signed per-seeder record + register as a Kademlia provider.
+    match crate::try_make_signed_seeder(
+        &peer_id,
+        file_hash,
+        &download_price_wei.to_string(),
+        cdn_wallet,
+        our_addrs,
+        Some(cdn_private_key),
+    ) {
+        Some(seeder_entry) => {
+            if let Err(e) = crate::publish_seeder_entry(dht, file_hash, &seeder_entry).await {
+                println!("[CDN] Provider publish failed for {}: {}", file_hash, e);
+            }
+        }
+        None => println!(
+            "[CDN] Failed to sign SeederInfo for {} — provider record not published",
+            file_hash
+        ),
     }
 }
 
