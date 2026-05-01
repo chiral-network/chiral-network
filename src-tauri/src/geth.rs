@@ -418,7 +418,16 @@ impl GethProcess {
         cmd.args(["--datadir"]).arg(&self.data_dir)
             .args(["--networkid", &network_id().to_string()])
             .args(["--http", "--http.addr", &http_addr, "--http.port", "8545"])
-            .args(["--http.api", "eth,net,web3,personal,debug,miner,admin,txpool"])
+            // `admin` is intentionally absent here. It exposes
+            // `admin_stopRPC` (deprecated alias of `admin_stopHTTP`)
+            // which any unauthenticated HTTP caller could use to
+            // shut down the RPC server itself — observed in the wild
+            // on the canonical relay 2026-04-28: a remote IP issued
+            // admin_stopRPC and the HTTP server stayed down for two
+            // days, breaking every client's wallet balance. Admin
+            // calls remain available over the IPC socket for
+            // operators who need them.
+            .args(["--http.api", "eth,net,web3,personal,debug,miner,txpool"])
             .args(["--http.corsdomain", "*"])
             // Full sync + archive GC is the key to not regressing block height
             // on restart. Snap/fast sync can roll back unfinalized state; that
