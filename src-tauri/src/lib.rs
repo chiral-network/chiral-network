@@ -1091,7 +1091,7 @@ struct PublishResult {
 /// Each seeder signs their entry so downloaders can verify the wallet address is legitimate.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SeederInfo {
+pub struct SeederInfo {
     pub(crate) peer_id: String,
     #[serde(default)]
     pub(crate) price_wei: String,
@@ -1135,7 +1135,7 @@ impl SeederInfo {
 /// seeders, etc). Those get silently dropped on read.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FileMetadata {
+pub struct FileMetadata {
     hash: String,
     file_name: String,
     file_size: u64,
@@ -1210,7 +1210,7 @@ fn seeder_entry_key(file_hash: &str, peer_id: &str) -> String {
 /// Publish this node's seeder entry for a file and register it as a Kademlia
 /// provider. Safe to call repeatedly — each call refreshes the entry and
 /// republishes the provider record.
-pub(crate) async fn publish_seeder_entry(
+pub async fn publish_seeder_entry(
     dht: &dht::DhtService,
     file_hash: &str,
     seeder: &SeederInfo,
@@ -1309,7 +1309,7 @@ async fn fetch_seeders(
 /// address or private key are missing — readers reject unsigned
 /// SeederInfo entries, so publishing one would just poison the DHT
 /// with a record nobody trusts.
-pub(crate) fn try_make_signed_seeder(
+pub fn try_make_signed_seeder(
     peer_id: &str,
     file_hash: &str,
     price_wei: &str,
@@ -1347,7 +1347,7 @@ pub(crate) fn try_make_signed_seeder(
 /// FileMetadata, so publishing one is worse than not publishing at
 /// all (the reader's not-found path lets the user retry from a
 /// signed publisher).
-pub(crate) fn try_make_signed_file_metadata(
+pub fn try_make_signed_file_metadata(
     hash: &str,
     file_name: &str,
     file_size: u64,
