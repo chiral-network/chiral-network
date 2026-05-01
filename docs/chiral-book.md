@@ -166,6 +166,9 @@ Trust boundaries are enforced cryptographically end-to-end. Every long-lived rec
 - Relay filters private IPs from Kademlia routing table.
 - Stop seeding removes peer from DHT seeder list (prevents ghost seeders).
 - 0.5% platform fee on all transactions (99.5% to seller, 0.5% to platform); `split_payment` is the single source of truth and `seller + fee == total` exactly.
+- Wallet RPC reads use an ordered fallback list (`rpc_client::call_with_fallbacks`): direct canonical Geth → relay's `/api/chain/rpc` proxy. Either path can be down without taking the wallet UI offline.
+- RPC failures surface as a yellow "canonical RPC unreachable" banner in the wallet UI rather than a misleading `0.00`. Mining page renders an inline divergence warning when local-Geth balance disagrees with canonical-RPC balance for the miner address (private-fork diagnostic).
+- Geth's `--http.api` deliberately omits `admin` so `admin_stopRPC` cannot be called over the public RPC port (admin remains available over the IPC socket).
 
 ---
 
@@ -782,6 +785,7 @@ chiral-network/
 | `CHIRAL_WALLET_EMAIL_SMTP_HOST` | none | SMTP server for email backup |
 | `CHIRAL_WALLET_EMAIL_FROM` | none | Sender address for email backup |
 | `CHIRAL_POLICY_PUBLIC_KEY` | placeholder zeros | 32-byte hex (with or without `0x` prefix) of the project's Ed25519 policy-signing public key. Setting this activates signed `VersionPolicy` updates without recompiling. Generate the matching keypair with `chiral-policy-sign keygen`. |
+| `CHIRAL_WALLET_KEY_FILE` | none | Path to a file containing a single hex secp256k1 private key (with or without `0x` prefix; mode 0600 expected). At startup the daemon loads the key, derives the address, and populates `state.wallet` so the CDN module can sign `chiral_seeder_*` / `chiral_file_*` records and `ChunkResponse::FileInfo` envelopes. Without it, the CDN runs with empty signatures and clients reject every record it publishes. Used in production at `/etc/chiral-cdn-wallet.key` on the canonical relay. |
 
 ### Local Storage Keys
 
