@@ -1441,17 +1441,6 @@
     </div>
   </div>
 
-  <!-- Server Status Bar (always visible) -->
-  <HostingServerBar
-    serverRunning={serverStatus.running}
-    serverAddress={serverStatus.address}
-    {port}
-    {isStartingServer}
-    onStartServer={startServer}
-    onStopServer={stopServer}
-    onPortChange={(p) => port = p}
-  />
-
   <!-- Tab bar -->
   <div class="flex gap-1 bg-gray-100 dark:bg-gray-800/60 rounded-xl p-1" role="tablist" aria-label="Hosting sections">
     <button
@@ -1524,6 +1513,19 @@
   <!-- Tab content -->
   <div role="tabpanel" id="tabpanel-{activeTab}" aria-labelledby="tab-{activeTab}" class="space-y-5">
   {#if activeTab === 'sites'}
+    <!-- Local HTTP server is what serves the user's site files. Only relevant
+         on the My Sites tab — Browse / CDN / Peer Hosts / Agreements all
+         talk to remote services and don't need it. -->
+    <HostingServerBar
+      serverRunning={serverStatus.running}
+      serverAddress={serverStatus.address}
+      {port}
+      {isStartingServer}
+      onStartServer={startServer}
+      onStopServer={stopServer}
+      onPortChange={(p) => port = p}
+    />
+
     <HostingSiteCreator
       {newSiteName}
       {selectedFiles}
