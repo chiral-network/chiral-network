@@ -61,10 +61,12 @@ The application consists of three layers:
 - 0.5% platform fee on all transactions (split between seller and platform wallet).
 
 ### Folder Bundles
-- Sell an entire folder under a single content-addressed hash (SHA-256 of the owner address plus the sorted `(rel_path, file_hash)` list of every file in the folder).
-- The seller publishes a `chiral_folder_<hash>` manifest to the DHT and registers as a Kademlia provider for that hash. Each child file is seeded as normal.
-- Buyers paste the folder hash into Search, see the file list, total CHI cost, and the set of seeders that hold every file in the bundle (the "common seeders" intersection).
-- `Download Folder` confirms the total cost once and starts each child file's existing chunked transfer against the chosen seeder.
+- Sell an entire folder as a single product at a folder-level price — buyers pay once for the bundle, not the sum of per-file prices.
+- The folder hash is content-addressed: SHA-256 of the owner address plus the sorted `(rel_path, file_hash)` list of every file in the folder. Same files + same owner always produce the same hash, so re-publishes are stable.
+- The seller publishes a signed `chiral_folder_<hash>` manifest to the DHT and registers as a Kademlia provider for that hash. The manifest carries `priceWei` and `walletAddress` (both inside the signed payload, so a hostile peer can't substitute a different price/recipient for an existing folder hash). Child files are published at price 0 — payment is collected once at the folder level.
+- Buyers paste the folder hash into Search, see the file list, the bundle price, and the set of seeders that hold every file in the bundle (the "common seeders" intersection).
+- "Buy Folder for X CHI" sends one transaction to the folder's payment wallet and then dispatches each child file's chunked transfer at price 0 — no per-file payment loop.
+- Known V1 gap: child files remain individually downloadable at price 0 when a buyer has the bare file hash. Closing this requires extending the chunked-transfer PaymentProof with folder context (tracked as a follow-up).
 
 ### ChiralDrop
 - Direct peer-to-peer file transfer between two users, similar to AirDrop.
