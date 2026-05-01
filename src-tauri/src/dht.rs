@@ -2285,10 +2285,7 @@ async fn event_loop(
                             // A single failed path should not mark a peer as failed if another path
                             // is already connected.
                             if swarm.is_connected(&peer) {
-                                println!(
-                                    "⚠️ Outgoing dial path failed for {}, but peer is already connected; ignoring",
-                                    peer
-                                );
+                                // One dial path failed but another succeeded — silently ignore.
                                 continue;
                             }
 
@@ -2296,17 +2293,14 @@ async fn event_loop(
                             let bootstrap_peer_ids = get_bootstrap_peer_ids();
                             let is_bootstrap_peer = bootstrap_peer_ids.contains(&peer_id_str);
 
-                            if is_bootstrap_peer {
-                                // Bootstrap peers are long-lived infra nodes; don't permanently
-                                // evict on transient failures — they'll be redialed on the next
-                                // ConnectionClosed reconnect cycle or Kademlia bootstrap timer.
-                                println!(
-                                    "⚠️ Outgoing connection error to bootstrap {:?}: {:?}",
-                                    peer, error
-                                );
-                            } else {
-                                println!("⚠️ Outgoing connection error to {}: {:?}", peer, error);
-                            }
+                            // Bootstrap peers are long-lived infra nodes; don't permanently
+                            // evict on transient failures — they'll be redialed on the next
+                            // ConnectionClosed reconnect cycle or Kademlia bootstrap timer.
+                            // Routine outgoing-dial failures (ResourceLimitExceeded on relay,
+                            // ConnectionRefused behind firewalls, link-local/RFC1918 advertised
+                            // addrs) are expected P2P churn and intentionally not logged here —
+                            // Kademlia handles routing-table eviction internally.
+                            let _ = (is_bootstrap_peer, &error);
 
                             // Fail any deferred file requests for this peer
                             if let Some(pending) = pending_file_requests.remove(&peer) {

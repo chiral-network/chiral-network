@@ -600,13 +600,19 @@
           `cdn ${cdnUrl}`,
         );
         const data = await resp.json();
-        if (!data.found || !data.metadata) return null;
-        const meta = data.metadata;
+        if (!data.found) return null;
+        // Seeder list lives at the top level of the daemon response
+        // (`data.seeders`), populated from per-seeder DHT records. The
+        // `metadata.seeders` field is a stub on the FileMetadata blob and is
+        // always empty — reading it here used to silently drop every CDN
+        // fallback seeder.
+        const meta = data.metadata || {};
+        const rawSeeders = Array.isArray(data.seeders) ? data.seeders : meta.seeders || [];
         return {
-          hash: meta.hash,
-          fileName: meta.fileName,
-          fileSize: meta.fileSize,
-          seeders: (meta.seeders || []).map(
+          hash: meta.hash || fileHash,
+          fileName: meta.fileName || '',
+          fileSize: meta.fileSize || 0,
+          seeders: rawSeeders.map(
             (s: { peerId: string; priceWei: string; walletAddress: string; multiaddrs: string[] }) => ({
               peerId: s.peerId,
               priceWei: s.priceWei || '0',

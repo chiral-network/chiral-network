@@ -358,10 +358,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("[ERROR] Incoming connection error: local={}, remote={}, err={:?}",
                     local_addr, send_back_addr, error);
             }
-            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                if let Some(peer) = peer_id {
-                    println!("[ERROR] Outgoing connection error to {}: {:?}", peer, error);
-                }
+            SwarmEvent::OutgoingConnectionError { .. } => {
+                // Routine P2P dial churn — silently ignored.
             }
             SwarmEvent::ExternalAddrConfirmed { address, .. } => {
                 println!("[ADDR] External address confirmed: {}", address);
