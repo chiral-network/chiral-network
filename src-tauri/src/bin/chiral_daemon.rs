@@ -1163,15 +1163,45 @@ async fn file_search(
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
     };
     let dht_key = format!("chiral_file_{}", file_hash);
-    let blob = dht.get_dht_value(dht_key).await;
-    // Provider + per-seeder lookup so headless search mirrors the Tauri
-    // search_file command — a hash with no blob but live providers still
-    // surfaces a result.
-    let providers = dht.get_file_providers(file_hash.clone()).await.unwrap_or_default();
-    let mut seeders: Vec<serde_json::Value> = Vec::new();
-    for peer_id in &providers {
+    // Run the blob + providers lookups in parallel and bound them; libp2p
+    // Kademlia otherwise waits for the full query convergence (often
+    // 10-20s) even when the record is in the local store. Without
+    // bounds the desktop's 5s HTTP timeout always fires before the body
+    // arrives, so CDN search results never reach the user.
+    let blob_fut = tokio::time::timeout(
+        std::time::Duration::from_millis(4000),
+        dht.get_dht_value(dht_key),
+    );
+    let providers_fut = tokio::time::timeout(
+        std::time::Duration::from_millis(3000),
+        dht.get_file_providers(file_hash.clone()),
+    );
+    let (blob_res, providers_res) = tokio::join!(blob_fut, providers_fut);
+    let blob = match blob_res {
+        Ok(r) => r,
+        Err(_) => Ok(None),
+    };
+    let providers: Vec<String> = match providers_res {
+        Ok(Ok(p)) => p,
+        _ => Vec::new(),
+    };
+    // Per-seeder records: parallel fetch with a short shared deadline so
+    // one slow provider doesn't extend the search budget.
+    let fetches = providers.iter().map(|peer_id| {
         let key = format!("chiral_seeder_{}_{}", file_hash, peer_id);
-        if let Ok(Some(json_str)) = dht.get_dht_value(key).await {
+        let dht = dht.clone();
+        async move {
+            tokio::time::timeout(
+                std::time::Duration::from_millis(3000),
+                dht.get_dht_value(key),
+            )
+            .await
+        }
+    });
+    let fetched = futures::future::join_all(fetches).await;
+    let mut seeders: Vec<serde_json::Value> = Vec::new();
+    for r in fetched {
+        if let Ok(Ok(Some(json_str))) = r {
             if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&json_str) {
                 seeders.push(entry);
             }

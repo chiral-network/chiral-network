@@ -3135,9 +3135,19 @@ async fn handle_behaviour_event(
                     let value = String::from_utf8(record.record.value.clone())
                         .unwrap_or_else(|_| String::new());
                     println!("DHT record value length: {} bytes", value.len());
-                    // Accumulate — don't resolve yet. We wait for FinishedWithNoAdditionalRecord
-                    // so we see ALL copies (local + remote) and pick the most up-to-date one.
-                    pending_get_results.entry(id).or_default().push(value);
+                    // Fire the response on FIRST hit and drop the waiter.
+                    // Kademlia keeps the query alive until convergence
+                    // (often 15-30s) — waiting for that turns every search
+                    // by hash into a multi-second roundtrip even when the
+                    // record is in the local store. The records we read
+                    // here (chiral_file_*, chiral_seeder_*, chiral_folder_*,
+                    // chiral_drive_share_*) are all ECDSA-signed by the
+                    // publisher, so taking the first replica is safe — a
+                    // forgery is rejected by the caller's verify step.
+                    pending_get_results.entry(id).or_default().push(value.clone());
+                    if let Some(tx) = pending_get_queries.remove(&id) {
+                        let _ = tx.send(Ok(Some(value)));
+                    }
                 }
                 kad::QueryResult::GetRecord(Ok(
                     kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. },
@@ -3147,6 +3157,9 @@ async fn handle_behaviour_event(
                     let selected_value = select_best_get_record_value(results);
 
                     if pending_auto_host_registry_queries.remove(&id) {
+                        // Auto-host-registry path still waits for all
+                        // replicas — first-hit doesn't apply here because
+                        // we want the union of advertised hosts.
                         auto_dial_discovered_hosts_from_registry(
                             selected_value,
                             swarm,
@@ -3154,6 +3167,9 @@ async fn handle_behaviour_event(
                             auto_peer_dial_attempts,
                         );
                     } else if let Some(tx) = pending_get_queries.remove(&id) {
+                        // Caller waiter wasn't fired by first-hit (record
+                        // not found anywhere). Resolve to the best (None)
+                        // so the caller sees Ok(None) instead of hanging.
                         let _ = tx.send(Ok(selected_value));
                     }
                 }
@@ -3187,11 +3203,29 @@ async fn handle_behaviour_event(
                 kad::QueryResult::GetProviders(Ok(
                     kad::GetProvidersOk::FoundProviders { providers, .. },
                 )) => {
-                    // Accumulate — Kademlia may fire this multiple times per query
-                    // as it contacts more peers. We resolve on the Finished event
-                    // below so the caller sees the full union.
+                    // First-hit: as soon as we see any providers, fire the
+                    // response and let Kademlia keep walking in the
+                    // background. Waiting for FinishedWithNoAdditionalRecord
+                    // adds 10-20s on every search by hash and was the
+                    // dominant source of CDN-search latency complaints.
+                    // Trade-off: a caller may see fewer providers than the
+                    // full set — but the search UI merges seeders from
+                    // multiple sources (DHT + CDN HTTP fallback) and a
+                    // single provider is enough to show the file as
+                    // available. Subsequent FoundProviders events still
+                    // accumulate (no waiter to fire), so the local cache
+                    // gets warmed for the next call.
                     if let Some(acc) = pending_get_providers_results.get_mut(&id) {
-                        acc.extend(providers);
+                        acc.extend(providers.iter().cloned());
+                    }
+                    if !providers.is_empty() {
+                        if let Some(tx) = pending_get_providers_queries.remove(&id) {
+                            let peer_ids: Vec<String> = providers
+                                .into_iter()
+                                .map(|p| p.to_string())
+                                .collect();
+                            let _ = tx.send(Ok(peer_ids));
+                        }
                     }
                 }
                 kad::QueryResult::GetProviders(Ok(
