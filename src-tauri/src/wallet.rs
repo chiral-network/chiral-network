@@ -641,10 +641,16 @@ pub async fn wait_for_tx_mined(tx_hash: &str) -> Result<bool, String> {
         2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000, 2000,
         5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000, 5000,
     ];
-    let endpoint = crate::geth::effective_rpc_endpoint();
+    // Use the canonical-RPC fallback list (direct + relay /api/chain/rpc
+    // proxy), not effective_rpc_endpoint(). Payment verification should
+    // always read from the canonical chain anyway — and a CDN whose
+    // local Geth is broken (port closed, crashed, isolated fork) used
+    // to fail payment-mining waits with "Connection refused to
+    // 127.0.0.1:8545" instead of falling through to the canonical RPC.
+    let endpoints = crate::geth::wallet_rpc_endpoints();
     for (i, delay_ms) in DELAYS_MS.iter().enumerate() {
-        let receipt = rpc_client::call(
-            &endpoint,
+        let receipt = rpc_client::call_with_fallbacks(
+            &endpoints,
             "eth_getTransactionReceipt",
             serde_json::json!([tx_hash]),
         ).await?;
@@ -667,9 +673,10 @@ pub async fn verify_tx_details(
     expected_to: &str,
     expected_amount_wei: u128,
 ) -> Result<bool, String> {
-    let endpoint = crate::geth::effective_rpc_endpoint();
-    let tx = rpc_client::call(
-        &endpoint,
+    // Same canonical-RPC fallback rationale as wait_for_tx_mined above.
+    let endpoints = crate::geth::wallet_rpc_endpoints();
+    let tx = rpc_client::call_with_fallbacks(
+        &endpoints,
         "eth_getTransactionByHash",
         serde_json::json!([tx_hash]),
     ).await?;
