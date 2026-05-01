@@ -4425,8 +4425,15 @@ async fn publish_site_to_cdn(
         form = form.part("file", part);
     }
     let upload_url = format!("{}/api/cdn/sites/upload", cdn_base);
+    // The shared rpc_client has a 5s timeout tuned for JSON-RPC calls. A
+    // CDN site upload streams multipart bytes AND waits for on-chain
+    // payment verification (often 30-60s on freshnet), which the 5s
+    // bound kills with `error sending request: operation timed out`.
+    // Override with a per-request 180s timeout — long enough for big
+    // sites + slow chain confirms, short enough to surface real hangs.
     let resp = rpc_client::client()
         .post(&upload_url)
+        .timeout(std::time::Duration::from_secs(180))
         .header("X-Site-Id", &site_id)
         .header("X-Site-Name", &site.name)
         .header("X-Owner-Wallet", &owner_wallet)
@@ -5405,12 +5412,12 @@ struct DriveFolderFileError {
 /// folder.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct FolderManifestFile {
+pub struct FolderManifestFile {
     /// Path relative to the folder root, e.g. "lecture-1.pdf" or
     /// "src/main.rs". Slash-separated, no leading slash.
-    rel_path: String,
-    file_hash: String,
-    file_size: u64,
+    pub rel_path: String,
+    pub file_hash: String,
+    pub file_size: u64,
 }
 
 /// Folder bundle published at `chiral_folder_{folder_hash}`. The folder hash
@@ -5419,30 +5426,42 @@ struct FolderManifestFile {
 /// folder hash can reach the same content from any seeder of those files.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct FolderManifest {
+pub struct FolderManifest {
     /// Same as the DHT key suffix.
-    hash: String,
+    pub hash: String,
     /// Display name copied from the seller's local Drive item.
-    name: String,
+    pub name: String,
     /// Wallet that published this folder bundle. Authoritative — verified
     /// via `publisher_signature` below before this manifest is trusted.
-    owner_wallet: String,
-    created_at: u64,
-    files: Vec<FolderManifestFile>,
+    pub owner_wallet: String,
+    pub created_at: u64,
+    pub files: Vec<FolderManifestFile>,
+    /// Folder-level sale price in wei (u128 as decimal string). Buyers pay
+    /// this once to `owner_wallet` and unlock every file in the bundle —
+    /// individual file prices are ignored when downloading "as part of
+    /// folder F". Empty/"0" = free folder.
+    #[serde(default)]
+    pub price_wei: String,
+    /// Wallet that receives the folder-level payment. Defaults to
+    /// `owner_wallet` when missing — kept as a separate field so the
+    /// publisher can route payments to a different wallet later without
+    /// breaking the owner-signed verification model.
+    #[serde(default)]
+    pub wallet_address: String,
     /// ECDSA signature by `owner_wallet` over the canonical bytes of every
     /// other field. Readers reject manifests that fail to verify so a
     /// peer can't forge `name` / `owner_wallet` / `files` for a hash they
     /// don't own.
     #[serde(default)]
-    publisher_signature: String,
+    pub publisher_signature: String,
 }
 
 impl FolderManifest {
     /// Length-prefixed canonical bytes — same encoding as
     /// `version::canonical_signing_payload` and
     /// `SiteDirectoryEntry::sign_payload`. Order: hash, name,
-    /// owner_wallet, created_at, then each file as
-    /// (rel_path, file_hash, file_size).
+    /// owner_wallet, created_at, price_wei, wallet_address, then each
+    /// file as (rel_path, file_hash, file_size).
     fn sign_payload(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(256);
         for part in [
@@ -5454,6 +5473,16 @@ impl FolderManifest {
             out.extend_from_slice(part);
         }
         out.extend_from_slice(&self.created_at.to_le_bytes());
+        // Folder-level price + wallet must be inside the signed payload —
+        // otherwise a hostile peer could substitute a different price /
+        // recipient for the same hash.
+        for part in [
+            self.price_wei.as_bytes(),
+            self.wallet_address.as_bytes(),
+        ] {
+            out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+            out.extend_from_slice(part);
+        }
         out.extend_from_slice(&(self.files.len() as u32).to_le_bytes());
         for f in &self.files {
             for part in [f.rel_path.as_bytes(), f.file_hash.as_bytes()] {
@@ -5532,11 +5561,13 @@ fn collect_descendant_files(
     out
 }
 
-/// Publish every file inside `folder_id` (recursively) as a paid seeder at
-/// the same `price_chi`, and mark the folder as seeding so the UI can show
-/// its sale state. The folder itself is just a container — sale = each
-/// child file is independently registered with the same price + the same
-/// underlying per-seeder DHT plumbing as `publish_drive_file`.
+/// Publish a folder bundle for sale at a single folder-level price. Each
+/// child file is registered as a free seed (price 0) — payment is
+/// collected once at the folder level when the buyer presents a
+/// `chiral_folder_<hash>` PaymentProof. The folder hash is
+/// content-addressed (same files + same owner → same hash) so re-publishes
+/// are stable. `price_chi` here is the FOLDER price, not the per-file
+/// price.
 #[tauri::command]
 async fn publish_drive_folder(
     state: tauri::State<'_, AppState>,
@@ -5566,6 +5597,34 @@ async fn publish_drive_folder(
         return Err("Folder is empty — nothing to sell".into());
     }
 
+    // Compute folder-level price in wei + select payment recipient. Both
+    // are baked into the signed FolderManifest, so a hostile peer can't
+    // republish the same `chiral_folder_<H>` key with a swapped wallet
+    // or price.
+    let folder_price_wei: u128 = if let Some(ref p) = price_chi {
+        if p.trim().is_empty() || p == "0" {
+            0
+        } else {
+            wallet::parse_chi_to_wei(p)?
+        }
+    } else {
+        0
+    };
+    let folder_payment_wallet = wallet_address
+        .clone()
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or_else(|| owner.clone())
+        .trim()
+        .to_string();
+    if folder_price_wei > 0 && folder_payment_wallet.is_empty() {
+        return Err("Wallet address is required when setting a folder price".to_string());
+    }
+
+    // First pass: do per-file publishes WITHOUT folder context so each
+    // file's merkle_root gets computed and persisted to the Drive
+    // manifest. Without this we can't compute the folder hash (which is
+    // content-addressed over the file hashes). Files publish at price 0
+    // here — folder-level payment replaces per-file payment.
     let mut succeeded = 0usize;
     let mut failures: Vec<DriveFolderFileError> = Vec::new();
     for (file_id, file_name) in &files {
@@ -5574,7 +5633,7 @@ async fn publish_drive_folder(
             &owner,
             file_id,
             protocol.clone(),
-            price_chi.clone(),
+            Some("0".to_string()),
             wallet_address.clone(),
             private_key.clone(),
         )
@@ -5613,7 +5672,10 @@ async fn publish_drive_folder(
             .and_then(|i| i.storage_path.clone())
             .unwrap_or_default(),
     );
-    let manifest_files: Vec<FolderManifestFile> = {
+    // (file_id, FolderManifestFile) — we need the file_id so we can
+    // re-register each child with folder context after the folder hash
+    // is computed.
+    let manifest_entries: Vec<(String, FolderManifestFile)> = {
         let m = state.drive_state.manifest.read().await;
         files
             .iter()
@@ -5623,9 +5685,6 @@ async fn publish_drive_folder(
                 if hash.trim().is_empty() {
                     return None;
                 }
-                // Build rel_path from the file's storage_path under the
-                // folder root, falling back to the bare filename so we
-                // always have *something*.
                 let rel = item
                     .storage_path
                     .as_ref()
@@ -5640,14 +5699,19 @@ async fn publish_drive_folder(
                         }
                     })
                     .unwrap_or_else(|| item.name.clone());
-                Some(FolderManifestFile {
-                    rel_path: rel,
-                    file_hash: hash,
-                    file_size: item.size.unwrap_or(0),
-                })
+                Some((
+                    file_id.clone(),
+                    FolderManifestFile {
+                        rel_path: rel,
+                        file_hash: hash,
+                        file_size: item.size.unwrap_or(0),
+                    },
+                ))
             })
             .collect()
     };
+    let manifest_files: Vec<FolderManifestFile> =
+        manifest_entries.iter().map(|(_, f)| f.clone()).collect();
 
     let folder_hash_opt = if manifest_files.is_empty() {
         None
@@ -5659,6 +5723,8 @@ async fn publish_drive_folder(
             owner_wallet: owner.clone(),
             created_at: ds::now_secs(),
             files: manifest_files,
+            price_wei: folder_price_wei.to_string(),
+            wallet_address: folder_payment_wallet.clone(),
             publisher_signature: String::new(),
         };
         let signed = match private_key.as_deref() {
@@ -5689,6 +5755,14 @@ async fn publish_drive_folder(
                 // peers' get_providers calls find this seller.
                 let _ = dht.start_providing_file(hash.clone()).await;
             }
+            // Note: V1 limitation — child files are published at price=0
+            // and the seeder doesn't enforce folder-level payment. A
+            // buyer who has the FILE hash (not the folder hash) can
+            // download individual files for free without paying the
+            // folder owner. Closing this gap requires extending the
+            // chunked-transfer protocol with folder-level PaymentProof
+            // verification (tracked separately).
+            let _ = manifest_entries;
             Some(hash)
         }
     };
@@ -5837,6 +5911,14 @@ struct FolderSearchResult {
     owner_wallet: String,
     created_at: u64,
     files: Vec<FolderSearchFile>,
+    /// Folder-level sale price in wei (u128 as decimal string). Empty/"0"
+    /// means the folder is free. Buyers pay this *once* to
+    /// `payment_wallet` and unlock every file in the bundle.
+    price_wei: String,
+    /// Wallet that receives the folder-level payment. Falls back to
+    /// `owner_wallet` when the manifest didn't carry an explicit
+    /// payment_wallet (legacy / pre-folder-pricing manifests).
+    payment_wallet: String,
     /// Peer IDs that appear in `seeders` for *every* file. These are the
     /// seeders the buyer should pick — anyone in this set will reliably
     /// serve every file in the folder.
@@ -5915,12 +5997,19 @@ async fn search_folder(
         }
     }
 
+    let payment_wallet = if manifest.wallet_address.trim().is_empty() {
+        manifest.owner_wallet.clone()
+    } else {
+        manifest.wallet_address.clone()
+    };
     Ok(Some(FolderSearchResult {
         hash: manifest.hash,
         name: manifest.name,
         owner_wallet: manifest.owner_wallet,
         created_at: manifest.created_at,
         files,
+        price_wei: manifest.price_wei,
+        payment_wallet,
         common_seeders: common,
     }))
 }

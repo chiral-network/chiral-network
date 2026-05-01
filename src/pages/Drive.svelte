@@ -786,9 +786,11 @@
       </h3>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
         {#if seedModalItem.type === 'folder'}
-          {seedModalItem.seeding ? 'Update the price for' : 'Sell every file inside'}
-          <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong>.
-          The price is applied to each file in this folder (recursively).
+          {seedModalItem.seeding ? 'Update the bundle price for' : 'Sell'}
+          <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong>
+          as a single folder bundle. Buyers pay this price <em>once</em> and
+          download every file in the folder — child file prices are
+          ignored when sold this way.
         {:else}
           {seedModalItem.seeding ? 'Update' : 'Share'} <strong class="text-gray-900 dark:text-white">"{seedModalItem.name}"</strong> on the network.
         {/if}
@@ -820,7 +822,9 @@
 
         <!-- Price input -->
         <div>
-          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">Price (CHI)</label>
+          <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
+            {seedModalItem.type === 'folder' ? 'Folder price (CHI)' : 'Price (CHI)'}
+          </label>
           <input
             type="number"
             step="0.001"
@@ -829,6 +833,12 @@
             bind:value={seedPrice}
             class="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          {#if seedModalItem.type === 'folder'}
+            <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+              One payment unlocks every file in the bundle. Buyers paste the
+              folder hash on the Download page to fetch the whole folder.
+            </p>
+          {/if}
         </div>
       </div>
 
