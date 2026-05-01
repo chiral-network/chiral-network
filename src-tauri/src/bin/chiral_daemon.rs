@@ -1231,6 +1231,48 @@ async fn file_search(
     }
 }
 
+// ---- Folder bundle search endpoint ----
+
+async fn folder_search(
+    State(state): State<Arc<HeadlessRuntimeState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let folder_hash = body["folderHash"].as_str().unwrap_or("").to_string();
+    if folder_hash.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "folderHash required");
+    }
+    let dht = match state.dht_service().await {
+        Some(d) => d,
+        None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
+    };
+    let key = format!("chiral_folder_{}", folder_hash);
+    let blob = match tokio::time::timeout(
+        std::time::Duration::from_millis(4000),
+        dht.get_dht_value(key),
+    )
+    .await
+    {
+        Ok(Ok(Some(json_str))) => json_str,
+        Ok(Ok(None)) => return Json(json!({"found": false})).into_response(),
+        Ok(Err(e)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        Err(_) => return Json(json!({"found": false, "error": "timeout"})).into_response(),
+    };
+    let manifest = match serde_json::from_str::<serde_json::Value>(&blob) {
+        Ok(m) => m,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Invalid folder manifest: {}", e),
+            )
+        }
+    };
+    Json(json!({
+        "found": true,
+        "manifest": manifest,
+    }))
+    .into_response()
+}
+
 // ---- Hosting advertisement endpoints ----
 
 async fn hosting_publish_ad(
@@ -1351,6 +1393,7 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
         )
         // File search
         .route("/api/headless/file/search", post(file_search))
+        .route("/api/headless/folder/search", post(folder_search))
         // ChiralDrop
         .route("/api/headless/drop/inbox", get(drop_inbox))
         .route("/api/headless/drop/outgoing", get(drop_outgoing))

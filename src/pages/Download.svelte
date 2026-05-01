@@ -103,6 +103,14 @@
     ownerWallet: string;
     createdAt: number;
     files: FolderSearchFile[];
+    /**
+     * Folder-level price in wei (decimal string). Empty/"0" = free folder.
+     * Buyers pay this *once* to `paymentWallet` and unlock every file in
+     * the bundle — replaces the legacy "sum of file prices" model.
+     */
+    priceWei: string;
+    /** Folder-level payment recipient. Falls back to ownerWallet. */
+    paymentWallet: string;
     /** Seeders that provide every file in the folder. */
     commonSeeders: SeederInfo[];
   }
@@ -1017,22 +1025,18 @@
       ?? null;
   }
 
-  /// Total price (in CHI as a string) the buyer pays if they pick the
-  /// currently-selected common seeder for every file in the folder.
+  /// Folder-level price in CHI as a string. Comes straight from the
+  /// signed manifest — independent of any per-file price (per-file is
+  /// always 0 inside a folder bundle).
   function folderTotalCostChi(): string {
     if (!folderResult) return '0';
-    const chosen = folderSelectedSeeder();
-    if (!chosen) return '0';
-    let totalWei = 0n;
-    for (const f of folderResult.files) {
-      const s = f.seeders.find((x) => x.peerId === chosen.peerId);
-      const w = s?.priceWei?.trim();
-      if (w && w !== '0') {
-        try { totalWei += BigInt(w); } catch { /* ignore bad numerics */ }
-      }
+    const w = folderResult.priceWei?.trim();
+    if (!w || w === '0') return '0';
+    try {
+      return (Number(BigInt(w)) / 1e18).toFixed(6).replace(/\.?0+$/, '') || '0';
+    } catch {
+      return '0';
     }
-    if (totalWei === 0n) return '0';
-    return (Number(totalWei) / 1e18).toFixed(6);
   }
 
   async function downloadFolderBundle() {
@@ -1047,6 +1051,7 @@
       return;
     }
     const totalCostChi = folderTotalCostChi();
+    const folderPaymentWallet = (folderResult.paymentWallet || folderResult.ownerWallet || '').trim();
     if (parseFloat(totalCostChi) > 0) {
       if (!$walletAccount) {
         toasts.show('Log in with your wallet to download paid folders', 'warning');
@@ -1060,18 +1065,40 @@
         );
         return;
       }
+      if (!folderPaymentWallet) {
+        toasts.show('Folder has a price but no payment wallet — manifest is malformed', 'error');
+        return;
+      }
       const ok = window.confirm(
-        `Pay ${totalCostChi} CHI to download ${folderResult.files.length} file${folderResult.files.length === 1 ? '' : 's'} from this folder?`,
+        `Pay ${totalCostChi} CHI to ${folderPaymentWallet.slice(0, 10)}… and download ${folderResult.files.length} file${folderResult.files.length === 1 ? '' : 's'}?`,
       );
       if (!ok) return;
     }
 
     folderDownloading = true;
     try {
-      // For each file in the manifest: build a per-file SearchResult that
-      // contains only the chosen seeder, then run the existing per-file
-      // download flow. Each file shows up as its own row in active
-      // downloads.
+      // Single folder-level payment to the manifest's payment wallet,
+      // then iterate file downloads. Each file inside the bundle is
+      // published at price=0 so no further per-file tx is sent.
+      if (parseFloat(totalCostChi) > 0 && $walletAccount) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const tx = await invoke<{ hash: string }>('send_transaction', {
+            fromAddress: $walletAccount.address,
+            toAddress: folderPaymentWallet,
+            amount: totalCostChi,
+            privateKey: $walletAccount.privateKey || '',
+          });
+          toasts.show(
+            `Folder payment sent: ${tx.hash.slice(0, 10)}… — starting downloads`,
+            'success',
+          );
+        } catch (e) {
+          toasts.detail('Folder payment failed', String(e), 'error');
+          folderDownloading = false;
+          return;
+        }
+      }
       for (const file of folderResult.files) {
         const seeder = file.seeders.find((s) => s.peerId === chosen.peerId);
         if (!seeder) {
@@ -1084,19 +1111,17 @@
           fileSize: file.fileSize,
           seeders: [seeder],
           createdAt: folderResult.createdAt,
-          priceWei: seeder.priceWei || '0',
+          // Force file-level price to 0 — the buyer already paid at the
+          // folder level above. Per-file payment proof is skipped.
+          priceWei: '0',
           walletAddress: seeder.walletAddress,
         };
-        // Reset the file-UI seeder index so startDownload picks our
-        // single-seeder list. skipBlacklist + skipCostConfirm because
-        // we already covered both at the folder level.
         selectedSeederIndex = 0;
         try {
           await startDownload(fileResult, true, true);
         } catch (e) {
           log.error(`Folder file download failed for ${file.relPath}:`, e);
         }
-        // Yield between dispatches so reactive UI updates flush.
         await new Promise((r) => setTimeout(r, 30));
       }
       toasts.show(
@@ -1829,9 +1854,13 @@
 
         <div class="flex items-center justify-between mt-4">
           <div class="text-sm text-gray-600 dark:text-gray-400">
-            Total cost:
+            Folder price:
             {#if folderTotalCostChi() !== '0'}
               <span class="font-semibold text-amber-600 dark:text-amber-400">{folderTotalCostChi()} CHI</span>
+              {#if folderResult.paymentWallet || folderResult.ownerWallet}
+                <span class="text-gray-400 mx-1">→</span>
+                <span class="font-mono text-xs">{(folderResult.paymentWallet || folderResult.ownerWallet).slice(0, 10)}…</span>
+              {/if}
             {:else}
               <span class="text-gray-400">Free</span>
             {/if}
@@ -1850,7 +1879,7 @@
               Starting...
             {:else}
               <Download class="w-4 h-4" />
-              Download Folder
+              {folderTotalCostChi() === '0' ? 'Download Folder' : `Buy Folder for ${folderTotalCostChi()} CHI`}
             {/if}
           </button>
         </div>
