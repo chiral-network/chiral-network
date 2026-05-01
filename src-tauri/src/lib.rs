@@ -1135,7 +1135,7 @@ impl SeederInfo {
 /// seeders, etc). Those get silently dropped on read.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct FileMetadata {
+pub(crate) struct FileMetadata {
     hash: String,
     file_name: String,
     file_size: u64,
@@ -1309,7 +1309,7 @@ async fn fetch_seeders(
 /// address or private key are missing — readers reject unsigned
 /// SeederInfo entries, so publishing one would just poison the DHT
 /// with a record nobody trusts.
-fn try_make_signed_seeder(
+pub(crate) fn try_make_signed_seeder(
     peer_id: &str,
     file_hash: &str,
     price_wei: &str,
@@ -1347,7 +1347,7 @@ fn try_make_signed_seeder(
 /// FileMetadata, so publishing one is worse than not publishing at
 /// all (the reader's not-found path lets the user retry from a
 /// signed publisher).
-fn try_make_signed_file_metadata(
+pub(crate) fn try_make_signed_file_metadata(
     hash: &str,
     file_name: &str,
     file_size: u64,
