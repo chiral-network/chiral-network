@@ -314,17 +314,38 @@ async fn status(State(s): State<Arc<CdnState>>) -> Response {
     .into_response()
 }
 
-/// GET /api/cdn/pricing?sizeMb=X&durationDays=Y — pure arithmetic, no DHT.
+/// GET /api/cdn/pricing?bytes=N&durationDays=Y — pure arithmetic, no DHT.
+///
+/// `bytes` is the preferred input; pass the exact file byte count so
+/// the quote matches what `upload` will compute via the same
+/// `required_upload_wei` helper. `sizeMb` is accepted as a legacy
+/// fallback (rounded UP to the next byte boundary so the quote is
+/// never lower than what the upload would charge — under-quoting was
+/// the cause of the "Payment details mismatch amount=…" error users
+/// hit after the f64 pricing path lost a few ten-thousandths of a
+/// CHI vs the exact u128 upload path).
 async fn pricing(
     State(s): State<Arc<CdnState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let size_mb: f64 = params.get("sizeMb").and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let duration_days: f64 = params.get("durationDays").and_then(|s| s.parse().ok()).unwrap_or(30.0);
-    let months = duration_days / 30.0;
-    let total_wei = (s.price_wei_per_mb_month as f64 * size_mb * months) as u128;
+    let duration_days: u64 = params
+        .get("durationDays")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+    let bytes: u128 = if let Some(b) = params.get("bytes").and_then(|s| s.parse().ok()) {
+        b
+    } else {
+        // Legacy fallback: convert sizeMb → bytes, ceil-rounded so the
+        // quote always meets-or-exceeds the upload-time requirement.
+        let size_mb: f64 = params
+            .get("sizeMb")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        (size_mb * (1024.0 * 1024.0)).ceil() as u128
+    };
+    let total_wei = required_upload_wei(s.price_wei_per_mb_month, bytes, duration_days as u128);
     Json(json!({
-        "sizeMb": size_mb,
+        "bytes": bytes.to_string(),
         "durationDays": duration_days,
         "pricePerMbMonthChi": wei_to_chi(s.price_wei_per_mb_month),
         "pricePerMbMonthWei": s.price_wei_per_mb_month.to_string(),

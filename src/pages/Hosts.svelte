@@ -329,9 +329,13 @@
     cdnConfirmPricing = null;
     showCdnUploadPicker = false;
 
-    const sizeMb = Math.max((file.size || 1) / (1024 * 1024), 0.001);
+    const bytes = Math.max(file.size || 1, 1);
     try {
-      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`);
+      // Pass exact bytes (not sizeMb) so the quote matches what the
+      // upload handler will charge via the same exact-u128 helper —
+      // f64 sizeMb conversions used to under-quote by ~0.0001 CHI
+      // and the upload would then reject the payment as too small.
+      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/pricing?bytes=${bytes}&durationDays=30`);
       cdnConfirmPricing = await resp.json();
     } catch {
       cdnConfirmPricing = { totalCostChi: '?', pricePerMbMonthChi: '?' };
@@ -353,7 +357,7 @@
       // refetching it during upload was the second-largest source of the
       // "everything is slow" complaint. Fall back to a fresh fetch only if
       // the user got here via a path that skipped the modal.
-      const sizeMb = (file.size || 1) / (1024 * 1024);
+      const bytes = Math.max(file.size || 1, 1);
       let totalCostChi = cdnConfirmPricing?.totalCostChi;
       let cdnWallet: string | undefined;
       const statusReq = fetchWithVersion(`${serverUrl}/api/cdn/status`);
@@ -361,7 +365,7 @@
         cdnWallet = (await (await statusReq).json()).walletAddress;
       } else {
         const [pricingResp, statusResp] = await Promise.all([
-          fetchWithVersion(`${serverUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=30`),
+          fetchWithVersion(`${serverUrl}/api/cdn/pricing?bytes=${bytes}&durationDays=30`),
           statusReq,
         ]);
         const pricing = await pricingResp.json();
@@ -716,15 +720,15 @@
 
   async function refreshCdnUploadQuote(site: HostedSite) {
     if (!cdnUploadServerUrl) return;
-    const sizeMb = totalSiteSize(site) / (1024 * 1024);
+    const bytes = Math.max(totalSiteSize(site), 1);
     try {
-      const url = `${cdnUploadServerUrl}/api/cdn/pricing?sizeMb=${sizeMb}&durationDays=${cdnUploadDurationDays}`;
+      const url = `${cdnUploadServerUrl}/api/cdn/pricing?bytes=${bytes}&durationDays=${cdnUploadDurationDays}`;
       const r = await fetchWithVersion(url);
       if (!r.ok) throw new Error(`CDN pricing returned ${r.status}`);
       const j = await r.json();
       cdnUploadQuote = {
         totalCostChi: String(j.totalCostChi ?? '0'),
-        sizeMb: Number(j.sizeMb ?? sizeMb),
+        sizeMb: bytes / (1024 * 1024),
       };
     } catch (err) {
       cdnUploadQuote = null;
