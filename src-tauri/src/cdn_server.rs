@@ -1190,13 +1190,28 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Format wei as a CHI decimal string LOSSLESSLY. The frontend feeds
+/// the returned string back into `parse_chi_to_wei` when it builds
+/// the upload payment, so any precision loss here makes the buyer
+/// pay slightly less than `required_upload_wei` requires and the
+/// upload then rejects the tx as "amount too low" — exactly the
+/// "amount=601000000000000 (need 601171493530274)" mismatch we hit
+/// after the f64-pricing fix landed.
+///
+/// Format: integer CHI part, optional dot + fractional part with
+/// trailing zeros trimmed. Uses pure integer arithmetic so the
+/// result, fed back through `parse_chi_to_wei`, returns exactly
+/// the input wei.
 fn wei_to_chi(wei: u128) -> String {
-    let chi = wei as f64 / 1e18;
-    if chi < 0.000001 {
-        format!("{chi:.18}").trim_end_matches('0').trim_end_matches('.').to_string()
-    } else {
-        format!("{chi:.6}")
+    const ONE_CHI: u128 = 1_000_000_000_000_000_000;
+    let whole = wei / ONE_CHI;
+    let frac = wei % ONE_CHI;
+    if frac == 0 {
+        return whole.to_string();
     }
+    let frac_str = format!("{:018}", frac);
+    let trimmed = frac_str.trim_end_matches('0');
+    format!("{}.{}", whole, trimmed)
 }
 
 fn parse_chi_or_zero(s: &str) -> u128 {
@@ -1229,12 +1244,35 @@ mod tests {
 
     #[test]
     fn wei_to_chi_display_small() {
-        assert_eq!(wei_to_chi(1_000_000_000_000_000), "0.001000");
+        assert_eq!(wei_to_chi(1_000_000_000_000_000), "0.001");
     }
 
     #[test]
     fn wei_to_chi_display_zero() {
         assert_eq!(wei_to_chi(0), "0");
+    }
+
+    #[test]
+    fn wei_to_chi_round_trip_is_lossless() {
+        // The frontend re-parses the CHI string we return into wei via
+        // `parse_chi_to_wei` to build the payment tx. Every legitimate
+        // wei value the upload handler might charge MUST round-trip
+        // back to itself, otherwise the tx pays slightly less than
+        // required_upload_wei and the upload rejects it.
+        for wei in [
+            0u128,
+            1,
+            999,
+            601_171_493_530_274, // the exact value from the user's mismatch
+            1_000_000_000_000_000_000,
+            123_456_789_012_345_678_901_234,
+            u128::MAX / 2,
+        ] {
+            let chi = wei_to_chi(wei);
+            let back = crate::wallet::parse_chi_to_wei(&chi)
+                .unwrap_or_else(|e| panic!("parse_chi_to_wei({chi:?}) failed: {e}"));
+            assert_eq!(back, wei, "wei={} → chi={:?} → wei={}", wei, chi, back);
+        }
     }
 
     #[test]
