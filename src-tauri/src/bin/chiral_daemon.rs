@@ -722,7 +722,20 @@ async fn dht_unregister_shared_file(
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
 
+    // Local map first so subsequent FileInfo requests are immediately
+    // refused. Then mirror the desktop `drive_stop_seeding` flow: drop
+    // our per-seeder DHT record and stop being a Kademlia provider for
+    // this file. Without these calls a peer who unregisters headlessly
+    // stays in everyone else's seeder lists until the records age out
+    // naturally (~3 min republish + remote TTL), and provider lookups
+    // keep returning a peer that no longer serves the file.
     svc.unregister_shared_file(&req.file_hash).await;
+    if let Err(e) = chiral_network::remove_seeder_entry(&svc, &req.file_hash).await {
+        eprintln!(
+            "[DAEMON] remove_seeder_entry failed for {}: {} (local seeding stopped, but DHT cleanup incomplete)",
+            req.file_hash, e
+        );
+    }
     Json(json!({ "status": "ok" })).into_response()
 }
 
@@ -1257,6 +1270,33 @@ async fn folder_search(
         Ok(Err(e)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
         Err(_) => return Json(json!({"found": false, "error": "timeout"})).into_response(),
     };
+    // Trust contract: folder manifests are ECDSA-signed by their owner.
+    // Without verification any peer could re-publish chiral_folder_<H>
+    // with a forged priceWei / walletAddress and divert payment. Drop
+    // unsigned / signature-invalid manifests instead of returning them
+    // — buyers MUST be able to trust the headless response shape.
+    let manifest_typed: chiral_network::FolderManifest =
+        match serde_json::from_str(&blob) {
+            Ok(m) => m,
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Invalid folder manifest: {}", e),
+                )
+            }
+        };
+    if !manifest_typed.verify() {
+        let reason = if manifest_typed.publisher_signature.is_empty() {
+            "unsigned"
+        } else {
+            "INVALID signature"
+        };
+        return Json(json!({
+            "found": false,
+            "error": format!("Folder manifest {} — dropped", reason),
+        }))
+        .into_response();
+    }
     let manifest = match serde_json::from_str::<serde_json::Value>(&blob) {
         Ok(m) => m,
         Err(e) => {

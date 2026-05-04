@@ -1228,7 +1228,7 @@ pub async fn publish_seeder_entry(
 /// ~3 min, which would keep a stale per-seeder entry alive on the network
 /// long after we've deleted the file. Removing the local record kills the
 /// republish cycle; remote replicas age out naturally over the record TTL.
-pub(crate) async fn remove_seeder_entry(
+pub async fn remove_seeder_entry(
     dht: &dht::DhtService,
     file_hash: &str,
 ) -> Result<(), String> {
@@ -5457,10 +5457,9 @@ pub struct FolderManifest {
 }
 
 impl FolderManifest {
-    /// Length-prefixed canonical bytes — same encoding as
-    /// `version::canonical_signing_payload` and
-    /// `SiteDirectoryEntry::sign_payload`. Order: hash, name,
-    /// owner_wallet, created_at, price_wei, wallet_address, then each
+    /// Length-prefixed canonical bytes for the v2 signing payload (with
+    /// folder-level pricing). Order: hash, name, owner_wallet,
+    /// created_at, price_wei, wallet_address, file count, then each
     /// file as (rel_path, file_hash, file_size).
     fn sign_payload(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(256);
@@ -5494,17 +5493,57 @@ impl FolderManifest {
         out
     }
 
-    fn sign(&mut self, private_key: &str) {
+    /// v1 (pre-folder-pricing) signing payload. Same as `sign_payload`
+    /// except the `price_wei` + `wallet_address` fields aren't included.
+    /// Used as a backward-compat fallback in `verify` so manifests
+    /// signed before folder-level pricing existed still validate. Never
+    /// used for *new* signatures — `sign` always uses the v2 payload.
+    fn sign_payload_legacy_v1(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(256);
+        for part in [
+            self.hash.as_bytes(),
+            self.name.as_bytes(),
+            self.owner_wallet.as_bytes(),
+        ] {
+            out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+            out.extend_from_slice(part);
+        }
+        out.extend_from_slice(&self.created_at.to_le_bytes());
+        out.extend_from_slice(&(self.files.len() as u32).to_le_bytes());
+        for f in &self.files {
+            for part in [f.rel_path.as_bytes(), f.file_hash.as_bytes()] {
+                out.extend_from_slice(&(part.len() as u32).to_le_bytes());
+                out.extend_from_slice(part);
+            }
+            out.extend_from_slice(&f.file_size.to_le_bytes());
+        }
+        out
+    }
+
+    pub fn sign(&mut self, private_key: &str) {
         let payload = self.sign_payload();
         self.publisher_signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
     }
 
-    fn verify(&self) -> bool {
+    pub fn verify(&self) -> bool {
         if self.publisher_signature.is_empty() || self.owner_wallet.is_empty() {
             return false;
         }
+        // Try v2 (current) first.
         let payload = self.sign_payload();
-        wallet::verify_signature(&payload, &self.publisher_signature, &self.owner_wallet)
+        if wallet::verify_signature(&payload, &self.publisher_signature, &self.owner_wallet) {
+            return true;
+        }
+        // Fallback: v1 payload (no price_wei / wallet_address fields).
+        // Only accept the legacy verification when those fields are
+        // genuinely empty — a manifest that *claims* a non-empty price
+        // but verifies under v1 is suspicious (someone tacked price
+        // fields onto a legacy-signed manifest), so we reject it.
+        if self.price_wei.is_empty() && self.wallet_address.is_empty() {
+            let legacy = self.sign_payload_legacy_v1();
+            return wallet::verify_signature(&legacy, &self.publisher_signature, &self.owner_wallet);
+        }
+        false
     }
 }
 
@@ -6888,5 +6927,62 @@ mod multi_seeder_tests {
         assert_eq!(parsed["seeders"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["seeders"][0]["peerId"], "PeerA");
         assert_eq!(parsed["fileName"], "test.txt");
+    }
+
+    /// Manifests signed before folder-level pricing existed must still
+    /// verify after the v2 payload was introduced — otherwise every
+    /// pre-pricing folder bundle goes dark on search_folder.
+    ///
+    /// We construct a manifest, sign it under the v1 (legacy) payload,
+    /// then verify with the v2-aware verify(). Acceptance is required.
+    #[test]
+    fn folder_manifest_verify_accepts_legacy_v1_signatures() {
+        // Use a fixed secp256k1 private key. Recover the matching
+        // wallet address by signing a probe message and asking
+        // recover_signer who signed it — avoids depending on a
+        // dedicated address_from_private_key helper.
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let probe_sig = wallet::sign_message(private_key, b"probe").unwrap();
+        let wallet = wallet::recover_signer(b"probe", &probe_sig).expect("recover address");
+
+        let mut m = FolderManifest {
+            hash: "abcdef0123456789".to_string(),
+            name: "legacy folder".to_string(),
+            owner_wallet: wallet.clone(),
+            created_at: 1_700_000_000,
+            files: vec![FolderManifestFile {
+                rel_path: "x.bin".to_string(),
+                file_hash: "ff".repeat(32),
+                file_size: 4096,
+            }],
+            // Legacy manifest: no folder-level pricing.
+            price_wei: String::new(),
+            wallet_address: String::new(),
+            publisher_signature: String::new(),
+        };
+        // Sign over the v1 payload (what pre-pricing publishers wrote).
+        let legacy_payload = m.sign_payload_legacy_v1();
+        m.publisher_signature = wallet::sign_message(private_key, &legacy_payload).unwrap();
+
+        // Sanity: the v2 payload should NOT match the legacy signature
+        // (they're different byte strings) — proves we're actually
+        // exercising the fallback path rather than accidentally getting
+        // an identical encoding.
+        assert!(!wallet::verify_signature(
+            &m.sign_payload(),
+            &m.publisher_signature,
+            &m.owner_wallet,
+        ));
+
+        // verify() must accept the legacy signature.
+        assert!(m.verify(), "legacy v1 manifest must verify under v2 verifier");
+
+        // And tampering with the price fields after the fact must be
+        // rejected — the v1 fallback is gated on price_wei +
+        // wallet_address being empty, so a buyer can't pay 0 to a
+        // hostile recipient.
+        m.price_wei = "1000000000000000000".to_string();
+        m.wallet_address = "0xdeadbeef".repeat(5).chars().take(42).collect();
+        assert!(!m.verify(), "legacy fallback must not accept tacked-on pricing");
     }
 }
