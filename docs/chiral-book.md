@@ -127,7 +127,7 @@ Trust boundaries are enforced cryptographically end-to-end. Every long-lived rec
 
 - File metadata (`chiral_file_<hash>`) — signed by publisher wallet over a length-prefixed canonical payload. `search_file` rejects unsigned/invalid metadata as not-found.
 - Seeder entries (`chiral_seeder_<hash>_<peer>`) — signed by the seeder's wallet, binding peer ID + file hash + wallet address. `fetch_seeders` drops empty-signature non-stub entries.
-- Folder manifests (`chiral_folder_<hash>`) — signed by `owner_wallet`. `search_folder` drops unsigned/invalid bundles.
+- Folder manifests (`chiral_folder_<hash>`) — signed by `owner_wallet` over a payload that includes the folder's `priceWei` and `walletAddress`, so a hostile peer can't republish the same hash with a swapped price/recipient. The Tauri `search_folder` and the headless `POST /api/headless/folder/search` both verify and drop unsigned/invalid bundles. Manifests published before folder-level pricing existed (v1) are still accepted via a fallback gated on the pricing fields being empty.
 - Chunked-transfer `FileInfo` envelopes — signed by the seeder's wallet. The downloader verifies before consuming the seeder's claimed `wallet_address` / `price_wei` and fails over to other seeders on bad signatures (closes the payment-redirection vector where a hostile seeder could substitute its own wallet).
 
 **HTTP authentication (replaces the previously-trusted bare `X-Owner` header):**
@@ -674,7 +674,7 @@ The test suite contains 585+ tests across 35 files:
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-251+ Rust tests across 13 modules covering: wallet CHI/Wei conversion, genesis validation, syncing logic, mining status, serialization, GPU error detection, Kademlia peer filtering, encryption, hosting server, rating storage, relay share proxy, and drive API.
+270+ Rust tests across 14 modules covering: wallet CHI/Wei conversion, genesis validation, syncing logic, mining status, serialization, GPU error detection, Kademlia peer filtering, encryption, hosting server, rating storage, relay share proxy, drive API, owner-proof signing (path/method/wallet binding + replay protection), folder-bundle hashing (order independence, owner case-folding, file-set sensitivity), folder-manifest v1/v2 signature roundtrip, and CDN payment math (`required_upload_wei` ceil rounding + saturation).
 
 ### Scaled Integration Tests
 
