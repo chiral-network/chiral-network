@@ -65,12 +65,13 @@ Chiral Network has its own cryptocurrency called **CHI**. It's used to pay for d
 
 Payments are verified on-chain before any file data is served, so you can't be charged without actually receiving your file, and sellers can't be stiffed after serving.
 
-## Privacy & Security
+## Security
 
-- **Your wallet lives on your device.** Nobody else — not even the Chiral team — has your recovery phrase. If you lose it, your CHI is gone.
-- **File listings are signed.** Every file's metadata and seeder entry is cryptographically signed, so nobody can spoof your files in the network.
+Chiral Network is **not an anonymity tool** — your wallet address, IP, and which files you publish or download are visible on the network. What the security model does cover:
+
+- **Your wallet lives on your device.** Nobody else has your recovery phrase. If you lose it, your CHI is gone.
+- **File listings are signed.** Every file's metadata and seeder entry is cryptographically signed, so nobody can spoof your files or substitute their own wallet to redirect your payment.
 - **Payments are verified.** Seeders check the blockchain for your payment before sending chunks.
-- **Direct transfers.** When you download a file, it comes directly from the peer (or CDN) sharing it — there's no central middleman storing copies.
 - **Update enforcement.** The app checks the network's published version policy on startup and walks you to the download page if your build is below the minimum required version. Vulnerable clients can't quietly stay on the network.
 
 ## Running Without a Window (Headless Mode)

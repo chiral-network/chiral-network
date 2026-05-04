@@ -28,6 +28,8 @@ Chiral Network is a decentralized file sharing application built on peer-to-peer
 
 Chiral Network enables users to share files directly between peers without relying on centralized servers. Files are discovered through a Kademlia DHT (Distributed Hash Table), transferred using a chunked protocol with per-chunk integrity verification, and paid for using CHI tokens on a private Ethereum-compatible blockchain.
 
+> **Threat model — what Chiral Network does not provide.** This is not an anonymity network. Wallet addresses, peer IDs, IP addresses (via libp2p multiaddrs), and which files a peer publishes / requests are all observable on the network — the same as on any unencrypted P2P system. The "Security" subsection below describes what the system *does* protect against (forged records, payment redirection, unsigned writes, replay attacks), all of which are integrity / authenticity concerns, not unlinkability.
+
 The application consists of three layers:
 
 1. **Frontend** -- Svelte 5 with TypeScript, rendered in a Tauri webview or browser.
