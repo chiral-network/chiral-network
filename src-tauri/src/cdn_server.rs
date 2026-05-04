@@ -1285,4 +1285,69 @@ mod tests {
     fn parse_chi_or_zero_handles_valid_chi() {
         assert_eq!(parse_chi_or_zero("0.001"), 1_000_000_000_000_000);
     }
+
+    /// Zero-input identities — the upload handler returns 0 immediately
+    /// (no payment required) when any of price/bytes/days is 0.
+    #[test]
+    fn required_upload_wei_zero_inputs() {
+        assert_eq!(required_upload_wei(0, 1, 1), 0);
+        assert_eq!(required_upload_wei(1, 0, 1), 0);
+        assert_eq!(required_upload_wei(1, 1, 0), 0);
+    }
+
+    /// One MiB stored for 30 days at 1 wei/MiB-month should cost
+    /// exactly 1 wei. Locks in the unit math so a future refactor
+    /// doesn't accidentally double-charge or under-charge.
+    #[test]
+    fn required_upload_wei_unit_math() {
+        let one_mib = 1024u128 * 1024;
+        assert_eq!(required_upload_wei(1, one_mib, 30), 1);
+        // Doubling the bytes doubles the cost.
+        assert_eq!(required_upload_wei(1, one_mib * 2, 30), 2);
+        // Doubling the days doubles the cost.
+        assert_eq!(required_upload_wei(1, one_mib, 60), 2);
+        // Doubling the price doubles the cost.
+        assert_eq!(required_upload_wei(2, one_mib, 30), 2);
+    }
+
+    /// Sub-MiB or sub-month inputs should round UP, never down — a
+    /// floor would let a buyer pay 0 wei to host a small file briefly.
+    /// One byte for one day at 1 wei/MiB-month is a tiny fraction; the
+    /// ceil rounds it to 1 wei (the smallest unit) instead of dropping
+    /// it to 0.
+    #[test]
+    fn required_upload_wei_ceils_to_at_least_one() {
+        assert_eq!(required_upload_wei(1, 1, 1), 1);
+        assert_eq!(required_upload_wei(1, 100, 1), 1);
+        // Just shy of one full unit also rounds up to 1.
+        let one_mib = 1024u128 * 1024;
+        assert_eq!(required_upload_wei(1, one_mib - 1, 30), 1);
+    }
+
+    /// Saturating multiplication on huge inputs: an attacker submitting
+    /// `u128::MAX` bytes shouldn't wrap around to a small value. The
+    /// upload site limit (500 MiB) makes this defensive only, but lock
+    /// it down so a future bug elsewhere can't slip a wrap-around past
+    /// payment verification.
+    #[test]
+    fn required_upload_wei_saturates_on_overflow() {
+        let huge = u128::MAX;
+        // Any combination that would naturally overflow saturates to a
+        // value at least as large as the inputs (i.e. doesn't wrap to a
+        // small attacker-friendly number).
+        let r = required_upload_wei(huge, huge, huge);
+        assert!(r > 0, "saturation must not produce 0 (would mean free upload)");
+        assert!(r >= u128::MAX / (1024 * 1024 * 30), "must be large after saturation");
+    }
+
+    /// Common real-world combo: 1 MiB at 0.001 CHI/MiB-month for 30 days
+    /// = exactly 0.001 CHI = 1e15 wei. Mirrors the unit math test in
+    /// real-money values so a regression in the constants is obvious.
+    #[test]
+    fn required_upload_wei_realistic_pricing() {
+        let price_chi_per_mb_month: u128 = 1_000_000_000_000_000; // 0.001 CHI
+        let one_mib = 1024u128 * 1024;
+        let cost = required_upload_wei(price_chi_per_mb_month, one_mib, 30);
+        assert_eq!(cost, 1_000_000_000_000_000); // 0.001 CHI in wei
+    }
 }

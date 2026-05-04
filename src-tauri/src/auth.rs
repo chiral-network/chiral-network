@@ -145,4 +145,68 @@ mod tests {
         let p2 = owner_proof_payload("0x1234", 1700000000, "POST", "/api/x");
         assert_eq!(p1, p2);
     }
+
+    /// Tag prefix is the only thing that domain-separates this proof
+    /// from any other length-prefixed signing payload in the project
+    /// (file metadata, folder manifest, site directory, etc.). If the
+    /// tag goes missing, a signature attesting to one purpose could be
+    /// replayed against another. Lock the literal tag down.
+    #[test]
+    fn payload_starts_with_domain_tag() {
+        let p = owner_proof_payload("0x1234", 1, "GET", "/api");
+        assert!(
+            p.starts_with(b"chiral-owner-proof-v1"),
+            "payload must begin with the v1 domain tag"
+        );
+    }
+
+    /// Each input field must change the payload independently. Without
+    /// this, an attacker could capture a (wallet, ts, GET, /api/foo)
+    /// proof and replay it as (wallet, ts, GET, /api/bar) — defeating
+    /// the path binding.
+    #[test]
+    fn payload_distinct_per_field() {
+        let base = owner_proof_payload("0xa", 100, "GET", "/api/x");
+        // Wallet differs.
+        assert_ne!(base, owner_proof_payload("0xb", 100, "GET", "/api/x"));
+        // Timestamp differs.
+        assert_ne!(base, owner_proof_payload("0xa", 101, "GET", "/api/x"));
+        // Method differs.
+        assert_ne!(base, owner_proof_payload("0xa", 100, "POST", "/api/x"));
+        // Path differs.
+        assert_ne!(base, owner_proof_payload("0xa", 100, "GET", "/api/y"));
+    }
+
+    /// Method and path are separately length-prefixed, so a path that
+    /// "absorbs" a method suffix (e.g. method="GET" path="/api" vs.
+    /// method="" path="GET/api") must not collide.
+    #[test]
+    fn payload_method_path_cannot_be_merged() {
+        let a = owner_proof_payload("0x1234", 1700000000, "GET", "/api");
+        let b = owner_proof_payload("0x1234", 1700000000, "", "GET/api");
+        assert_ne!(a, b);
+    }
+
+    /// Empty fields are still length-prefixed (with a zero u32). An
+    /// attacker who omits the wallet shouldn't get a payload that
+    /// collides with a different non-empty wallet.
+    #[test]
+    fn payload_empty_fields_remain_distinct() {
+        let a = owner_proof_payload("", 1, "GET", "/x");
+        let b = owner_proof_payload("a", 1, "GET", "/x");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn invalid_wallet_format_rejected() {
+        assert!(!is_valid_wallet(""));
+        assert!(!is_valid_wallet("0x"));
+        assert!(!is_valid_wallet("0x123")); // too short
+        assert!(!is_valid_wallet(&format!("0x{}", "z".repeat(40)))); // non-hex
+        assert!(!is_valid_wallet(&format!("0x{}1", "0".repeat(40)))); // too long
+        assert!(!is_valid_wallet(&"a".repeat(42))); // missing 0x prefix
+        // Real-shape wallet accepted regardless of case.
+        assert!(is_valid_wallet(&format!("0x{}", "abcdef0123".repeat(4))));
+        assert!(is_valid_wallet(&format!("0x{}", "ABCDEF0123".repeat(4))));
+    }
 }

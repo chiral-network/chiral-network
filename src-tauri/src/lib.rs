@@ -6985,4 +6985,122 @@ mod multi_seeder_tests {
         m.wallet_address = "0xdeadbeef".repeat(5).chars().take(42).collect();
         assert!(!m.verify(), "legacy fallback must not accept tacked-on pricing");
     }
+
+    fn mff(rel_path: &str, file_hash: &str, file_size: u64) -> FolderManifestFile {
+        FolderManifestFile {
+            rel_path: rel_path.to_string(),
+            file_hash: file_hash.to_string(),
+            file_size,
+        }
+    }
+
+    /// Folder hash is stable: same owner + same file set produces the
+    /// same hash regardless of the order in which files were enumerated
+    /// upstream. Critical for republish stability — if the hash drifted
+    /// when filesystem walk order changed, every republish would create
+    /// a new folder hash and break buyers' bookmarks.
+    #[test]
+    fn compute_folder_hash_is_order_independent() {
+        let owner = "0xABCDEF1234567890";
+        let a = vec![
+            mff("a.bin", "11".repeat(32).as_str(), 100),
+            mff("dir/b.bin", "22".repeat(32).as_str(), 200),
+            mff("c.bin", "33".repeat(32).as_str(), 300),
+        ];
+        let mut b = a.clone();
+        b.reverse();
+        let mut c = a.clone();
+        c.swap(0, 1);
+        assert_eq!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &b));
+        assert_eq!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &c));
+    }
+
+    #[test]
+    fn compute_folder_hash_owner_is_lowercased() {
+        let files = vec![mff("x.bin", "ff".repeat(32).as_str(), 1)];
+        let upper = compute_folder_hash("0xABCDEF1234567890", &files);
+        let lower = compute_folder_hash("0xabcdef1234567890", &files);
+        assert_eq!(upper, lower, "owner casing must not change the folder hash");
+    }
+
+    #[test]
+    fn compute_folder_hash_changes_on_owner() {
+        let files = vec![mff("x.bin", "ff".repeat(32).as_str(), 1)];
+        let h1 = compute_folder_hash("0x0000000000000000000000000000000000000001", &files);
+        let h2 = compute_folder_hash("0x0000000000000000000000000000000000000002", &files);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn compute_folder_hash_changes_on_file_set() {
+        let owner = "0x0000000000000000000000000000000000000001";
+        let f1 = vec![mff("x.bin", "ff".repeat(32).as_str(), 1)];
+        let f2 = vec![
+            mff("x.bin", "ff".repeat(32).as_str(), 1),
+            mff("y.bin", "ee".repeat(32).as_str(), 1),
+        ];
+        let f3 = vec![mff("x.bin", "fe".repeat(32).as_str(), 1)]; // different content hash
+        assert_ne!(compute_folder_hash(owner, &f1), compute_folder_hash(owner, &f2));
+        assert_ne!(compute_folder_hash(owner, &f1), compute_folder_hash(owner, &f3));
+    }
+
+    /// rel_path is hashed verbatim (with owner-lowercasing only). Two
+    /// distinct casings of the same path are different folders. This is
+    /// intentional: filesystems differ on case sensitivity, so we don't
+    /// silently merge.
+    #[test]
+    fn compute_folder_hash_is_path_case_sensitive() {
+        let owner = "0x0000000000000000000000000000000000000001";
+        let a = vec![mff("Readme.md", "aa".repeat(32).as_str(), 1)];
+        let b = vec![mff("readme.md", "aa".repeat(32).as_str(), 1)];
+        assert_ne!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &b));
+    }
+
+    /// file_size is NOT included in the folder hash (only rel_path +
+    /// file_hash are). This is by design: file_size is a hint that the
+    /// content_hash already binds, so a same-content file with a
+    /// metadata-tracked size of 0 still produces the same folder hash.
+    /// Locking it down so a future change doesn't accidentally include
+    /// file_size and break stable republishes.
+    #[test]
+    fn compute_folder_hash_ignores_file_size() {
+        let owner = "0x0000000000000000000000000000000000000001";
+        let a = vec![mff("x.bin", "ff".repeat(32).as_str(), 100)];
+        let b = vec![mff("x.bin", "ff".repeat(32).as_str(), 999_999)];
+        assert_eq!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &b));
+    }
+
+    /// Folder pricing v2 round-trip: sign, verify, mutate price, expect
+    /// rejection. Complements the legacy-v1 acceptance test above by
+    /// exercising the new payload's tamper detection.
+    #[test]
+    fn folder_manifest_v2_pricing_is_signed() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let probe_sig = wallet::sign_message(private_key, b"probe").unwrap();
+        let wallet = wallet::recover_signer(b"probe", &probe_sig).unwrap();
+
+        let mut m = FolderManifest {
+            hash: "feedface".to_string(),
+            name: "priced folder".to_string(),
+            owner_wallet: wallet.clone(),
+            created_at: 1_700_000_000,
+            files: vec![mff("a.bin", "ff".repeat(32).as_str(), 4096)],
+            price_wei: "1000000000000000000".to_string(), // 1 CHI
+            wallet_address: wallet.clone(),
+            publisher_signature: String::new(),
+        };
+        m.sign(private_key);
+        assert!(m.verify(), "freshly v2-signed manifest must verify");
+
+        // Tamper price → reject.
+        let saved = m.price_wei.clone();
+        m.price_wei = "1".to_string();
+        assert!(!m.verify(), "modified price_wei must invalidate signature");
+        m.price_wei = saved;
+        assert!(m.verify());
+
+        // Tamper recipient → reject.
+        m.wallet_address = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string();
+        assert!(!m.verify(), "modified wallet_address must invalidate signature");
+    }
 }
