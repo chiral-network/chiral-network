@@ -1,6 +1,17 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { HardDrive, FolderPlus, Upload, Loader2 } from 'lucide-svelte';
+  import {
+    HardDrive,
+    FolderPlus,
+    Upload,
+    Loader2,
+    Star,
+    Radio,
+    Share2,
+    Files,
+    ArrowDown,
+    ArrowUp,
+  } from 'lucide-svelte';
   import { driveStore, type DriveItem, type DriveManifest } from '$lib/stores/driveStore';
   import { formatBytes } from '$lib/utils';
   import { setLocalDriveServer } from '$lib/services/driveApiService';
@@ -46,6 +57,23 @@
 
   // Drag and drop
   let isDragging = $state(false);
+
+  // Quick filters (chips above the file grid). null = no filter.
+  type QuickFilter = 'all' | 'starred' | 'seeding' | 'shared';
+  let quickFilter = $state<QuickFilter>('all');
+
+  // List-view sorting (no-op for grid view).
+  type SortKey = 'name' | 'size' | 'modified';
+  let sortKey = $state<SortKey>('name');
+  let sortDir = $state<'asc' | 'desc'>('asc');
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortKey = key;
+      sortDir = 'asc';
+    }
+  }
 
   // Subscribe to store
   driveStore.subscribe(m => manifest = m);
@@ -145,16 +173,57 @@
 
   // Derived
   const breadcrumb = $derived(driveStore.getBreadcrumb(currentFolderId, manifest));
-  const currentItems = $derived(
+  const baseItems = $derived(
     searchQuery
       ? driveStore.searchByName(searchQuery, manifest)
       : driveStore.getChildren(currentFolderId, manifest)
   );
+  /// `baseItems` filtered by the active quick-filter chip. The filter is
+  /// scoped to the current folder/search view — not the whole drive.
+  const filteredItems = $derived.by(() => {
+    switch (quickFilter) {
+      case 'starred':
+        return baseItems.filter((i) => i.starred);
+      case 'seeding':
+        return baseItems.filter((i) => i.seeding);
+      case 'shared':
+        return baseItems.filter((i) => i.isPublic || i.shared);
+      default:
+        return baseItems;
+    }
+  });
+  /// In list view we honor the sort headers. Grid view always shows
+  /// folders-first then alphabetical (the store's natural order).
+  const currentItems = $derived.by(() => {
+    if (viewMode !== 'list') return filteredItems;
+    const arr = [...filteredItems];
+    arr.sort((a, b) => {
+      // Folders always sort above files within a sort direction.
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      let cmp = 0;
+      if (sortKey === 'name') cmp = a.name.localeCompare(b.name);
+      else if (sortKey === 'size') cmp = (a.size ?? 0) - (b.size ?? 0);
+      else if (sortKey === 'modified') cmp = (a.modifiedAt ?? 0) - (b.modifiedAt ?? 0);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  });
+  // Drive-wide stats for the header strip — across all owned items, not
+  // just the current folder.
   const totalSize = $derived(
     manifest.items
-      .filter(i => i.type === 'file' && i.size)
+      .filter((i) => i.type === 'file' && i.size)
       .reduce((sum, i) => sum + (i.size || 0), 0)
   );
+  const totalFiles = $derived(manifest.items.filter((i) => i.type === 'file').length);
+  const seedingCount = $derived(manifest.items.filter((i) => i.seeding).length);
+  const sharedCount = $derived(manifest.items.filter((i) => i.isPublic || i.shared).length);
+  const starredCount = $derived(manifest.items.filter((i) => i.starred).length);
+  // Counts per chip — shown in pill badges so the user knows whether
+  // toggling a filter will produce results before clicking.
+  const baseStarred = $derived(baseItems.filter((i) => i.starred).length);
+  const baseSeeding = $derived(baseItems.filter((i) => i.seeding).length);
+  const baseShared = $derived(baseItems.filter((i) => i.isPublic || i.shared).length);
 
   async function loadCurrentFolder() {
     loading = true;
@@ -573,174 +642,309 @@
 <svelte:head><title>Drive | Chiral Network</title></svelte:head>
 
 <div
-  class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto"
+  class="relative p-4 sm:p-6 max-w-[1400px] mx-auto"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
   role="main"
 >
-  <!-- Header -->
-  <div>
+  <!-- Full-bleed drag overlay (covers the page when files are being dragged in) -->
+  {#if isDragging}
+    <div
+      class="fixed inset-0 z-40 flex items-center justify-center bg-blue-500/10 backdrop-blur-sm pointer-events-none"
+    >
+      <div class="px-8 py-12 rounded-2xl bg-white dark:bg-gray-800 shadow-2xl ring-2 ring-blue-400 ring-offset-4 ring-offset-blue-500/10">
+        <Upload class="w-14 h-14 mx-auto text-blue-500 mb-3" />
+        <p class="text-lg font-semibold text-blue-700 dark:text-blue-300 text-center">Drop to upload</p>
+        <p class="text-sm text-gray-500 dark:text-gray-400 text-center mt-1">
+          Files will be added to {breadcrumb[breadcrumb.length - 1]?.name ?? 'your Drive'}
+        </p>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Header + drive-wide stats -->
+  <div class="mb-4">
     <h1 class="text-2xl font-bold text-gray-900 dark:text-white">My Drive</h1>
-    <p class="text-muted-foreground mt-2">
-      Cloud storage with shareable links
-      {#if manifest.items.length > 0}
-        <span class="ml-2 text-xs">
-          — {manifest.items.filter(i => i.type === 'file').length} files, {formatBytes(totalSize)}
-        </span>
-      {/if}
-    </p>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Cloud storage with shareable links.</p>
   </div>
 
-  <!-- Toolbar -->
-  <DriveToolbar
-    {viewMode}
-    {searchQuery}
-    onUpload={handleUpload}
-    onNewFolder={handleNewFolder}
-    onViewModeChange={handleViewModeChange}
-    onSearchChange={(q) => searchQuery = q}
-  />
-
-  <!-- Breadcrumb -->
-  {#if !searchQuery}
-    <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
-  {:else}
-    <p class="text-sm text-gray-500 dark:text-gray-400">
-      Search results for "<span class="font-medium">{searchQuery}</span>" — {currentItems.length} result{currentItems.length !== 1 ? 's' : ''}
-    </p>
-  {/if}
-
-  <!-- New folder input -->
-  {#if creatingFolder}
-    <div class="flex items-center gap-2">
-      <FolderPlus class="w-5 h-5 text-yellow-500" />
-      <input
-        id="new-folder-input"
-        type="text"
-        placeholder="Folder name"
-        bind:value={newFolderName}
-        onkeydown={(e) => { if (e.key === 'Enter') confirmNewFolder(); if (e.key === 'Escape') cancelNewFolder(); }}
-        class="px-3 py-1.5 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-      />
-      <button onclick={confirmNewFolder} class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition">Create</button>
-      <button onclick={cancelNewFolder} class="px-3 py-1.5 text-gray-600 dark:text-gray-400 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition">Cancel</button>
-    </div>
-  {/if}
-
-  <!-- Upload progress -->
-  {#if uploading}
-    <div class="flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400">
-      <Loader2 class="w-4 h-4 animate-spin" />
-      Uploading files to server...
-    </div>
-  {/if}
-
-  <!-- Drag overlay -->
-  {#if isDragging}
-    <div class="border-2 border-dashed border-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-xl p-12 text-center">
-      <Upload class="w-10 h-10 mx-auto text-blue-500 mb-2" />
-      <p class="text-blue-600 dark:text-blue-400 font-medium">Drop files here to upload</p>
-    </div>
-  {/if}
-
-  <!-- Loading -->
-  {#if loading}
-    <div class="flex items-center justify-center py-16">
-      <Loader2 class="w-8 h-8 animate-spin text-blue-500" />
-    </div>
-  {:else if currentItems.length === 0 && !creatingFolder && !isDragging}
-    <!-- Empty state -->
-    <div class="flex flex-col items-center justify-center py-16 text-center">
-      <div class="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
-        <HardDrive class="w-8 h-8 text-gray-400" />
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30 shrink-0">
+        <Files class="w-4 h-4 text-blue-600 dark:text-blue-400" />
       </div>
-      <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-1">
-        {searchQuery ? 'No files found' : 'This folder is empty'}
-      </h3>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
-        {searchQuery ? 'Try a different search term' : 'Upload files or create a folder to get started'}
-      </p>
-      {#if !searchQuery}
-        <div class="flex gap-3">
-          <button
-            onclick={handleUpload}
-            class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
-          >
-            <Upload class="w-4 h-4" />
-            Upload File
-          </button>
-          <button
-            onclick={handleNewFolder}
-            class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/30"
-          >
-            <FolderPlus class="w-4 h-4" />
-            New Folder
-          </button>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Files</div>
+        <div class="text-sm font-semibold text-gray-900 dark:text-white tabular-nums">
+          {totalFiles.toLocaleString()}
         </div>
-      {/if}
+      </div>
     </div>
-  {:else if viewMode === 'grid'}
-    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-      {#each currentItems as item (item.id)}
-        {#if renamingId === item.id}
-          <div class="bg-white dark:bg-gray-800 border border-blue-400 rounded-xl p-4">
-            <input
-              id="rename-input"
-              type="text"
-              bind:value={renameValue}
-              onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
-              onblur={confirmRename}
-              class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30 shrink-0">
+        <HardDrive class="w-4 h-4 text-purple-600 dark:text-purple-400" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Total size</div>
+        <div class="text-sm font-semibold text-gray-900 dark:text-white tabular-nums">
+          {formatBytes(totalSize)}
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 shrink-0">
+        <Radio class="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Seeding</div>
+        <div class="text-sm font-semibold text-gray-900 dark:text-white tabular-nums">
+          {seedingCount}
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30 shrink-0">
+        <Share2 class="w-4 h-4 text-amber-600 dark:text-amber-400" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Shared</div>
+        <div class="text-sm font-semibold text-gray-900 dark:text-white tabular-nums">
+          {sharedCount}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sticky toolbar + breadcrumb + filter chips. Stays put while files
+       scroll, so actions and current location are always reachable. -->
+  <div class="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-gray-50/95 dark:bg-gray-900/95 backdrop-blur border-b border-gray-200 dark:border-gray-700 space-y-3">
+    <DriveToolbar
+      {viewMode}
+      {searchQuery}
+      onUpload={handleUpload}
+      onNewFolder={handleNewFolder}
+      onViewModeChange={handleViewModeChange}
+      onSearchChange={(q) => (searchQuery = q)}
+    />
+
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <!-- Breadcrumb / search results header -->
+      <div class="min-w-0 flex-1">
+        {#if !searchQuery}
+          <DriveBreadcrumb {breadcrumb} onNavigate={navigateTo} />
         {:else}
-          <DriveFileCard
-            {item}
-            onOpen={handleOpen}
-            onContextMenu={handleContextMenu}
-          />
+          <p class="text-sm text-gray-500 dark:text-gray-400 truncate">
+            Search results for "<span class="font-medium text-gray-700 dark:text-gray-200">{searchQuery}</span>" —
+            {currentItems.length} result{currentItems.length !== 1 ? 's' : ''}
+          </p>
         {/if}
-      {/each}
-    </div>
-  {:else}
-    <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-      <table class="w-full">
-        <thead>
-          <tr class="border-b border-gray-200 dark:border-gray-700 text-left">
-            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Name</th>
-            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide w-24">Size</th>
-            <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide w-32">Modified</th>
-            <th class="py-2.5 px-3 w-12"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each currentItems as item (item.id)}
-            {#if renamingId === item.id}
-              <tr class="border-b border-gray-100 dark:border-gray-700/50">
-                <td colspan="4" class="py-2 px-3">
-                  <input
-                    id="rename-input"
-                    type="text"
-                    bind:value={renameValue}
-                    onkeydown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') { renamingId = null; } }}
-                    onblur={confirmRename}
-                    class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </td>
-              </tr>
-            {:else}
-              <DriveFileRow
-                {item}
-                onOpen={handleOpen}
-                onContextMenu={handleContextMenu}
-              />
+      </div>
+
+      <!-- Quick filter chips -->
+      <div class="flex flex-wrap items-center gap-1 shrink-0">
+        {#each [
+          { id: 'all' as QuickFilter, label: 'All', icon: null, count: baseItems.length },
+          { id: 'starred' as QuickFilter, label: 'Starred', icon: Star, count: baseStarred },
+          { id: 'seeding' as QuickFilter, label: 'Seeding', icon: Radio, count: baseSeeding },
+          { id: 'shared' as QuickFilter, label: 'Shared', icon: Share2, count: baseShared },
+        ] as chip}
+          <button
+            onclick={() => (quickFilter = chip.id)}
+            class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors
+              {quickFilter === chip.id
+                ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}"
+          >
+            {#if chip.icon}
+              <chip.icon class="w-3 h-3" />
             {/if}
-          {/each}
-        </tbody>
-      </table>
+            <span>{chip.label}</span>
+            {#if chip.count > 0 && chip.id !== 'all'}
+              <span class="text-[10px] tabular-nums opacity-80">{chip.count}</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
     </div>
-  {/if}
+  </div>
+
+  <div class="space-y-4 mt-4">
+    <!-- New folder input -->
+    {#if creatingFolder}
+      <div class="flex items-center gap-2 p-3 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+        <FolderPlus class="w-5 h-5 text-yellow-600 dark:text-yellow-400 shrink-0" />
+        <input
+          id="new-folder-input"
+          type="text"
+          placeholder="Folder name"
+          bind:value={newFolderName}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') confirmNewFolder();
+            if (e.key === 'Escape') cancelNewFolder();
+          }}
+          class="flex-1 px-3 py-1.5 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-xs"
+        />
+        <button
+          onclick={confirmNewFolder}
+          class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition shrink-0 font-medium"
+        >Create</button>
+        <button
+          onclick={cancelNewFolder}
+          class="px-3 py-1.5 text-gray-600 dark:text-gray-400 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition shrink-0"
+        >Cancel</button>
+      </div>
+    {/if}
+
+    <!-- Upload progress -->
+    {#if uploading}
+      <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+        <Loader2 class="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400" />
+        <span class="text-sm text-blue-700 dark:text-blue-300">Uploading files…</span>
+      </div>
+    {/if}
+
+    {#if loading}
+      <div class="flex items-center justify-center py-16">
+        <Loader2 class="w-8 h-8 animate-spin text-blue-500" />
+      </div>
+    {:else if currentItems.length === 0 && !creatingFolder}
+      <!-- Empty state -->
+      <div class="flex flex-col items-center justify-center py-20 text-center">
+        <div class="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
+          <HardDrive class="w-8 h-8 text-gray-400" />
+        </div>
+        <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-1">
+          {#if searchQuery}
+            No files match "{searchQuery}"
+          {:else if quickFilter !== 'all'}
+            Nothing {quickFilter === 'starred' ? 'starred' : quickFilter === 'seeding' ? 'being seeded' : 'shared'} here
+          {:else}
+            This folder is empty
+          {/if}
+        </h3>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-6 max-w-xs">
+          {#if searchQuery}
+            Try a different search term, or clear the search to browse this folder.
+          {:else if quickFilter !== 'all'}
+            Use the chip above to switch to "All", or {quickFilter === 'starred' ? 'star a file' : quickFilter === 'seeding' ? 'seed a file to the network' : 'share a file'} to see it here.
+          {:else}
+            Drag files anywhere on this page, or use the buttons below.
+          {/if}
+        </p>
+        {#if !searchQuery && quickFilter === 'all'}
+          <div class="flex gap-3">
+            <button
+              onclick={handleUpload}
+              class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+            >
+              <Upload class="w-4 h-4" />
+              Upload file
+            </button>
+            <button
+              onclick={handleNewFolder}
+              class="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition text-sm font-medium"
+            >
+              <FolderPlus class="w-4 h-4" />
+              New folder
+            </button>
+          </div>
+        {/if}
+      </div>
+    {:else if viewMode === 'grid'}
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-7 2xl:grid-cols-8 gap-3">
+        {#each currentItems as item (item.id)}
+          {#if renamingId === item.id}
+            <div class="bg-white dark:bg-gray-800 border border-blue-400 rounded-xl p-4">
+              <input
+                id="rename-input"
+                type="text"
+                bind:value={renameValue}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter') confirmRename();
+                  if (e.key === 'Escape') {
+                    renamingId = null;
+                  }
+                }}
+                onblur={confirmRename}
+                class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          {:else}
+            <DriveFileCard {item} onOpen={handleOpen} onContextMenu={handleContextMenu} />
+          {/if}
+        {/each}
+      </div>
+    {:else}
+      <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-gray-200 dark:border-gray-700 text-left bg-gray-50/60 dark:bg-gray-900/30">
+              <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                <button
+                  onclick={() => toggleSort('name')}
+                  class="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200"
+                >
+                  Name
+                  {#if sortKey === 'name'}
+                    {#if sortDir === 'asc'}<ArrowUp class="w-3 h-3" />{:else}<ArrowDown class="w-3 h-3" />{/if}
+                  {/if}
+                </button>
+              </th>
+              <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide w-24">
+                <button
+                  onclick={() => toggleSort('size')}
+                  class="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200"
+                >
+                  Size
+                  {#if sortKey === 'size'}
+                    {#if sortDir === 'asc'}<ArrowUp class="w-3 h-3" />{:else}<ArrowDown class="w-3 h-3" />{/if}
+                  {/if}
+                </button>
+              </th>
+              <th class="py-2.5 px-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide w-32">
+                <button
+                  onclick={() => toggleSort('modified')}
+                  class="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200"
+                >
+                  Modified
+                  {#if sortKey === 'modified'}
+                    {#if sortDir === 'asc'}<ArrowUp class="w-3 h-3" />{:else}<ArrowDown class="w-3 h-3" />{/if}
+                  {/if}
+                </button>
+              </th>
+              <th class="py-2.5 px-3 w-12"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each currentItems as item (item.id)}
+              {#if renamingId === item.id}
+                <tr class="border-b border-gray-100 dark:border-gray-700/50">
+                  <td colspan="4" class="py-2 px-3">
+                    <input
+                      id="rename-input"
+                      type="text"
+                      bind:value={renameValue}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter') confirmRename();
+                        if (e.key === 'Escape') {
+                          renamingId = null;
+                        }
+                      }}
+                      onblur={confirmRename}
+                      class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </td>
+                </tr>
+              {:else}
+                <DriveFileRow {item} onOpen={handleOpen} onContextMenu={handleContextMenu} />
+              {/if}
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
 </div>
 
 <!-- Context menu -->
