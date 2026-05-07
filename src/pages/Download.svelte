@@ -256,6 +256,11 @@
   let downloadHistory = $state<HistoryEntry[]>([]);
   let showSearchHistory = $state(false);
   let downloadsTab = $state<'active' | 'history'>('active');
+  // Quick filter for the unified Downloads list. The list aggregates
+  // session `downloads` (active + recently-finished) AND persisted
+  // `downloadHistory` rows; this lets the user narrow to one bucket.
+  type DownloadFilter = 'all' | 'active' | 'completed' | 'failed';
+  let downloadFilter = $state<DownloadFilter>('all');
   let isViewerOpen = $state(false);
   let viewerSource = $state('');
   let viewerType = $state<PreviewType>('unsupported');
@@ -265,9 +270,63 @@
   // History pagination
   const HISTORY_PER_PAGE = 10;
   let historyPage = $state(0);
-  let historyTotalPages = $derived(Math.max(1, Math.ceil(downloadHistory.length / HISTORY_PER_PAGE)));
+  /// Filtered history that respects the active downloadFilter chip.
+  /// "completed" and "failed" filters narrow to the matching status
+  /// rows; "active" hides the entire history (in-progress downloads
+  /// only live in the session `downloads` array, not history).
+  let filteredHistory = $derived.by(() => {
+    switch (downloadFilter) {
+      case 'active':
+        return [];
+      case 'completed':
+        return downloadHistory.filter((h) => h.status === 'completed');
+      case 'failed':
+        return downloadHistory.filter(
+          (h) => h.status === 'failed' || h.status === 'cancelled'
+        );
+      default:
+        return downloadHistory;
+    }
+  });
+  let historyTotalPages = $derived(Math.max(1, Math.ceil(filteredHistory.length / HISTORY_PER_PAGE)));
   let paginatedHistory = $derived(
-    downloadHistory.slice(historyPage * HISTORY_PER_PAGE, (historyPage + 1) * HISTORY_PER_PAGE)
+    filteredHistory.slice(historyPage * HISTORY_PER_PAGE, (historyPage + 1) * HISTORY_PER_PAGE)
+  );
+  /// Filtered session downloads matching the chip. "active" → only
+  /// in-progress; "completed"/"failed" → matching finished session
+  /// rows.
+  let filteredDownloads = $derived.by(() => {
+    switch (downloadFilter) {
+      case 'active':
+        return downloads.filter((d) => !['completed', 'failed', 'cancelled'].includes(d.status));
+      case 'completed':
+        return downloads.filter((d) => d.status === 'completed');
+      case 'failed':
+        return downloads.filter((d) => d.status === 'failed' || d.status === 'cancelled');
+      default:
+        return downloads;
+    }
+  });
+
+  // Counts for chip badges.
+  let activeCount = $derived(
+    downloads.filter((d) => !['completed', 'failed', 'cancelled'].includes(d.status)).length
+  );
+  let completedCount = $derived(
+    downloads.filter((d) => d.status === 'completed').length +
+      downloadHistory.filter((h) => h.status === 'completed').length
+  );
+  let failedCount = $derived(
+    downloads.filter((d) => d.status === 'failed' || d.status === 'cancelled').length +
+      downloadHistory.filter((h) => h.status === 'failed' || h.status === 'cancelled').length
+  );
+  let totalDownloadedBytes = $derived(
+    downloads
+      .filter((d) => d.status === 'completed')
+      .reduce((sum, d) => sum + (d.size || 0), 0) +
+      downloadHistory
+        .filter((h) => h.status === 'completed')
+        .reduce((sum, h) => sum + (h.fileSize || 0), 0)
   );
   // Reset to last valid page when history shrinks
   $effect(() => {
@@ -1356,6 +1415,39 @@
     // Silent — history list cleared in UI
   }
 
+  /// Delete a single entry from the persisted history list. Active
+  /// (in-progress) downloads aren't removable here — use cancelDownload
+  /// for those.
+  function deleteHistoryEntry(entryId: string) {
+    const before = downloadHistory.length;
+    downloadHistory = downloadHistory.filter((h) => h.id !== entryId);
+    if (downloadHistory.length !== before) saveDownloadHistory();
+  }
+
+  /// Delete a finished entry that's still in the session `downloads`
+  /// array (status completed / failed / cancelled). Active downloads
+  /// can't be deleted with this — they need to be cancelled first.
+  function deleteFinishedDownload(downloadId: string) {
+    const target = downloads.find((d) => d.id === downloadId);
+    if (!target) return;
+    if (!['completed', 'failed', 'cancelled'].includes(target.status)) return;
+    downloads = downloads.filter((d) => d.id !== downloadId);
+    saveDownloadHistory();
+  }
+
+  /// Clear EVERY finished download — both the persisted history AND any
+  /// finished entries still in the session `downloads` array. The old
+  /// "Clear history" button only emptied the history, leaving session
+  /// completed/failed rows visible, which surfaced as a "delete doesn't
+  /// work" complaint.
+  function clearAllFinished() {
+    downloadHistory = [];
+    downloads = downloads.filter(
+      (d) => !['completed', 'failed', 'cancelled'].includes(d.status)
+    );
+    saveDownloadHistory();
+  }
+
   // Get active downloads (not completed/failed/cancelled)
   function getActiveDownloads(): DownloadItem[] {
     return downloads.filter(d => !['completed', 'failed', 'cancelled'].includes(d.status));
@@ -1682,7 +1774,7 @@
 
 <svelte:head><title>Download | Chiral Network</title></svelte:head>
 
-<div class="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
+<div class="max-w-[1400px] mx-auto p-4 sm:p-6 space-y-6">
   <div>
     <h1 class="text-2xl font-bold dark:text-white">Download</h1>
     <p class="text-gray-600 dark:text-gray-400 mt-2">Search and download files from the Chiral Network</p>
@@ -2083,26 +2175,76 @@
 
   <!-- Downloads -->
   <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700">
-    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 gap-3 flex-wrap">
       <div class="flex items-center gap-2">
         <Download class="w-4 h-4 text-gray-500 dark:text-gray-400" />
         <h2 class="text-sm font-semibold dark:text-white">Downloads</h2>
-        {#if getActiveDownloads().length > 0}
-          <span class="px-1.5 py-0.5 text-xs font-semibold bg-primary-100 text-primary-700 dark:bg-primary-900/50 dark:text-primary-400 rounded-full">
-            {getActiveDownloads().length} active
-          </span>
-        {/if}
       </div>
-      {#if downloadHistory.length > 0}
+
+      <!-- Quick filter chips -->
+      <div class="flex flex-wrap items-center gap-1">
+        {#each [
+          { id: 'all' as DownloadFilter, label: 'All', count: downloads.length + downloadHistory.length },
+          { id: 'active' as DownloadFilter, label: 'Active', count: activeCount },
+          { id: 'completed' as DownloadFilter, label: 'Completed', count: completedCount },
+          { id: 'failed' as DownloadFilter, label: 'Failed', count: failedCount },
+        ] as chip}
+          <button
+            onclick={() => (downloadFilter = chip.id)}
+            class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors
+              {downloadFilter === chip.id
+                ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'}"
+          >
+            <span>{chip.label}</span>
+            {#if chip.count > 0}
+              <span class="text-[10px] tabular-nums opacity-80">{chip.count}</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+
+      {#if downloads.some((d) => ['completed', 'failed', 'cancelled'].includes(d.status)) || downloadHistory.length > 0}
         <button
-          onclick={clearDownloadHistory}
+          onclick={clearAllFinished}
           class="flex items-center gap-1 px-2.5 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+          title="Remove all completed, failed, and cancelled downloads from this list. In-progress downloads are kept."
         >
           <Trash2 class="w-3 h-3" />
-          Clear history
+          Clear all
         </button>
       {/if}
     </div>
+
+    <!-- Stats strip — Active / Completed / Failed / Bytes downloaded -->
+    {#if downloads.length > 0 || downloadHistory.length > 0}
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700">
+        <div class="bg-white dark:bg-gray-800 px-4 py-3">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Active</div>
+          <div class="text-base font-semibold text-primary-600 dark:text-primary-400 tabular-nums mt-0.5">
+            {activeCount}
+          </div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 px-4 py-3">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Completed</div>
+          <div class="text-base font-semibold text-green-600 dark:text-green-400 tabular-nums mt-0.5">
+            {completedCount}
+          </div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 px-4 py-3">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Failed</div>
+          <div class="text-base font-semibold {failedCount > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-300'} tabular-nums mt-0.5">
+            {failedCount}
+          </div>
+        </div>
+        <div class="bg-white dark:bg-gray-800 px-4 py-3">
+          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Downloaded</div>
+          <div class="text-base font-semibold text-gray-900 dark:text-white tabular-nums mt-0.5">
+            {formatFileSize(totalDownloadedBytes)}
+          </div>
+        </div>
+      </div>
+    {/if}
 
     {#if downloads.length === 0 && downloadHistory.length === 0}
       <div class="text-center py-16 px-6">
@@ -2110,10 +2252,18 @@
         <p class="text-gray-500 dark:text-gray-400">No downloads yet</p>
         <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">Search for a file above to start downloading</p>
       </div>
+    {:else if filteredDownloads.length === 0 && filteredHistory.length === 0}
+      <div class="text-center py-12 px-6">
+        <p class="text-sm text-gray-500 dark:text-gray-400">No {downloadFilter} downloads</p>
+        <button
+          onclick={() => (downloadFilter = 'all')}
+          class="mt-2 text-xs text-primary-600 dark:text-primary-400 hover:underline"
+        >Show all</button>
+      </div>
     {:else}
       <div class="divide-y divide-gray-100 dark:divide-gray-700">
         <!-- Active downloads (current session) -->
-        {#each downloads as download (download.id)}
+        {#each filteredDownloads as download (download.id)}
           {@const DownloadIcon = getFileIcon(download.name)}
           {@const isActive = download.status === 'downloading' || download.status === 'paused'}
           {@const isFinished = ['completed', 'failed', 'cancelled'].includes(download.status)}
@@ -2226,11 +2376,11 @@
                     {/if}
                   {/if}
                   <button
-                    onclick={() => moveToHistory(download.id)}
-                    class="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
-                    title="Dismiss"
+                    onclick={() => deleteFinishedDownload(download.id)}
+                    class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                    title="Delete"
                   >
-                    <X class="w-4 h-4 text-gray-400" />
+                    <Trash2 class="w-4 h-4 text-gray-400 hover:text-red-500" />
                   </button>
                 {/if}
               </div>
@@ -2340,6 +2490,13 @@
                 >
                   <Download class="w-4 h-4 text-gray-400" />
                 </button>
+                <button
+                  onclick={() => deleteHistoryEntry(entry.id)}
+                  class="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors"
+                  title="Delete from history"
+                >
+                  <Trash2 class="w-4 h-4 text-gray-400 hover:text-red-500" />
+                </button>
               </div>
             </div>
           </div>
@@ -2349,7 +2506,7 @@
       {#if historyTotalPages > 1}
         <div class="flex items-center justify-between px-5 py-3 border-t border-gray-200 dark:border-gray-700">
           <span class="text-xs text-gray-500 dark:text-gray-400">
-            Showing {historyPage * HISTORY_PER_PAGE + 1}–{Math.min((historyPage + 1) * HISTORY_PER_PAGE, downloadHistory.length)} of {downloadHistory.length}
+            Showing {historyPage * HISTORY_PER_PAGE + 1}–{Math.min((historyPage + 1) * HISTORY_PER_PAGE, filteredHistory.length)} of {filteredHistory.length}
           </span>
           <div class="flex items-center gap-1">
             <button
