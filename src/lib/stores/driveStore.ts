@@ -485,16 +485,28 @@ function createDriveStore() {
     ): Promise<DriveItem | null> {
       const owner = syncOwner();
       if (!owner) return null;
+      // The publisher signs every chiral_file_<hash> + chiral_seeder_*
+      // record it writes (trust contract — readers drop unsigned ones).
+      // Without a private key the backend returns
+      // "wallet must be unlocked" instantly, which surfaces to the user
+      // as an immediate seed failure. Pull the unlocked private key
+      // from the wallet store and forward it on every publish.
+      const account = get(walletAccount);
+      const privateKey = account?.privateKey ?? '';
+      if (!privateKey) {
+        console.error('seedFile: wallet is locked (no privateKey)');
+        return null;
+      }
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const normalizedPrice = normalizePriceChi(priceChi);
-        const walletAddr = normalizedPrice ? owner : undefined;
         const raw = await invoke('publish_drive_file', {
           owner,
           itemId,
           protocol,
           priceChi: normalizedPrice,
-          walletAddress: walletAddr ?? null,
+          walletAddress: owner,
+          privateKey,
         });
         const converted = fromApi(raw as any);
         update(m => {
@@ -532,10 +544,17 @@ function createDriveStore() {
     } | null> {
       const owner = syncOwner();
       if (!owner) return null;
+      // Folder publishes sign every child file's records too — wallet
+      // must be unlocked. See seedFile above for context.
+      const account = get(walletAccount);
+      const privateKey = account?.privateKey ?? '';
+      if (!privateKey) {
+        console.error('seedFolder: wallet is locked (no privateKey)');
+        return null;
+      }
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const normalizedPrice = normalizePriceChi(priceChi);
-        const walletAddr = normalizedPrice ? owner : undefined;
         const raw = await invoke<{
           folder: any;
           filesTotal: number;
@@ -547,7 +566,8 @@ function createDriveStore() {
           folderId,
           protocol,
           priceChi: normalizedPrice,
-          walletAddress: walletAddr ?? null,
+          walletAddress: owner,
+          privateKey,
         });
         await this.load();
         return {

@@ -906,12 +906,18 @@
   async function addProposalDriveFile(fileId: string, fileName: string) {
     const wallet = get(walletAccount);
     if (!wallet?.address) return;
+    if (!wallet.privateKey) {
+      toasts.detail(`Cannot publish ${fileName}`, 'Wallet is locked', 'error');
+      return;
+    }
     publishingDriveFile = fileId;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const item = await invoke<{ merkleRoot?: string }>('publish_drive_file', {
         owner: wallet.address, itemId: fileId,
-        protocol: null, priceChi: null, walletAddress: wallet.address,
+        protocol: null, priceChi: null,
+        walletAddress: wallet.address,
+        privateKey: wallet.privateKey,
       });
       const hash = item.merkleRoot;
       if (!hash) { toasts.show(`${fileName} has no file hash`, 'error'); return; }
