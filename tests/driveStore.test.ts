@@ -5,11 +5,16 @@ import type { DriveItem, DriveManifest } from '$lib/stores/driveStore';
 
 const mockedInvoke = vi.mocked(invoke);
 
-// Mock wallet store
+// Mock wallet store. seedFile/seedFolder require an unlocked wallet
+// (privateKey present) — the backend signs every record it publishes,
+// so the store refuses to invoke `publish_drive_file` without one.
 vi.mock('$lib/stores', () => {
   const { writable } = require('svelte/store');
   return {
-    walletAccount: writable({ address: '0xTestWallet123' }),
+    walletAccount: writable({
+      address: '0xTestWallet123',
+      privateKey: '0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f',
+    }),
     networkConnected: writable(true),
   };
 });
@@ -316,13 +321,18 @@ describe('driveStore', () => {
 
       const result = await driveStore.seedFile('item-1', 'WebRTC');
 
-      expect(mockedInvoke).toHaveBeenCalledWith('publish_drive_file', {
+      // walletAddress and privateKey are always forwarded — the backend
+      // signs every chiral_file/seeder record it publishes, so the
+      // store refuses to invoke without an unlocked wallet (regardless
+      // of whether the file is being sold or seeded for free).
+      expect(mockedInvoke).toHaveBeenCalledWith('publish_drive_file', expect.objectContaining({
         owner: '0xTestWallet123',
         itemId: 'item-1',
         protocol: 'WebRTC',
         priceChi: null,
-        walletAddress: null,
-      });
+        walletAddress: '0xTestWallet123',
+      }));
+      expect(mockedInvoke.mock.calls[0][1]).toHaveProperty('privateKey');
       expect(result).not.toBeNull();
       expect(result!.seeding).toBe(true);
       expect(result!.merkleRoot).toBe('abc123');
@@ -350,16 +360,17 @@ describe('driveStore', () => {
 
       await driveStore.seedFile('item-2', 'BitTorrent', '0.5');
 
-      expect(mockedInvoke).toHaveBeenCalledWith('publish_drive_file', {
+      expect(mockedInvoke).toHaveBeenCalledWith('publish_drive_file', expect.objectContaining({
         owner: '0xTestWallet123',
         itemId: 'item-2',
         protocol: 'BitTorrent',
         priceChi: '0.5',
         walletAddress: '0xTestWallet123',
-      });
+      }));
+      expect(mockedInvoke.mock.calls[0][1]).toHaveProperty('privateKey');
     });
 
-    it('should not include wallet address when priceChi is "0"', async () => {
+    it('forwards wallet address even when priceChi is "0" (free seed still needs signing)', async () => {
       const { driveStore } = await import('$lib/stores/driveStore');
 
       mockedInvoke.mockResolvedValueOnce({
@@ -381,7 +392,7 @@ describe('driveStore', () => {
       await driveStore.seedFile('item-3', 'WebRTC', '0');
 
       expect(mockedInvoke).toHaveBeenCalledWith('publish_drive_file', expect.objectContaining({
-        walletAddress: null,
+        walletAddress: '0xTestWallet123',
       }));
     });
 
