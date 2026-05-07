@@ -1459,29 +1459,28 @@ async fn publish_file(
             "Wallet must be unlocked (private key + address required) to publish a file".to_string()
         })?;
 
-        // Immutable metadata write: only publish the blob if absent.
+        // Always publish the metadata blob. An earlier optimization
+        // gated this on "blob already present" but interacted badly
+        // with first-hit Kademlia (a stale local copy would skip the
+        // put, then expire, and the file would become unreachable).
+        // Re-publishing the publisher's own signed blob is safe and
+        // refreshes the Kademlia record TTL.
         let dht_key = format!("chiral_file_{}", merkle_root);
-        let blob_present = matches!(
-            dht.get_dht_value(dht_key.clone()).await,
-            Ok(Some(_))
-        );
-        if !blob_present {
-            let metadata = try_make_signed_file_metadata(
-                &merkle_root,
-                &file_name,
-                file_size,
-                &proto,
-                &wallet_addr,
-                private_key.as_deref(),
-            )
-            .ok_or_else(|| {
-                "Wallet must be unlocked (private key + address required) to publish a file"
-                    .to_string()
-            })?;
-            let metadata_json = serde_json::to_string(&metadata)
-                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-            dht.put_dht_value(dht_key, metadata_json).await?;
-        }
+        let metadata = try_make_signed_file_metadata(
+            &merkle_root,
+            &file_name,
+            file_size,
+            &proto,
+            &wallet_addr,
+            private_key.as_deref(),
+        )
+        .ok_or_else(|| {
+            "Wallet must be unlocked (private key + address required) to publish a file"
+                .to_string()
+        })?;
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        dht.put_dht_value(dht_key, metadata_json).await?;
 
         if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
             println!("Provider publish failed for {}: {}", merkle_root, e);
@@ -1572,29 +1571,23 @@ async fn publish_file_data(
             "Wallet must be unlocked (private key + address required) to publish a file".to_string()
         })?;
 
-        // Immutable metadata: write only if absent.
+        // Always publish; see publish_file for rationale.
         let dht_key = format!("chiral_file_{}", merkle_root);
-        let blob_present = matches!(
-            dht.get_dht_value(dht_key.clone()).await,
-            Ok(Some(_))
-        );
-        if !blob_present {
-            let metadata = try_make_signed_file_metadata(
-                &merkle_root,
-                &file_name,
-                file_size,
-                "WebRTC",
-                &wallet_addr,
-                private_key.as_deref(),
-            )
-            .ok_or_else(|| {
-                "Wallet must be unlocked (private key + address required) to publish a file"
-                    .to_string()
-            })?;
-            let metadata_json = serde_json::to_string(&metadata)
-                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-            dht.put_dht_value(dht_key, metadata_json).await?;
-        }
+        let metadata = try_make_signed_file_metadata(
+            &merkle_root,
+            &file_name,
+            file_size,
+            "WebRTC",
+            &wallet_addr,
+            private_key.as_deref(),
+        )
+        .ok_or_else(|| {
+            "Wallet must be unlocked (private key + address required) to publish a file"
+                .to_string()
+        })?;
+        let metadata_json = serde_json::to_string(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+        dht.put_dht_value(dht_key, metadata_json).await?;
 
         if let Err(e) = publish_seeder_entry(dht, &merkle_root, &our_seeder).await {
             println!("Provider publish failed for {}: {}", merkle_root, e);
@@ -2582,22 +2575,17 @@ async fn republish_shared_file(
                 return Ok(());
             };
 
-            let blob_present = matches!(
-                dht.get_dht_value(dht_key.clone()).await,
-                Ok(Some(_))
-            );
-            if !blob_present {
-                if let Some(metadata) = try_make_signed_file_metadata(
-                    &file_hash,
-                    &file_name,
-                    file_size,
-                    "WebRTC",
-                    &wallet_addr,
-                    private_key.as_deref(),
-                ) {
-                    if let Ok(metadata_json) = serde_json::to_string(&metadata) {
-                        let _ = dht.put_dht_value(dht_key, metadata_json).await;
-                    }
+            // Always publish; see publish_file for rationale.
+            if let Some(metadata) = try_make_signed_file_metadata(
+                &file_hash,
+                &file_name,
+                file_size,
+                "WebRTC",
+                &wallet_addr,
+                private_key.as_deref(),
+            ) {
+                if let Ok(metadata_json) = serde_json::to_string(&metadata) {
+                    let _ = dht.put_dht_value(dht_key, metadata_json).await;
                 }
             }
 
@@ -5147,25 +5135,20 @@ async fn publish_drive_file_inner(
             .to_string()
     })?;
 
-    // Write the immutable file-metadata blob only if it doesn't already exist.
-    // Seeder info lives in per-seeder records + provider registration below.
+    // Always publish the metadata blob (refreshes Kademlia record TTL
+    // and avoids the first-hit-vs-stale-local interaction described in
+    // publish_file). Per-seeder data lives in chiral_seeder_<hash>_<peer>.
     let dht_key = format!("chiral_file_{}", file_hash);
-    let blob_present = matches!(
-        dht.get_dht_value(dht_key.clone()).await,
-        Ok(Some(_))
-    );
-    if !blob_present {
-        let metadata = try_make_signed_file_metadata(
-            &file_hash, &file_name, actual_size, &proto, &wallet_addr, private_key.as_deref(),
-        )
-        .ok_or_else(|| {
-            "Cannot publish file metadata: wallet must be unlocked (private key + address required)"
-                .to_string()
-        })?;
-        let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-        dht.put_dht_value(dht_key, metadata_json).await?;
-    }
+    let metadata = try_make_signed_file_metadata(
+        &file_hash, &file_name, actual_size, &proto, &wallet_addr, private_key.as_deref(),
+    )
+    .ok_or_else(|| {
+        "Cannot publish file metadata: wallet must be unlocked (private key + address required)"
+            .to_string()
+    })?;
+    let metadata_json = serde_json::to_string(&metadata)
+        .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+    dht.put_dht_value(dht_key, metadata_json).await?;
     let _ = peer_id;
     let _ = price_wei_val;
     let _ = wallet_addr;
@@ -5277,29 +5260,23 @@ async fn seed_hosted_file(
             .to_string()
     })?;
 
-    // Immutable metadata blob: write only if absent.
+    // Always publish; see publish_file for rationale.
     let dht_key = format!("chiral_file_{}", file_hash);
-    let blob_present = matches!(
-        dht.get_dht_value(dht_key.clone()).await,
-        Ok(Some(_))
-    );
-    if !blob_present {
-        let metadata = try_make_signed_file_metadata(
-            &file_hash,
-            &file_name,
-            file_size,
-            "WebRTC",
-            &wallet_address,
-            private_key.as_deref(),
-        )
-        .ok_or_else(|| {
-            "Wallet must be unlocked (private key + address required) to publish file metadata"
-                .to_string()
-        })?;
-        let metadata_json = serde_json::to_string(&metadata)
-            .map_err(|e| format!("Failed to serialize: {}", e))?;
-        dht.put_dht_value(dht_key, metadata_json).await?;
-    }
+    let metadata = try_make_signed_file_metadata(
+        &file_hash,
+        &file_name,
+        file_size,
+        "WebRTC",
+        &wallet_address,
+        private_key.as_deref(),
+    )
+    .ok_or_else(|| {
+        "Wallet must be unlocked (private key + address required) to publish file metadata"
+            .to_string()
+    })?;
+    let metadata_json = serde_json::to_string(&metadata)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    dht.put_dht_value(dht_key, metadata_json).await?;
     let _ = peer_id;
 
     if let Err(e) = publish_seeder_entry(&dht, &file_hash, &our_seeder).await {

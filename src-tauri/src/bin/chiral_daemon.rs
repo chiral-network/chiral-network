@@ -683,21 +683,23 @@ async fn dht_register_shared_file(
         .into_response();
     };
 
+    // Always publish (don't gate on existing-blob check). With first-hit
+    // Kademlia, a stale local copy would short-circuit the put, then
+    // expire from the store, and the file becomes unreachable. Multiple
+    // signed blobs at the same chiral_file_<hash> key are harmless —
+    // verify_publisher accepts whichever the reader sees.
     let blob_key = format!("chiral_file_{}", req.file_hash);
-    let blob_present = matches!(svc.get_dht_value(blob_key.clone()).await, Ok(Some(_)));
-    if !blob_present {
-        if let Some(metadata) = chiral_network::try_make_signed_file_metadata(
-            &req.file_hash,
-            &req.file_name,
-            req.file_size,
-            "WebRTC",
-            &req.wallet_address,
-            Some(&req.private_key),
-        ) {
-            if let Ok(blob) = serde_json::to_string(&metadata) {
-                if let Err(e) = svc.put_dht_value(blob_key, blob).await {
-                    eprintln!("[CDN] file metadata blob put failed: {}", e);
-                }
+    if let Some(metadata) = chiral_network::try_make_signed_file_metadata(
+        &req.file_hash,
+        &req.file_name,
+        req.file_size,
+        "WebRTC",
+        &req.wallet_address,
+        Some(&req.private_key),
+    ) {
+        if let Ok(blob) = serde_json::to_string(&metadata) {
+            if let Err(e) = svc.put_dht_value(blob_key, blob).await {
+                eprintln!("[DAEMON] file metadata blob put failed: {}", e);
             }
         }
     }

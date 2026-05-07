@@ -765,31 +765,40 @@ async fn register_in_dht(
         return;
     }
 
-    // Immutable file-metadata blob: write only if absent. The CDN is not
-    // necessarily the original publisher, so we don't overwrite an existing
-    // publisher-signed record.
+    // Always publish the metadata blob — both on initial upload AND on
+    // every startup re-seed. The CDN is the canonical seeder for files
+    // uploaded to it, so it owns this record and re-publishing
+    // refreshes the Kademlia record TTL. An earlier optimization
+    // gated this on a `blob_present` check, which interacted badly
+    // with first-hit Kademlia: a stale local copy would short-circuit
+    // the put, then expire from the local store, and the file would
+    // become unreachable on search. Multiple peers signing the same
+    // chiral_file_<hash> key under their own wallet is harmless —
+    // verify_publisher accepts whichever blob the reader sees.
     let key = format!("chiral_file_{file_hash}");
-    let blob_present = matches!(dht.get_dht_value(key.clone()).await, Ok(Some(_)));
-    if !blob_present {
-        match crate::try_make_signed_file_metadata(
-            file_hash,
-            file_name,
-            file_size,
-            "WebRTC",
-            cdn_wallet,
-            Some(cdn_private_key),
-        ) {
-            Some(metadata) => match serde_json::to_string(&metadata) {
-                Ok(json_str) => {
-                    let _ = dht.put_dht_value(key, json_str).await;
+    match crate::try_make_signed_file_metadata(
+        file_hash,
+        file_name,
+        file_size,
+        "WebRTC",
+        cdn_wallet,
+        Some(cdn_private_key),
+    ) {
+        Some(metadata) => match serde_json::to_string(&metadata) {
+            Ok(json_str) => {
+                if let Err(e) = dht.put_dht_value(key, json_str).await {
+                    println!(
+                        "[CDN] FileMetadata blob put failed for {}: {}",
+                        file_hash, e
+                    );
                 }
-                Err(e) => println!("[CDN] Failed to serialize FileMetadata for {}: {}", file_hash, e),
-            },
-            None => println!(
-                "[CDN] Failed to sign FileMetadata for {} — record not published",
-                file_hash
-            ),
-        }
+            }
+            Err(e) => println!("[CDN] Failed to serialize FileMetadata for {}: {}", file_hash, e),
+        },
+        None => println!(
+            "[CDN] Failed to sign FileMetadata for {} — record not published",
+            file_hash
+        ),
     }
     let _ = created_at;
 
