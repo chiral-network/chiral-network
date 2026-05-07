@@ -4685,15 +4685,19 @@ async fn drive_upload_file(
     if owner.is_empty() {
         return Err("owner required".into());
     }
-    let src = std::path::Path::new(&file_path);
+    let src = std::path::PathBuf::from(&file_path);
     let file_name = src
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or("Invalid file path")?
         .to_string();
-    let data = std::fs::read(src).map_err(|e| format!("Failed to read file: {}", e))?;
 
-    if data.len() > 500 * 1024 * 1024 {
+    // Stat first so we can reject oversize uploads without copying anything.
+    let file_size = tokio::fs::metadata(&src)
+        .await
+        .map_err(|e| format!("Failed to stat file: {}", e))?
+        .len();
+    if file_size > 500 * 1024 * 1024 {
         return Err("File exceeds 500 MB limit".into());
     }
 
@@ -4701,23 +4705,60 @@ async fn drive_upload_file(
     let storage_name = format!("{}_{}", item_id, file_name);
     let mime = ds::mime_from_name(&file_name);
     let files_dir = ds::drive_files_dir().ok_or("Cannot determine storage directory")?;
-    std::fs::create_dir_all(&files_dir)
+    tokio::fs::create_dir_all(&files_dir)
+        .await
         .map_err(|e| format!("Failed to create storage dir: {}", e))?;
     let dest = files_dir.join(&storage_name);
-    std::fs::write(&dest, &data).map_err(|e| format!("Failed to write file: {}", e))?;
 
-    // Compute and persist file hash at upload time so later seeding can be instant.
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(&data);
-    let computed_merkle_root = hex::encode(hasher.finalize());
+    // Copy + hash off the async runtime. Previously this used
+    // `std::fs::read` → `std::fs::write` → SHA-256 over the in-memory
+    // buffer, all synchronously on the tokio runtime — so a multi-GB
+    // upload froze libp2p, wallet RPC, and the UI event loop until the
+    // copy finished. Now we tokio::fs::copy (delegates to the blocking
+    // pool) AND spawn_blocking the hash, both running on threads
+    // separate from the async reactor.
+    let dest_for_copy = dest.clone();
+    let src_for_copy = src.clone();
+    let copied_bytes = tokio::fs::copy(&src_for_copy, &dest_for_copy)
+        .await
+        .map_err(|e| format!("Failed to copy file: {}", e))?;
+
+    // Reuse caller-supplied merkle_root if present (e.g. import flows
+    // that already know the hash). Otherwise hash the just-written
+    // destination on the blocking pool so the runtime stays free.
+    let computed_merkle_root = if let Some(h) = merkle_root.clone().filter(|h| !h.trim().is_empty())
+    {
+        h
+    } else {
+        let dest_for_hash = dest.clone();
+        tokio::task::spawn_blocking(move || -> Result<String, String> {
+            use sha2::{Digest, Sha256};
+            use std::io::Read;
+            let mut file = std::fs::File::open(&dest_for_hash)
+                .map_err(|e| format!("Failed to open uploaded file for hashing: {}", e))?;
+            let mut hasher = Sha256::new();
+            let mut buf = [0u8; 1024 * 1024];
+            loop {
+                let n = file
+                    .read(&mut buf)
+                    .map_err(|e| format!("Failed to read uploaded file while hashing: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+            }
+            Ok(hex::encode(hasher.finalize()))
+        })
+        .await
+        .map_err(|e| format!("Hash task panicked: {}", e))??
+    };
 
     let item = DsItem {
         id: item_id,
         name: file_name.clone(),
         item_type: "file".into(),
         parent_id,
-        size: Some(data.len() as u64),
+        size: Some(copied_bytes),
         mime_type: Some(mime),
         created_at: ds::now_secs(),
         modified_at: ds::now_secs(),
@@ -4725,7 +4766,7 @@ async fn drive_upload_file(
         storage_path: Some(storage_name),
         owner,
         is_public: true,
-        merkle_root: merkle_root.or(Some(computed_merkle_root)),
+        merkle_root: Some(computed_merkle_root),
         protocol: None,
         price_chi: None,
         seed_enabled: false,
@@ -4739,7 +4780,7 @@ async fn drive_upload_file(
     println!(
         "[DRIVE] Uploaded file: {} ({} bytes)",
         file_name,
-        data.len()
+        copied_bytes
     );
     Ok(item)
 }

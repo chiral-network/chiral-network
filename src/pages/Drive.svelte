@@ -272,12 +272,15 @@
       const paths: string[] | null = await invoke('open_file_dialog', { multiple: true });
       if (!paths || paths.length === 0) return;
       uploading = true;
-      let count = 0;
       try {
-        for (const path of paths) {
-          const result = await driveStore.uploadFile(path, currentFolderId);
-          if (result) count++;
-        }
+        // Upload paths in parallel — the Tauri backend's drive_upload_file
+        // runs the copy + hash on the blocking thread pool, so multiple
+        // uploads overlap on separate threads instead of waiting for
+        // each previous one to finish.
+        const results = await Promise.all(
+          paths.map((p) => driveStore.uploadFile(p, currentFolderId))
+        );
+        const count = results.filter((r) => r).length;
         if (count > 0) {
           toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
         } else {
@@ -612,12 +615,15 @@
         if (event.payload.type === 'drop' && event.payload.paths?.length > 0) {
           isDragging = false;
           uploading = true;
-          let count = 0;
           try {
-            for (const path of event.payload.paths) {
-              const result = await driveStore.uploadFile(path as string, currentFolderId);
-              if (result) count++;
-            }
+            // Same parallelization as handleUpload — backend copy/hash
+            // runs on the blocking pool, so multiple drops overlap.
+            const results = await Promise.all(
+              (event.payload.paths as string[]).map((p) =>
+                driveStore.uploadFile(p, currentFolderId)
+              )
+            );
+            const count = results.filter((r) => r).length;
             if (count > 0) toasts.show(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
           } catch (e) {
             toasts.detail('Upload failed', (e as Error).message, 'error');
