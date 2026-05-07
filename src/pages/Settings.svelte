@@ -273,8 +273,8 @@
 
 <div class="p-4 sm:p-6 max-w-[1400px] mx-auto">
   <div class="mb-4">
-    <h1 class="text-2xl font-bold dark:text-white">Settings</h1>
-    <p class="text-sm text-gray-500 dark:text-gray-400">
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
       Customize the app's appearance, notifications, network, and behavior.
     </p>
   </div>

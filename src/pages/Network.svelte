@@ -594,8 +594,8 @@
   <!-- Header -->
   <div class="flex items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold dark:text-white">Network</h1>
-      <p class="text-sm text-gray-500 dark:text-gray-400">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Network</h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
         Blockchain node, peer-to-peer network, and connection health.
       </p>
     </div>

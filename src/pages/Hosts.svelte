@@ -1309,7 +1309,7 @@
   <div class="flex items-start justify-between gap-4">
     <div>
       <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Hosts</h1>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+      <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
         Host websites and files, find hosting providers, and manage agreements
       </p>
     </div>
@@ -1617,7 +1617,7 @@
                 <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">Your Files on This CDN</h4>
                 <button
                   onclick={() => { showCdnUploadPicker = true; loadCdnDriveFiles(); }}
-                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
                 >
                   <Upload class="w-3 h-3" />
                   Upload
@@ -1673,7 +1673,7 @@
               <p class="text-sm text-gray-500 dark:text-gray-400">No files hosted on this CDN yet</p>
               <button
                 onclick={() => { showCdnUploadPicker = true; loadCdnDriveFiles(); }}
-                class="mt-3 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-flex items-center gap-2"
+                class="mt-3 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors inline-flex items-center gap-2"
               >
                 <Upload class="w-4 h-4" />
                 Upload from Drive
@@ -1801,7 +1801,7 @@
             </div>
             <button
               onclick={() => confirmCdnUpload(CDN_SERVERS[0].url, file)}
-              class="ml-3 px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-1.5"
+              class="ml-3 px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center gap-1.5"
             >
               <Upload class="w-3 h-3" />
               Select
@@ -1854,7 +1854,7 @@
           min="0"
           bind:value={cdnFilePrice}
           placeholder="0 = free"
-          class="w-full px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+          class="w-full px-3 py-2 text-sm bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg dark:text-white focus:ring-2 focus:ring-primary-500 outline-none"
         />
         <p class="text-[10px] text-gray-400 mt-1">Set to 0 for free downloads, or set a price others will pay</p>
       </div>
@@ -1876,7 +1876,7 @@
           if (file) await uploadToCdn(serverUrl, file);
         }}
         disabled={cdnUploading !== null}
-        class="flex-1 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+        class="flex-1 px-4 py-2 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
       >
         {#if cdnUploading}
           <Loader2 class="w-4 h-4 animate-spin" />

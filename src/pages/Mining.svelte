@@ -401,8 +401,8 @@
 <div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
   <div class="flex items-center justify-between">
     <div>
-      <h1 class="text-2xl font-bold dark:text-white">Mining</h1>
-      <p class="text-gray-600 dark:text-gray-400 mt-1">Mine CHI tokens on the Chiral Network</p>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Mining</h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Mine CHI tokens on the Chiral Network</p>
     </div>
     <button
       onclick={refreshAll}

@@ -1776,8 +1776,8 @@
 
 <div class="max-w-[1400px] mx-auto p-4 sm:p-6 space-y-6">
   <div>
-    <h1 class="text-2xl font-bold dark:text-white">Download</h1>
-    <p class="text-gray-600 dark:text-gray-400 mt-2">Search and download files from the Chiral Network</p>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Download</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Search and download files from the Chiral Network</p>
   </div>
 
   <!-- Network Status Warning -->
@@ -1909,7 +1909,7 @@
             <select
               id="folder-seeder-picker"
               bind:value={folderSeederIndex}
-              class="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              class="w-full px-3 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-md text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
               {#each folderResult.commonSeeders as seeder, i (seeder.peerId)}
                 <option value={i}>
@@ -1964,7 +1964,7 @@
           <button
             onclick={downloadFolderBundle}
             disabled={!isTauri || folderDownloading || folderResult.commonSeeders.length === 0}
-            class="px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all font-medium focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
           >
             {#if folderDownloading}
               <Loader2 class="w-4 h-4 animate-spin" />
@@ -2035,7 +2035,7 @@
                         onclick={() => applySeederSort(mode)}
                         class="px-2.5 py-1 capitalize transition-colors
                           {seederSort === mode
-                            ? 'bg-primary-500 text-white'
+                            ? 'bg-primary-600 text-white'
                             : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'}"
                       >
                         {mode}

@@ -615,8 +615,8 @@
   <!-- Header -->
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div>
-      <h1 class="text-2xl font-bold dark:text-white">Diagnostics</h1>
-      <p class="text-sm text-gray-500 dark:text-gray-400">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Diagnostics</h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
         Live status of every subsystem. Click a tile to jump to its detail panel.
       </p>
     </div>

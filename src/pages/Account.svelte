@@ -448,8 +448,8 @@
 <div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
   <div>
     <div>
-      <h1 class="text-2xl font-bold dark:text-white">Account</h1>
-      <p class="text-gray-600 dark:text-gray-400 mt-1">Manage your wallet and account settings</p>
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Account</h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Manage your wallet and account settings</p>
     </div>
   </div>
 

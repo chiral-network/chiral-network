@@ -783,11 +783,11 @@
             if (e.key === 'Enter') confirmNewFolder();
             if (e.key === 'Escape') cancelNewFolder();
           }}
-          class="flex-1 px-3 py-1.5 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-xs"
+          class="flex-1 px-3 py-1.5 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 max-w-xs"
         />
         <button
           onclick={confirmNewFolder}
-          class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition shrink-0 font-medium"
+          class="px-3 py-1.5 bg-primary-600 text-white text-sm rounded-lg hover:bg-primary-700 transition shrink-0 font-medium"
         >Create</button>
         <button
           onclick={cancelNewFolder}
@@ -836,7 +836,7 @@
           <div class="flex gap-3">
             <button
               onclick={handleUpload}
-              class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+              class="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500/40"
             >
               <Upload class="w-4 h-4" />
               Upload file
@@ -867,7 +867,7 @@
                   }
                 }}
                 onblur={confirmRename}
-                class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
               />
             </div>
           {:else}
@@ -932,7 +932,7 @@
                         }
                       }}
                       onblur={confirmRename}
-                      class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      class="w-full px-2 py-1 text-sm bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500"
                     />
                   </td>
                 </tr>
@@ -1008,7 +1008,7 @@
             <button
               onclick={() => seedProtocol = 'WebRTC'}
               class="flex-1 px-3 py-1.5 text-sm font-medium transition {seedProtocol === 'WebRTC'
-                ? 'bg-blue-600 text-white'
+                ? 'bg-primary-600 text-white'
                 : 'bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'}"
             >
               WebRTC
@@ -1035,7 +1035,7 @@
             min="0"
             placeholder="Free"
             bind:value={seedPrice}
-            class="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
           />
           {#if seedModalItem.type === 'folder'}
             <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
@@ -1053,7 +1053,7 @@
         >Cancel</button>
         <button
           onclick={confirmSeed}
-          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition"
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-primary-600 hover:bg-primary-700 transition"
         >
           {#if seedModalItem?.seeding}
             Update

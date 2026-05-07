@@ -576,8 +576,8 @@
   <!-- Header -->
   <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
     <div class="space-y-1">
-      <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">ChiralDrop</h1>
-      <p class="text-sm sm:text-base text-gray-600 dark:text-gray-400">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">ChiralDrop</h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
         Your alias:
         <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
       </p>
