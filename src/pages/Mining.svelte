@@ -426,7 +426,7 @@
           <AlertTriangle class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
         </div>
         <div>
-          <h2 class="font-semibold dark:text-white">Local Blockchain Node Required</h2>
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Local Blockchain Node Required</h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
             {#if !gethStatus?.installed}
               Geth is not installed
@@ -465,7 +465,7 @@
             <Pickaxe class="w-6 h-6 {isAnyMining ? 'text-yellow-600 dark:text-yellow-400' : 'text-gray-600 dark:text-gray-400'}" />
           </div>
           <div>
-            <h2 class="font-semibold dark:text-white">Mining</h2>
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Mining</h2>
             <p class="text-sm text-gray-500 dark:text-gray-400">Earn CHI by mining blocks with CPU or GPU</p>
           </div>
         </div>

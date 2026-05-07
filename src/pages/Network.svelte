@@ -684,7 +684,7 @@
               <Server class="w-5 h-5 {gethStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-600 dark:text-gray-400'}" />
             </div>
             <div>
-              <h2 class="font-semibold dark:text-white">Blockchain Node</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Blockchain Node</h2>
               <p class="text-xs text-gray-500 dark:text-gray-400">Geth — Chiral chain</p>
             </div>
           </div>
@@ -879,7 +879,7 @@
               <Globe class="w-5 h-5 {$networkConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-600 dark:text-gray-400'}" />
             </div>
             <div>
-              <h2 class="font-semibold dark:text-white">P2P Network</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">P2P Network</h2>
               <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia DHT</p>
             </div>
           </div>
@@ -1023,7 +1023,7 @@
       <header class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
           <Users class="w-5 h-5 text-gray-600 dark:text-gray-300" />
-          <h2 class="font-semibold dark:text-white">Connected Peers</h2>
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Connected Peers</h2>
           <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 tabular-nums">
             {visiblePeers.length}
           </span>
@@ -1121,7 +1121,7 @@
       <header class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
           <Cloud class="w-5 h-5 text-gray-600 dark:text-gray-300" />
-          <h2 class="font-semibold dark:text-white">Advertised Hosts</h2>
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Advertised Hosts</h2>
           <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 tabular-nums">
             {advertisedHostsWithStatus.length}
           </span>
@@ -1199,7 +1199,7 @@
     <section class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
       <header class="flex items-center gap-2 mb-4">
         <ShieldBan class="w-5 h-5 text-red-600 dark:text-red-400" />
-        <h2 class="font-semibold dark:text-white">Blacklist</h2>
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Blacklist</h2>
         <span class="text-xs text-gray-500 dark:text-gray-400">Block addresses from file transfers</span>
         {#if $blacklist.length > 0}
           <span class="ml-auto px-2 py-0.5 text-xs rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium tabular-nums">

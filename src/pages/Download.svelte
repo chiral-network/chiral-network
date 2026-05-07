@@ -1799,7 +1799,7 @@
   <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6">
     <div class="flex items-center gap-2 mb-4">
       <Plus class="w-5 h-5 text-gray-600 dark:text-gray-400" />
-      <h2 class="text-lg font-semibold dark:text-white">Add New Download</h2>
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Add New Download</h2>
     </div>
 
     <!-- Search Mode Tabs -->
@@ -1888,7 +1888,7 @@
             <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
           </div>
           <div class="flex-1 min-w-0">
-            <h3 class="text-lg font-semibold truncate dark:text-white">{folderResult.name || 'Untitled Folder'}</h3>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white truncate">{folderResult.name || 'Untitled Folder'}</h3>
             <div class="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
               <span class="tabular-nums">{folderResult.files.length} file{folderResult.files.length === 1 ? '' : 's'}</span>
               <span class="tabular-nums">{formatFileSize(folderResult.files.reduce((acc, f) => acc + (f.fileSize || 0), 0))}</span>
@@ -1989,7 +1989,7 @@
           </div>
 
           <div class="flex-1 min-w-0">
-            <h3 class="text-lg font-semibold truncate dark:text-white">{searchResult.fileName}</h3>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white truncate">{searchResult.fileName}</h3>
             <div class="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
               {#if searchResult.fileSize > 0}
                 <span class="tabular-nums">{formatFileSize(searchResult.fileSize)}</span>
@@ -2178,7 +2178,7 @@
     <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 gap-3 flex-wrap">
       <div class="flex items-center gap-2">
         <Download class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-        <h2 class="text-sm font-semibold dark:text-white">Downloads</h2>
+        <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Downloads</h2>
       </div>
 
       <!-- Quick filter chips -->
@@ -2636,7 +2636,7 @@
         <div class="p-2.5 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
           <AlertTriangle class="w-6 h-6 text-amber-600 dark:text-amber-400" />
         </div>
-        <h3 class="text-lg font-semibold dark:text-white">Confirm Download</h3>
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Confirm Download</h3>
       </div>
 
       <div class="space-y-3 mb-5">

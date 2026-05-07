@@ -709,7 +709,7 @@
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
         <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-800/85">
-          <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Incoming Transfers</h3>
+          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Incoming Transfers</h3>
           <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
               <div class="rounded-xl border border-amber-100 bg-amber-50/60 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
@@ -827,7 +827,7 @@
       <!-- Transaction History -->
       {#if showHistory}
         <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="mb-3 font-semibold text-gray-900 dark:text-white">Transaction History</h3>
+          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Transaction History</h3>
           <div class="flex-1 space-y-2 overflow-y-auto pr-1">
             {#if $transferHistory.length === 0}
               <p class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">No transfers yet</p>

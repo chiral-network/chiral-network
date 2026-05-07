@@ -323,7 +323,7 @@
               <Palette class="w-5 h-5 text-purple-600 dark:text-purple-400" />
             </div>
             <div>
-              <h2 class="font-semibold text-lg dark:text-white">Appearance</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Appearance</h2>
               <p class="text-sm text-gray-500 dark:text-gray-400">Theme, accent color, and navigation layout.</p>
             </div>
           </header>
@@ -433,7 +433,7 @@
                 <Bell class="w-5 h-5 text-amber-600 dark:text-amber-400" />
               </div>
               <div>
-                <h2 class="font-semibold text-lg dark:text-white">Notifications</h2>
+                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Notifications</h2>
                 <p class="text-sm text-gray-500 dark:text-gray-400">
                   {enabledNotificationCount} of {notificationOptions.length} enabled
                 </p>
@@ -490,7 +490,7 @@
               <NetworkIcon class="w-5 h-5 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <h2 class="font-semibold text-lg dark:text-white">Network</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Network</h2>
               <p class="text-sm text-gray-500 dark:text-gray-400">Choose which Chiral Network to connect to.</p>
             </div>
           </header>
@@ -549,7 +549,7 @@
               <HardDrive class="w-5 h-5 text-primary-600 dark:text-primary-400" />
             </div>
             <div>
-              <h2 class="font-semibold text-lg dark:text-white">Storage</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Storage</h2>
               <p class="text-sm text-gray-500 dark:text-gray-400">Where downloaded files are saved on your computer.</p>
             </div>
           </header>
@@ -605,7 +605,7 @@
               <Pickaxe class="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
             </div>
             <div>
-              <h2 class="font-semibold text-lg dark:text-white">Startup</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Startup</h2>
               <p class="text-sm text-gray-500 dark:text-gray-400">What runs automatically when the app launches.</p>
             </div>
           </header>
@@ -641,7 +641,7 @@
               <Sliders class="w-5 h-5 text-gray-600 dark:text-gray-300" />
             </div>
             <div>
-              <h2 class="font-semibold text-lg dark:text-white">Advanced</h2>
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Advanced</h2>
               <p class="text-sm text-gray-500 dark:text-gray-400">Destructive operations live here. Read carefully.</p>
             </div>
           </header>
@@ -686,7 +686,7 @@
           <AlertTriangle class="w-5 h-5 text-red-600 dark:text-red-400" />
         </div>
         <div>
-          <h3 class="font-semibold text-lg dark:text-white">Reset all settings?</h3>
+          <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Reset all settings?</h3>
           <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">
             Theme, accent, navigation, notifications, startup, and the download directory will return to defaults.
             Wallet, files, and DHT identity are kept.

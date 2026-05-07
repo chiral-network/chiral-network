@@ -610,7 +610,7 @@
           <Send class="w-6 h-6 text-primary-600 dark:text-primary-400" />
         </div>
         <div>
-          <h3 class="font-semibold dark:text-white">Send CHI</h3>
+          <h3 class="font-semibold text-gray-900 dark:text-white">Send CHI</h3>
           <p class="text-sm text-gray-500 dark:text-gray-400">Transfer CHI to another address</p>
         </div>
       </div>
@@ -808,7 +808,7 @@
             <History class="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
           </div>
           <div>
-            <h3 class="font-semibold dark:text-white">Transaction History</h3>
+            <h3 class="font-semibold text-gray-900 dark:text-white">Transaction History</h3>
             <div class="flex items-center gap-2">
               <p class="text-sm text-gray-500 dark:text-gray-400">Recent transactions</p>
               {#if isLoadingHistory && transactions.length > 0}
@@ -975,7 +975,7 @@
           <ShieldCheck class="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
         </div>
         <div>
-          <h3 class="font-semibold dark:text-white">My Reputation</h3>
+          <h3 class="font-semibold text-gray-900 dark:text-white">My Reputation</h3>
           <p class="text-sm text-gray-500 dark:text-gray-400">Elo score from recent transfers and earnings</p>
         </div>
       </div>

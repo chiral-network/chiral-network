@@ -1556,7 +1556,7 @@
       {/if}
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="text-lg font-semibold dark:text-white">CDN Servers</h2>
+          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">CDN Servers</h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">Always-on servers that host your files so they stay available when you go offline</p>
         </div>
         <button
@@ -1583,7 +1583,7 @@
                   <Globe class="w-5 h-5 {cdn.status === 'online' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}" />
                 </div>
                 <div>
-                  <h3 class="font-semibold dark:text-white">{cdn.name}</h3>
+                  <h3 class="font-semibold text-gray-900 dark:text-white">{cdn.name}</h3>
                   <p class="text-xs text-gray-500 dark:text-gray-400">{cdn.region}</p>
                 </div>
               </div>
@@ -1596,15 +1596,15 @@
               <div class="mt-3 grid grid-cols-3 gap-3">
                 <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5 text-center">
                   <p class="text-lg font-bold dark:text-white">{cdn.activeFiles}</p>
-                  <p class="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Files Hosted</p>
+                  <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Files Hosted</p>
                 </div>
                 <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5 text-center">
                   <p class="text-lg font-bold dark:text-white">{formatBytes(cdn.totalStorageBytes)}</p>
-                  <p class="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Storage Used</p>
+                  <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Storage Used</p>
                 </div>
                 <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5 text-center">
                   <p class="text-lg font-bold dark:text-white">{cdn.uniqueOwners}</p>
-                  <p class="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wide">Users</p>
+                  <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Users</p>
                 </div>
               </div>
             {/if}
@@ -1773,7 +1773,7 @@
     onkeydown={(e) => e.stopPropagation()}
   >
     <div class="flex items-center justify-between mb-4">
-      <h3 class="text-lg font-semibold dark:text-white">Upload to CDN</h3>
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Upload to CDN</h3>
       <button onclick={() => showCdnUploadPicker = false} class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
         &times;
       </button>
@@ -1828,7 +1828,7 @@
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
   >
-    <h3 class="text-lg font-semibold dark:text-white mb-4">Confirm CDN Upload</h3>
+    <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Confirm CDN Upload</h3>
 
     <div class="space-y-3 mb-5">
       <div class="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-3">

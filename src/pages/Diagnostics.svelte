@@ -698,7 +698,7 @@
             <div class="p-1.5 rounded-lg {$networkConnected ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-gray-100 dark:bg-gray-700'}">
               <Globe class="w-4 h-4 {$networkConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-600 dark:text-gray-400'}" />
             </div>
-            <h2 class="font-semibold dark:text-white text-sm">DHT</h2>
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">DHT</h2>
             <span class="text-xs text-gray-400 dark:text-gray-500 truncate">peer network</span>
           </div>
           <button
@@ -809,7 +809,7 @@
             <div class="p-1.5 rounded-lg bg-orange-100 dark:bg-orange-900/30">
               <Activity class="w-4 h-4 text-orange-600 dark:text-orange-400" />
             </div>
-            <h2 class="font-semibold dark:text-white text-sm">Bootstrap</h2>
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Bootstrap</h2>
             <span class="text-xs text-gray-400 dark:text-gray-500 truncate">enode reachability</span>
           </div>
           <button
@@ -879,7 +879,7 @@
             <div class="p-1.5 rounded-lg {gethStatus?.running ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-gray-100 dark:bg-gray-700'}">
               <Server class="w-4 h-4 {gethStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-600 dark:text-gray-400'}" />
             </div>
-            <h2 class="font-semibold dark:text-white text-sm">Geth</h2>
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Geth</h2>
             <span class="text-xs text-gray-400 dark:text-gray-500 truncate">blockchain node</span>
           </div>
           <button
@@ -969,7 +969,7 @@
             <div class="p-1.5 rounded-lg {miningStatus?.mining ? 'bg-amber-100 dark:bg-amber-900/30' : 'bg-gray-100 dark:bg-gray-700'}">
               <Pickaxe class="w-4 h-4 {miningStatus?.mining ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}" />
             </div>
-            <h2 class="font-semibold dark:text-white text-sm">Mining</h2>
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">Mining</h2>
             <span class="text-xs text-gray-400 dark:text-gray-500 truncate">CHI rewards</span>
           </div>
           <button
