@@ -316,16 +316,28 @@ async fn auto_reseed_drive_files(state: &AppState) {
             .filter(|h| !h.trim().is_empty())
         {
             Some(root) => root,
-            None => match compute_sha256_file(&full_path) {
-                Ok(hash) => {
-                    hash_updates.push((item_id.clone(), hash.clone()));
-                    hash
+            None => {
+                // Hash off the async runtime — auto-reseed iterates every
+                // Drive file at startup, so a single multi-GB file would
+                // otherwise block libp2p / wallet RPC / UI events for the
+                // duration of the read.
+                let path_for_hash = full_path.clone();
+                match tokio::task::spawn_blocking(move || compute_sha256_file(&path_for_hash)).await
+                {
+                    Ok(Ok(hash)) => {
+                        hash_updates.push((item_id.clone(), hash.clone()));
+                        hash
+                    }
+                    Ok(Err(e)) => {
+                        println!("[DRIVE] Auto-reseed failed to hash {}: {}", file_name, e);
+                        continue;
+                    }
+                    Err(e) => {
+                        println!("[DRIVE] Auto-reseed hash task panicked for {}: {}", file_name, e);
+                        continue;
+                    }
                 }
-                Err(e) => {
-                    println!("[DRIVE] Auto-reseed failed to hash {}: {}", file_name, e);
-                    continue;
-                }
-            },
+            }
         };
 
         let price_wei = match price_chi.as_deref() {
@@ -5047,30 +5059,39 @@ async fn publish_drive_file_inner(
             .len(),
     };
 
-    // Reuse persisted hash when available so publishing from Drive is instant.
+    // Reuse persisted hash when available so re-publishing from Drive is
+    // instant. First-publish hashes the file off the async runtime via
+    // spawn_blocking — without this, hashing a multi-GB file blocks
+    // every other tokio task (network I/O included), and the
+    // publish_drive_folder loop runs the hashes serially across files,
+    // turning a folder publish into a multi-minute hang.
     let file_hash = if let Some(root) = existing_merkle_root
         .clone()
         .filter(|h| !h.trim().is_empty())
     {
         root
     } else {
-        use sha2::{Digest, Sha256};
-        use std::io::Read;
-
-        let mut file =
-            std::fs::File::open(&full_path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let mut hasher = Sha256::new();
-        let mut buf = [0u8; 1024 * 1024];
-        loop {
-            let n = file
-                .read(&mut buf)
-                .map_err(|e| format!("Failed to read file while hashing: {}", e))?;
-            if n == 0 {
-                break;
+        let path_for_hash = full_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<String, String> {
+            use sha2::{Digest, Sha256};
+            use std::io::Read;
+            let mut file = std::fs::File::open(&path_for_hash)
+                .map_err(|e| format!("Failed to open file: {}", e))?;
+            let mut hasher = Sha256::new();
+            let mut buf = [0u8; 1024 * 1024];
+            loop {
+                let n = file
+                    .read(&mut buf)
+                    .map_err(|e| format!("Failed to read file while hashing: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
             }
-            hasher.update(&buf[..n]);
-        }
-        hex::encode(hasher.finalize())
+            Ok(hex::encode(hasher.finalize()))
+        })
+        .await
+        .map_err(|e| format!("Hash task panicked: {}", e))??
     };
 
     let proto = protocol.unwrap_or_else(|| "WebRTC".to_string());
@@ -5636,29 +5657,43 @@ async fn publish_drive_folder(
         return Err("Wallet address is required when setting a folder price".to_string());
     }
 
-    // First pass: do per-file publishes WITHOUT folder context so each
-    // file's merkle_root gets computed and persisted to the Drive
-    // manifest. Without this we can't compute the folder hash (which is
-    // content-addressed over the file hashes). Files publish at price 0
-    // here — folder-level payment replaces per-file payment.
+    // First pass: per-file publishes happen in parallel so the per-file
+    // SHA-256 hashing (now off the async runtime) overlaps across files
+    // instead of running serially. For a folder of N first-time-seeded
+    // files this is the difference between N×hash_time and 1×hash_time.
+    // Each file's merkle_root is persisted to the Drive manifest by the
+    // inner function so the folder hash can be computed afterward.
+    let publish_futures = files.iter().map(|(file_id, file_name)| {
+        let state = state.inner();
+        let owner = owner.clone();
+        let file_id = file_id.clone();
+        let file_name = file_name.clone();
+        let protocol = protocol.clone();
+        let wallet_address = wallet_address.clone();
+        let private_key = private_key.clone();
+        async move {
+            let res = publish_drive_file_inner(
+                state,
+                &owner,
+                &file_id,
+                protocol,
+                Some("0".to_string()),
+                wallet_address,
+                private_key,
+            )
+            .await;
+            (file_id, file_name, res)
+        }
+    });
+    let results = futures::future::join_all(publish_futures).await;
     let mut succeeded = 0usize;
     let mut failures: Vec<DriveFolderFileError> = Vec::new();
-    for (file_id, file_name) in &files {
-        match publish_drive_file_inner(
-            state.inner(),
-            &owner,
-            file_id,
-            protocol.clone(),
-            Some("0".to_string()),
-            wallet_address.clone(),
-            private_key.clone(),
-        )
-        .await
-        {
+    for (file_id, file_name, res) in results {
+        match res {
             Ok(_) => succeeded += 1,
             Err(e) => failures.push(DriveFolderFileError {
-                item_id: file_id.clone(),
-                name: file_name.clone(),
+                item_id: file_id,
+                name: file_name,
                 error: e,
             }),
         }
