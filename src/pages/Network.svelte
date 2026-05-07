@@ -15,21 +15,21 @@
     Download,
     RefreshCw,
     AlertTriangle,
-    Check,
     Loader2,
     Globe,
     Activity,
     HeartPulse,
-    ChevronDown,
-    ChevronUp,
     ShieldBan,
     Trash2,
-    Plus
+    Plus,
+    Users,
+    Cloud,
   } from 'lucide-svelte';
   import { logger } from '$lib/logger';
   const log = logger('Network');
 
-  // Types
+  // ---------- Types ----------
+
   interface GethStatus {
     installed: boolean;
     running: boolean;
@@ -81,12 +81,19 @@
     lastHeartbeatAt: number | null;
   }
 
-  // DHT State
+  type Health = 'good' | 'warn' | 'bad' | 'idle';
+  type Tab = 'overview' | 'peers' | 'hosts' | 'blacklist';
+
+  // ---------- State ----------
+
+  let activeTab = $state<Tab>('overview');
+
+  // DHT
   let isConnecting = $state(false);
   let error = $state('');
   let localPeerId = $state('');
 
-  // Geth State
+  // Geth
   let gethStatus = $state<GethStatus | null>(null);
   let isLoadingGeth = $state(true);
   let isStartingGeth = $state(false);
@@ -95,28 +102,24 @@
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
   let unlistenDownload: (() => void) | null = null;
 
-  // Bootstrap Health State
+  // Bootstrap
   let bootstrapHealth = $state<BootstrapHealthReport | null>(null);
   let isCheckingBootstrap = $state(false);
-  let showBootstrapDetails = $state(false);
+
+  // DHT health
+  let dhtHealth = $state<DhtHealthInfo | null>(null);
+  let isCheckingDhtHealth = $state(false);
 
   // "Connecting to network" message auto-dismiss
   let showGethConnectingMsg = $state(false);
   let gethConnectingTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  // DHT Health State
-  let dhtHealth = $state<DhtHealthInfo | null>(null);
-  let isCheckingDhtHealth = $state(false);
-  let showDhtHealthDetails = $state(false);
-
-  // Bootstrap peer IDs and Connected Peers visibility controls
+  // Peer list filtering / pagination
   let bootstrapPeerIds = $state<Set<string>>(new Set());
   let showBootstrapPeers = $state(true);
   let visiblePeers = $derived(
     showBootstrapPeers ? $peers : $peers.filter((peer) => !bootstrapPeerIds.has(peer.id))
   );
-
-  // Peer list pagination
   const PEERS_PER_PAGE = 10;
   let peerPage = $state(0);
   let peerTotalPages = $derived(Math.max(1, Math.ceil(visiblePeers.length / PEERS_PER_PAGE)));
@@ -124,33 +127,30 @@
     visiblePeers.slice(peerPage * PEERS_PER_PAGE, (peerPage + 1) * PEERS_PER_PAGE)
   );
 
-  // Wallet-visible host advertisements (registry + ad payloads)
+  // Advertised hosts
   let advertisedHosts = $state<AdvertisedHostRow[]>([]);
   let isLoadingAdvertisedHosts = $state(false);
   let advertisedHostsError = $state('');
   let connectedPeerIds = $derived(new Set($peers.map((peer) => peer.id)));
   let advertisedHostsWithStatus = $derived(
-    advertisedHosts.map((host) => ({
-      ...host,
-      isOnline: connectedPeerIds.has(host.peerId)
-    }))
+    advertisedHosts.map((host) => ({ ...host, isOnline: connectedPeerIds.has(host.peerId) }))
   );
-  // Reset to first page when peer list changes significantly
+
+  // Blacklist form
+  let blacklistAddress = $state('');
+  let blacklistReason = $state('');
+
+  // Reset peer page when peer list shrinks
   $effect(() => {
-    if (peerPage >= peerTotalPages) {
-      peerPage = Math.max(0, peerTotalPages - 1);
-    }
+    if (peerPage >= peerTotalPages) peerPage = Math.max(0, peerTotalPages - 1);
   });
 
-
-  // Show "connecting" message only when Geth is running with 0 peers, auto-dismiss after 30s
+  // Show "connecting" message when Geth is running with 0 peers, auto-dismiss after 30s
   $effect(() => {
     if (gethStatus?.running && gethStatus?.peerCount === 0) {
       showGethConnectingMsg = true;
       if (gethConnectingTimeout) clearTimeout(gethConnectingTimeout);
-      gethConnectingTimeout = setTimeout(() => {
-        showGethConnectingMsg = false;
-      }, 30000);
+      gethConnectingTimeout = setTimeout(() => (showGethConnectingMsg = false), 30000);
     } else {
       showGethConnectingMsg = false;
       if (gethConnectingTimeout) {
@@ -160,12 +160,101 @@
     }
   });
 
-  // Check if Tauri is available
+  // ---------- Health derivations (drive the status strip) ----------
+
+  let gethHealthState: Health = $derived(
+    !gethStatus
+      ? 'idle'
+      : !gethStatus.installed
+        ? 'bad'
+        : gethStatus.running && !gethStatus.syncing
+          ? 'good'
+          : gethStatus.running
+            ? 'warn'
+            : 'bad'
+  );
+  let gethHeadline: string = $derived(
+    !gethStatus
+      ? '—'
+      : !gethStatus.installed
+        ? 'Not installed'
+        : !gethStatus.running
+          ? 'Stopped'
+          : gethStatus.syncing && gethStatus.highestBlock > 0
+            ? `Syncing ${((gethStatus.currentBlock / gethStatus.highestBlock) * 100).toFixed(1)}%`
+            : `Block ${gethStatus.currentBlock.toLocaleString()}`
+  );
+
+  let dhtHealthState: Health = $derived(
+    !$networkConnected
+      ? 'bad'
+      : $networkStats.connectedPeers > 0
+        ? 'good'
+        : 'warn'
+  );
+  let dhtHeadline: string = $derived(
+    !$networkConnected
+      ? 'Disconnected'
+      : `${$networkStats.connectedPeers} peer${$networkStats.connectedPeers === 1 ? '' : 's'}`
+  );
+
+  let bootstrapHealthState: Health = $derived(
+    !bootstrapHealth
+      ? 'idle'
+      : bootstrapHealth.isHealthy
+        ? 'good'
+        : bootstrapHealth.healthyNodes > 0
+          ? 'warn'
+          : 'bad'
+  );
+  let bootstrapHeadline: string = $derived(
+    !bootstrapHealth ? '—' : `${bootstrapHealth.healthyNodes}/${bootstrapHealth.totalNodes} reachable`
+  );
+
+  let relayListeningCount = $derived(
+    dhtHealth ? dhtHealth.listeningAddresses.filter((addr) => isRelayCircuitAddress(addr)).length : 0
+  );
+
+  // ---------- Lifecycle ----------
+
   function isTauri(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   }
 
-  // Classify a multiaddr as IPv4, IPv6, or other
+  onMount(async () => {
+    if (isTauri()) {
+      try {
+        const ids: string[] = await invoke('get_bootstrap_peer_ids');
+        bootstrapPeerIds = new Set(ids);
+      } catch {
+        /* bootstrap IDs unavailable — show all peers */
+      }
+
+      await loadGethStatus();
+      await loadBootstrapHealth();
+      await loadAdvertisedHosts();
+
+      unlistenDownload = await listen<DownloadProgress>('geth-download-progress', (event) => {
+        downloadProgress = event.payload;
+        if (event.payload.percentage >= 100) {
+          isDownloading = false;
+          loadGethStatus();
+        }
+      });
+
+      refreshInterval = setInterval(loadGethStatus, 10000);
+    }
+    isLoadingGeth = false;
+  });
+
+  onDestroy(() => {
+    if (refreshInterval) clearInterval(refreshInterval);
+    if (unlistenDownload) unlistenDownload();
+    if (gethConnectingTimeout) clearTimeout(gethConnectingTimeout);
+  });
+
+  // ---------- Helpers ----------
+
   function addrType(addr: string): 'IPv4' | 'IPv6' | 'other' {
     if (addr.startsWith('/ip4/')) return 'IPv4';
     if (addr.startsWith('/ip6/')) return 'IPv6';
@@ -176,10 +265,9 @@
     return addr.includes('/p2p-circuit');
   }
 
-  // Extract the IP address and port from a multiaddr like /ip4/1.2.3.4/tcp/4001/...
   function extractIpPort(addr: string): string {
     const parts = addr.split('/').filter(Boolean);
-    const ipIdx = parts.findIndex(p => p === 'ip4' || p === 'ip6');
+    const ipIdx = parts.findIndex((p) => p === 'ip4' || p === 'ip6');
     if (ipIdx === -1 || ipIdx + 1 >= parts.length) return addr;
     const ip = parts[ipIdx + 1];
     const tcpIdx = parts.indexOf('tcp', ipIdx);
@@ -191,19 +279,11 @@
     return new Date(timestamp * 1000).toLocaleTimeString();
   }
 
-  let relayListeningCount = $derived(
-    dhtHealth ? dhtHealth.listeningAddresses.filter((addr) => isRelayCircuitAddress(addr)).length : 0
-  );
-
   function parseUnixSeconds(value: unknown): number | null {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return Math.floor(value);
-    }
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
     if (typeof value === 'string' && value.trim().length > 0) {
       const parsed = Number(value);
-      if (Number.isFinite(parsed)) {
-        return Math.floor(parsed);
-      }
+      if (Number.isFinite(parsed)) return Math.floor(parsed);
     }
     return null;
   }
@@ -212,49 +292,41 @@
     return timestamp ? new Date(timestamp * 1000).toLocaleString() : 'Unknown';
   }
 
-  onMount(async () => {
-    if (isTauri()) {
-      // Load bootstrap peer IDs to filter them from Connected Peers
-      try {
-        const ids: string[] = await invoke('get_bootstrap_peer_ids');
-        bootstrapPeerIds = new Set(ids);
-      } catch { /* bootstrap IDs unavailable — show all peers */ }
+  function truncateAddress(addr: string): string {
+    if (addr.length <= 16) return addr;
+    return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
+  }
 
-      await loadGethStatus();
-      await loadBootstrapHealth();
-      await loadAdvertisedHosts();
-
-      // Set up download progress listener
-      unlistenDownload = await listen<DownloadProgress>('geth-download-progress', (event) => {
-        downloadProgress = event.payload;
-        if (event.payload.percentage >= 100) {
-          isDownloading = false;
-          loadGethStatus();
-        }
-      });
-
-      // Refresh status every 10 seconds
-      refreshInterval = setInterval(loadGethStatus, 10000);
+  function healthDot(state: Health): string {
+    switch (state) {
+      case 'good':
+        return 'bg-green-500';
+      case 'warn':
+        return 'bg-amber-500';
+      case 'bad':
+        return 'bg-red-500';
+      default:
+        return 'bg-gray-300 dark:bg-gray-600';
     }
-    isLoadingGeth = false;
-  });
+  }
 
-  onDestroy(() => {
-    if (refreshInterval) {
-      clearInterval(refreshInterval);
+  function healthRing(state: Health): string {
+    switch (state) {
+      case 'good':
+        return 'ring-green-500/40 hover:ring-green-500/70';
+      case 'warn':
+        return 'ring-amber-500/40 hover:ring-amber-500/70';
+      case 'bad':
+        return 'ring-red-500/40 hover:ring-red-500/70';
+      default:
+        return 'ring-gray-300/40 dark:ring-gray-600/40 hover:ring-gray-400/60';
     }
-    if (unlistenDownload) {
-      unlistenDownload();
-    }
-    if (gethConnectingTimeout) {
-      clearTimeout(gethConnectingTimeout);
-    }
-  });
+  }
 
-  // Load Geth status
+  // ---------- Loaders ----------
+
   async function loadGethStatus(notify = false) {
     if (!isTauri()) {
-      // In non-Tauri mode, set a default status
       gethStatus = {
         installed: false,
         running: false,
@@ -263,22 +335,16 @@
         currentBlock: 0,
         highestBlock: 0,
         peerCount: 0,
-        chainId: 0
+        chainId: 0,
       };
       return;
     }
-
     try {
       gethStatus = await invoke<GethStatus>('get_geth_status');
-      if (notify) {
-        toasts.show('Node status refreshed', 'success');
-      }
+      if (notify) toasts.show('Node status refreshed', 'success');
     } catch (err) {
-      // If we can't get status, set installed to false
       log.error('Geth status check failed:', err);
-      if (notify) {
-        toasts.detail('Failed to refresh node status', String(err), 'error');
-      }
+      if (notify) toasts.detail('Failed to refresh node status', String(err), 'error');
       gethStatus = {
         installed: false,
         running: false,
@@ -287,21 +353,18 @@
         currentBlock: 0,
         highestBlock: 0,
         peerCount: 0,
-        chainId: 0
+        chainId: 0,
       };
     }
   }
 
-  // Download Geth
   async function handleDownloadGeth() {
     if (!isTauri()) {
       toasts.show('Geth download requires the desktop app', 'warning');
       return;
     }
-
     isDownloading = true;
     downloadProgress = { downloaded: 0, total: 0, percentage: 0, status: 'Starting download...' };
-
     try {
       await invoke('download_geth');
       toasts.show('Geth installed', 'success');
@@ -314,10 +377,8 @@
     }
   }
 
-  // Start Geth
   async function handleStartGeth() {
     if (!isTauri()) return;
-
     isStartingGeth = true;
     try {
       await invoke('start_geth', { minerAddress: $walletAccount?.address || null });
@@ -331,10 +392,8 @@
     }
   }
 
-  // Stop Geth
   async function handleStopGeth() {
     if (!isTauri()) return;
-
     try {
       await invoke('stop_geth');
       toasts.show('Blockchain node stopped', 'info');
@@ -345,36 +404,26 @@
     }
   }
 
-  // Check bootstrap node health
   async function checkBootstrapHealth(notify = false) {
     if (!isTauri()) return;
-
     isCheckingBootstrap = true;
     try {
       bootstrapHealth = await invoke<BootstrapHealthReport>('check_bootstrap_health');
-      if (notify) {
-        toasts.show('Bootstrap health refreshed', 'success');
-      }
+      if (notify) toasts.show('Bootstrap health refreshed', 'success');
     } catch (err) {
       log.error('Failed to check bootstrap health:', err);
-      if (notify) {
-        toasts.detail('Failed to refresh bootstrap health', String(err), 'error');
-      }
+      if (notify) toasts.detail('Failed to refresh bootstrap health', String(err), 'error');
     } finally {
       isCheckingBootstrap = false;
     }
   }
 
-  // Load cached bootstrap health (fast, no network calls)
   async function loadBootstrapHealth() {
     if (!isTauri()) return;
-
     try {
       const cached = await invoke<BootstrapHealthReport | null>('get_bootstrap_health');
-      if (cached) {
-        bootstrapHealth = cached;
-      }
-    } catch (err) {
+      if (cached) bootstrapHealth = cached;
+    } catch {
       log.debug('No cached bootstrap health available');
     }
   }
@@ -384,10 +433,8 @@
       advertisedHosts = [];
       return;
     }
-
     isLoadingAdvertisedHosts = true;
     advertisedHostsError = '';
-
     try {
       const registryJson = await invoke<string>('get_host_registry');
       const parsed = JSON.parse(registryJson) as unknown;
@@ -395,17 +442,15 @@
         ? parsed
             .map((entry) => {
               if (!entry || typeof entry !== 'object') return null;
-              const maybeEntry = entry as Partial<HostRegistryEntry>;
-              if (typeof maybeEntry.peerId !== 'string' || maybeEntry.peerId.trim().length === 0) {
-                return null;
-              }
+              const me = entry as Partial<HostRegistryEntry>;
+              if (typeof me.peerId !== 'string' || me.peerId.trim().length === 0) return null;
               return {
-                peerId: maybeEntry.peerId,
-                walletAddress: typeof maybeEntry.walletAddress === 'string' ? maybeEntry.walletAddress : '',
-                updatedAt: parseUnixSeconds(maybeEntry.updatedAt) ?? 0
+                peerId: me.peerId,
+                walletAddress: typeof me.walletAddress === 'string' ? me.walletAddress : '',
+                updatedAt: parseUnixSeconds(me.updatedAt) ?? 0,
               };
             })
-            .filter((entry): entry is HostRegistryEntry => entry !== null)
+            .filter((e): e is HostRegistryEntry => e !== null)
         : [];
 
       const rows = await Promise.all(
@@ -415,24 +460,21 @@
             const adJson = await invoke<string | null>('get_host_advertisement', { peerId: entry.peerId });
             if (adJson) {
               const adValue = JSON.parse(adJson) as unknown;
-              if (adValue && typeof adValue === 'object') {
-                ad = adValue as Partial<HostAdvertisement>;
-              }
+              if (adValue && typeof adValue === 'object') ad = adValue as Partial<HostAdvertisement>;
             }
           } catch {
-            // Ignore individual ad failures and still show registry entry.
+            /* ignore individual ad failures and still show registry entry */
           }
-
-          const walletAddress = typeof ad?.walletAddress === 'string' && ad.walletAddress.trim().length > 0
-            ? ad.walletAddress
-            : entry.walletAddress || '(unknown)';
-
+          const walletAddress =
+            typeof ad?.walletAddress === 'string' && ad.walletAddress.trim().length > 0
+              ? ad.walletAddress
+              : entry.walletAddress || '(unknown)';
           return {
             peerId: entry.peerId,
             walletAddress,
             updatedAt: parseUnixSeconds(entry.updatedAt),
             publishedAt: parseUnixSeconds(ad?.publishedAt),
-            lastHeartbeatAt: parseUnixSeconds(ad?.lastHeartbeatAt)
+            lastHeartbeatAt: parseUnixSeconds(ad?.lastHeartbeatAt),
           };
         })
       );
@@ -442,10 +484,7 @@
         const bTs = b.lastHeartbeatAt ?? b.updatedAt ?? 0;
         return bTs - aTs;
       });
-
-      if (notify) {
-        toasts.show('Host advertisements refreshed', 'success');
-      }
+      if (notify) toasts.show('Host advertisements refreshed', 'success');
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes('DHT not running')) {
@@ -453,50 +492,40 @@
       } else {
         advertisedHostsError = errMsg;
         log.error('Failed to load host advertisements:', err);
-        if (notify) {
-          toasts.detail('Failed to refresh host advertisements', errMsg, 'error');
-        }
+        if (notify) toasts.detail('Failed to refresh host advertisements', errMsg, 'error');
       }
     } finally {
       isLoadingAdvertisedHosts = false;
     }
   }
 
-  // DHT Health Check
   async function checkDhtHealth(notify = false) {
     isCheckingDhtHealth = true;
     try {
       dhtHealth = await dhtService.getHealth();
-      if (notify) {
-        toasts.show('DHT health refreshed', 'success');
-      }
+      if (notify) toasts.show('DHT health refreshed', 'success');
     } catch (err) {
       log.error('Failed to check DHT health:', err);
-      if (notify) {
-        toasts.detail('Failed to refresh DHT health', String(err), 'error');
-      } else {
-        toasts.show('Failed to check DHT health', 'error');
-      }
+      if (notify) toasts.detail('Failed to refresh DHT health', String(err), 'error');
+      else toasts.show('Failed to check DHT health', 'error');
     } finally {
       isCheckingDhtHealth = false;
     }
   }
 
-  // DHT Functions
+  // ---------- DHT connect / disconnect ----------
+
   async function connectToNetwork() {
     isConnecting = true;
     error = '';
     try {
       await dhtService.start();
       const peerId = await dhtService.getPeerId();
-      if (peerId) {
-        localPeerId = peerId;
-      }
+      if (peerId) localPeerId = peerId;
       await loadAdvertisedHosts();
       toasts.notify('networkStatus', 'Connected to P2P network', 'success');
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      // If DHT is already running (e.g. stale state after logout), sync the UI
       if (errMsg.includes('already running')) {
         networkConnected.set(true);
         const peerId = await dhtService.getPeerId();
@@ -529,23 +558,15 @@
   async function pingPeer(peerId: string) {
     try {
       const result = await dhtService.pingPeer(peerId);
-      // Silent — ping result shown in UI
       log.info('Ping successful:', result);
+      toasts.show('Pong', 'success');
     } catch (err) {
       toasts.show('Ping failed', 'error');
       log.error('Ping failed:', err);
     }
   }
 
-  function formatDate(date: Date | number): string {
-    const d = typeof date === 'number' ? new Date(date) : date;
-    return d.toLocaleString();
-  }
-
-
-  // Blacklist
-  let blacklistAddress = $state('');
-  let blacklistReason = $state('');
+  // ---------- Blacklist ----------
 
   function addToBlacklist() {
     const addr = blacklistAddress.trim();
@@ -553,48 +574,43 @@
       toasts.show('Enter an address first', 'warning');
       return;
     }
-    const current = $blacklist;
-    if (current.some(e => e.address.toLowerCase() === addr.toLowerCase())) {
+    if ($blacklist.some((e) => e.address.toLowerCase() === addr.toLowerCase())) {
       toasts.show('Address is already blacklisted', 'warning');
       return;
     }
     blacklist.add(addr, blacklistReason.trim() || 'No reason given');
     blacklistAddress = '';
     blacklistReason = '';
-    // Silent — address appears in the blacklist UI
   }
 
   function removeFromBlacklist(address: string) {
     blacklist.remove(address);
-    // Silent — address removed from the blacklist UI
-  }
-
-  function truncateAddress(addr: string): string {
-    if (addr.length <= 16) return addr;
-    return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
   }
 </script>
 
 <svelte:head><title>Network | Chiral Network</title></svelte:head>
 
-<div class="max-w-6xl mx-auto p-4 sm:p-6">
-  <div class="flex items-center justify-between mb-6">
+<div class="max-w-[1400px] mx-auto p-4 sm:p-6 space-y-4">
+  <!-- Header -->
+  <div class="flex items-center justify-between gap-3">
     <div>
       <h1 class="text-2xl font-bold dark:text-white">Network</h1>
-      <p class="text-gray-600 dark:text-gray-400 mt-1">Manage blockchain and P2P network connections</p>
+      <p class="text-sm text-gray-500 dark:text-gray-400">
+        Blockchain node, peer-to-peer network, and connection health.
+      </p>
     </div>
     <button
       onclick={() => loadGethStatus(true)}
       disabled={isLoadingGeth}
-      class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-primary-500"
+      class="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 disabled:opacity-50"
       title="Refresh status"
     >
-      <RefreshCw class="w-5 h-5 {isLoadingGeth ? 'animate-spin' : ''}" />
+      <RefreshCw class="w-4 h-4 {isLoadingGeth ? 'animate-spin' : ''}" />
     </button>
   </div>
 
   {#if error}
-    <div class="bg-red-50 dark:bg-red-900/30 border-l-4 border-red-400 p-4 mb-6 rounded-r-lg">
+    <div class="bg-red-50 dark:bg-red-900/30 border-l-4 border-red-400 p-4 rounded-r-lg">
       <div class="flex items-center gap-2">
         <AlertTriangle class="w-5 h-5 text-red-600 dark:text-red-400" />
         <p class="text-sm text-red-800 dark:text-red-300">{error}</p>
@@ -602,388 +618,383 @@
     </div>
   {/if}
 
-  <!-- Blockchain Node Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <div class="p-2 {gethStatus?.running ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
-          <Server class="w-6 h-6 {gethStatus?.running ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
+  <!-- Sticky status strip -->
+  <div
+    class="sticky top-0 z-10 grid grid-cols-1 sm:grid-cols-3 gap-2 p-2 rounded-2xl bg-white/80 dark:bg-gray-800/80 backdrop-blur border border-gray-200 dark:border-gray-700 shadow-sm"
+  >
+    {#each [{ icon: Server, label: 'Blockchain', state: gethHealthState, headline: gethHeadline, onclick: () => (activeTab = 'overview') }, { icon: Globe, label: 'P2P network', state: dhtHealthState, headline: dhtHeadline, onclick: () => (activeTab = 'overview') }, { icon: Activity, label: 'Bootstrap', state: bootstrapHealthState, headline: bootstrapHeadline, onclick: () => checkBootstrapHealth(true) }] as tile}
+      <button
+        onclick={tile.onclick}
+        class="flex items-center gap-3 px-3 py-2 rounded-xl ring-1 {healthRing(tile.state)} bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700/60 transition-all text-left"
+      >
+        <div class="relative shrink-0">
+          <tile.icon class="w-5 h-5 text-gray-600 dark:text-gray-300" />
+          <span
+            class="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full {healthDot(tile.state)} ring-2 ring-white dark:ring-gray-800"
+          ></span>
         </div>
-        <div>
-          <h2 class="font-semibold dark:text-white">Blockchain Node (Geth)</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Chiral Network blockchain connection</p>
-        </div>
-      </div>
-      <div class="flex items-center gap-2">
-        {#if gethStatus?.running}
-          <span class="flex items-center gap-2 px-3 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-sm">
-            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            Running
-          </span>
-        {:else if gethStatus?.installed}
-          <span class="flex items-center gap-2 px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-sm">
-            <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
-            Stopped
-          </span>
-        {:else}
-          <span class="flex items-center gap-2 px-3 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full text-sm">
-            <AlertTriangle class="w-4 h-4" />
-            Not Installed
-          </span>
-        {/if}
-      </div>
-    </div>
-
-    {#if !gethStatus?.installed}
-      <!-- Download Geth Section -->
-      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-4">
-        <div class="flex items-start gap-3">
-          <AlertTriangle class="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
-          <div>
-            <p class="font-medium text-yellow-800 dark:text-yellow-300">Geth Not Installed</p>
-            <p class="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
-              Download Core-Geth to connect to the Chiral Network blockchain.
-              This is required for wallet balance, transactions, and mining.
-            </p>
+        <div class="min-w-0">
+          <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">{tile.label}</div>
+          <div class="text-sm font-semibold text-gray-900 dark:text-white truncate tabular-nums">
+            {tile.headline}
           </div>
         </div>
-      </div>
-
-      {#if isDownloading && downloadProgress}
-        <div class="space-y-2">
-          <div class="flex justify-between text-sm dark:text-gray-300">
-            <span>{downloadProgress.status}</span>
-            <span>{downloadProgress.percentage.toFixed(1)}%</span>
-          </div>
-          <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-            <div
-              class="bg-primary-600 h-2 rounded-full transition-all"
-              style="width: {downloadProgress.percentage}%"
-            ></div>
-          </div>
-          {#if downloadProgress.total > 0}
-            <p class="text-xs text-gray-500 dark:text-gray-400 text-right">
-              {formatBytes(downloadProgress.downloaded)} / {formatBytes(downloadProgress.total)}
-            </p>
-          {/if}
-        </div>
-      {:else}
-        <button
-          onclick={handleDownloadGeth}
-          disabled={isDownloading}
-          class="w-full px-4 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-        >
-          <Download class="w-5 h-5" />
-          Download Geth
-        </button>
-      {/if}
-    {:else}
-      <!-- Geth Stats -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Block Height</p>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.currentBlock?.toLocaleString() || 0}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Blockchain Peers</p>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.peerCount || 0}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Chain ID</p>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.chainId || 'N/A'}</p>
-        </div>
-        <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-          <p class="text-xs text-gray-500 dark:text-gray-400">Sync Status</p>
-          <p class="text-lg font-bold tabular-nums dark:text-white">{gethStatus?.syncing ? 'Syncing' : gethStatus?.running ? 'Synced' : gethStatus?.chainId ? 'Remote' : 'Offline'}</p>
-        </div>
-      </div>
-
-      <!-- Geth Controls -->
-      <div class="flex gap-3">
-        {#if gethStatus?.running}
-          <button
-            onclick={handleStopGeth}
-            class="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
-          >
-            <Square class="w-4 h-4" />
-            Stop Node
-          </button>
-        {:else}
-          <button
-            onclick={handleStartGeth}
-            disabled={isStartingGeth}
-            class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
-          >
-            {#if isStartingGeth}
-              <Loader2 class="w-4 h-4 animate-spin" />
-              Starting...
-            {:else}
-              <Play class="w-4 h-4" />
-              Start Node
-            {/if}
-          </button>
-        {/if}
-      </div>
-
-      <!-- Connecting Info -->
-      {#if showGethConnectingMsg}
-        <div class="mt-4 p-3 bg-primary-50 dark:bg-primary-900/30 border border-primary-200 dark:border-primary-800 rounded-lg">
-          <p class="text-sm text-primary-800 dark:text-primary-300">
-            <strong>Connecting to network...</strong> The node is discovering peers via bootstrap nodes.
-            This may take a moment. Peer count will update automatically.
-          </p>
-        </div>
-      {/if}
-
-      <!-- Bootstrap Health Check -->
-      <div class="mt-4 border-t border-gray-200 dark:border-gray-700 pt-4">
-        <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-2">
-            <Activity class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Bootstrap Health Check</span>
-          </div>
-          <button
-            onclick={() => checkBootstrapHealth(true)}
-            disabled={isCheckingBootstrap}
-            class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
-          >
-            {#if isCheckingBootstrap}
-              <Loader2 class="w-3 h-3 animate-spin" />
-            {:else}
-              <Activity class="w-3 h-3" />
-            {/if}
-            Run Check
-          </button>
-        </div>
-
-        {#if bootstrapHealth}
-          <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-3">
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-              <p class="text-sm font-bold {bootstrapHealth.isHealthy ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-                {bootstrapHealth.isHealthy ? 'Healthy' : 'Degraded'}
-              </p>
-            </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Healthy Nodes</p>
-              <p class="text-sm font-bold tabular-nums dark:text-white">{bootstrapHealth.healthyNodes} / {bootstrapHealth.totalNodes}</p>
-            </div>
-            <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-              <p class="text-xs text-gray-500 dark:text-gray-400">Last Checked</p>
-                <p class="text-sm font-bold tabular-nums dark:text-white">{formatUnixSeconds(bootstrapHealth.timestamp)}</p>
-            </div>
-          </div>
-
-          <!-- Expandable Node Details -->
-          <button
-            onclick={() => showBootstrapDetails = !showBootstrapDetails}
-            class="w-full flex items-center justify-between text-left py-2"
-          >
-            <span class="text-xs text-gray-500 dark:text-gray-400">Node Details</span>
-            {#if showBootstrapDetails}
-              <ChevronUp class="w-4 h-4 text-gray-400" />
-            {:else}
-              <ChevronDown class="w-4 h-4 text-gray-400" />
-            {/if}
-          </button>
-
-          {#if showBootstrapDetails}
-            <div class="space-y-2">
-              {#each bootstrapHealth.nodes as node}
-                <div class="flex items-center justify-between p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg text-xs">
-                  <div class="flex items-center gap-2">
-                    <div class="w-2 h-2 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                    <div>
-                      <span class="font-medium dark:text-white text-sm">{node.name}</span>
-                      <span class="text-gray-500 dark:text-gray-400 ml-1">({node.region})</span>
-                    </div>
-                  </div>
-                  <div class="text-right shrink-0">
-                    {#if node.reachable && node.latencyMs}
-                      <span class="tabular-nums text-green-600 dark:text-green-400">{node.latencyMs}ms</span>
-                    {:else if node.error}
-                      <span class="text-red-500 dark:text-red-400">{node.error}</span>
-                    {:else}
-                      <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-                        {node.reachable ? 'Reachable' : 'Unreachable'}
-                      </span>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-
-              {#if !bootstrapHealth.isHealthy}
-                <div class="p-2 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
-                  <p class="text-xs text-red-700 dark:text-red-300">
-                    <strong>Warning:</strong> Not enough bootstrap nodes are reachable.
-                    Peer discovery may be limited.
-                  </p>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        {:else}
-          <p class="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
-            Click "Run Check" to test bootstrap node connectivity
-          </p>
-        {/if}
-      </div>
-    {/if}
+      </button>
+    {/each}
   </div>
 
-  <!-- P2P Network (DHT) Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-    <!-- Header with status and controls -->
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-center gap-3">
-        <div class="p-2 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30' : 'bg-gray-100 dark:bg-gray-700'} rounded-lg">
-          <Globe class="w-6 h-6 {$networkConnected ? 'text-green-600 dark:text-green-400' : 'text-gray-600 dark:text-gray-400'}" />
-        </div>
-        <div>
-          <h2 class="font-semibold dark:text-white">P2P Network (DHT)</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">Kademlia DHT file sharing and peer discovery</p>
-        </div>
-      </div>
-      <div class="flex items-center gap-2">
-        <span class="flex items-center gap-2 px-3 py-1 {$networkConnected ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'} rounded-full text-sm">
-          <span class="w-2 h-2 rounded-full {$networkConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}"></span>
-          {$networkConnected ? 'Connected' : 'Disconnected'}
-        </span>
-      </div>
-    </div>
+  <!-- Tabs -->
+  <div class="flex border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+    {#each [{ id: 'overview' as Tab, label: 'Overview', icon: Globe }, { id: 'peers' as Tab, label: 'Peers', icon: Users, count: visiblePeers.length }, { id: 'hosts' as Tab, label: 'Hosts', icon: Cloud, count: advertisedHostsWithStatus.length }, { id: 'blacklist' as Tab, label: 'Blacklist', icon: ShieldBan, count: $blacklist.length }] as tab}
+      <button
+        onclick={() => (activeTab = tab.id)}
+        class="px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap shrink-0
+          {activeTab === tab.id
+            ? 'border-primary-500 text-primary-700 dark:text-primary-400'
+            : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}"
+      >
+        <tab.icon class="w-4 h-4" />
+        <span>{tab.label}</span>
+        {#if 'count' in tab && tab.count > 0}
+          <span
+            class="px-1.5 py-0.5 text-[10px] tabular-nums rounded {activeTab === tab.id
+              ? 'bg-primary-100 dark:bg-primary-900/30'
+              : 'bg-gray-100 dark:bg-gray-700'}"
+          >
+            {tab.count}
+          </span>
+        {/if}
+      </button>
+    {/each}
+  </div>
 
-    <!-- Stats Grid -->
-    <div class="grid grid-cols-2 gap-3 mb-4">
-      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
-        <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.connectedPeers}</p>
-      </div>
-      <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
-        <p class="text-xs text-gray-500 dark:text-gray-400">Discovered Peers</p>
-        <p class="text-lg font-bold tabular-nums dark:text-white">{$networkStats.totalPeers}</p>
-      </div>
-    </div>
-
-    <!-- Peer ID -->
-    {#if localPeerId}
-      <div class="mb-4 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-        <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">Your Peer ID</div>
-        <div class="font-mono text-xs break-all dark:text-gray-300">{localPeerId}</div>
-      </div>
-    {/if}
-
-    <!-- Connect/Disconnect -->
-    <div class="mb-4">
-      {#if $networkConnected}
-        <button
-          onclick={disconnectFromNetwork}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
-        >
-          <Square class="w-4 h-4" />
-          <span>Disconnect</span>
-        </button>
-      {:else}
-        <button
-          onclick={connectToNetwork}
-          disabled={isConnecting}
-          class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
-        >
-          {#if isConnecting}
-            <Loader2 class="w-4 h-4 animate-spin" />
-            <span>Connecting...</span>
+  <!-- Tab content -->
+  {#if activeTab === 'overview'}
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <!-- Blockchain Node Card -->
+      <section class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-5 space-y-4">
+        <header class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="p-2 rounded-lg {gethStatus?.running ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-gray-100 dark:bg-gray-700'}">
+              <Server class="w-5 h-5 {gethStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-600 dark:text-gray-400'}" />
+            </div>
+            <div>
+              <h2 class="font-semibold dark:text-white">Blockchain Node</h2>
+              <p class="text-xs text-gray-500 dark:text-gray-400">Geth — Chiral chain</p>
+            </div>
+          </div>
+          {#if gethStatus?.running}
+            <span class="flex items-center gap-1.5 px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full text-xs font-medium">
+              <span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+              Running
+            </span>
+          {:else if gethStatus?.installed}
+            <span class="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-xs font-medium">
+              Stopped
+            </span>
           {:else}
-            <Play class="w-4 h-4" />
-            <span>Connect</span>
+            <span class="flex items-center gap-1 px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-full text-xs font-medium">
+              <AlertTriangle class="w-3 h-3" />
+              Not installed
+            </span>
           {/if}
-        </button>
-      {/if}
-    </div>
+        </header>
 
-    <!-- Health Check -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-4">
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-2">
-          <HeartPulse class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Health Check</span>
-        </div>
-        <button
-          onclick={() => checkDhtHealth(true)}
-          disabled={isCheckingDhtHealth}
-          class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
-        >
-          {#if isCheckingDhtHealth}
-            <Loader2 class="w-3 h-3 animate-spin" />
+        {#if !gethStatus?.installed}
+          <div class="rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 p-3 text-sm text-yellow-800 dark:text-yellow-200">
+            Geth is required for wallet balance, transactions, and mining. Download to get started.
+          </div>
+          {#if isDownloading && downloadProgress}
+            <div class="space-y-2">
+              <div class="flex justify-between text-sm dark:text-gray-300">
+                <span>{downloadProgress.status}</span>
+                <span class="tabular-nums">{downloadProgress.percentage.toFixed(1)}%</span>
+              </div>
+              <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                <div
+                  class="bg-primary-600 h-full transition-all"
+                  style:width="{downloadProgress.percentage}%"
+                ></div>
+              </div>
+              {#if downloadProgress.total > 0}
+                <p class="text-xs text-gray-500 dark:text-gray-400 text-right tabular-nums">
+                  {formatBytes(downloadProgress.downloaded)} / {formatBytes(downloadProgress.total)}
+                </p>
+              {/if}
+            </div>
           {:else}
-            <HeartPulse class="w-3 h-3" />
+            <button
+              onclick={handleDownloadGeth}
+              disabled={isDownloading}
+              class="w-full px-4 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm font-medium"
+            >
+              <Download class="w-4 h-4" />
+              Download Geth
+            </button>
           {/if}
-          Run Check
-        </button>
-      </div>
-
-      {#if dhtHealth}
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-            <p class="text-xs text-gray-500 dark:text-gray-400">Status</p>
-            <div class="flex items-center gap-1.5">
-              <span class="w-2 h-2 rounded-full {dhtHealth.running ? 'bg-green-500' : 'bg-red-500'}"></span>
-              <p class="text-sm font-bold {dhtHealth.running ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}">
-                {dhtHealth.running ? 'Running' : 'Stopped'}
+        {:else}
+          <!-- Stat tiles -->
+          <div class="grid grid-cols-2 gap-2">
+            <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5">
+              <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Block</p>
+              <p class="text-sm font-semibold dark:text-white tabular-nums">{(gethStatus?.currentBlock ?? 0).toLocaleString()}</p>
+            </div>
+            <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5">
+              <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Peers</p>
+              <p class="text-sm font-semibold dark:text-white tabular-nums">{gethStatus?.peerCount ?? 0}</p>
+            </div>
+            <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5">
+              <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Chain ID</p>
+              <p class="text-sm font-semibold dark:text-white tabular-nums">{gethStatus?.chainId || '—'}</p>
+            </div>
+            <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5">
+              <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Sync</p>
+              <p class="text-sm font-semibold dark:text-white">
+                {gethStatus?.syncing
+                  ? 'Syncing'
+                  : gethStatus?.running
+                    ? 'Synced'
+                    : gethStatus?.chainId
+                      ? 'Remote'
+                      : 'Offline'}
               </p>
             </div>
           </div>
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-            <p class="text-xs text-gray-500 dark:text-gray-400">Connected Peers</p>
-            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.connectedPeerCount}</p>
+
+          {#if gethStatus.syncing && gethStatus.highestBlock > 0}
+            <div class="space-y-1">
+              <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                <span>{gethStatus.currentBlock.toLocaleString()}</span>
+                <span>{((gethStatus.currentBlock / gethStatus.highestBlock) * 100).toFixed(1)}%</span>
+                <span>{gethStatus.highestBlock.toLocaleString()}</span>
+              </div>
+              <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="bg-blue-500 h-full transition-all"
+                  style:width="{(gethStatus.currentBlock / gethStatus.highestBlock) * 100}%"
+                ></div>
+              </div>
+            </div>
+          {/if}
+
+          {#if showGethConnectingMsg}
+            <div class="rounded-lg bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 p-3 text-sm text-primary-800 dark:text-primary-300">
+              <strong>Connecting…</strong> The node is discovering peers via bootstrap. Peer count will update automatically.
+            </div>
+          {/if}
+
+          <!-- Action -->
+          {#if gethStatus?.running}
+            <button
+              onclick={handleStopGeth}
+              class="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+            >
+              <Square class="w-4 h-4" />
+              Stop Node
+            </button>
+          {:else}
+            <button
+              onclick={handleStartGeth}
+              disabled={isStartingGeth}
+              class="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm font-medium"
+            >
+              {#if isStartingGeth}
+                <Loader2 class="w-4 h-4 animate-spin" />
+                Starting…
+              {:else}
+                <Play class="w-4 h-4" />
+                Start Node
+              {/if}
+            </button>
+          {/if}
+
+          <!-- Bootstrap health (collapsed) -->
+          <details class="border-t border-gray-200 dark:border-gray-700 pt-3">
+            <summary class="flex items-center justify-between cursor-pointer">
+              <span class="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
+                <Activity class="w-3.5 h-3.5" />
+                Bootstrap health
+                {#if bootstrapHealth}
+                  <span class="text-gray-500 dark:text-gray-400 tabular-nums">{bootstrapHealth.healthyNodes}/{bootstrapHealth.totalNodes}</span>
+                {/if}
+              </span>
+              <button
+                onclick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  checkBootstrapHealth(true);
+                }}
+                disabled={isCheckingBootstrap}
+                class="text-xs px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 text-gray-600 dark:text-gray-300 flex items-center gap-1"
+              >
+                {#if isCheckingBootstrap}
+                  <Loader2 class="w-3 h-3 animate-spin" />
+                {:else}
+                  <Activity class="w-3 h-3" />
+                {/if}
+                Check
+              </button>
+            </summary>
+            <div class="mt-3 space-y-1.5">
+              {#if bootstrapHealth}
+                {#each bootstrapHealth.nodes as node}
+                  <div class="flex items-center justify-between gap-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded text-xs">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <div class="w-1.5 h-1.5 rounded-full {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
+                      <span class="font-medium dark:text-white truncate">{node.name}</span>
+                      <span class="text-[10px] text-gray-500 dark:text-gray-400">{node.region}</span>
+                    </div>
+                    <span class="shrink-0 tabular-nums {node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'}">
+                      {#if node.reachable && node.latencyMs}
+                        {node.latencyMs}ms
+                      {:else if node.error}
+                        error
+                      {:else}
+                        down
+                      {/if}
+                    </span>
+                  </div>
+                {/each}
+                <p class="text-[10px] text-gray-400 dark:text-gray-500 text-right">
+                  Last checked {formatUnixSeconds(bootstrapHealth.timestamp)}
+                </p>
+              {:else}
+                <p class="text-xs text-gray-500 dark:text-gray-400">Click "Check" to test connectivity.</p>
+              {/if}
+            </div>
+          </details>
+        {/if}
+      </section>
+
+      <!-- P2P Network Card -->
+      <section class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-5 space-y-4">
+        <header class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="p-2 rounded-lg {$networkConnected ? 'bg-emerald-100 dark:bg-emerald-900/30' : 'bg-gray-100 dark:bg-gray-700'}">
+              <Globe class="w-5 h-5 {$networkConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-600 dark:text-gray-400'}" />
+            </div>
+            <div>
+              <h2 class="font-semibold dark:text-white">P2P Network</h2>
+              <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia DHT</p>
+            </div>
           </div>
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-            <p class="text-xs text-gray-500 dark:text-gray-400">Kademlia Peers</p>
-            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.kademliaPeers}</p>
+          <span
+            class="flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium
+              {$networkConnected
+                ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'}"
+          >
+            <span class="w-1.5 h-1.5 rounded-full {$networkConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}"></span>
+            {$networkConnected ? 'Connected' : 'Disconnected'}
+          </span>
+        </header>
+
+        <!-- Stat tiles -->
+        <div class="grid grid-cols-2 gap-2">
+          <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5">
+            <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Connected peers</p>
+            <p class="text-sm font-semibold dark:text-white tabular-nums">{$networkStats.connectedPeers}</p>
           </div>
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-            <p class="text-xs text-gray-500 dark:text-gray-400">Shared Files</p>
-            <p class="text-sm font-bold tabular-nums dark:text-white">{dhtHealth.sharedFiles}</p>
-          </div>
-          <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-2.5">
-            <p class="text-xs text-gray-500 dark:text-gray-400">Relay Listeners</p>
-            <p class="text-sm font-bold tabular-nums {relayListeningCount > 0 ? 'text-green-600 dark:text-green-400' : 'text-yellow-600 dark:text-yellow-400'}">
-              {relayListeningCount}
-            </p>
+          <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-2.5">
+            <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Discovered</p>
+            <p class="text-sm font-semibold dark:text-white tabular-nums">{$networkStats.totalPeers}</p>
           </div>
         </div>
 
-        <!-- Expandable Details -->
-        <button
-          onclick={() => showDhtHealthDetails = !showDhtHealthDetails}
-          class="w-full flex items-center justify-between text-left py-2"
-        >
-          <span class="text-xs text-gray-500 dark:text-gray-400">Advanced Details</span>
-          {#if showDhtHealthDetails}
-            <ChevronUp class="w-4 h-4 text-gray-400" />
-          {:else}
-            <ChevronDown class="w-4 h-4 text-gray-400" />
-          {/if}
-        </button>
-
-        {#if showDhtHealthDetails}
-          <div class="space-y-2">
-            {#if dhtHealth.peerId}
-              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Peer ID</p>
-                <p class="font-mono text-xs break-all dark:text-gray-300">{dhtHealth.peerId}</p>
-              </div>
+        <!-- Action -->
+        {#if $networkConnected}
+          <button
+            onclick={disconnectFromNetwork}
+            class="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+          >
+            <Square class="w-4 h-4" />
+            Disconnect
+          </button>
+        {:else}
+          <button
+            onclick={connectToNetwork}
+            disabled={isConnecting}
+            class="w-full px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm font-medium"
+          >
+            {#if isConnecting}
+              <Loader2 class="w-4 h-4 animate-spin" />
+              Connecting…
+            {:else}
+              <Play class="w-4 h-4" />
+              Connect
             {/if}
+          </button>
+        {/if}
 
+        {#if localPeerId}
+          <button
+            class="w-full p-2.5 bg-gray-50 dark:bg-gray-700/50 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            onclick={() => {
+              navigator.clipboard.writeText(localPeerId);
+              toasts.show('Peer ID copied', 'success');
+            }}
+            title="Click to copy"
+          >
+            <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-0.5">Your peer ID</p>
+            <p class="font-mono text-[11px] break-all dark:text-gray-300">{localPeerId}</p>
+          </button>
+        {/if}
+
+        <!-- DHT health (collapsed) -->
+        <details class="border-t border-gray-200 dark:border-gray-700 pt-3">
+          <summary class="flex items-center justify-between cursor-pointer">
+            <span class="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
+              <HeartPulse class="w-3.5 h-3.5" />
+              DHT health
+              {#if dhtHealth}
+                <span class="text-gray-500 dark:text-gray-400 tabular-nums">{dhtHealth.connectedPeerCount} peers · {dhtHealth.kademliaPeers} kad</span>
+              {/if}
+            </span>
+            <button
+              onclick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                checkDhtHealth(true);
+              }}
+              disabled={isCheckingDhtHealth}
+              class="text-xs px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 text-gray-600 dark:text-gray-300 flex items-center gap-1"
+            >
+              {#if isCheckingDhtHealth}
+                <Loader2 class="w-3 h-3 animate-spin" />
+              {:else}
+                <HeartPulse class="w-3 h-3" />
+              {/if}
+              Check
+            </button>
+          </summary>
+          {#if dhtHealth}
+            <div class="mt-3 grid grid-cols-2 gap-2">
+              <div class="bg-gray-50 dark:bg-gray-700/50 rounded p-2">
+                <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Shared files</p>
+                <p class="text-sm font-semibold dark:text-white tabular-nums">{dhtHealth.sharedFiles}</p>
+              </div>
+              <div class="bg-gray-50 dark:bg-gray-700/50 rounded p-2">
+                <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Relay listeners</p>
+                <p
+                  class="text-sm font-semibold tabular-nums {relayListeningCount > 0
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-yellow-600 dark:text-yellow-400'}"
+                >
+                  {relayListeningCount}
+                </p>
+              </div>
+            </div>
             {#if dhtHealth.listeningAddresses.length > 0}
-              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">Listening Addresses ({dhtHealth.listeningAddresses.length})</p>
-                <div class="space-y-1.5">
+              <div class="mt-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded">
+                <p class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Listening ({dhtHealth.listeningAddresses.length})</p>
+                <div class="space-y-1 max-h-32 overflow-y-auto">
                   {#each dhtHealth.listeningAddresses as addr}
-                    <div class="flex items-start gap-2 text-xs">
-                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(addr) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}">
+                    <div class="flex items-start gap-1.5 text-[11px]">
+                      <span class="shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold {addrType(addr) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'}">
                         {addrType(addr)}
                       </span>
                       {#if isRelayCircuitAddress(addr)}
-                        <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">
+                        <span class="shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">
                           Relay
                         </span>
                       {/if}
@@ -995,55 +1006,20 @@
                 </div>
               </div>
             {/if}
-
-            {#if dhtHealth.bootstrapNodes.length > 0}
-              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <p class="text-xs text-gray-500 dark:text-gray-400 mb-2">DHT Bootstrap Nodes</p>
-                <div class="space-y-1.5">
-                  {#each dhtHealth.bootstrapNodes as node}
-                    <div class="flex items-start gap-2 text-xs">
-                      <div class="w-2 h-2 rounded-full mt-1 {node.reachable ? 'bg-green-500' : 'bg-red-500'} shrink-0"></div>
-                      <span class="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold {addrType(node.address) === 'IPv6' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300' : addrType(node.address) === 'IPv4' ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}">
-                        {addrType(node.address)}
-                      </span>
-                      <span class="font-mono break-all dark:text-gray-300">{extractIpPort(node.address)}</span>
-                      <span class="{node.reachable ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'} shrink-0">
-                        {node.reachable ? 'Reachable' : 'Unreachable'}
-                      </span>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if dhtHealth.protocols.length > 0}
-              <div class="p-2.5 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <p class="text-xs text-gray-500 dark:text-gray-400 mb-1">Active Protocols ({dhtHealth.protocols.length})</p>
-                <div class="flex flex-wrap gap-1.5">
-                  {#each dhtHealth.protocols as protocol}
-                    <span class="px-2 py-0.5 bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400 text-xs rounded-full font-mono">
-                      {protocol}
-                    </span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/if}
-      {:else}
-        <p class="text-xs text-gray-500 dark:text-gray-400 text-center py-2">
-          Click "Run Check" to view DHT health diagnostics
-        </p>
-      {/if}
+          {:else}
+            <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">Click "Check" to load DHT health.</p>
+          {/if}
+        </details>
+      </section>
     </div>
 
-    <!-- Connected Peers -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <div class="flex items-center justify-between gap-2 mb-3">
+  {:else if activeTab === 'peers'}
+    <section class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
+      <header class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
-          <Radio class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Connected Peers</span>
-          <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+          <Users class="w-5 h-5 text-gray-600 dark:text-gray-300" />
+          <h2 class="font-semibold dark:text-white">Connected Peers</h2>
+          <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 tabular-nums">
             {visiblePeers.length}
           </span>
         </div>
@@ -1055,95 +1031,100 @@
           />
           Show bootstrap peers
         </label>
-      </div>
+      </header>
 
       {#if visiblePeers.length === 0}
-        <div class="text-center py-4 text-gray-500 dark:text-gray-400">
+        <div class="text-center py-8 text-gray-500 dark:text-gray-400">
           {#if !showBootstrapPeers && $peers.length > 0}
             <p class="text-sm">Only bootstrap peers are connected</p>
-            <p class="text-xs">Enable "Show bootstrap peers" to include them here</p>
+            <p class="text-xs mt-1">Toggle "Show bootstrap peers" above to include them</p>
           {:else}
             <p class="text-sm">No peers connected</p>
-            <p class="text-xs">Connect to the P2P network to discover peers</p>
+            <p class="text-xs mt-1">Connect to the P2P network on the Overview tab</p>
           {/if}
         </div>
       {:else}
         <div class="space-y-2">
-          {#each paginatedPeers as peer}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
-              <div class="flex items-start justify-between gap-3">
-                <div class="flex-1 min-w-0">
-                  <button
-                    class="font-mono text-sm break-all dark:text-gray-200 text-left hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
-                    title="Click to copy peer ID"
-                    onclick={() => { navigator.clipboard.writeText(peer.id); toasts.show('Peer ID copied', 'success'); }}
-                  >{peer.id}</button>
-                  {#if peer.address}
-                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate" title={peer.address}>Address: {peer.address}</div>
-                  {/if}
-                </div>
+          {#each paginatedPeers as peer (peer.id)}
+            <div class="flex items-start justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+              <div class="flex-1 min-w-0">
                 <button
-                  onclick={() => pingPeer(peer.id)}
-                  class="flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white text-sm rounded hover:bg-primary-700 transition shrink-0"
-                  title="Ping this peer"
+                  class="font-mono text-sm break-all dark:text-gray-200 text-left hover:text-primary-600 dark:hover:text-primary-400"
+                  title="Click to copy peer ID"
+                  onclick={() => {
+                    navigator.clipboard.writeText(peer.id);
+                    toasts.show('Peer ID copied', 'success');
+                  }}
                 >
-                  <Radio class="w-3 h-3" />
-                  <span>Ping</span>
+                  {peer.id}
                 </button>
+                {#if peer.address}
+                  <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 truncate" title={peer.address}>
+                    {peer.address}
+                  </div>
+                {/if}
               </div>
+              <button
+                onclick={() => pingPeer(peer.id)}
+                class="flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white text-xs rounded hover:bg-primary-700 transition shrink-0 font-medium"
+                title="Ping this peer"
+              >
+                <Radio class="w-3 h-3" />
+                Ping
+              </button>
             </div>
           {/each}
         </div>
 
         {#if peerTotalPages > 1}
-          <div class="flex items-center justify-between mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+          <div class="flex items-center justify-between mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
             <span class="text-xs text-gray-500 dark:text-gray-400">
-              Showing {peerPage * PEERS_PER_PAGE + 1}–{Math.min((peerPage + 1) * PEERS_PER_PAGE, visiblePeers.length)} of {visiblePeers.length}
+              {peerPage * PEERS_PER_PAGE + 1}–{Math.min((peerPage + 1) * PEERS_PER_PAGE, visiblePeers.length)} of {visiblePeers.length}
             </span>
             <div class="flex items-center gap-1">
               <button
-                onclick={() => { peerPage = 0; }}
+                onclick={() => (peerPage = 0)}
                 disabled={peerPage === 0}
-                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 dark:text-gray-300"
               >First</button>
               <button
-                onclick={() => { peerPage = Math.max(0, peerPage - 1); }}
+                onclick={() => (peerPage = Math.max(0, peerPage - 1))}
                 disabled={peerPage === 0}
-                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
-              >Prev</button>
-              <span class="px-2 py-1 text-xs text-gray-600 dark:text-gray-400">
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 dark:text-gray-300"
+              >‹</button>
+              <span class="px-2 py-1 text-xs text-gray-600 dark:text-gray-400 tabular-nums">
                 {peerPage + 1} / {peerTotalPages}
               </span>
               <button
-                onclick={() => { peerPage = Math.min(peerTotalPages - 1, peerPage + 1); }}
+                onclick={() => (peerPage = Math.min(peerTotalPages - 1, peerPage + 1))}
                 disabled={peerPage >= peerTotalPages - 1}
-                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
-              >Next</button>
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 dark:text-gray-300"
+              >›</button>
               <button
-                onclick={() => { peerPage = peerTotalPages - 1; }}
+                onclick={() => (peerPage = peerTotalPages - 1)}
                 disabled={peerPage >= peerTotalPages - 1}
-                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed dark:text-gray-300"
+                class="px-2 py-1 text-xs rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-30 dark:text-gray-300"
               >Last</button>
             </div>
           </div>
         {/if}
       {/if}
-    </div>
+    </section>
 
-    <!-- Advertised Hosts -->
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <div class="flex items-center justify-between mb-3">
+  {:else if activeTab === 'hosts'}
+    <section class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
+      <header class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
-          <Server class="w-4 h-4 text-gray-500 dark:text-gray-400" />
-          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Advertised Hosts</span>
-          <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+          <Cloud class="w-5 h-5 text-gray-600 dark:text-gray-300" />
+          <h2 class="font-semibold dark:text-white">Advertised Hosts</h2>
+          <span class="px-2 py-0.5 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 tabular-nums">
             {advertisedHostsWithStatus.length}
           </span>
         </div>
         <button
           onclick={() => loadAdvertisedHosts(true)}
           disabled={isLoadingAdvertisedHosts}
-          class="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors flex items-center gap-1 disabled:opacity-50 dark:text-gray-300"
+          class="text-xs px-3 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 dark:text-gray-300 flex items-center gap-1 disabled:opacity-50"
         >
           {#if isLoadingAdvertisedHosts}
             <Loader2 class="w-3 h-3 animate-spin" />
@@ -1152,49 +1133,51 @@
           {/if}
           Refresh
         </button>
-      </div>
+      </header>
 
       {#if advertisedHostsError}
-        <div class="mb-2 p-2 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+        <div class="mb-3 p-2.5 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
           <p class="text-xs text-red-700 dark:text-red-300">{advertisedHostsError}</p>
         </div>
       {/if}
 
-      {#if isLoadingAdvertisedHosts && advertisedHostsWithStatus.length === 0}
-        <div class="text-center py-4 text-gray-500 dark:text-gray-400">
-          <p class="text-sm">Loading host advertisements...</p>
-        </div>
-      {:else if advertisedHostsWithStatus.length === 0}
-        <div class="text-center py-4 text-gray-500 dark:text-gray-400">
-          <p class="text-sm">No host advertisements found</p>
-          <p class="text-xs">Published hosts appear here with peer ID and wallet address</p>
+      {#if advertisedHostsWithStatus.length === 0}
+        <div class="text-center py-8 text-gray-500 dark:text-gray-400">
+          {#if isLoadingAdvertisedHosts}
+            <Loader2 class="w-6 h-6 mx-auto mb-2 animate-spin" />
+            <p class="text-sm">Loading…</p>
+          {:else}
+            <Cloud class="w-8 h-8 mx-auto mb-2 opacity-40" />
+            <p class="text-sm">No host advertisements</p>
+            <p class="text-xs mt-1">Other peers' published hosting offers appear here.</p>
+          {/if}
         </div>
       {:else}
-        <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
-          {#each advertisedHostsWithStatus as host}
-            <div class="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+        <div class="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+          {#each advertisedHostsWithStatus as host (host.peerId)}
+            <div class="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
               <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full {host.isOnline ? 'bg-green-500' : 'bg-gray-400'} shrink-0"></span>
+                    <span class="w-1.5 h-1.5 rounded-full {host.isOnline ? 'bg-green-500' : 'bg-gray-400'} shrink-0"></span>
                     <button
-                      class="font-mono text-xs break-all dark:text-gray-200 text-left hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
+                      class="font-mono text-xs break-all dark:text-gray-200 text-left hover:text-primary-600 dark:hover:text-primary-400"
                       title="Click to copy peer ID"
-                      onclick={() => { navigator.clipboard.writeText(host.peerId); toasts.show('Peer ID copied', 'success'); }}
-                    >
-                      {host.peerId}
-                    </button>
+                      onclick={() => {
+                        navigator.clipboard.writeText(host.peerId);
+                        toasts.show('Peer ID copied', 'success');
+                      }}
+                    >{host.peerId}</button>
                   </div>
-                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-1 break-all">Wallet: {host.walletAddress}</p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Updated: {formatUnixDateTime(host.updatedAt)}
+                  <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1 break-all">
+                    Wallet: <span class="font-mono">{host.walletAddress}</span>
                   </p>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    Heartbeat: {formatUnixDateTime(host.lastHeartbeatAt)} | Published: {formatUnixDateTime(host.publishedAt)}
+                  <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                    Updated {formatUnixDateTime(host.updatedAt)} · Heartbeat {formatUnixDateTime(host.lastHeartbeatAt)}
                   </p>
                 </div>
                 <span
-                  class="px-2 py-0.5 text-xs rounded-full shrink-0 {host.isOnline
+                  class="px-2 py-0.5 text-[10px] uppercase tracking-wider rounded-full shrink-0 font-semibold {host.isOnline
                     ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
                     : 'bg-gray-100 dark:bg-gray-600 text-gray-600 dark:text-gray-300'}"
                 >
@@ -1205,86 +1188,87 @@
           {/each}
         </div>
       {/if}
-    </div>
-  </div>
+    </section>
 
-  <!-- Blacklist Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-6 mt-6">
-    <div class="flex items-center gap-3 mb-4">
-      <div class="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+  {:else if activeTab === 'blacklist'}
+    <section class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-5">
+      <header class="flex items-center gap-2 mb-4">
         <ShieldBan class="w-5 h-5 text-red-600 dark:text-red-400" />
-      </div>
-      <div>
         <h2 class="font-semibold dark:text-white">Blacklist</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Block addresses from file transfers</p>
-      </div>
-      {#if $blacklist.length > 0}
-        <span class="px-2 py-0.5 text-xs rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium">
-          {$blacklist.length}
-        </span>
-      {/if}
-    </div>
+        <span class="text-xs text-gray-500 dark:text-gray-400">Block addresses from file transfers</span>
+        {#if $blacklist.length > 0}
+          <span class="ml-auto px-2 py-0.5 text-xs rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium tabular-nums">
+            {$blacklist.length}
+          </span>
+        {/if}
+      </header>
 
-    <!-- Add Form -->
-    <div class="flex gap-2 mb-4">
-      <input
-        type="text"
-        bind:value={blacklistAddress}
-        placeholder="Wallet or peer address"
-        class="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
-      />
-      <input
-        type="text"
-        bind:value={blacklistReason}
-        placeholder="Reason (optional)"
-        class="w-48 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') addToBlacklist(); }}
-      />
-      <button
-        onclick={addToBlacklist}
-        class="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors shrink-0"
-      >
-        <Plus class="w-4 h-4" />
-        Add
-      </button>
-    </div>
-
-    <!-- Entries List -->
-    {#if $blacklist.length === 0}
-      <div class="text-center py-6 text-gray-500 dark:text-gray-400">
-        <ShieldBan class="w-8 h-8 mx-auto mb-2 opacity-40" />
-        <p class="text-sm">No blacklisted addresses</p>
-        <p class="text-xs mt-1">Add addresses above to block them from file transfers</p>
+      <div class="flex flex-wrap gap-2 mb-4">
+        <input
+          type="text"
+          bind:value={blacklistAddress}
+          placeholder="Wallet or peer address"
+          class="flex-1 min-w-[12rem] px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+          onkeydown={(e: KeyboardEvent) => {
+            if (e.key === 'Enter') addToBlacklist();
+          }}
+        />
+        <input
+          type="text"
+          bind:value={blacklistReason}
+          placeholder="Reason (optional)"
+          class="w-48 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+          onkeydown={(e: KeyboardEvent) => {
+            if (e.key === 'Enter') addToBlacklist();
+          }}
+        />
+        <button
+          onclick={addToBlacklist}
+          class="flex items-center gap-1.5 px-4 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors shrink-0 font-medium"
+        >
+          <Plus class="w-4 h-4" />
+          Add
+        </button>
       </div>
-    {:else}
-      <div class="space-y-2 max-h-64 overflow-y-auto">
-        {#each $blacklist as entry}
-          <div class="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg group">
-            <div class="flex-1 min-w-0">
-              <button
-                class="font-mono text-sm dark:text-gray-200 truncate text-left hover:text-primary-600 dark:hover:text-primary-400 cursor-pointer"
-                title="Click to copy: {entry.address}"
-                onclick={() => { navigator.clipboard.writeText(entry.address); toasts.show('Address copied', 'success'); }}
-              >
-                {truncateAddress(entry.address)}
-              </button>
-              <div class="flex items-center gap-2 mt-0.5">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{entry.reason}</span>
-                <span class="text-xs text-gray-400 dark:text-gray-500">&middot;</span>
-                <span class="text-xs text-gray-400 dark:text-gray-500">{new Date(entry.addedAt).toLocaleDateString()}</span>
+
+      {#if $blacklist.length === 0}
+        <div class="text-center py-8 text-gray-500 dark:text-gray-400">
+          <ShieldBan class="w-8 h-8 mx-auto mb-2 opacity-40" />
+          <p class="text-sm">No blacklisted addresses</p>
+          <p class="text-xs mt-1">Add addresses above to refuse file transfers from them.</p>
+        </div>
+      {:else}
+        <div class="space-y-2 max-h-[60vh] overflow-y-auto">
+          {#each $blacklist as entry (entry.address)}
+            <div class="flex items-center justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg group">
+              <div class="flex-1 min-w-0">
+                <button
+                  class="font-mono text-sm dark:text-gray-200 truncate text-left hover:text-primary-600 dark:hover:text-primary-400"
+                  title="Click to copy: {entry.address}"
+                  onclick={() => {
+                    navigator.clipboard.writeText(entry.address);
+                    toasts.show('Address copied', 'success');
+                  }}
+                >
+                  {truncateAddress(entry.address)}
+                </button>
+                <div class="flex items-center gap-2 mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  <span>{entry.reason}</span>
+                  <span class="text-gray-400 dark:text-gray-500">·</span>
+                  <span>{new Date(entry.addedAt).toLocaleDateString()}</span>
+                </div>
               </div>
+              <button
+                onclick={() => removeFromBlacklist(entry.address)}
+                class="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                title="Remove from blacklist"
+              >
+                <Trash2 class="w-4 h-4" />
+              </button>
             </div>
-            <button
-              onclick={() => removeFromBlacklist(entry.address)}
-              class="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
-              title="Remove from blacklist"
-            >
-              <Trash2 class="w-4 h-4" />
-            </button>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </div>
+          {/each}
+        </div>
+      {/if}
+    </section>
+  {/if}
 </div>
