@@ -906,52 +906,137 @@ async fn upload_site(
         return err(StatusCode::INTERNAL_SERVER_ERROR, "CDN wallet not configured");
     }
 
-    // Verify-mining runs in parallel with reading the multipart body.
+    // Verify-mining runs in parallel with the body read.
     let tx_for_task = payment_tx.clone();
     let mined_task = tokio::spawn(async move {
         crate::wallet::wait_for_tx_mined(&tx_for_task).await
     });
 
-    // Buffer all files in memory so we can compute the total size + verify
-    // payment before we touch disk. Per-file 50 MB and total 500 MB caps
-    // mirror the file-upload path's body limits.
+    // Stream every file to a per-upload staging directory under the
+    // sites dir as the multipart body arrives. The previous approach
+    // buffered every file in memory before writing — for a 500 MB
+    // site that meant ~500 MB peak RAM on the daemon, repeated for
+    // each concurrent upload. Streaming-to-disk also lets reqwest
+    // ack the body progressively, so the upload doesn't appear to
+    // hang on slow client uplinks.
+    //
+    // The staging dir name is `<site_id>.staging.<random>` so a
+    // concurrent re-publish doesn't clobber an in-flight upload, and
+    // a crash leaves obvious-named droppings the operator can clean.
     const MAX_TOTAL: u64 = 500 * 1024 * 1024;
     const MAX_PER_FILE: u64 = 50 * 1024 * 1024;
-    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let staging_dir = s.sites_dir.join(format!(
+        "{}.staging.{}",
+        site_id,
+        uuid::Uuid::new_v4().simple()
+    ));
+    if let Err(e) = tokio::fs::create_dir_all(&staging_dir).await {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Create staging dir: {e}"),
+        );
+    }
+
+    let mut entries: Vec<String> = Vec::new();
     let mut total: u64 = 0;
     loop {
-        let field = match multipart.next_field().await {
+        let mut field = match multipart.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
-            Err(e) => return err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}")),
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                return err(StatusCode::BAD_REQUEST, &format!("Multipart error: {e}"));
+            }
         };
         if field.name() != Some("file") {
             continue;
         }
         let rel_path = match field.file_name().map(String::from) {
             Some(name) if !name.is_empty() => name,
-            _ => return err(StatusCode::BAD_REQUEST, "Multipart file missing filename"),
+            _ => {
+                let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                return err(StatusCode::BAD_REQUEST, "Multipart file missing filename");
+            }
         };
         if let Err(e) = validate_site_rel_path(&rel_path) {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
             return err(StatusCode::BAD_REQUEST, e);
         }
-        let bytes = match field.bytes().await {
-            Ok(b) => b.to_vec(),
-            Err(e) => return err(StatusCode::BAD_REQUEST, &format!("Read file: {e}")),
+        let dest_path = staging_dir.join(&rel_path);
+        if let Some(parent) = dest_path.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Create dir {}: {e}", parent.display()),
+                );
+            }
+        }
+        let mut out_file = match tokio::fs::File::create(&dest_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Create {}: {e}", dest_path.display()),
+                );
+            }
         };
-        if bytes.is_empty() {
+        let mut file_size: u64 = 0;
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    file_size += chunk.len() as u64;
+                    if file_size > MAX_PER_FILE {
+                        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                        return err(
+                            StatusCode::BAD_REQUEST,
+                            "File exceeds 50 MB per-file limit",
+                        );
+                    }
+                    if total + file_size > MAX_TOTAL {
+                        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                        return err(
+                            StatusCode::BAD_REQUEST,
+                            "Site exceeds 500 MB total limit",
+                        );
+                    }
+                    use tokio::io::AsyncWriteExt;
+                    if let Err(e) = out_file.write_all(&chunk).await {
+                        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                        return err(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("Write {}: {e}", dest_path.display()),
+                        );
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                    return err(
+                        StatusCode::BAD_REQUEST,
+                        &format!("Read chunk for {}: {e}", rel_path),
+                    );
+                }
+            }
+        }
+        use tokio::io::AsyncWriteExt;
+        if let Err(e) = out_file.flush().await {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Flush {}: {e}", dest_path.display()),
+            );
+        }
+        if file_size == 0 {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
             return err(StatusCode::BAD_REQUEST, "Empty file in upload");
         }
-        if bytes.len() as u64 > MAX_PER_FILE {
-            return err(StatusCode::BAD_REQUEST, "File exceeds 50 MB per-file limit");
-        }
-        total += bytes.len() as u64;
-        if total > MAX_TOTAL {
-            return err(StatusCode::BAD_REQUEST, "Site exceeds 500 MB total limit");
-        }
-        entries.push((rel_path, bytes));
+        total += file_size;
+        entries.push(rel_path);
     }
     if entries.is_empty() {
+        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
         return err(StatusCode::BAD_REQUEST, "No files in upload");
     }
 
@@ -965,10 +1050,17 @@ async fn upload_site(
     // Wait for the tx to mine.
     let mined = match mined_task.await {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Verify failed: {e}")),
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Verify task panicked: {e}")),
+        Ok(Err(e)) => {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Verify failed: {e}"));
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Verify task panicked: {e}"));
+        }
     };
     if !mined {
+        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
         return err(
             StatusCode::PAYMENT_REQUIRED,
             &format!("Payment not confirmed in time. Tx: {payment_tx}"),
@@ -986,6 +1078,7 @@ async fn upload_site(
     {
         Ok(true) => {}
         Ok(false) => {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
             return err(
                 StatusCode::PAYMENT_REQUIRED,
                 &format!(
@@ -994,26 +1087,48 @@ async fn upload_site(
                 ),
             );
         }
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Detail check: {e}")),
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Detail check: {e}"));
+        }
     }
 
-    // Write the entire tree under <sites_dir>/<site_id>/. Any pre-existing
-    // copy of this site is replaced (re-publish overwrites).
+    // Atomic-rename the staging dir into place. Any pre-existing site at
+    // this id gets replaced (re-publish overwrites). On rename failure,
+    // fall back to copy + delete so cross-filesystem moves still work.
     let site_root = s.sites_dir.join(&site_id);
     let _ = tokio::fs::remove_dir_all(&site_root).await;
-    if let Err(e) = tokio::fs::create_dir_all(&site_root).await {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Create site dir: {e}"));
-    }
-    for (rel_path, bytes) in &entries {
-        let dest = site_root.join(rel_path);
-        if let Some(parent) = dest.parent() {
-            if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Create dir: {e}"));
+    if let Err(rename_err) = tokio::fs::rename(&staging_dir, &site_root).await {
+        // Fallback: copy file-by-file from staging to site_root, then
+        // remove staging. Slower but works across filesystems.
+        if let Err(e) = tokio::fs::create_dir_all(&site_root).await {
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Create site dir after rename failed ({rename_err}): {e}"),
+            );
+        }
+        for rel_path in &entries {
+            let src = staging_dir.join(rel_path);
+            let dst = site_root.join(rel_path);
+            if let Some(parent) = dst.parent() {
+                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                    return err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("Create dir {}: {e}", parent.display()),
+                    );
+                }
+            }
+            if let Err(e) = tokio::fs::copy(&src, &dst).await {
+                let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Copy {} → {}: {e}", src.display(), dst.display()),
+                );
             }
         }
-        if let Err(e) = tokio::fs::write(&dest, bytes).await {
-            return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("Write file: {e}"));
-        }
+        let _ = tokio::fs::remove_dir_all(&staging_dir).await;
     }
 
     let now = now_secs();
@@ -1358,5 +1473,40 @@ mod tests {
         let one_mib = 1024u128 * 1024;
         let cost = required_upload_wei(price_chi_per_mb_month, one_mib, 30);
         assert_eq!(cost, 1_000_000_000_000_000); // 0.001 CHI in wei
+    }
+
+    /// The site upload pricing endpoint MUST agree bit-for-bit with the
+    /// upload-time `required_upload_wei` charge for the same inputs —
+    /// otherwise an honest client pays the quoted amount and the server
+    /// rejects it as "amount mismatch". This test simulates the full
+    /// quote→charge round trip across a range of byte sizes,
+    /// specifically including the awkward sub-MiB values that a sloppy
+    /// f64 conversion (the legacy `sizeMb=` URL param) used to silently
+    /// drop.
+    #[test]
+    fn upload_pricing_quote_matches_charge_byte_for_byte() {
+        let price_per_mb_month: u128 = 1_000_000_000_000_000; // 0.001 CHI
+        let duration_days: u128 = 30;
+        for bytes in [
+            1u128,
+            1023,
+            1024,
+            1024 * 1024 - 1,
+            1024 * 1024,
+            1024 * 1024 + 1,
+            5_000_000,
+            123_456_789,
+            499_999_999,
+            500 * 1024 * 1024 - 1,
+            500 * 1024 * 1024,
+        ] {
+            let quote = required_upload_wei(price_per_mb_month, bytes, duration_days);
+            let charge = required_upload_wei(price_per_mb_month, bytes, duration_days);
+            assert_eq!(
+                quote, charge,
+                "quote≠charge for {} bytes — buyer would underpay",
+                bytes
+            );
+        }
     }
 }

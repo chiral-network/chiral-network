@@ -4325,13 +4325,13 @@ async fn publish_site_to_cdn(
         return Err(format!("Site directory missing on disk: {}", site.directory));
     }
 
-    // Read every file. We collect (rel_path, bytes) pairs because we need
-    // the total size for the price quote AND we can reuse the bytes for
-    // the multipart body without a second walk.
-    fn collect_files(
+    // First walk the tree to enumerate (rel_path, abs_path) pairs only —
+    // no I/O of contents yet. We need the total size for the quote, and
+    // we want to defer the actual byte reads off the async runtime.
+    fn enumerate_files(
         root: &std::path::Path,
         cur: &std::path::Path,
-        out: &mut Vec<(String, Vec<u8>)>,
+        out: &mut Vec<(String, std::path::PathBuf, u64)>,
     ) -> Result<(), String> {
         let entries = std::fs::read_dir(cur)
             .map_err(|e| format!("Read dir {}: {}", cur.display(), e))?;
@@ -4340,33 +4340,38 @@ async fn publish_site_to_cdn(
             let path = entry.path();
             let ft = entry.file_type().map_err(|e| format!("File type: {}", e))?;
             if ft.is_dir() {
-                collect_files(root, &path, out)?;
+                enumerate_files(root, &path, out)?;
             } else if ft.is_file() {
                 let rel = path
                     .strip_prefix(root)
                     .map_err(|e| format!("Strip prefix: {}", e))?
                     .to_string_lossy()
                     .replace('\\', "/");
-                let bytes = std::fs::read(&path)
-                    .map_err(|e| format!("Read file {}: {}", path.display(), e))?;
-                out.push((rel, bytes));
+                let size = entry
+                    .metadata()
+                    .map_err(|e| format!("File metadata: {}", e))?
+                    .len();
+                out.push((rel, path, size));
             }
         }
         Ok(())
     }
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    collect_files(&site_dir, &site_dir, &mut files)?;
-    if files.is_empty() {
+    let mut file_index: Vec<(String, std::path::PathBuf, u64)> = Vec::new();
+    enumerate_files(&site_dir, &site_dir, &mut file_index)?;
+    if file_index.is_empty() {
         return Err("Site directory is empty".into());
     }
-    let total_size: u64 = files.iter().map(|(_, b)| b.len() as u64).sum();
+    let total_size: u64 = file_index.iter().map(|(_, _, sz)| *sz).sum();
 
-    // Get pricing + CDN wallet so we know who to pay and how much.
+    // Get pricing + CDN wallet so we know who to pay and how much. Use
+    // exact `bytes=` (not the legacy `sizeMb=` f64 path) so the client
+    // quote and the server's upload-time `required_upload_wei` math agree
+    // bit-for-bit — under-quoting here used to make the upload reject the
+    // payment as "amount mismatch".
     let cdn_base = cdn_url.trim_end_matches('/').to_string();
-    let size_mb = total_size as f64 / (1024.0 * 1024.0);
     let pricing_url = format!(
-        "{}/api/cdn/pricing?sizeMb={}&durationDays={}",
-        cdn_base, size_mb, duration_days
+        "{}/api/cdn/pricing?bytes={}&durationDays={}",
+        cdn_base, total_size, duration_days
     );
     let pricing: serde_json::Value = rpc_client::client()
         .get(&pricing_url)
@@ -4414,12 +4419,31 @@ async fn publish_site_to_cdn(
         result.hash
     };
 
+    // Read every file off the async runtime in parallel. tokio::fs::read
+    // dispatches each open+read to the blocking thread pool, so a 100-file
+    // site is bounded by the slowest single read instead of the sum.
+    // Sequential std::fs::read on the async runtime would block libp2p,
+    // wallet RPC, and UI events for the duration of the walk.
+    let read_futures = file_index.into_iter().map(|(rel_path, abs_path, _sz)| async move {
+        let bytes = tokio::fs::read(&abs_path)
+            .await
+            .map_err(|e| format!("Read file {}: {}", abs_path.display(), e))?;
+        Ok::<(String, Vec<u8>), String>((rel_path, bytes))
+    });
+    let read_results = futures::future::join_all(read_futures).await;
+    let mut files: Vec<(String, Vec<u8>)> = Vec::with_capacity(read_results.len());
+    for r in read_results {
+        files.push(r?);
+    }
+
     // Multipart upload — each file gets a separate form-data part with the
-    // relative path stuck into the filename slot.
+    // relative path stuck into the filename slot. Move bytes (don't clone)
+    // so the peak memory cost is 1× site size, not 2×.
+    let local_file_count = files.len();
     let mut form = reqwest::multipart::Form::new();
-    for (rel_path, bytes) in files.iter() {
-        let part = reqwest::multipart::Part::bytes(bytes.clone())
-            .file_name(rel_path.clone())
+    for (rel_path, bytes) in files {
+        let part = reqwest::multipart::Part::bytes(bytes)
+            .file_name(rel_path)
             .mime_str("application/octet-stream")
             .map_err(|e| format!("Build multipart part: {}", e))?;
         form = form.part("file", part);
@@ -4459,7 +4483,7 @@ async fn publish_site_to_cdn(
     let file_count = resp_body
         .get("fileCount")
         .and_then(|v| v.as_u64())
-        .unwrap_or(files.len() as u64) as u32;
+        .unwrap_or(local_file_count as u64) as u32;
 
     let public_url = format!("{}/cdn/sites/{}/", cdn_base, site_id);
 
