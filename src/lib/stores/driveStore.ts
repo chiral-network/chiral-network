@@ -684,13 +684,18 @@ function createDriveStore() {
     async stopSeeding(itemId: string): Promise<void> {
       const owner = syncOwner();
       if (!owner) return;
-      let snapshot: { seeding?: boolean; seedEnabled?: boolean } | null = null;
+      // Snapshot the previous seeding flag synchronously, before the
+      // optimistic flip, so we can revert on failure. Reading via `get`
+      // (rather than capturing inside the update callback) sidesteps
+      // TypeScript's flow-narrowing issues with `let`-bindings reassigned
+      // across closure boundaries.
+      const before = get({ subscribe });
+      const beforeItem = before.items.find(i => i.id === itemId);
+      const prevSeeding = beforeItem?.seeding;
+      const itemExisted = beforeItem !== undefined;
       update(m => {
         const idx = m.items.findIndex(i => i.id === itemId);
         if (idx >= 0) {
-          snapshot = {
-            seeding: m.items[idx].seeding,
-          };
           m.items[idx] = { ...m.items[idx], seeding: false };
         }
         return m;
@@ -712,12 +717,11 @@ function createDriveStore() {
         console.error('Failed to stop seeding:', e);
         // Revert the optimistic flip so the row doesn't lie about its
         // network state.
-        if (snapshot) {
-          const prev = snapshot;
+        if (itemExisted) {
           update(m => {
             const idx = m.items.findIndex(i => i.id === itemId);
             if (idx >= 0) {
-              m.items[idx] = { ...m.items[idx], seeding: prev.seeding ?? true };
+              m.items[idx] = { ...m.items[idx], seeding: prevSeeding ?? true };
             }
             return m;
           });
