@@ -90,6 +90,12 @@
   let cdnUploadDurationDays = $state(30);
   let cdnUploadQuote = $state<{ totalCostChi: string; sizeMb: number } | null>(null);
   let cdnUploadSubmitting = $state(false);
+  // Live stage feedback for the (long) upload — populated from
+  // `cdn-upload-progress` Tauri events emitted by `publish_site_to_cdn`.
+  // Without this, the user stares at a generic "Uploading" spinner for
+  // 30-180s while the CDN waits for the on-chain payment to confirm.
+  let cdnUploadStage = $state<string | null>(null);
+  let cdnUploadStageMessage = $state<string | null>(null);
 
   // ---------------------------------------------------------------------------
   // Marketplace / agreements state
@@ -720,9 +726,23 @@
       return;
     }
     cdnUploadSubmitting = true;
+    cdnUploadStage = 'starting';
+    cdnUploadStageMessage = null;
+    let unlistenStage: (() => void) | null = null;
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const result = await invoke<CdnSitePublishResult>('publish_site_to_cdn', {
+      const core = await import('@tauri-apps/api/core');
+      const evt = await import('@tauri-apps/api/event');
+      // Subscribe before invoking so we don't miss the first stage event.
+      unlistenStage = await evt.listen<{
+        siteId: string;
+        stage: string;
+        message?: string | null;
+      }>('cdn-upload-progress', (e) => {
+        if (e.payload.siteId !== site.id) return;
+        cdnUploadStage = e.payload.stage;
+        cdnUploadStageMessage = e.payload.message ?? null;
+      });
+      const result = await core.invoke<CdnSitePublishResult>('publish_site_to_cdn', {
         siteId: site.id,
         cdnUrl: cdnUploadServerUrl,
         durationDays: cdnUploadDurationDays,
@@ -739,7 +759,25 @@
     } catch (err: any) {
       toasts.detail('CDN upload failed', String(err), 'error');
     } finally {
+      if (unlistenStage) unlistenStage();
       cdnUploadSubmitting = false;
+      cdnUploadStage = null;
+      cdnUploadStageMessage = null;
+    }
+  }
+
+  function cdnStageLabel(stage: string | null): string {
+    switch (stage) {
+      case 'starting':
+      case 'preparing': return 'Preparing files…';
+      case 'quoting': return 'Quoting price…';
+      case 'paying': return 'Sending payment…';
+      case 'paid': return 'Payment broadcast — preparing upload…';
+      case 'reading': return 'Reading site files…';
+      case 'uploading': return 'Uploading + verifying payment on-chain…';
+      case 'done': return 'Done';
+      case 'error': return 'Failed';
+      default: return 'Uploading…';
     }
   }
 
@@ -1525,6 +1563,15 @@
                     <span class="font-mono text-amber-700 dark:text-amber-300 font-medium">{cdnUploadQuote.totalCostChi} CHI</span>
                   {/if}
                 </div>
+                {#if cdnUploadSubmitting}
+                  <div class="mt-2 flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+                    <Loader2 class="w-3 h-3 animate-spin" />
+                    <span>{cdnStageLabel(cdnUploadStage)}</span>
+                    {#if cdnUploadStageMessage}
+                      <span class="text-gray-500 dark:text-gray-400 truncate" title={cdnUploadStageMessage}>· {cdnUploadStageMessage}</span>
+                    {/if}
+                  </div>
+                {/if}
               {/if}
             </div>
           {/each}

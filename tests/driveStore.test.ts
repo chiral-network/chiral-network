@@ -438,6 +438,116 @@ describe('driveStore', () => {
       // Should not throw
       await expect(driveStore.stopSeeding('nonexistent')).resolves.toBeUndefined();
     });
+
+    it('should optimistically flip seeding=false before the backend resolves', async () => {
+      // The store flips the row's `seeding` flag in-memory immediately so
+      // the badge disappears without waiting for the DHT unregister +
+      // manifest persist round-trip. Verify the flip is visible
+      // mid-await, before invoke resolves.
+      const { driveStore } = await import('$lib/stores/driveStore');
+      // Seed the store with a row that's currently seeding.
+      driveStore.subscribe(() => {}); // ensure subscribed; ignore
+      // We can't load() since it would fetch; instead, manually mutate
+      // the store via a roundabout: invoke updatePrice (which uses
+      // updateItem on backend, but since we mock, we can mock the API).
+      // Simpler: directly set the manifest by importing the underlying
+      // writable through a side-channel — but the store doesn't expose
+      // it. Use the existing `set` exposed via subscribe + recreate
+      // pattern: we'll do it by stubbing the backend item that
+      // stopSeeding's success branch reads.
+      //
+      // Approach: pre-seed via load() with a mocked api response, then
+      // hold the invoke resolve until we've snapshotted state.
+      const { driveApi } = await import('$lib/services/driveApiService');
+      vi.mocked(driveApi.listItems).mockResolvedValueOnce([
+        {
+          id: 'item-seeding',
+          name: 'song.mp3',
+          itemType: 'file',
+          parentId: null,
+          size: 2048,
+          createdAt: 1000,
+          modifiedAt: 1000,
+          starred: false,
+          isPublic: true,
+          merkleRoot: 'abc',
+          protocol: 'WebRTC',
+          priceChi: '0',
+          seeding: true,
+        } as any,
+      ]);
+      vi.mocked(driveApi.listShareLinks).mockResolvedValueOnce([]);
+      await driveStore.load();
+
+      // Defer the backend response so we can observe state mid-flight.
+      let resolveInvoke!: (v: any) => void;
+      const pending = new Promise((res) => {
+        resolveInvoke = res;
+      });
+      mockedInvoke.mockReturnValueOnce(pending as any);
+
+      const stopPromise = driveStore.stopSeeding('item-seeding');
+
+      // Yield to let the synchronous optimistic update run.
+      await Promise.resolve();
+      const midManifest = get({ subscribe: driveStore.subscribe } as any) as DriveManifest;
+      const midItem = midManifest.items.find((i) => i.id === 'item-seeding');
+      expect(midItem?.seeding).toBe(false);
+
+      // Now resolve the backend with the canonical "no longer seeding" item.
+      resolveInvoke({
+        id: 'item-seeding',
+        name: 'song.mp3',
+        itemType: 'file',
+        parentId: null,
+        size: 2048,
+        createdAt: 1000,
+        modifiedAt: 1000,
+        starred: false,
+        isPublic: true,
+        merkleRoot: null,
+        protocol: null,
+        priceChi: null,
+        seeding: false,
+      });
+      await stopPromise;
+      const finalManifest = get({ subscribe: driveStore.subscribe } as any) as DriveManifest;
+      expect(finalManifest.items.find((i) => i.id === 'item-seeding')?.seeding).toBe(false);
+    });
+
+    it('should revert the optimistic flip when the backend call fails', async () => {
+      // If the DHT unregister or manifest persist fails, the row must
+      // snap back to `seeding: true` — we can't lie to the user about
+      // the actual network state.
+      const { driveStore } = await import('$lib/stores/driveStore');
+      const { driveApi } = await import('$lib/services/driveApiService');
+      vi.mocked(driveApi.listItems).mockResolvedValueOnce([
+        {
+          id: 'item-seeding-2',
+          name: 'doc.pdf',
+          itemType: 'file',
+          parentId: null,
+          size: 4096,
+          createdAt: 1000,
+          modifiedAt: 1000,
+          starred: false,
+          isPublic: true,
+          merkleRoot: 'xyz',
+          protocol: 'WebRTC',
+          priceChi: '0',
+          seeding: true,
+        } as any,
+      ]);
+      vi.mocked(driveApi.listShareLinks).mockResolvedValueOnce([]);
+      await driveStore.load();
+
+      mockedInvoke.mockRejectedValueOnce(new Error('DHT not running'));
+
+      await driveStore.stopSeeding('item-seeding-2');
+
+      const finalManifest = get({ subscribe: driveStore.subscribe } as any) as DriveManifest;
+      expect(finalManifest.items.find((i) => i.id === 'item-seeding-2')?.seeding).toBe(true);
+    });
   });
 
   describe('exportTorrent', () => {

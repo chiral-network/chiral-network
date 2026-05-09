@@ -531,11 +531,27 @@ function createDriveStore() {
      * filesFailed, failures }` so the caller can surface partial-success
      * counts. After the call, the manifest is reloaded from the backend
      * so per-file seeding state is reflected.
+     *
+     * If `onProgress` is provided, it's invoked as each child file
+     * finishes publishing — backed by `drive-folder-publish-progress`
+     * events from the Rust side. Useful for keeping the seed-folder
+     * button responsive on large folders where the backend's parallel
+     * SHA-256 + DHT publishes can take 10s+.
      */
     async seedFolder(
       folderId: string,
       protocol: 'WebRTC' | 'BitTorrent',
       priceChi?: string | number | null,
+      onProgress?: (p: {
+        stage: string;
+        total: number;
+        completed: number;
+        succeeded?: number;
+        failed?: number;
+        fileName?: string;
+        ok?: boolean;
+        error?: string | null;
+      }) => void,
     ): Promise<{
       filesTotal: number;
       filesSucceeded: number;
@@ -552,10 +568,28 @@ function createDriveStore() {
         console.error('seedFolder: wallet is locked (no privateKey)');
         return null;
       }
+      let unlistenStage: (() => void) | null = null;
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
+        const core = await import('@tauri-apps/api/core');
+        const evt = await import('@tauri-apps/api/event');
+        if (onProgress) {
+          unlistenStage = await evt.listen<{
+            folderId: string;
+            stage: string;
+            total: number;
+            completed: number;
+            succeeded?: number;
+            failed?: number;
+            fileName?: string;
+            ok?: boolean;
+            error?: string | null;
+          }>('drive-folder-publish-progress', (e) => {
+            if (e.payload.folderId !== folderId) return;
+            onProgress(e.payload);
+          });
+        }
         const normalizedPrice = normalizePriceChi(priceChi);
-        const raw = await invoke<{
+        const raw = await core.invoke<{
           folder: any;
           filesTotal: number;
           filesSucceeded: number;
@@ -579,20 +613,52 @@ function createDriveStore() {
       } catch (e) {
         console.error('Failed to seed folder:', e);
         return null;
+      } finally {
+        if (unlistenStage) unlistenStage();
       }
     },
 
     /** Stop selling every file inside a folder. Mirror of seedFolder. */
-    async stopSeedingFolder(folderId: string): Promise<{
+    async stopSeedingFolder(
+      folderId: string,
+      onProgress?: (p: {
+        stage: string;
+        total: number;
+        completed: number;
+        succeeded?: number;
+        failed?: number;
+        fileName?: string;
+        ok?: boolean;
+        error?: string | null;
+      }) => void,
+    ): Promise<{
       filesTotal: number;
       filesSucceeded: number;
       filesFailed: number;
     } | null> {
       const owner = syncOwner();
       if (!owner) return null;
+      let unlistenStage: (() => void) | null = null;
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const raw = await invoke<{
+        const core = await import('@tauri-apps/api/core');
+        const evt = await import('@tauri-apps/api/event');
+        if (onProgress) {
+          unlistenStage = await evt.listen<{
+            folderId: string;
+            stage: string;
+            total: number;
+            completed: number;
+            succeeded?: number;
+            failed?: number;
+            fileName?: string;
+            ok?: boolean;
+            error?: string | null;
+          }>('drive-folder-unpublish-progress', (e) => {
+            if (e.payload.folderId !== folderId) return;
+            onProgress(e.payload);
+          });
+        }
+        const raw = await core.invoke<{
           filesTotal: number;
           filesSucceeded: number;
           filesFailed: number;
@@ -606,13 +672,29 @@ function createDriveStore() {
       } catch (e) {
         console.error('Failed to stop seeding folder:', e);
         return null;
+      } finally {
+        if (unlistenStage) unlistenStage();
       }
     },
 
-    /** Stop seeding a file on the P2P network */
+    /** Stop seeding a file on the P2P network. Optimistic — flips the row's
+     *  `seeding` flag immediately so the badge disappears without waiting
+     *  for the DHT unregister + manifest persist round-trip; reverts the
+     *  flip if the backend call fails. */
     async stopSeeding(itemId: string): Promise<void> {
       const owner = syncOwner();
       if (!owner) return;
+      let snapshot: { seeding?: boolean; seedEnabled?: boolean } | null = null;
+      update(m => {
+        const idx = m.items.findIndex(i => i.id === itemId);
+        if (idx >= 0) {
+          snapshot = {
+            seeding: m.items[idx].seeding,
+          };
+          m.items[idx] = { ...m.items[idx], seeding: false };
+        }
+        return m;
+      });
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const raw = await invoke('drive_stop_seeding', { owner, itemId });
@@ -628,6 +710,18 @@ function createDriveStore() {
         clearFolderCaches();
       } catch (e) {
         console.error('Failed to stop seeding:', e);
+        // Revert the optimistic flip so the row doesn't lie about its
+        // network state.
+        if (snapshot) {
+          const prev = snapshot;
+          update(m => {
+            const idx = m.items.findIndex(i => i.id === itemId);
+            if (idx >= 0) {
+              m.items[idx] = { ...m.items[idx], seeding: prev.seeding ?? true };
+            }
+            return m;
+          });
+        }
       }
     },
 

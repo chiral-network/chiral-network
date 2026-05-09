@@ -4145,6 +4145,9 @@ async fn publish_site_to_relay(
     let signature = wallet::sign_message(&private_key, &payload)
         .map_err(|e| format!("Failed to sign register payload: {}", e))?;
 
+    // The shared client's 5s default is tuned for JSON-RPC; relay
+    // register can take longer on a congested or distant relay. Bring
+    // this in line with the share-register path's 30s budget.
     let resp = rpc_client::client()
         .post(&url)
         .json(&serde_json::json!({
@@ -4153,6 +4156,7 @@ async fn publish_site_to_relay(
             "owner_wallet": owner_lower,
             "signature": signature,
         }))
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("Failed to register site with relay: {}", e))?;
@@ -4244,6 +4248,7 @@ async fn unpublish_site_from_relay(
         .delete(&url)
         .header("X-Owner", &owner_lower)
         .header("X-Owner-Sig", format!("{}:{}", ts, signature))
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| format!("Failed to connect to relay: {}", e))?;
@@ -4296,21 +4301,68 @@ struct CdnSitePublishResult {
     payment_tx: String,
 }
 
+/// Stage progress event for CDN site upload. Emitted on the
+/// `cdn-upload-progress` Tauri channel so the upload modal can show what
+/// the long blocking call is actually doing instead of just spinning.
+/// Stages, in order: `preparing` → `quoting` → `paying` → `paid` →
+/// `reading` → `uploading` → `done` (or `error` from any prior stage).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CdnUploadProgress {
+    site_id: String,
+    stage: &'static str,
+    message: Option<String>,
+    file_count: Option<u64>,
+    total_bytes: Option<u64>,
+    total_cost_chi: Option<String>,
+    tx_hash: Option<String>,
+}
+
+impl CdnUploadProgress {
+    fn new(site_id: &str, stage: &'static str) -> Self {
+        Self {
+            site_id: site_id.to_string(),
+            stage,
+            message: None,
+            file_count: None,
+            total_bytes: None,
+            total_cost_chi: None,
+            tx_hash: None,
+        }
+    }
+}
+
 #[tauri::command]
 async fn publish_site_to_cdn(
+    app: tauri::AppHandle,
     site_id: String,
     cdn_url: String,
     duration_days: Option<u64>,
     owner_wallet: String,
     private_key: String,
 ) -> Result<CdnSitePublishResult, String> {
+    // Helper: emit a stage event. The button is locked for ~30-180s on
+    // freshnet (multipart upload + on-chain payment verify); without
+    // these, the modal spinner looks stuck.
+    let emit_stage = |progress: CdnUploadProgress| {
+        let _ = app.emit("cdn-upload-progress", progress);
+    };
+    let emit_error = |stage: &'static str, msg: &str| {
+        let mut p = CdnUploadProgress::new(&site_id, "error");
+        p.message = Some(format!("{}: {}", stage, msg));
+        let _ = app.emit("cdn-upload-progress", p);
+    };
+
     if owner_wallet.is_empty() || private_key.is_empty() {
+        emit_error("validate", "Wallet must be unlocked");
         return Err("Wallet must be unlocked before publishing to a CDN".into());
     }
     let duration_days = duration_days.unwrap_or(30);
     if duration_days == 0 {
+        emit_error("validate", "Duration must be at least 1 day");
         return Err("Duration must be at least 1 day".into());
     }
+    emit_stage(CdnUploadProgress::new(&site_id, "preparing"));
 
     // Look up the site + walk every file on disk so we can submit the full
     // tree as a multipart upload.
@@ -4318,11 +4370,16 @@ async fn publish_site_to_cdn(
     let site = all_sites
         .iter()
         .find(|s| s.id == site_id)
-        .ok_or_else(|| format!("Site not found: {}", site_id))?
+        .ok_or_else(|| {
+            emit_error("lookup", "Site not found");
+            format!("Site not found: {}", site_id)
+        })?
         .clone();
     let site_dir = std::path::PathBuf::from(&site.directory);
     if !site_dir.is_dir() {
-        return Err(format!("Site directory missing on disk: {}", site.directory));
+        let m = format!("Site directory missing on disk: {}", site.directory);
+        emit_error("lookup", &m);
+        return Err(m);
     }
 
     // First walk the tree to enumerate (rel_path, abs_path) pairs only —
@@ -4357,11 +4414,21 @@ async fn publish_site_to_cdn(
         Ok(())
     }
     let mut file_index: Vec<(String, std::path::PathBuf, u64)> = Vec::new();
-    enumerate_files(&site_dir, &site_dir, &mut file_index)?;
+    if let Err(e) = enumerate_files(&site_dir, &site_dir, &mut file_index) {
+        emit_error("enumerate", &e);
+        return Err(e);
+    }
     if file_index.is_empty() {
+        emit_error("enumerate", "Site directory is empty");
         return Err("Site directory is empty".into());
     }
     let total_size: u64 = file_index.iter().map(|(_, _, sz)| *sz).sum();
+    {
+        let mut p = CdnUploadProgress::new(&site_id, "quoting");
+        p.file_count = Some(file_index.len() as u64);
+        p.total_bytes = Some(total_size);
+        emit_stage(p);
+    }
 
     // Get pricing + CDN wallet so we know who to pay and how much. Use
     // exact `bytes=` (not the legacy `sizeMb=` f64 path) so the client
@@ -4373,41 +4440,73 @@ async fn publish_site_to_cdn(
         "{}/api/cdn/pricing?bytes={}&durationDays={}",
         cdn_base, total_size, duration_days
     );
-    let pricing: serde_json::Value = rpc_client::client()
-        .get(&pricing_url)
-        .send()
-        .await
-        .map_err(|e| format!("CDN pricing request failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Parse pricing response: {}", e))?;
-    let total_cost_chi = pricing
-        .get("totalCostChi")
-        .and_then(|v| v.as_str())
-        .ok_or("CDN pricing response missing totalCostChi")?
-        .to_string();
+    let pricing: serde_json::Value = match rpc_client::client().get(&pricing_url).send().await {
+        Ok(r) => match r.json().await {
+            Ok(j) => j,
+            Err(e) => {
+                let m = format!("Parse pricing response: {}", e);
+                emit_error("quoting", &m);
+                return Err(m);
+            }
+        },
+        Err(e) => {
+            let m = format!("CDN pricing request failed: {}", e);
+            emit_error("quoting", &m);
+            return Err(m);
+        }
+    };
+    let total_cost_chi = match pricing.get("totalCostChi").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => {
+            let m = "CDN pricing response missing totalCostChi".to_string();
+            emit_error("quoting", &m);
+            return Err(m);
+        }
+    };
 
-    let status: serde_json::Value = rpc_client::client()
+    let status: serde_json::Value = match rpc_client::client()
         .get(&format!("{}/api/cdn/status", cdn_base))
         .send()
         .await
-        .map_err(|e| format!("CDN status request failed: {}", e))?
-        .json()
-        .await
-        .map_err(|e| format!("Parse status response: {}", e))?;
-    let cdn_wallet = status
+    {
+        Ok(r) => match r.json().await {
+            Ok(j) => j,
+            Err(e) => {
+                let m = format!("Parse status response: {}", e);
+                emit_error("quoting", &m);
+                return Err(m);
+            }
+        },
+        Err(e) => {
+            let m = format!("CDN status request failed: {}", e);
+            emit_error("quoting", &m);
+            return Err(m);
+        }
+    };
+    let cdn_wallet = match status
         .get("walletAddress")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .ok_or("CDN wallet address not configured")?
-        .to_string();
+    {
+        Some(s) => s.to_string(),
+        None => {
+            let m = "CDN wallet address not configured".to_string();
+            emit_error("quoting", &m);
+            return Err(m);
+        }
+    };
 
     // Pay the CDN.
     let payment_tx = if total_cost_chi == "0" {
         String::new()
     } else {
+        {
+            let mut p = CdnUploadProgress::new(&site_id, "paying");
+            p.total_cost_chi = Some(total_cost_chi.clone());
+            emit_stage(p);
+        }
         let endpoint = geth::wallet_rpc_endpoint();
-        let result = wallet::send_transaction(
+        let result = match wallet::send_transaction(
             &endpoint,
             &owner_wallet,
             &cdn_wallet,
@@ -4415,7 +4514,17 @@ async fn publish_site_to_cdn(
             &private_key,
         )
         .await
-        .map_err(|e| format!("CDN payment failed: {}", e))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let m = format!("CDN payment failed: {}", e);
+                emit_error("paying", &m);
+                return Err(m);
+            }
+        };
+        let mut p = CdnUploadProgress::new(&site_id, "paid");
+        p.tx_hash = Some(result.hash.clone());
+        emit_stage(p);
         result.hash
     };
 
@@ -4424,6 +4533,12 @@ async fn publish_site_to_cdn(
     // site is bounded by the slowest single read instead of the sum.
     // Sequential std::fs::read on the async runtime would block libp2p,
     // wallet RPC, and UI events for the duration of the walk.
+    {
+        let mut p = CdnUploadProgress::new(&site_id, "reading");
+        p.file_count = Some(file_index.len() as u64);
+        p.total_bytes = Some(total_size);
+        emit_stage(p);
+    }
     let read_futures = file_index.into_iter().map(|(rel_path, abs_path, _sz)| async move {
         let bytes = tokio::fs::read(&abs_path)
             .await
@@ -4433,7 +4548,13 @@ async fn publish_site_to_cdn(
     let read_results = futures::future::join_all(read_futures).await;
     let mut files: Vec<(String, Vec<u8>)> = Vec::with_capacity(read_results.len());
     for r in read_results {
-        files.push(r?);
+        match r {
+            Ok(item) => files.push(item),
+            Err(e) => {
+                emit_error("reading", &e);
+                return Err(e);
+            }
+        }
     }
 
     // Multipart upload — each file gets a separate form-data part with the
@@ -4442,20 +4563,45 @@ async fn publish_site_to_cdn(
     let local_file_count = files.len();
     let mut form = reqwest::multipart::Form::new();
     for (rel_path, bytes) in files {
-        let part = reqwest::multipart::Part::bytes(bytes)
+        let part = match reqwest::multipart::Part::bytes(bytes)
             .file_name(rel_path)
             .mime_str("application/octet-stream")
-            .map_err(|e| format!("Build multipart part: {}", e))?;
+        {
+            Ok(p) => p,
+            Err(e) => {
+                let m = format!("Build multipart part: {}", e);
+                emit_error("uploading", &m);
+                return Err(m);
+            }
+        };
         form = form.part("file", part);
     }
     let upload_url = format!("{}/api/cdn/sites/upload", cdn_base);
+    {
+        let mut p = CdnUploadProgress::new(&site_id, "uploading");
+        p.file_count = Some(local_file_count as u64);
+        p.total_bytes = Some(total_size);
+        if !payment_tx.is_empty() {
+            p.tx_hash = Some(payment_tx.clone());
+            // The CDN runs `wait_for_tx_mined` server-side after it
+            // receives the multipart, so this stage covers the network
+            // upload AND the on-chain confirmation wait. Surface that
+            // to the user so a 30-60s pause looks like progress, not a
+            // hang.
+            p.message = Some(
+                "Uploading files and verifying payment on-chain (this can take 30–60s)..."
+                    .to_string(),
+            );
+        }
+        emit_stage(p);
+    }
     // The shared rpc_client has a 5s timeout tuned for JSON-RPC calls. A
     // CDN site upload streams multipart bytes AND waits for on-chain
     // payment verification (often 30-60s on freshnet), which the 5s
     // bound kills with `error sending request: operation timed out`.
     // Override with a per-request 180s timeout — long enough for big
     // sites + slow chain confirms, short enough to surface real hangs.
-    let resp = rpc_client::client()
+    let resp = match rpc_client::client()
         .post(&upload_url)
         .timeout(std::time::Duration::from_secs(180))
         .header("X-Site-Id", &site_id)
@@ -4466,16 +4612,29 @@ async fn publish_site_to_cdn(
         .multipart(form)
         .send()
         .await
-        .map_err(|e| format!("CDN upload failed: {}", e))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let m = format!("CDN upload failed: {}", e);
+            emit_error("uploading", &m);
+            return Err(m);
+        }
+    };
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        return Err(format!("CDN returned {}: {}", status, text));
+        let m = format!("CDN returned {}: {}", status, text);
+        emit_error("uploading", &m);
+        return Err(m);
     }
-    let resp_body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Parse CDN response: {}", e))?;
+    let resp_body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            let m = format!("Parse CDN response: {}", e);
+            emit_error("uploading", &m);
+            return Err(m);
+        }
+    };
     let expires_at = resp_body
         .get("expiresAt")
         .and_then(|v| v.as_u64())
@@ -4497,6 +4656,15 @@ async fn publish_site_to_cdn(
         "[HOSTING] Site {} uploaded to CDN: {} ({} files, {} bytes)",
         site_id, public_url, file_count, total_size
     );
+    {
+        let mut p = CdnUploadProgress::new(&site_id, "done");
+        p.file_count = Some(file_count as u64);
+        p.total_bytes = Some(total_size);
+        if !payment_tx.is_empty() {
+            p.tx_hash = Some(payment_tx.clone());
+        }
+        emit_stage(p);
+    }
     Ok(CdnSitePublishResult {
         site_id,
         cdn_url: public_url,
@@ -5672,6 +5840,7 @@ fn collect_descendant_files(
 /// price.
 #[tauri::command]
 async fn publish_drive_folder(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     owner: String,
     folder_id: String,
@@ -5698,6 +5867,20 @@ async fn publish_drive_folder(
     if files.is_empty() {
         return Err("Folder is empty — nothing to sell".into());
     }
+    // Live progress events. The button can be locked for a while on
+    // first-time-seeded folders (parallel SHA-256 of every child file
+    // bounded by the slowest single hash); without these the UI looks
+    // frozen even though work is happening.
+    let total_files = files.len();
+    let _ = app.emit(
+        "drive-folder-publish-progress",
+        serde_json::json!({
+            "folderId": folder_id,
+            "stage": "starting",
+            "total": total_files,
+            "completed": 0,
+        }),
+    );
 
     // Compute folder-level price in wei + select payment recipient. Both
     // are baked into the signed FolderManifest, so a hostile peer can't
@@ -5728,6 +5911,7 @@ async fn publish_drive_folder(
     // files this is the difference between N×hash_time and 1×hash_time.
     // Each file's merkle_root is persisted to the Drive manifest by the
     // inner function so the folder hash can be computed afterward.
+    let completed_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let publish_futures = files.iter().map(|(file_id, file_name)| {
         let state = state.inner();
         let owner = owner.clone();
@@ -5736,6 +5920,9 @@ async fn publish_drive_folder(
         let protocol = protocol.clone();
         let wallet_address = wallet_address.clone();
         let private_key = private_key.clone();
+        let app = app.clone();
+        let folder_id = folder_id.clone();
+        let counter = completed_counter.clone();
         async move {
             let res = publish_drive_file_inner(
                 state,
@@ -5747,6 +5934,27 @@ async fn publish_drive_folder(
                 private_key,
             )
             .await;
+            // Emit progress as each child file finishes so the UI can
+            // tick a counter / surface failures inline instead of
+            // waiting for the whole bulk to resolve.
+            let done = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let (ok, err_msg) = match &res {
+                Ok(_) => (true, None),
+                Err(e) => (false, Some(e.clone())),
+            };
+            let _ = app.emit(
+                "drive-folder-publish-progress",
+                serde_json::json!({
+                    "folderId": folder_id,
+                    "stage": "file",
+                    "total": total_files,
+                    "completed": done,
+                    "fileId": file_id,
+                    "fileName": file_name,
+                    "ok": ok,
+                    "error": err_msg,
+                }),
+            );
             (file_id, file_name, res)
         }
     });
@@ -5763,25 +5971,34 @@ async fn publish_drive_folder(
             }),
         }
     }
+    let _ = app.emit(
+        "drive-folder-publish-progress",
+        serde_json::json!({
+            "folderId": folder_id,
+            "stage": "files_done",
+            "total": total_files,
+            "completed": total_files,
+            "succeeded": succeeded,
+            "failed": failures.len(),
+        }),
+    );
 
     // Build a folder manifest from every successfully-seeded child file so
     // a buyer can search by *one* hash and download the whole bundle. The
     // folder hash is content-addressed (same files → same hash) so it's
-    // stable across re-publishes.
-    let folder_name = {
-        let m = state.drive_state.manifest.read().await;
-        m.items
-            .iter()
-            .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
-            .map(|i| i.name.clone())
-            .unwrap_or_default()
-    };
+    // stable across re-publishes. Snapshot the manifest once instead of
+    // re-acquiring the read lock 3× — the per-file publishes have all
+    // committed their merkle_root by now and we don't need a fresh view
+    // for each lookup.
+    let manifest_snapshot = state.drive_state.manifest.read().await.clone();
+    let folder_name = manifest_snapshot
+        .items
+        .iter()
+        .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
+        .map(|i| i.name.clone())
+        .unwrap_or_default();
     let folder_root_path = std::path::PathBuf::from(
-        state
-            .drive_state
-            .manifest
-            .read()
-            .await
+        manifest_snapshot
             .items
             .iter()
             .find(|i| i.id == folder_id && i.owner == owner)
@@ -5792,7 +6009,7 @@ async fn publish_drive_folder(
     // re-register each child with folder context after the folder hash
     // is computed.
     let manifest_entries: Vec<(String, FolderManifestFile)> = {
-        let m = state.drive_state.manifest.read().await;
+        let m = &manifest_snapshot;
         files
             .iter()
             .filter_map(|(file_id, _name)| {
@@ -5908,6 +6125,19 @@ async fn publish_drive_folder(
     };
     state.drive_state.persist().await;
 
+    let _ = app.emit(
+        "drive-folder-publish-progress",
+        serde_json::json!({
+            "folderId": folder_id,
+            "stage": "done",
+            "total": total_files,
+            "completed": total_files,
+            "succeeded": succeeded,
+            "failed": failures.len(),
+            "folderHash": folder_hash_opt,
+        }),
+    );
+
     Ok(DriveFolderSeedResult {
         folder,
         files_total: files.len(),
@@ -5921,6 +6151,7 @@ async fn publish_drive_folder(
 /// folder's own seeding state. Mirror of `publish_drive_folder`.
 #[tauri::command]
 async fn unpublish_drive_folder(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     owner: String,
     folder_id: String,
@@ -5939,15 +6170,66 @@ async fn unpublish_drive_folder(
         let _ = folder;
         collect_descendant_files(&m, &owner, &folder_id)
     };
+    let total_files = files.len();
+    let _ = app.emit(
+        "drive-folder-unpublish-progress",
+        serde_json::json!({
+            "folderId": folder_id,
+            "stage": "starting",
+            "total": total_files,
+            "completed": 0,
+        }),
+    );
 
+    // Run the per-file teardowns in parallel instead of one-after-another.
+    // Each call hits the DHT command channel + acquires the manifest write
+    // lock briefly + persists the manifest; under a serial loop, a folder
+    // with N seeded files locked the "Stop selling folder" button for
+    // N × (DHT round-trip + disk fsync). Parallelizing with join_all caps
+    // the wall time at ~max(file_i) instead of sum(file_i). Persistence
+    // contention is bounded by tokio's I/O queue; each persist writes the
+    // full manifest, but the saved time on DHT round-trips dominates.
+    let completed_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop_futures = files.iter().map(|(file_id, file_name)| {
+        let state = state.inner();
+        let owner = owner.clone();
+        let file_id = file_id.clone();
+        let file_name = file_name.clone();
+        let app = app.clone();
+        let folder_id_evt = folder_id.clone();
+        let counter = completed_counter.clone();
+        async move {
+            let res = drive_stop_seeding_inner(state, &owner, &file_id).await;
+            let done = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let (ok, err_msg) = match &res {
+                Ok(_) => (true, None),
+                Err(e) => (false, Some(e.clone())),
+            };
+            let _ = app.emit(
+                "drive-folder-unpublish-progress",
+                serde_json::json!({
+                    "folderId": folder_id_evt,
+                    "stage": "file",
+                    "total": total_files,
+                    "completed": done,
+                    "fileId": file_id,
+                    "fileName": file_name,
+                    "ok": ok,
+                    "error": err_msg,
+                }),
+            );
+            (file_id, file_name, res)
+        }
+    });
+    let results = futures::future::join_all(stop_futures).await;
     let mut succeeded = 0usize;
     let mut failures: Vec<DriveFolderFileError> = Vec::new();
-    for (file_id, file_name) in &files {
-        match drive_stop_seeding_inner(state.inner(), &owner, file_id).await {
+    for (file_id, file_name, res) in results {
+        match res {
             Ok(_) => succeeded += 1,
             Err(e) => failures.push(DriveFolderFileError {
-                item_id: file_id.clone(),
-                name: file_name.clone(),
+                item_id: file_id,
+                name: file_name,
                 error: e,
             }),
         }
@@ -5991,6 +6273,18 @@ async fn unpublish_drive_folder(
         item.clone()
     };
     state.drive_state.persist().await;
+
+    let _ = app.emit(
+        "drive-folder-unpublish-progress",
+        serde_json::json!({
+            "folderId": folder_id,
+            "stage": "done",
+            "total": total_files,
+            "completed": total_files,
+            "succeeded": succeeded,
+            "failed": failures.len(),
+        }),
+    );
 
     Ok(DriveFolderSeedResult {
         folder,

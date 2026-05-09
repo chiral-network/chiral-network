@@ -54,6 +54,18 @@
   let seedModalItem = $state<DriveItem | null>(null);
   let seedProtocol = $state<'WebRTC' | 'BitTorrent'>('WebRTC');
   let seedPrice = $state('');
+  // Live progress for folder publishes — populated from per-file events
+  // emitted by the Rust `publish_drive_folder` command. Without this,
+  // the user clicks "Sell folder" and stares at nothing for 10s+ while
+  // every child file is hashed in parallel.
+  let folderSeedProgress = $state<{
+    folderId: string;
+    name: string;
+    total: number;
+    completed: number;
+    failed: number;
+    mode: 'publish' | 'unpublish';
+  } | null>(null);
 
   // Drag and drop
   let isDragging = $state(false);
@@ -514,7 +526,31 @@
     }
 
     if (item.type === 'folder') {
-      const result = await driveStore.seedFolder(item.id, seedProtocol, priceChi || undefined);
+      folderSeedProgress = {
+        folderId: item.id,
+        name: item.name,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        mode: 'publish',
+      };
+      const result = await driveStore.seedFolder(
+        item.id,
+        seedProtocol,
+        priceChi || undefined,
+        (p) => {
+          if (!folderSeedProgress || folderSeedProgress.folderId !== item.id) return;
+          folderSeedProgress = {
+            ...folderSeedProgress,
+            total: p.total ?? folderSeedProgress.total,
+            completed: p.completed ?? folderSeedProgress.completed,
+            failed:
+              p.failed ??
+              (p.ok === false ? folderSeedProgress.failed + 1 : folderSeedProgress.failed),
+          };
+        },
+      );
+      folderSeedProgress = null;
       if (!result) {
         toasts.show(`Failed to sell folder "${item.name}"`, 'error');
         return;
@@ -552,7 +588,26 @@
 
   async function handleStopSeeding(item: DriveItem) {
     if (item.type === 'folder') {
-      const result = await driveStore.stopSeedingFolder(item.id);
+      folderSeedProgress = {
+        folderId: item.id,
+        name: item.name,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        mode: 'unpublish',
+      };
+      const result = await driveStore.stopSeedingFolder(item.id, (p) => {
+        if (!folderSeedProgress || folderSeedProgress.folderId !== item.id) return;
+        folderSeedProgress = {
+          ...folderSeedProgress,
+          total: p.total ?? folderSeedProgress.total,
+          completed: p.completed ?? folderSeedProgress.completed,
+          failed:
+            p.failed ??
+            (p.ok === false ? folderSeedProgress.failed + 1 : folderSeedProgress.failed),
+        };
+      });
+      folderSeedProgress = null;
       if (result && result.filesSucceeded > 0) {
         toasts.show(
           `Stopped selling "${item.name}" (${result.filesSucceeded} file${result.filesSucceeded === 1 ? '' : 's'})`,
@@ -972,6 +1027,30 @@
     onShowInExplorer={handleShowInExplorer}
     onEditPrice={handleEditPrice}
   />
+{/if}
+
+<!-- Folder publish progress (live updates from Rust events) -->
+{#if folderSeedProgress}
+  <div class="fixed bottom-4 right-4 z-40 max-w-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg p-3">
+    <div class="flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-white">
+      <span class="inline-block w-3 h-3 rounded-full border-2 border-primary-500 border-t-transparent animate-spin"></span>
+      {folderSeedProgress.mode === 'unpublish' ? 'Stopping' : 'Selling'} "{folderSeedProgress.name}"
+    </div>
+    <div class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+      {folderSeedProgress.completed} / {folderSeedProgress.total || '?'} files
+      {#if folderSeedProgress.failed > 0}
+        <span class="text-amber-600 dark:text-amber-400"> · {folderSeedProgress.failed} failed</span>
+      {/if}
+    </div>
+    {#if folderSeedProgress.total > 0}
+      <div class="mt-2 h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+        <div
+          class="h-full bg-primary-500 transition-all"
+          style="width: {Math.min(100, (folderSeedProgress.completed / folderSeedProgress.total) * 100)}%"
+        ></div>
+      </div>
+    {/if}
+  </div>
 {/if}
 
 <!-- Seed to network modal -->
