@@ -430,6 +430,16 @@ enum SwarmCommand {
         file_hash: String,
         response_tx: tokio::sync::oneshot::Sender<Result<Vec<String>, String>>,
     },
+    /// Send a deferred FileInfo/Chunk response. Used when the response had
+    /// to be built off the libp2p reactor (e.g. SHA-256 chunk-hash
+    /// computation on a cold seeder). Only the swarm task can call
+    /// `send_response` on the request_response behaviour, so the worker
+    /// task hands the channel + response back to the swarm via this
+    /// command.
+    SendChunkResponse {
+        channel: request_response::ResponseChannel<ChunkResponse>,
+        response: ChunkResponse,
+    },
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -716,8 +726,12 @@ impl DhtService {
 
         *running = true;
 
-        // Create command channel
+        // Create command channel. The sender is stored for outside callers
+        // and *also* cloned into the event loop so deferred response paths
+        // (e.g. the off-reactor chunk-hash worker) can hand work back to
+        // the swarm task itself.
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let cmd_tx_for_loop = cmd_tx.clone();
         let mut cmd_sender = self.command_sender.lock().await;
         *cmd_sender = Some(cmd_tx);
         drop(cmd_sender);
@@ -739,6 +753,7 @@ impl DhtService {
                 is_running_clone,
                 events_clone,
                 cmd_rx,
+                cmd_tx_for_loop,
                 file_transfer_clone,
                 shared_files_clone,
                 download_dir_clone,
@@ -1908,6 +1923,7 @@ async fn event_loop(
     is_running: Arc<Mutex<bool>>,
     events: EventSink,
     mut cmd_rx: mpsc::UnboundedReceiver<SwarmCommand>,
+    cmd_tx: mpsc::UnboundedSender<SwarmCommand>,
     file_transfer_service: Option<Arc<Mutex<crate::file_transfer::FileTransferService>>>,
     shared_files: SharedFilesMap,
     download_directory: DownloadDirectoryRef,
@@ -2118,6 +2134,7 @@ async fn event_loop(
                             &mut failed_peers,
                             &mut auto_peer_dial_attempts,
                             &mut pending_echo,
+                            &cmd_tx,
                         )
                         .await;
                     }
@@ -2508,6 +2525,20 @@ async fn event_loop(
                         pending_get_providers_queries.insert(query_id, response_tx);
                         pending_get_providers_results.insert(query_id, HashSet::new());
                     }
+                    SwarmCommand::SendChunkResponse { channel, response } => {
+                        // Dispatch a response that was built on a worker task
+                        // (because computing it required SHA-256 over a
+                        // multi-MB file, which we refuse to run on the
+                        // libp2p reactor). The behaviour's send_response
+                        // is sync once the channel is in hand.
+                        if let Err(e) = swarm
+                            .behaviour_mut()
+                            .file_request
+                            .send_response(channel, response)
+                        {
+                            println!("Failed to send deferred chunk response: {:?}", e);
+                        }
+                    }
                     SwarmCommand::HealthCheck { response_tx } => {
                         let listeners: Vec<String> = swarm.listeners().map(|a| a.to_string()).collect();
                         let connected: Vec<PeerId> = swarm.connected_peers().cloned().collect();
@@ -2750,6 +2781,7 @@ async fn handle_behaviour_event(
         request_response::OutboundRequestId,
         tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
     >,
+    cmd_tx: &mpsc::UnboundedSender<SwarmCommand>,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -3501,52 +3533,146 @@ async fn handle_behaviour_event(
                                         "📋 Received FileInfo request from {}: hash={}",
                                         peer, file_hash
                                     );
-                                    let mut shared = shared_files.lock().await;
+                                    let shared = shared_files.lock().await;
 
-                                    let response = if let Some(file_info) =
-                                        shared.get_mut(&file_hash)
-                                    {
-                                        // Compute chunk hashes if not cached
+                                    // Cold path: chunk hashes haven't been
+                                    // warmed yet (the background warmup
+                                    // spawned at register_shared_file is
+                                    // still running, or the seeder just
+                                    // started and hasn't gotten to it). We
+                                    // refuse to hash here on the libp2p
+                                    // reactor — a multi-MB SHA-256 sweep
+                                    // blocks every other peer's events for
+                                    // the whole read. Hand the work to a
+                                    // worker task that hashes off-runtime
+                                    // and bounces the response back via a
+                                    // SendChunkResponse command, so the
+                                    // swarm task continues servicing other
+                                    // peers in the meantime.
+                                    if let Some(file_info) = shared.get(&file_hash) {
                                         if file_info.chunk_hashes.is_none() {
-                                            println!(
-                                                "Computing chunk hashes for {}...",
-                                                file_info.file_name
-                                            );
-                                            match compute_chunk_hashes(&file_info.file_path) {
-                                                Ok(hashes) => {
-                                                    file_info.chunk_hashes = Some(hashes);
-                                                }
-                                                Err(e) => {
-                                                    println!(
-                                                        "Failed to compute chunk hashes: {}",
-                                                        e
-                                                    );
-                                                    let resp = ChunkResponse::FileInfo {
-                                                        request_id,
-                                                        file_hash,
-                                                        file_name: file_info.file_name.clone(),
-                                                        file_size: 0,
-                                                        chunk_size: CHUNK_SIZE as u32,
-                                                        total_chunks: 0,
-                                                        chunk_hashes: vec![],
-                                                        price_wei: "0".to_string(),
-                                                        wallet_address: String::new(),
-                                                        signature: String::new(),
-                                                        error: Some(format!(
-                                                            "Failed to read file: {}",
-                                                            e
-                                                        )),
-                                                    };
-                                                    drop(shared);
-                                                    let _ = swarm
-                                                        .behaviour_mut()
-                                                        .file_request
-                                                        .send_response(channel, resp);
-                                                    return;
-                                                }
-                                            }
+                                            let path = file_info.file_path.clone();
+                                            let file_name = file_info.file_name.clone();
+                                            let file_size = file_info.file_size;
+                                            let price_str = file_info.price_wei.to_string();
+                                            let wallet = file_info.wallet_address.clone();
+                                            let private_key = file_info.private_key.clone();
+                                            let shared_clone = shared_files.clone();
+                                            let cmd_tx_clone = cmd_tx.clone();
+                                            let request_id = request_id.clone();
+                                            let file_hash_owned = file_hash.clone();
+                                            drop(shared);
+                                            tokio::spawn(async move {
+                                                let path_for_hash = path.clone();
+                                                let hash_result = match tokio::task::spawn_blocking(
+                                                    move || compute_chunk_hashes(&path_for_hash),
+                                                )
+                                                .await
+                                                {
+                                                    Ok(inner) => inner,
+                                                    Err(je) => Err(format!(
+                                                        "Hash task panicked: {}",
+                                                        je
+                                                    )),
+                                                };
+                                                let response = match hash_result {
+                                                    Ok(hashes) => {
+                                                        // Cache the result so the next request
+                                                        // hits the warm path. Lose-the-race is
+                                                        // fine — another worker may have
+                                                        // populated it concurrently; either
+                                                        // set wins.
+                                                        let mut shared = shared_clone.lock().await;
+                                                        if let Some(info) = shared.get_mut(&file_hash_owned) {
+                                                            if info.chunk_hashes.is_none() {
+                                                                info.chunk_hashes = Some(hashes.clone());
+                                                            }
+                                                        }
+                                                        drop(shared);
+                                                        if private_key.is_empty() || wallet.is_empty() {
+                                                            ChunkResponse::FileInfo {
+                                                                request_id,
+                                                                file_hash: file_hash_owned,
+                                                                file_name,
+                                                                file_size: 0,
+                                                                chunk_size: CHUNK_SIZE as u32,
+                                                                total_chunks: 0,
+                                                                chunk_hashes: vec![],
+                                                                price_wei: "0".to_string(),
+                                                                wallet_address: String::new(),
+                                                                signature: String::new(),
+                                                                error: Some(
+                                                                    "Seeder cannot sign FileInfo (wallet not unlocked)"
+                                                                        .to_string(),
+                                                                ),
+                                                            }
+                                                        } else {
+                                                            let payload = file_info_sign_payload(
+                                                                &file_hash_owned,
+                                                                &file_name,
+                                                                file_size,
+                                                                CHUNK_SIZE as u32,
+                                                                hashes.len() as u32,
+                                                                &hashes,
+                                                                &price_str,
+                                                                &wallet,
+                                                            );
+                                                            let signature = crate::wallet::sign_message(
+                                                                &private_key,
+                                                                &payload,
+                                                            )
+                                                            .unwrap_or_default();
+                                                            ChunkResponse::FileInfo {
+                                                                request_id,
+                                                                file_hash: file_hash_owned,
+                                                                file_name,
+                                                                file_size,
+                                                                chunk_size: CHUNK_SIZE as u32,
+                                                                total_chunks: hashes.len() as u32,
+                                                                chunk_hashes: hashes,
+                                                                price_wei: price_str,
+                                                                wallet_address: wallet,
+                                                                signature,
+                                                                error: None,
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(msg) => {
+                                                        println!(
+                                                            "Failed to compute chunk hashes for {}: {}",
+                                                            file_hash_owned, msg
+                                                        );
+                                                        ChunkResponse::FileInfo {
+                                                            request_id,
+                                                            file_hash: file_hash_owned,
+                                                            file_name,
+                                                            file_size: 0,
+                                                            chunk_size: CHUNK_SIZE as u32,
+                                                            total_chunks: 0,
+                                                            chunk_hashes: vec![],
+                                                            price_wei: "0".to_string(),
+                                                            wallet_address: String::new(),
+                                                            signature: String::new(),
+                                                            error: Some(msg),
+                                                        }
+                                                    }
+                                                };
+                                                let _ = cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
+                                                    channel,
+                                                    response,
+                                                });
+                                            });
+                                            return;
                                         }
+                                    }
 
+                                    // Warm path: chunk hashes are already
+                                    // cached, so build + send the response
+                                    // synchronously while still on the
+                                    // swarm task. No I/O here — just clones
+                                    // + a (cheap) signature.
+                                    let response = if let Some(file_info) = shared.get(&file_hash)
+                                    {
                                         let chunk_hashes = file_info.chunk_hashes.as_ref().unwrap();
                                         let price_str = file_info.price_wei.to_string();
                                         let wallet = file_info.wallet_address.clone();
