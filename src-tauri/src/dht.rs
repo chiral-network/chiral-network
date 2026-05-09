@@ -1083,6 +1083,138 @@ impl DhtService {
     }
 }
 
+/// Run the full PaymentProof verification dance off the libp2p reactor.
+/// Distinguishes "tx not yet mined" (retryable) from "wrong amount or
+/// recipient" (permanent), and atomically claims the tx in the spent
+/// ledger only on success so the buyer can safely retry the same
+/// PaymentProof if the seeder's RPC node was lagging.
+async fn verify_payment_proof(
+    payment_tx: &str,
+    payer_address: &str,
+    expected_wallet: &str,
+    expected_price: u128,
+    file_hash: &str,
+    request_id: String,
+    events: &EventSink,
+) -> ChunkResponse {
+    // Stage 3: replay guard — peek before doing any chain work so we
+    // don't burn an RPC call on a tx that's already been redeemed.
+    let already_spent = {
+        let store = spent_tx_store().await;
+        let guard = store.lock().await;
+        guard.contains(&payment_tx.to_lowercase())
+    };
+    if already_spent {
+        println!(
+            "❌ Payment tx {} already redeemed for a previous download",
+            payment_tx
+        );
+        return ChunkResponse::PaymentAck {
+            request_id,
+            file_hash: file_hash.to_string(),
+            accepted: false,
+            error: Some(
+                "Payment tx already redeemed — one payment serves one download".to_string(),
+            ),
+        };
+    }
+
+    // FM-A25: distinguish mined-vs-not so the buyer gets a retryable
+    // "not yet confirmed" answer instead of a generic verification
+    // failure. The spent-tx ledger only records on success, so the
+    // buyer can safely retry the same PaymentProof.
+    let mined = match crate::wallet::wait_for_tx_mined(payment_tx).await {
+        Ok(v) => v,
+        Err(e) => {
+            println!("❌ wait_for_tx_mined error: {}", e);
+            return ChunkResponse::PaymentAck {
+                request_id,
+                file_hash: file_hash.to_string(),
+                accepted: false,
+                error: Some(format!("Payment verification error: {} (please retry)", e)),
+            };
+        }
+    };
+    if !mined {
+        println!(
+            "⏳ Payment tx {} not yet mined — buyer should retry shortly",
+            payment_tx
+        );
+        return ChunkResponse::PaymentAck {
+            request_id,
+            file_hash: file_hash.to_string(),
+            accepted: false,
+            error: Some(
+                "Payment not yet confirmed on-chain (retryable) — please retry in 30s".to_string(),
+            ),
+        };
+    }
+
+    match verify_payment_on_chain(payment_tx, payer_address, expected_wallet, expected_price).await
+    {
+        Ok(true) => {
+            // Atomically claim this tx so concurrent replays can't slip
+            // through between the peek above and this point.
+            if !claim_spent_tx(payment_tx, file_hash).await {
+                println!(
+                    "❌ Race: tx {} redeemed by a concurrent request",
+                    payment_tx
+                );
+                return ChunkResponse::PaymentAck {
+                    request_id,
+                    file_hash: file_hash.to_string(),
+                    accepted: false,
+                    error: Some(
+                        "Payment tx already redeemed by a concurrent request".to_string(),
+                    ),
+                };
+            }
+            println!(
+                "✅ Payment verified for {} from {}",
+                file_hash, payer_address
+            );
+            let price_wei_str = expected_price.to_string();
+            let _ = events.emit(
+                "chiraldrop-payment-received",
+                serde_json::json!({
+                    "fileHash": file_hash,
+                    "txHash": payment_tx,
+                    "priceWei": price_wei_str,
+                    "fromWallet": payer_address,
+                    "toWallet": expected_wallet,
+                }),
+            );
+            ChunkResponse::PaymentAck {
+                request_id,
+                file_hash: file_hash.to_string(),
+                accepted: true,
+                error: None,
+            }
+        }
+        Ok(false) => {
+            println!("❌ Payment verification failed for {}", file_hash);
+            ChunkResponse::PaymentAck {
+                request_id,
+                file_hash: file_hash.to_string(),
+                accepted: false,
+                error: Some(
+                    "Payment verification failed: insufficient amount or wrong recipient"
+                        .to_string(),
+                ),
+            }
+        }
+        Err(e) => {
+            println!("❌ Payment verification error: {}", e);
+            ChunkResponse::PaymentAck {
+                request_id,
+                file_hash: file_hash.to_string(),
+                accepted: false,
+                error: Some(format!("Payment verification error: {}", e)),
+            }
+        }
+    }
+}
+
 /// Verify a payment transaction on-chain.
 /// Checks that the transaction was sent to the expected recipient with at least the expected value.
 async fn verify_payment_on_chain(
@@ -3764,85 +3896,92 @@ async fn handle_behaviour_event(
                                     file_hash,
                                     chunk_index,
                                 } => {
+                                    // Defer the disk read + SHA-256 off the
+                                    // libp2p reactor. The previous version
+                                    // ran std::fs::File::open + seek + read
+                                    // + SHA-256 inline on the swarm task
+                                    // for every chunk request — for a
+                                    // 100-chunk download that's 100 sync
+                                    // I/Os in a row, blocking every other
+                                    // peer's events the whole time.
                                     let shared = shared_files.lock().await;
-
-                                    let response = if let Some(file_info) = shared.get(&file_hash) {
-                                        // Read the specific chunk from disk
-                                        let offset = chunk_index as u64 * CHUNK_SIZE as u64;
-                                        match std::fs::File::open(&file_info.file_path) {
-                                            Ok(mut file) => {
-                                                if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-                                                    ChunkResponse::Chunk {
-                                                        request_id,
-                                                        file_hash,
-                                                        chunk_index,
-                                                        chunk_data: None,
-                                                        chunk_hash: String::new(),
-                                                        error: Some(format!(
-                                                            "Failed to seek: {}",
-                                                            e
-                                                        )),
-                                                    }
-                                                } else {
-                                                    let mut buf = vec![0u8; CHUNK_SIZE];
-                                                    match file.read(&mut buf) {
-                                                        Ok(bytes_read) => {
-                                                            buf.truncate(bytes_read);
-                                                            let mut hasher = Sha256::new();
-                                                            hasher.update(&buf);
-                                                            let chunk_hash =
-                                                                hex::encode(hasher.finalize());
-                                                            ChunkResponse::Chunk {
-                                                                request_id,
-                                                                file_hash,
-                                                                chunk_index,
-                                                                chunk_data: Some(buf),
-                                                                chunk_hash,
-                                                                error: None,
-                                                            }
-                                                        }
-                                                        Err(e) => ChunkResponse::Chunk {
-                                                            request_id,
-                                                            file_hash,
-                                                            chunk_index,
-                                                            chunk_data: None,
-                                                            chunk_hash: String::new(),
-                                                            error: Some(format!(
-                                                                "Failed to read chunk: {}",
-                                                                e
-                                                            )),
-                                                        },
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => ChunkResponse::Chunk {
+                                    let file_path = match shared.get(&file_hash) {
+                                        Some(info) => info.file_path.clone(),
+                                        None => {
+                                            drop(shared);
+                                            let response = ChunkResponse::Chunk {
                                                 request_id,
                                                 file_hash,
                                                 chunk_index,
                                                 chunk_data: None,
                                                 chunk_hash: String::new(),
-                                                error: Some(format!("Failed to open file: {}", e)),
-                                            },
-                                        }
-                                    } else {
-                                        ChunkResponse::Chunk {
-                                            request_id,
-                                            file_hash,
-                                            chunk_index,
-                                            chunk_data: None,
-                                            chunk_hash: String::new(),
-                                            error: Some("File not found".to_string()),
+                                                error: Some("File not found".to_string()),
+                                            };
+                                            if let Err(e) = swarm
+                                                .behaviour_mut()
+                                                .file_request
+                                                .send_response(channel, response)
+                                            {
+                                                println!("Failed to send chunk response: {:?}", e);
+                                            }
+                                            return;
                                         }
                                     };
                                     drop(shared);
 
-                                    if let Err(e) = swarm
-                                        .behaviour_mut()
-                                        .file_request
-                                        .send_response(channel, response)
-                                    {
-                                        println!("Failed to send chunk response: {:?}", e);
-                                    }
+                                    let cmd_tx_clone = cmd_tx.clone();
+                                    let request_id = request_id.clone();
+                                    let file_hash_owned = file_hash.clone();
+                                    tokio::spawn(async move {
+                                        let path_for_read = file_path.clone();
+                                        let read_result = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String), String> {
+                                            let mut file = std::fs::File::open(&path_for_read)
+                                                .map_err(|e| format!("Failed to open file: {}", e))?;
+                                            let offset = chunk_index as u64 * CHUNK_SIZE as u64;
+                                            file.seek(SeekFrom::Start(offset))
+                                                .map_err(|e| format!("Failed to seek: {}", e))?;
+                                            let mut buf = vec![0u8; CHUNK_SIZE];
+                                            let bytes_read = file
+                                                .read(&mut buf)
+                                                .map_err(|e| format!("Failed to read chunk: {}", e))?;
+                                            buf.truncate(bytes_read);
+                                            let mut hasher = Sha256::new();
+                                            hasher.update(&buf);
+                                            let chunk_hash = hex::encode(hasher.finalize());
+                                            Ok((buf, chunk_hash))
+                                        })
+                                        .await;
+                                        let response = match read_result {
+                                            Ok(Ok((buf, chunk_hash))) => ChunkResponse::Chunk {
+                                                request_id,
+                                                file_hash: file_hash_owned,
+                                                chunk_index,
+                                                chunk_data: Some(buf),
+                                                chunk_hash,
+                                                error: None,
+                                            },
+                                            Ok(Err(msg)) => ChunkResponse::Chunk {
+                                                request_id,
+                                                file_hash: file_hash_owned,
+                                                chunk_index,
+                                                chunk_data: None,
+                                                chunk_hash: String::new(),
+                                                error: Some(msg),
+                                            },
+                                            Err(je) => ChunkResponse::Chunk {
+                                                request_id,
+                                                file_hash: file_hash_owned,
+                                                chunk_index,
+                                                chunk_data: None,
+                                                chunk_hash: String::new(),
+                                                error: Some(format!("Chunk read task panicked: {}", je)),
+                                            },
+                                        };
+                                        let _ = cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
+                                            channel,
+                                            response,
+                                        });
+                                    });
                                 }
                                 ChunkRequest::PaymentProof {
                                     request_id,
@@ -3854,197 +3993,89 @@ async fn handle_behaviour_event(
                                         "💰 Received payment proof from {}: tx={}, payer={}",
                                         peer, payment_tx, payer_address
                                     );
+                                    // Pull what we need from shared_files in
+                                    // a tight window. Anything that can wait
+                                    // for chain RPC is moved to a worker
+                                    // below — the previous version called
+                                    // wait_for_tx_mined inline, blocking the
+                                    // entire libp2p reactor for up to ~88s
+                                    // while a single tx propagated. During
+                                    // that window every other peer's
+                                    // pings/dials/chunks stalled, even if
+                                    // they were unrelated to this download.
                                     let shared = shared_files.lock().await;
-
-                                    let response = if let Some(file_info) = shared.get(&file_hash) {
-                                        if file_info.price_wei == 0 {
-                                            // Free file — no payment needed, accept
-                                            ChunkResponse::PaymentAck {
+                                    let (price_wei, expected_wallet) = match shared.get(&file_hash) {
+                                        Some(info) => (info.price_wei, info.wallet_address.clone()),
+                                        None => {
+                                            drop(shared);
+                                            let resp = ChunkResponse::PaymentAck {
                                                 request_id,
                                                 file_hash,
-                                                accepted: true,
-                                                error: None,
-                                            }
-                                        } else {
-                                            // Verify payment on-chain
-                                            let expected_wallet = file_info.wallet_address.clone();
-                                            let expected_price = file_info.price_wei;
-                                            drop(shared);
-
-                                            // Stage 3: replay guard — reject up front if this
-                                            // tx was already redeemed. Peeking first (rather
-                                            // than claim-then-verify) avoids burning a slot on
-                                            // an invalid tx.
-                                            let already_spent = {
-                                                let store = spent_tx_store().await;
-                                                let guard = store.lock().await;
-                                                guard.contains(&payment_tx.to_lowercase())
+                                                accepted: false,
+                                                error: Some("File not found".to_string()),
                                             };
-                                            if already_spent {
-                                                println!(
-                                                    "❌ Payment tx {} already redeemed for a previous download",
-                                                    payment_tx
-                                                );
-                                                ChunkResponse::PaymentAck {
-                                                    request_id,
-                                                    file_hash,
-                                                    accepted: false,
-                                                    error: Some(
-                                                        "Payment tx already redeemed — one payment serves one download"
-                                                            .to_string(),
-                                                    ),
-                                                }
-                                            } else {
-                                            // FM-A25: check mined-vs-not separately so the buyer
-                                            // gets a retryable "not yet confirmed" answer instead
-                                            // of a generic "verification failed" when the tx is
-                                            // valid but hasn't propagated to the seeder's RPC node
-                                            // yet. The spent-tx ledger only records on success, so
-                                            // resending PaymentProof with the same tx_hash is safe.
-                                            let mined = match crate::wallet::wait_for_tx_mined(&payment_tx).await {
-                                                Ok(v) => v,
-                                                Err(e) => {
-                                                    println!("❌ wait_for_tx_mined error: {}", e);
-                                                    let resp = ChunkResponse::PaymentAck {
-                                                        request_id,
-                                                        file_hash,
-                                                        accepted: false,
-                                                        error: Some(format!(
-                                                            "Payment verification error: {} (please retry)",
-                                                            e
-                                                        )),
-                                                    };
-                                                    if let Err(e) = swarm
-                                                        .behaviour_mut()
-                                                        .file_request
-                                                        .send_response(channel, resp)
-                                                    {
-                                                        println!("Failed to send PaymentAck: {:?}", e);
-                                                    }
-                                                    return;
-                                                }
-                                            };
-                                            if !mined {
-                                                println!(
-                                                    "⏳ Payment tx {} not yet mined — buyer should retry shortly",
-                                                    payment_tx
-                                                );
-                                                let resp = ChunkResponse::PaymentAck {
-                                                    request_id,
-                                                    file_hash,
-                                                    accepted: false,
-                                                    error: Some(
-                                                        "Payment not yet confirmed on-chain (retryable) — please retry in 30s"
-                                                            .to_string(),
-                                                    ),
-                                                };
-                                                if let Err(e) = swarm
-                                                    .behaviour_mut()
-                                                    .file_request
-                                                    .send_response(channel, resp)
-                                                {
-                                                    println!("Failed to send PaymentAck: {:?}", e);
-                                                }
-                                                return;
-                                            }
-                                            match verify_payment_on_chain(
-                                                &payment_tx,
-                                                &payer_address,
-                                                &expected_wallet,
-                                                expected_price,
-                                            )
-                                            .await
+                                            if let Err(e) = swarm
+                                                .behaviour_mut()
+                                                .file_request
+                                                .send_response(channel, resp)
                                             {
-                                                Ok(true) => {
-                                                    // Atomically claim this tx so concurrent
-                                                    // replays can't slip through between the
-                                                    // peek above and the chain verify. If the
-                                                    // claim fails, another task beat us to it.
-                                                    if !claim_spent_tx(&payment_tx, &file_hash).await {
-                                                        println!(
-                                                            "❌ Race: tx {} redeemed by a concurrent request",
-                                                            payment_tx
-                                                        );
-                                                        ChunkResponse::PaymentAck {
-                                                            request_id,
-                                                            file_hash,
-                                                            accepted: false,
-                                                            error: Some(
-                                                                "Payment tx already redeemed by a concurrent request"
-                                                                    .to_string(),
-                                                            ),
-                                                        }
-                                                    } else {
-                                                    println!(
-                                                        "✅ Payment verified for {} from {}",
-                                                        file_hash, payer_address
-                                                    );
-                                                    let price_wei_str = expected_price.to_string();
-                                                    let _ = events.emit(
-                                                        "chiraldrop-payment-received",
-                                                        serde_json::json!({
-                                                            "fileHash": file_hash,
-                                                            "txHash": payment_tx,
-                                                            "priceWei": price_wei_str,
-                                                            "fromWallet": payer_address,
-                                                            "toWallet": expected_wallet,
-                                                        }),
-                                                    );
-                                                    ChunkResponse::PaymentAck {
-                                                        request_id,
-                                                        file_hash,
-                                                        accepted: true,
-                                                        error: None,
-                                                    }
-                                                    }
-                                                }
-                                                Ok(false) => {
-                                                    println!(
-                                                        "❌ Payment verification failed for {}",
-                                                        file_hash
-                                                    );
-                                                    ChunkResponse::PaymentAck {
-                                                        request_id,
-                                                        file_hash,
-                                                        accepted: false,
-                                                        error: Some("Payment verification failed: insufficient amount or wrong recipient".to_string()),
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    println!(
-                                                        "❌ Payment verification error: {}",
-                                                        e
-                                                    );
-                                                    ChunkResponse::PaymentAck {
-                                                        request_id,
-                                                        file_hash,
-                                                        accepted: false,
-                                                        error: Some(format!(
-                                                            "Payment verification error: {}",
-                                                            e
-                                                        )),
-                                                    }
-                                                }
+                                                println!("Failed to send PaymentAck response: {:?}", e);
                                             }
-                                        }
-                                        }
-                                    } else {
-                                        drop(shared);
-                                        ChunkResponse::PaymentAck {
-                                            request_id,
-                                            file_hash,
-                                            accepted: false,
-                                            error: Some("File not found".to_string()),
+                                            return;
                                         }
                                     };
+                                    drop(shared);
 
-                                    if let Err(e) = swarm
-                                        .behaviour_mut()
-                                        .file_request
-                                        .send_response(channel, response)
-                                    {
-                                        println!("Failed to send PaymentAck response: {:?}", e);
+                                    // Free-file fast path — no chain RPC,
+                                    // no risk of stalling the reactor.
+                                    if price_wei == 0 {
+                                        let resp = ChunkResponse::PaymentAck {
+                                            request_id,
+                                            file_hash,
+                                            accepted: true,
+                                            error: None,
+                                        };
+                                        if let Err(e) = swarm
+                                            .behaviour_mut()
+                                            .file_request
+                                            .send_response(channel, resp)
+                                        {
+                                            println!("Failed to send PaymentAck response: {:?}", e);
+                                        }
+                                        return;
                                     }
+
+                                    // Paid file — defer the entire chain-
+                                    // verification dance off the reactor.
+                                    // The worker peeks the spent-tx ledger,
+                                    // waits for the tx to mine (≤88s),
+                                    // verifies the receipt details against
+                                    // the seeder's expected wallet/price,
+                                    // claims the tx atomically, and hands
+                                    // the final PaymentAck back to the
+                                    // swarm task via SendChunkResponse.
+                                    let cmd_tx_clone = cmd_tx.clone();
+                                    let events_clone = events.clone();
+                                    let request_id_owned = request_id.clone();
+                                    let file_hash_owned = file_hash.clone();
+                                    let payment_tx_owned = payment_tx.clone();
+                                    let payer_address_owned = payer_address.clone();
+                                    tokio::spawn(async move {
+                                        let response = verify_payment_proof(
+                                            &payment_tx_owned,
+                                            &payer_address_owned,
+                                            &expected_wallet,
+                                            price_wei,
+                                            &file_hash_owned,
+                                            request_id_owned,
+                                            &events_clone,
+                                        )
+                                        .await;
+                                        let _ = cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
+                                            channel,
+                                            response,
+                                        });
+                                    });
                                 }
                             }
                         }
