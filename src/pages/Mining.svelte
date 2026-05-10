@@ -276,7 +276,17 @@
       // a private fork (or the canonical RPC is unreachable) — the
       // user's "I mined N CHI on this page but my wallet shows 0"
       // experience.
-      const minerAddr = mining?.minerAddress || $walletAccount?.address;
+      //
+      // Only run the diagnostic against Geth's actual etherbase
+      // (`mining.minerAddress`, derived from `eth_coinbase`). Falling
+      // back to `$walletAccount.address` would query a different
+      // address than Geth is mining to, masking real mismatches and
+      // producing false reassurance: e.g. user has wallet 0xBob but
+      // Geth has no etherbase set — the fallback queries 0xBob's
+      // balance on local + canonical, both 0, no divergence flag,
+      // even though the user can see "Total Mined: 5 CHI" because
+      // Geth happened to mine to keystore account 0.
+      const minerAddr = mining?.minerAddress;
       if (minerAddr) {
         balanceDiagnostic = await invoke<MiningBalanceDiagnostic>(
           'get_mining_balance_diagnostic',
@@ -621,6 +631,18 @@
         <p class="text-sm font-mono truncate dark:text-gray-300">
           {miningStatus?.minerAddress || $walletAccount?.address || 'Not set'}
         </p>
+        {#if miningStatus?.minerAddress && $walletAccount?.address && miningStatus.minerAddress.toLowerCase() !== $walletAccount.address.toLowerCase()}
+          <!-- Geth's active etherbase differs from the connected wallet
+               — the user is mining to a different address than the one
+               their wallet shows. Likely cause: Geth was started with a
+               different etherbase (e.g. via daemon CLI) before the
+               wallet was connected. handleStartMining() syncs them on
+               next CPU/GPU mining start, but rewards already mined
+               under the old etherbase land in that other address. -->
+          <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            ⚠ Mining to a different address than your connected wallet ({$walletAccount.address.slice(0, 6)}…{$walletAccount.address.slice(-4)}). Click "Start mining" to switch Geth to your wallet.
+          </p>
+        {/if}
       </div>
 
       <!-- CPU Section -->
