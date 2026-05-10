@@ -73,13 +73,6 @@ Format per entry:
 - **Why it's still here:** Bounded to keep the Svelte reactive update cost low; an unbounded buffer would chew GC.
 - **Workaround:** Operators investigating a long-running issue should `Export` periodically or use the `Copy snapshot` button which captures recent state at a point in time.
 
-### Auto-refresh keeps polling even when the page is not visible
-
-- **Where:** `src/pages/Diagnostics.svelte::startAutoRefresh`
-- **Symptom:** When the user navigates away from Diagnostics, the 5s `setInterval` keeps firing `loadGethStatus()`, `loadMiningStatus()`, `loadGethLog()`, and `loadDhtHealth()` Tauri commands until the component unmounts (which can be never, on persistent layouts).
-- **Why it's still here:** No `document.visibilityState` check yet.
-- **Workaround:** Toggle "Auto-refresh" off when leaving the page.
-
 ### Frontend bundle is 750 kB minified, gzip 220 kB
 
 - **Where:** Vite build warning every `npm run build`

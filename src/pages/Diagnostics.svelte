@@ -249,14 +249,47 @@
     }
   });
 
+  // Pause auto-refresh while the page (or tab) is hidden — without this,
+  // navigating off Diagnostics keeps firing every Tauri command on the
+  // 5s interval forever (the component lives on persistent layouts and
+  // doesn't unmount). When the user comes back, the listener kicks the
+  // interval back on so they see fresh state.
+  function handleVisibilityChange() {
+    if (typeof document === 'undefined') return;
+    if (document.visibilityState === 'visible') {
+      if (autoRefreshEnabled && autoRefreshInterval === null) {
+        startAutoRefresh();
+      }
+    } else {
+      // Tear the interval down without flipping `autoRefreshEnabled` so
+      // the user's preference survives the tab being away.
+      if (autoRefreshInterval !== null) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+      }
+    }
+  }
+
+  onMount(() => {
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+  });
+
   onDestroy(() => {
     for (const unlisten of eventListeners) unlisten();
     stopAutoRefresh();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }
   });
 
   function startAutoRefresh() {
     stopAutoRefresh();
-    if (autoRefreshEnabled) {
+    // Don't start the interval if the page is currently hidden — the
+    // visibilitychange handler will kick it on when the user comes back.
+    const hidden = typeof document !== 'undefined' && document.visibilityState !== 'visible';
+    if (autoRefreshEnabled && !hidden) {
       autoRefreshInterval = setInterval(async () => {
         if (!isTauri()) return;
         await Promise.all([loadGethStatus(), loadMiningStatus(), loadGethLog(), loadDhtHealth()]);
