@@ -491,6 +491,40 @@ impl GethProcess {
         Ok(())
     }
 
+    /// Wipe the local chaindata so the next `start()` does a fresh
+    /// `geth init` and re-syncs from the canonical bootnode. Used to
+    /// recover from "I mined on a private fork" — the local node has
+    /// accumulated more cumulative work than what canonical has done in
+    /// the same wall-clock window, so Ethash won't switch back on its
+    /// own. Only the chaindata is removed; `nodekey` and any wallet
+    /// keystore stay put.
+    ///
+    /// Geth must be stopped before calling. Mining rewards on the
+    /// pre-reset local fork are unrecoverable — they were never on the
+    /// canonical chain.
+    pub fn reset_chain(&mut self) -> Result<(), String> {
+        if self.child.is_some() {
+            return Err("Stop Geth before resetting the local chain".into());
+        }
+        let geth_dir = self.data_dir.join("geth");
+        for sub in ["chaindata", "lightchaindata", "triecache", "ethash"] {
+            let p = geth_dir.join(sub);
+            if p.exists() {
+                fs::remove_dir_all(&p)
+                    .map_err(|e| format!("remove {}: {}", p.display(), e))?;
+            }
+        }
+        // The genesis.json file at the datadir root is regenerated on
+        // next start by init_genesis_if_needed, so wipe it too — leaving
+        // a stale copy from an old preset would be confusing if the
+        // operator switched networks between resets.
+        let genesis = self.data_dir.join("genesis.json");
+        if genesis.exists() {
+            let _ = fs::remove_file(&genesis);
+        }
+        Ok(())
+    }
+
     /// Fast kill for app shutdown — no graceful wait.
     pub fn stop_fast(&mut self) {
         if let Some(mut child) = self.child.take() {

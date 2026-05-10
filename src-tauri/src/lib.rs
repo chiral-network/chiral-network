@@ -3299,6 +3299,23 @@ async fn stop_geth(state: tauri::State<'_, AppState>) -> Result<(), String> {
     geth.stop()
 }
 
+/// Stop Geth and wipe the local chaindata so the next start re-inits
+/// from genesis and re-syncs against the canonical bootnode. Used to
+/// recover from a private-fork situation (the mining diagnostic flags
+/// `diverged: true` when the local Geth's balance for the miner address
+/// differs from the canonical RPC's balance by more than 0.001 CHI).
+/// Mining rewards on the pre-reset fork are unrecoverable — they were
+/// never on the canonical chain.
+#[tauri::command]
+async fn reset_local_chain(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut geth = state.geth.lock().await;
+    // Stop first; reset_chain refuses to wipe chaindata while a Geth
+    // process is still pinned to it (open file handles + the active
+    // process would either fight the rm or miss the wipe entirely).
+    geth.stop()?;
+    geth.reset_chain()
+}
+
 #[tauri::command]
 async fn get_geth_status(state: tauri::State<'_, AppState>) -> Result<GethStatus, String> {
     let geth = state.geth.lock().await;
@@ -7029,6 +7046,7 @@ pub fn run() {
             download_geth,
             start_geth,
             stop_geth,
+            reset_local_chain,
             get_geth_status,
             start_mining,
             stop_mining,

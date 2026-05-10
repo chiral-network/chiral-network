@@ -53,6 +53,13 @@
   }
 
   let balanceDiagnostic = $state<MiningBalanceDiagnostic | null>(null);
+  // Reset-local-chain affordance for the divergence path. The button on
+  // the divergence banner opens a confirm dialog that warns the user
+  // their local-fork mining rewards are unrecoverable; on confirm we
+  // call `reset_local_chain` (stops Geth + wipes chaindata) and let the
+  // user restart Geth to re-sync from canonical.
+  let showResetConfirm = $state(false);
+  let resettingChain = $state(false);
 
   interface GpuDevice {
     id: string;
@@ -293,6 +300,28 @@
     }
   }
 
+  async function confirmResetLocalChain() {
+    showResetConfirm = false;
+    resettingChain = true;
+    try {
+      await invoke('reset_local_chain');
+      // Drop the divergence banner immediately so the user sees the
+      // reset took effect; loadStatus() below will repopulate from the
+      // freshly-stopped Geth.
+      balanceDiagnostic = null;
+      toasts.detail(
+        'Local chain reset',
+        'Geth stopped and chaindata wiped. Start Geth again to re-sync from canonical.',
+        'success',
+      );
+      await loadStatus();
+    } catch (err: any) {
+      toasts.detail('Reset failed', String(err), 'error');
+    } finally {
+      resettingChain = false;
+    }
+  }
+
   async function loadGpuCapabilities() {
     if (!isTauri()) return;
 
@@ -530,9 +559,21 @@
               ⚠ Canonical RPC unreachable — wallet page may show stale 0
             </p>
           {:else if balanceDiagnostic?.diverged}
-            <p class="text-xs mt-1 text-red-600 dark:text-red-400">
-              ⚠ Diverges from canonical chain ({balanceDiagnostic.canonicalBalanceChi.toFixed(4)} CHI on-chain) — likely mining on a private fork
-            </p>
+            <div class="mt-1 text-xs text-red-600 dark:text-red-400 space-y-1">
+              <p>
+                ⚠ Local Geth is on a private fork ({balanceDiagnostic.canonicalBalanceChi.toFixed(4)} CHI on canonical chain).
+              </p>
+              <p class="text-red-500 dark:text-red-400/80">
+                Mining rewards on this fork won't appear in your wallet — they were never on the real network. Reset to re-sync from canonical.
+              </p>
+              <button
+                onclick={() => showResetConfirm = true}
+                disabled={resettingChain}
+                class="mt-1 px-2 py-0.5 text-xs rounded border border-red-400 dark:border-red-500/60 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {resettingChain ? 'Resetting…' : 'Reset local chain'}
+              </button>
+            </div>
           {/if}
         </div>
         <div class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
@@ -753,3 +794,46 @@
 
   {/if}
 </div>
+
+<!-- Reset-local-chain confirm dialog. Shown when the divergence banner's
+     "Reset local chain" button is clicked. Wipes chaindata so the next
+     Geth start re-syncs from canonical. Mining rewards on the local
+     fork are unrecoverable — the dialog says so plainly. -->
+{#if showResetConfirm}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+    onclick={() => showResetConfirm = false}
+    onkeydown={(e) => { if (e.key === 'Escape') showResetConfirm = false; }}
+  >
+    <div
+      class="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2 flex items-center gap-2">
+        <AlertTriangle class="w-5 h-5 text-red-500" />
+        Reset local chain?
+      </h3>
+      <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
+        This will stop Geth and delete the local chain data. After
+        reset, start Geth again and it'll re-sync from the canonical
+        bootstrap node.
+      </p>
+      <p class="text-sm text-red-600 dark:text-red-400 mb-4">
+        Any CHI mined on the current local fork is unrecoverable — those
+        blocks were never on the canonical chain. Your wallet keys are
+        unaffected.
+      </p>
+      <div class="flex justify-end gap-3">
+        <button
+          onclick={() => showResetConfirm = false}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition"
+        >Cancel</button>
+        <button
+          onclick={confirmResetLocalChain}
+          class="px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition"
+        >Reset chain</button>
+      </div>
+    </div>
+  </div>
+{/if}
