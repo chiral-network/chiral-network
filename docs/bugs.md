@@ -73,13 +73,6 @@ Format per entry:
 - **Why it's still here:** Bounded to keep the Svelte reactive update cost low; an unbounded buffer would chew GC.
 - **Workaround:** Operators investigating a long-running issue should `Export` periodically or use the `Copy snapshot` button which captures recent state at a point in time.
 
-### Frontend bundle is 750 kB minified, gzip 220 kB
-
-- **Where:** Vite build warning every `npm run build`
-- **Symptom:** Single-chunk bundle exceeds Vite's 500 kB warning; affects cold-start time on the Tauri webview, especially on lower-end Linux distros.
-- **Why it's still here:** No code-splitting wired up (`build.rollupOptions.output.manualChunks`).
-- **Workaround:** None for users; build warning is informational.
-
 ---
 
 ## Test gaps (not bugs in product code, but flagged so contributors know)
