@@ -262,13 +262,30 @@ fn read_price_env() -> u128 {
 /// served by `hosting_server.rs` against the local-only `hosted_sites.json`
 /// (empty on a CDN-only deployment, but the route slot is still claimed).
 pub fn router(state: Arc<CdnState>) -> Router {
-    Router::new()
+    // Protected routes — every owner-mutating endpoint goes here so the
+    // owner-proof middleware can authenticate the caller before they're
+    // allowed to delete or re-price someone else's CDN content. Before
+    // this split, the bare `?owner=0xABC` query param was the only auth
+    // — anyone who knew a file/site hash and the original owner's
+    // wallet address could delete it (docs/bugs.md).
+    let protected = Router::new()
+        .route(
+            "/api/cdn/files/:file_hash",
+            delete(delete_file).put(update_price),
+        )
+        .route("/api/cdn/sites/:site_id", delete(delete_site))
+        .layer(axum::middleware::from_fn(crate::auth::owner_proof_middleware));
+
+    // Public routes — readable / payment-gated endpoints. Uploads
+    // verify a separate on-chain payment receipt so they don't need
+    // the owner-proof middleware. Visitor `/cdn/sites/...` reads must
+    // stay unauthenticated.
+    let public = Router::new()
         .route(
             "/api/cdn/upload",
             post(upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
         .route("/api/cdn/files", get(list))
-        .route("/api/cdn/files/:file_hash", delete(delete_file).put(update_price))
         .route("/api/cdn/pricing", get(pricing))
         .route("/api/cdn/status", get(status))
         // ── CDN-hosted sites ──────────────────────────────────────────
@@ -277,11 +294,11 @@ pub fn router(state: Arc<CdnState>) -> Router {
             post(upload_site).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
         .route("/api/cdn/sites", get(list_sites))
-        .route("/api/cdn/sites/:site_id", delete(delete_site))
         .route("/cdn/sites/:site_id", get(serve_site_redirect))
         .route("/cdn/sites/:site_id/", get(serve_site_root))
-        .route("/cdn/sites/:site_id/*path", get(serve_site_file))
-        .with_state(state)
+        .route("/cdn/sites/:site_id/*path", get(serve_site_file));
+
+    protected.merge(public).with_state(state)
 }
 
 /// GET /api/cdn/status — service identity + counts + unit price.
@@ -556,15 +573,28 @@ async fn upload(
     .into_response()
 }
 
-/// DELETE /api/cdn/files/:file_hash?owner=0xABC — unregister + delete file.
+/// DELETE /api/cdn/files/:file_hash — unregister + delete file.
+///
+/// Auth: owner-proof middleware verifies `X-Owner` against `X-Owner-Sig`
+/// before this handler runs. We trust `X-Owner` here (NOT the `?owner=`
+/// query param). Otherwise an attacker could sign a request as
+/// themselves and pass `?owner=victim` to delete a different wallet's
+/// file — the middleware would happily verify the attacker's signature
+/// against the attacker's X-Owner header while the handler used the
+/// query param to scope the registry retain.
 async fn delete_file(
     State(s): State<Arc<CdnState>>,
+    headers: HeaderMap,
     AxumPath(file_hash): AxumPath<String>,
-    Query(params): Query<HashMap<String, String>>,
+    Query(_params): Query<HashMap<String, String>>,
 ) -> Response {
-    let owner = params.get("owner").cloned().unwrap_or_default().to_lowercase();
+    let owner = headers
+        .get("x-owner")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
     if owner.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "owner query param required");
+        return err(StatusCode::BAD_REQUEST, "X-Owner header required");
     }
     let removed = s
         .with_registry(|r| {
@@ -585,19 +615,28 @@ async fn delete_file(
 
 /// PUT /api/cdn/files/:file_hash — change the download price (seeder price
 /// downstream clients pay when they fetch from this CDN).
+///
+/// Auth: owner-proof middleware verifies `X-Owner` against `X-Owner-Sig`.
+/// Trust `X-Owner` here, not the body's `owner` field — same reason as
+/// `delete_file` above.
 async fn update_price(
     State(s): State<Arc<CdnState>>,
+    headers: HeaderMap,
     AxumPath(file_hash): AxumPath<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let owner = body["owner"].as_str().unwrap_or("").to_lowercase();
+    let owner = headers
+        .get("x-owner")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
     let new_price = match &body["downloadPriceChi"] {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Number(n) => n.to_string(),
         _ => "0".to_string(),
     };
     if owner.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "owner required");
+        return err(StatusCode::BAD_REQUEST, "X-Owner header required");
     }
 
     let found_entry = s
@@ -1194,15 +1233,24 @@ async fn list_sites(
     .into_response()
 }
 
-/// DELETE /api/cdn/sites/:site_id?owner=0xABC — remove site files + registry.
+/// DELETE /api/cdn/sites/:site_id — remove site files + registry.
+///
+/// Auth: owner-proof middleware verifies `X-Owner` against `X-Owner-Sig`.
+/// Trust `X-Owner` here, not the `?owner=` query param — see
+/// `delete_file` for the attack the verification protects against.
 async fn delete_site(
     State(s): State<Arc<CdnState>>,
+    headers: HeaderMap,
     AxumPath(site_id): AxumPath<String>,
-    Query(params): Query<HashMap<String, String>>,
+    Query(_params): Query<HashMap<String, String>>,
 ) -> Response {
-    let owner = params.get("owner").cloned().unwrap_or_default().to_lowercase();
+    let owner = headers
+        .get("x-owner")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
     if owner.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "owner query param required");
+        return err(StatusCode::BAD_REQUEST, "X-Owner header required");
     }
     let removed = s
         .with_sites_registry(|r| {

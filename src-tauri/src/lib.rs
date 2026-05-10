@@ -4680,9 +4680,10 @@ async fn unpublish_site_from_cdn(
     site_id: String,
     cdn_url: Option<String>,
     owner_wallet: String,
+    private_key: String,
 ) -> Result<(), String> {
-    if owner_wallet.is_empty() {
-        return Err("Wallet required to unpublish from a CDN".into());
+    if owner_wallet.is_empty() || private_key.is_empty() {
+        return Err("Wallet must be unlocked to unpublish from a CDN".into());
     }
     let mut all_sites = hosting::load_sites();
     let site = all_sites
@@ -4700,12 +4701,25 @@ async fn unpublish_site_from_cdn(
         None => cdn_base.trim_end_matches('/').to_string(),
     };
 
-    let url = format!(
-        "{}/api/cdn/sites/{}?owner={}",
-        cdn_base, site_id, owner_wallet
-    );
+    // Owner-proof: the CDN's `/api/cdn/sites/:id` DELETE route is now
+    // gated by the owner-proof middleware. Sign the (wallet, ts, method,
+    // path-with-query) tuple so the server can recover the wallet from
+    // the signature and verify it matches the registry's stored owner.
+    let owner_lower = owner_wallet.to_lowercase();
+    let path = format!("/api/cdn/sites/{}?owner={}", site_id, owner_lower);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let proof_payload = auth::owner_proof_payload(&owner_lower, ts, "DELETE", &path);
+    let signature = wallet::sign_message(&private_key, &proof_payload)
+        .map_err(|e| format!("Failed to sign unpublish proof: {}", e))?;
+
+    let url = format!("{}{}", cdn_base, path);
     let resp = rpc_client::client()
         .delete(&url)
+        .header("X-Owner", &owner_lower)
+        .header("X-Owner-Sig", format!("{}:{}", ts, signature))
         .send()
         .await
         .map_err(|e| format!("Failed to connect to CDN: {}", e))?;

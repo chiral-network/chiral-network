@@ -218,10 +218,32 @@
 
   async function deleteCdnFile(serverUrl: string, fileHash: string) {
     const myWallet = $walletAccount?.address || '';
-    if (!myWallet) { toasts.show('No wallet connected', 'error'); return; }
-
+    const privateKey = $walletAccount?.privateKey || '';
+    if (!myWallet || !privateKey) {
+      toasts.show('Wallet must be unlocked to delete from CDN', 'error');
+      return;
+    }
     try {
-      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/files/${fileHash}?owner=${myWallet}`, { method: 'DELETE' });
+      // Owner-proof: the CDN's `/api/cdn/files/:hash` DELETE route is
+      // protected by signed-challenge middleware. Sign the request
+      // before sending so the server can recover the caller's wallet
+      // and match it against the registry's stored owner.
+      const ownerLower = myWallet.toLowerCase();
+      const path = `/api/cdn/files/${fileHash}?owner=${ownerLower}`;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const proof = await invoke<{ header: string }>('compute_owner_proof', {
+        method: 'DELETE',
+        path,
+        walletAddress: myWallet,
+        privateKey,
+      });
+      const resp = await fetchWithVersion(`${serverUrl}${path}`, {
+        method: 'DELETE',
+        headers: {
+          'X-Owner': ownerLower,
+          'X-Owner-Sig': proof.header,
+        },
+      });
       if (resp.ok) {
         toasts.show('File removed from CDN', 'success');
         await loadCdnServers();
@@ -236,11 +258,28 @@
 
   async function updateCdnPrice(serverUrl: string, fileHash: string, newPrice: string) {
     const owner = $walletAccount?.address || '';
-    if (!owner) return;
+    const privateKey = $walletAccount?.privateKey || '';
+    if (!owner || !privateKey) {
+      toasts.show('Wallet must be unlocked to update price', 'error');
+      return;
+    }
     try {
-      const resp = await fetchWithVersion(`${serverUrl}/api/cdn/files/${fileHash}`, {
+      const ownerLower = owner.toLowerCase();
+      const path = `/api/cdn/files/${fileHash}`;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const proof = await invoke<{ header: string }>('compute_owner_proof', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        path,
+        walletAddress: owner,
+        privateKey,
+      });
+      const resp = await fetchWithVersion(`${serverUrl}${path}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Owner': ownerLower,
+          'X-Owner-Sig': proof.header,
+        },
         body: JSON.stringify({ owner, downloadPriceChi: newPrice }),
       });
       if (resp.ok) {
@@ -784,13 +823,18 @@
   async function unpublishFromCdn(site: HostedSite) {
     if (!isTauri || !site.cdnUrl) return;
     const owner = $walletAccount?.address || '';
-    if (!owner) { toasts.show('No wallet connected', 'error'); return; }
+    const privateKey = $walletAccount?.privateKey || '';
+    if (!owner || !privateKey) {
+      toasts.show('Wallet must be unlocked to remove from CDN', 'error');
+      return;
+    }
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('unpublish_site_from_cdn', {
         siteId: site.id,
         cdnUrl: site.cdnUrl,
         ownerWallet: owner,
+        privateKey,
       });
       toasts.show('Site removed from CDN', 'info');
       await loadSites();

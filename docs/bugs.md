@@ -23,13 +23,6 @@ Format per entry:
 - **Why it's still here:** Closing the gap requires extending `ChunkRequest::PaymentProof` and `ChunkResponse::FileInfo` with folder context (`folder_hash`, folder-level `priceWei`/`walletAddress`), plus a per-folder spent-tx ledger so one folder payment unlocks every file in the manifest. Sketched in an earlier prototype but reverted to ship the V1 UX flow first.
 - **Workaround:** Don't put files in folders that you'd object to being downloaded for free outside the folder context.
 
-### CDN file delete has no signed-proof auth
-
-- **Where:** `src-tauri/src/cdn_server.rs::delete_file` (`DELETE /api/cdn/files/:hash`)
-- **Symptom:** The handler only checks `?owner=0xABC` query param against the registry's stored `owner_wallet`. Anyone who knows a file's hash and the original owner's wallet address can call DELETE and remove the file (and its DHT records) from the CDN.
-- **Why it's still here:** The owner-proof signed-challenge scheme already exists (`auth::owner_proof_payload`), it's wired on `/api/drive/*` and the unregister DELETEs on relay register routes. The same middleware needs to land on `/api/cdn/files/:hash` (and its sibling `PUT` for price update). Trivial change but hasn't been done.
-- **Workaround:** Operators can assume malicious deletes will surface as registry drops in the daemon log; affected uploaders re-publish.
-
 ### Policy public key is the 32-byte placeholder
 
 - **Where:** `src-tauri/src/version.rs::POLICY_PUBLIC_KEY`
