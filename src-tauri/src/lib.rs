@@ -146,7 +146,11 @@ async fn start_dht_internal(
 
     // Restore persisted Drive seeding registrations (root + nested folders)
     // as soon as DHT comes online so "seeding=true" reflects actual availability.
-    auto_reseed_drive_files(state).await;
+    // No wallet credentials available here (DHT can start before login), so
+    // this pass only re-registers files locally. The frontend will call
+    // `reseed_drive_files` again with the unlocked wallet after login to
+    // publish the signed DHT records.
+    auto_reseed_drive_files(state, None, None).await;
 
     // Run follow-up reseed passes after startup to absorb timing races between
     // bootstrap, relay reservation, and Drive manifest load/refresh.
@@ -167,7 +171,9 @@ async fn start_dht_internal(
             }
 
             app_state.drive_state.load_from_disk_async().await;
-            auto_reseed_drive_files(app_state.inner()).await;
+            // Delayed retries also run without wallet creds — same caveat
+            // as the initial pass above.
+            auto_reseed_drive_files(app_state.inner(), None, None).await;
         }
     });
 
@@ -211,7 +217,21 @@ fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-async fn auto_reseed_drive_files(state: &AppState) {
+/// Re-register Drive files that should be seeding.
+///
+/// Always runs the local-side re-registration (so this node can serve
+/// chunks if a peer happens to ask). When `wallet_address` AND
+/// `private_key` are both provided, ALSO publishes the signed DHT
+/// records (`chiral_file_<hash>` metadata blob + `chiral_seeder_*`
+/// entry + Kademlia provider) so other peers can discover us via
+/// `search_file(hash)`. Without those records, this node is invisible
+/// to remote search even though `seeding=true` locally — that was the
+/// "auto-seeding on login doesn't work" symptom.
+async fn auto_reseed_drive_files(
+    state: &AppState,
+    wallet_address: Option<&str>,
+    private_key: Option<&str>,
+) {
     let dht = {
         let dht_guard = state.dht.lock().await;
         dht_guard.as_ref().cloned()
@@ -219,6 +239,10 @@ async fn auto_reseed_drive_files(state: &AppState) {
     let Some(dht) = dht else {
         return;
     };
+    let can_publish_signed = wallet_address
+        .map(|w| !w.trim().is_empty())
+        .unwrap_or(false)
+        && private_key.map(|k| !k.trim().is_empty()).unwrap_or(false);
 
     let files_dir = match ds::drive_files_dir() {
         Some(dir) => dir,
@@ -271,7 +295,10 @@ async fn auto_reseed_drive_files(state: &AppState) {
     let mut activated_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut disabled_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut reseeded_local = 0usize;
-    let reseeded_dht_metadata = 0usize;
+    // Counts files for which we actually published signed DHT records
+    // (file metadata + seeder entry + provider). Only non-zero when
+    // wallet creds are present; matches the variable expected later.
+    let published_dht_records_count = std::sync::atomic::AtomicUsize::new(0);
 
     for (
         item_id,
@@ -364,9 +391,12 @@ async fn auto_reseed_drive_files(state: &AppState) {
             continue;
         }
 
-        // auto-reseed has no unlocked wallet — pass empty private_key so
-        // the seeder responder refuses to sign FileInfo (FM-A09). The
-        // user re-seeds via the signed publishers when they unlock.
+        // Register locally so we can serve chunks if a peer requests
+        // them. Pass the unlocked private key when available so the
+        // seeder responder can sign FileInfo envelopes (FM-A09); when
+        // we have no wallet (DHT auto-started before login), pass empty
+        // string and the responder will refuse to serve until the next
+        // reseed pass populates it.
         dht.register_shared_file(
             file_hash.clone(),
             full_path.to_string_lossy().to_string(),
@@ -374,7 +404,7 @@ async fn auto_reseed_drive_files(state: &AppState) {
             file_size,
             price_wei,
             wallet_addr.clone(),
-            String::new(),
+            private_key.map(|k| k.to_string()).unwrap_or_default(),
         )
         .await;
 
@@ -387,18 +417,78 @@ async fn auto_reseed_drive_files(state: &AppState) {
             continue;
         }
 
-        // Auto-reseed runs at startup without an unlocked wallet, so it
-        // has no private key to sign FileMetadata or SeederInfo. Readers
-        // drop unsigned records (FM-A07/A08), so writing them here would
-        // just spam the DHT with useless data. Skip publishing entirely
-        // — the user can re-seed from the Drive page once the wallet is
-        // unlocked, which goes through `publish_drive_file_inner` and
-        // signs properly.
-        println!(
-            "[DRIVE] Auto-reseed for {} skipped — wallet must be unlocked to re-publish signed records",
-            file_hash
-        );
+        // Publish signed DHT records ONLY when the wallet is unlocked.
+        // Readers drop unsigned records (FM-A07/A08), so writing them
+        // without a private key would just spam the DHT with useless
+        // data. The post-login reseed pass (frontend calls
+        // `reseed_drive_files` with the wallet creds) re-runs this loop
+        // and publishes the signed records — that's what restores
+        // search-by-hash discoverability after a fresh login.
+        if !can_publish_signed {
+            continue;
+        }
+        let owner_wallet = wallet_address.unwrap();
+        let pk = private_key.unwrap();
+        let seeder_price_str = price_wei.to_string();
+        // Sign + publish chiral_file_<hash> metadata blob.
+        let Some(metadata) = try_make_signed_file_metadata(
+            &file_hash,
+            &file_name,
+            file_size,
+            "WebRTC",
+            owner_wallet,
+            Some(pk),
+        ) else {
+            println!(
+                "[DRIVE] Auto-reseed for {} skipped signed metadata publish — sign_message failed",
+                file_hash
+            );
+            continue;
+        };
+        let metadata_json = match serde_json::to_string(&metadata) {
+            Ok(s) => s,
+            Err(e) => {
+                println!(
+                    "[DRIVE] Auto-reseed serialize metadata failed for {}: {}",
+                    file_hash, e
+                );
+                continue;
+            }
+        };
+        let dht_key = format!("chiral_file_{}", file_hash);
+        if let Err(e) = dht.put_dht_value(dht_key, metadata_json).await {
+            println!(
+                "[DRIVE] Auto-reseed put_dht_value for {} failed: {}",
+                file_hash, e
+            );
+            continue;
+        }
+        // Sign + publish per-seeder entry + Kademlia provider record.
+        let Some(seeder) = try_make_signed_seeder(
+            &peer_id,
+            &file_hash,
+            &seeder_price_str,
+            owner_wallet,
+            our_multiaddrs.clone(),
+            Some(pk),
+        ) else {
+            println!(
+                "[DRIVE] Auto-reseed for {} skipped signed seeder publish — sign_message failed",
+                file_hash
+            );
+            continue;
+        };
+        if let Err(e) = publish_seeder_entry(&dht, &file_hash, &seeder).await {
+            println!(
+                "[DRIVE] Auto-reseed publish_seeder_entry for {} failed: {}",
+                file_hash, e
+            );
+            continue;
+        }
+        published_dht_records_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+    let reseeded_dht_metadata =
+        published_dht_records_count.load(std::sync::atomic::Ordering::Relaxed);
     let _ = (reseeded_dht_metadata, &peer_id, &our_multiaddrs);
 
     let mut manifest_changed = false;
@@ -465,10 +555,19 @@ async fn auto_reseed_drive_files(state: &AppState) {
 }
 
 #[tauri::command]
-async fn reseed_drive_files(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn reseed_drive_files(
+    state: tauri::State<'_, AppState>,
+    wallet_address: Option<String>,
+    private_key: Option<String>,
+) -> Result<(), String> {
     // Reload disk state first to avoid stale in-memory manifests after app restart.
     state.drive_state.load_from_disk_async().await;
-    auto_reseed_drive_files(state.inner()).await;
+    auto_reseed_drive_files(
+        state.inner(),
+        wallet_address.as_deref(),
+        private_key.as_deref(),
+    )
+    .await;
     Ok(())
 }
 

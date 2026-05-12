@@ -1,9 +1,23 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { peers, networkStats, networkConnected } from './stores';
+import { get } from 'svelte/store';
+import { peers, networkStats, networkConnected, walletAccount } from './stores';
 import type { PeerInfo } from './stores';
 import { toasts } from './toastStore';
 import { logger } from './logger';
+
+/// Forward the unlocked wallet (if any) to the backend's auto-reseed
+/// so it can publish the signed `chiral_file_<hash>` + `chiral_seeder_*`
+/// records that make the seeder discoverable. Without these, the local
+/// Drive shows `seeding=true` but other peers can't find us via
+/// search-by-hash (FM-A07/A08 — readers drop unsigned records).
+function reseedArgs() {
+  const acct = get(walletAccount);
+  return {
+    walletAddress: acct?.address || null,
+    privateKey: acct?.privateKey || null,
+  };
+}
 
 const log = logger('DHT');
 
@@ -53,9 +67,12 @@ class DhtService {
     // from a previous session or from auto-start before UI attached)
     await this.updateNetworkInfo();
 
-    // Ensure persisted Drive files are re-registered after restart
+    // Ensure persisted Drive files are re-registered after restart.
+    // Pass the wallet so the backend can publish signed DHT records
+    // (the missing step that previously left auto-seeded files
+    // invisible to remote search).
     try {
-      await invoke('reseed_drive_files');
+      await invoke('reseed_drive_files', reseedArgs());
     } catch (error) {
       log.warn('Drive reseed refresh failed:', error);
     }
@@ -170,7 +187,10 @@ class DhtService {
 
     if (!this.bootstrapCompleteUnlisten) {
       this.bootstrapCompleteUnlisten = await listen('dht-bootstrap-complete', () => {
-        void invoke('reseed_drive_files').catch((error) => {
+        // Re-reseed after Kademlia bootstrap completes so the signed
+        // DHT records (file metadata + seeder entry) actually land on
+        // freshly-discovered peers' stores, not just our local one.
+        void invoke('reseed_drive_files', reseedArgs()).catch((error) => {
           log.warn('Drive reseed refresh after bootstrap failed:', error);
         });
       });
