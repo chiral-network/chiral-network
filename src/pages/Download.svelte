@@ -1774,131 +1774,182 @@
 
 <svelte:head><title>Download | Chiral Network</title></svelte:head>
 
-<div class="max-w-[1400px] mx-auto p-4 sm:p-6 space-y-6">
+<div class="max-w-[1400px] mx-auto p-4 sm:p-6 space-y-4">
+  <!-- Header — mirrors Drive / Hosts / Mining title pattern. -->
   <div>
     <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Download</h1>
-    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Search and download files from the Chiral Network</p>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Search the network by hash, magnet, or .torrent and pull files from peers.</p>
+  </div>
+
+  <!-- Page-level stats strip — matches Drive's `grid-cols-2 lg:grid-cols-4`
+       icon-pill pattern. Replaces the previously-inline stats inside the
+       Downloads card so the same numbers are visible above-the-fold even
+       when the page first loads (and gives the page a recognisable
+       silhouette next to its sibling pages). -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg bg-primary-100 dark:bg-primary-900/30 shrink-0">
+        <Loader2 class="w-4 h-4 text-primary-600 dark:text-primary-400 {activeCount > 0 ? 'animate-spin' : ''}" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Active</div>
+        <div class="text-sm font-semibold text-gray-900 dark:text-white tabular-nums">{activeCount.toLocaleString()}</div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg bg-green-100 dark:bg-green-900/30 shrink-0">
+        <CheckCircle class="w-4 h-4 text-green-600 dark:text-green-400" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Completed</div>
+        <div class="text-sm font-semibold text-gray-900 dark:text-white tabular-nums">{completedCount.toLocaleString()}</div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg {failedCount > 0 ? 'bg-red-100 dark:bg-red-900/30' : 'bg-gray-100 dark:bg-gray-700'} shrink-0">
+        <AlertCircle class="w-4 h-4 {failedCount > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-400 dark:text-gray-500'}" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Failed</div>
+        <div class="text-sm font-semibold {failedCount > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-white'} tabular-nums">{failedCount.toLocaleString()}</div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
+      <div class="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30 shrink-0">
+        <Download class="w-4 h-4 text-purple-600 dark:text-purple-400" />
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Downloaded</div>
+        <div class="text-sm font-semibold text-gray-900 dark:text-white tabular-nums">{formatFileSize(totalDownloadedBytes)}</div>
+      </div>
+    </div>
   </div>
 
   <!-- Network Status Warning -->
   {#if !$networkConnected}
-    <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
-      <div class="flex items-start gap-3">
-        <div class="text-yellow-600 dark:text-yellow-400 mt-0.5">!</div>
-        <div>
-          <p class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">Network Not Connected</p>
-          <p class="text-sm text-yellow-700 dark:text-yellow-400">
-            Please connect to the DHT network from the Network page before downloading files.
-          </p>
-        </div>
+    <div class="flex items-start gap-3 px-4 py-3 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+      <AlertTriangle class="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
+      <div class="min-w-0">
+        <p class="text-sm font-semibold text-yellow-800 dark:text-yellow-300">Network not connected</p>
+        <p class="text-xs text-yellow-700 dark:text-yellow-400 mt-0.5">
+          Open the Network page and connect to the DHT before searching.
+        </p>
       </div>
     </div>
   {/if}
 
-  <!-- Add New Download Section -->
-  <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-6">
-    <div class="flex items-center gap-2 mb-4">
-      <Plus class="w-5 h-5 text-gray-600 dark:text-gray-400" />
-      <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Add New Download</h2>
-    </div>
-
-    <!-- Search Mode Tabs -->
-    <div class="flex gap-2 mb-4">
-      <button
-        onclick={() => { searchMode = 'hash'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'hash' ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
-      >
-        <Search class="w-4 h-4" />
-        Merkle Hash
-      </button>
-      <button
-        onclick={() => { searchMode = 'magnet'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'magnet' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
-      >
-        <Link class="w-4 h-4" />
-        Magnet Link
-      </button>
-      <button
-        onclick={() => { searchMode = 'torrent'; searchQuery = ''; searchResult = null; searchError = null; }}
-        class="flex items-center gap-2 px-4 py-2 rounded-lg border transition-all {searchMode === 'torrent' ? 'border-green-500 bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
-      >
-        <FileUp class="w-4 h-4" />
-        .torrent File
-      </button>
+  <!-- Add New Download — input card with segmented mode picker. The
+       three modes (hash / magnet / .torrent) used to be 3 wide buttons
+       on a separate row; collapsing them into a segmented control next
+       to the title shrinks the visual footprint and matches the
+       segmented-control idiom used elsewhere (DriveSeedingPanel's
+       Protocol picker, Hosts CDN seeder sort). -->
+  <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5 space-y-4">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <div class="flex items-center gap-2">
+        <div class="p-1.5 rounded-lg bg-primary-100 dark:bg-primary-900/30">
+          <Plus class="w-4 h-4 text-primary-600 dark:text-primary-400" />
+        </div>
+        <h2 class="text-base font-semibold text-gray-900 dark:text-white">New download</h2>
+      </div>
+      <div class="inline-flex rounded-lg border border-gray-200 dark:border-gray-600 overflow-hidden text-sm">
+        {#each ([
+          { id: 'hash' as SearchMode, label: 'Hash', icon: Search },
+          { id: 'magnet' as SearchMode, label: 'Magnet', icon: Link },
+          { id: 'torrent' as SearchMode, label: '.torrent', icon: FileUp },
+        ]) as mode}
+          {@const ModeIcon = mode.icon}
+          <button
+            onclick={() => { searchMode = mode.id; searchQuery = ''; searchResult = null; folderResult = null; searchError = null; }}
+            class="flex items-center gap-1.5 px-3 py-1.5 transition-colors
+              {searchMode === mode.id
+                ? 'bg-primary-600 text-white'
+                : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}"
+          >
+            <ModeIcon class="w-3.5 h-3.5" />
+            {mode.label}
+          </button>
+        {/each}
+      </div>
     </div>
 
     <!-- Search Input -->
     {#if searchMode === 'torrent'}
-      <div class="text-center py-8 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-        <FileUp class="w-12 h-12 mx-auto text-gray-400 mb-3" />
-        <p class="text-gray-600 dark:text-gray-400 mb-4">Upload a .torrent file to start downloading</p>
+      <div class="flex flex-col items-center text-center py-8 px-4 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl bg-gray-50/50 dark:bg-gray-700/20">
+        <div class="p-3 rounded-full bg-green-100 dark:bg-green-900/30 mb-3">
+          <FileUp class="w-7 h-7 text-green-600 dark:text-green-400" />
+        </div>
+        <p class="text-sm font-medium text-gray-700 dark:text-gray-200">Drop in a .torrent file</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-4">Or pick one from disk to start a transfer</p>
         <button
           onclick={handleTorrentFile}
           disabled={!$networkConnected}
-          class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+          class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 text-sm font-medium"
         >
-          Select .torrent File
+          Choose file…
         </button>
       </div>
     {:else}
-      <div class="relative">
-        <div class="flex gap-3">
+      <div>
+        <div class="flex gap-2">
           <div class="flex-1 relative">
+            <Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 pointer-events-none" />
             <input
               type="text"
               bind:value={searchQuery}
-              placeholder={searchMode === 'hash' ? 'Enter SHA-256 hash (64 characters)' : 'Paste magnet link (magnet:?xt=urn:btih:...)'}
-              class="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
+              placeholder={searchMode === 'hash' ? 'SHA-256 hash (64 hex characters)' : 'magnet:?xt=urn:btih:…'}
+              class="w-full pl-9 pr-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm dark:bg-gray-700 dark:text-gray-200"
               onkeydown={(e) => e.key === 'Enter' && searchFile()}
               onfocus={() => showSearchHistory = true}
               onblur={() => setTimeout(() => showSearchHistory = false, 200)}
             />
           </div>
-
           <button
             onclick={searchFile}
             disabled={isSearching || !$networkConnected}
-            class="px-6 py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
+            class="px-5 py-2.5 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-all focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 text-sm font-medium"
           >
             {#if isSearching}
-              <Loader2 class="w-5 h-5 animate-spin" />
-              Searching...
+              <Loader2 class="w-4 h-4 animate-spin" />
+              Searching…
             {:else}
-              <Search class="w-5 h-5" />
+              <Search class="w-4 h-4" />
               Search
             {/if}
           </button>
         </div>
-      </div>
 
-      <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
-        {#if searchMode === 'hash'}
-          Enter a 64-character SHA-256 Merkle root hash to search for files
-        {:else}
-          Paste a magnet link starting with "magnet:?xt=urn:btih:"
-        {/if}
-      </p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 pl-1">
+          {#if searchMode === 'hash'}
+            Paste a 64-character SHA-256 to look up files or folder bundles.
+          {:else}
+            Paste a magnet URI starting with <code class="font-mono text-[11px]">magnet:?xt=urn:btih:</code>.
+          {/if}
+        </p>
+      </div>
     {/if}
 
     <!-- Folder Bundle Result -->
     {#if folderResult}
-      <div class="mt-6 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
-        <div class="flex items-start gap-4 mb-3">
-          <div class="flex items-center justify-center w-14 h-14 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-700 flex-shrink-0">
-            <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+      <div class="bg-gray-50 dark:bg-gray-700/30 rounded-xl p-4 border border-gray-200 dark:border-gray-600">
+        <div class="flex items-start gap-3 mb-3">
+          <div class="p-2.5 rounded-xl bg-blue-100 dark:bg-blue-900/30 shrink-0">
+            <FolderOpen class="w-6 h-6 text-blue-600 dark:text-blue-400" />
           </div>
           <div class="flex-1 min-w-0">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white truncate">{folderResult.name || 'Untitled Folder'}</h3>
-            <div class="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
+            <h3 class="text-base font-semibold text-gray-900 dark:text-white truncate">{folderResult.name || 'Untitled folder'}</h3>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600 dark:text-gray-400 mt-1">
               <span class="tabular-nums">{folderResult.files.length} file{folderResult.files.length === 1 ? '' : 's'}</span>
+              <span class="text-gray-300 dark:text-gray-600">·</span>
               <span class="tabular-nums">{formatFileSize(folderResult.files.reduce((acc, f) => acc + (f.fileSize || 0), 0))}</span>
+              <span class="text-gray-300 dark:text-gray-600">·</span>
               <span class="tabular-nums {folderResult.commonSeeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
                 {folderResult.commonSeeders.length > 0
                   ? `${folderResult.commonSeeders.length} seeder${folderResult.commonSeeders.length === 1 ? '' : 's'} cover the bundle`
                   : 'No seeder covers all files'}
               </span>
             </div>
-            <p class="text-xs text-gray-400 dark:text-gray-500 mt-1 font-mono truncate" title={folderResult.hash}>folder hash: {folderResult.hash.slice(0, 16)}…</p>
+            <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-1.5 font-mono truncate" title={folderResult.hash}>folder hash: {folderResult.hash.slice(0, 16)}…</p>
           </div>
         </div>
 
@@ -1981,18 +2032,19 @@
     <!-- Search Result -->
     {#if searchResult}
       {@const ResultFileIcon = getFileIcon(searchResult.fileName)}
-      <div class="mt-6 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+      <div class="bg-gray-50 dark:bg-gray-700/30 rounded-xl p-4 border border-gray-200 dark:border-gray-600">
         <!-- File info row -->
-        <div class="flex items-start gap-4">
-          <div class="flex items-center justify-center w-14 h-14 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-600 flex-shrink-0">
-            <ResultFileIcon class="w-7 h-7 {getFileColor(searchResult.fileName)}" />
+        <div class="flex items-start gap-3">
+          <div class="p-2.5 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 shrink-0">
+            <ResultFileIcon class="w-6 h-6 {getFileColor(searchResult.fileName)}" />
           </div>
 
           <div class="flex-1 min-w-0">
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white truncate">{searchResult.fileName}</h3>
-            <div class="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400 mt-1">
+            <h3 class="text-base font-semibold text-gray-900 dark:text-white truncate">{searchResult.fileName}</h3>
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600 dark:text-gray-400 mt-1">
               {#if searchResult.fileSize > 0}
                 <span class="tabular-nums">{formatFileSize(searchResult.fileSize)}</span>
+                <span class="text-gray-300 dark:text-gray-600">·</span>
               {/if}
               <span class="tabular-nums {searchResult.seeders.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}">
                 {searchResult.seeders.length > 0 ? `${searchResult.seeders.length} seeder${searchResult.seeders.length !== 1 ? 's' : ''} found` : 'No seeders available'}
@@ -2000,18 +2052,17 @@
               {#if searchResult.seeders.length > 0}
                 {@const bestSeederElo = getBestSeederElo(searchResult.seeders)}
                 {#if bestSeederElo !== null}
-                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
+                  <span class="text-gray-300 dark:text-gray-600">·</span>
+                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 text-[11px] font-medium rounded bg-primary-100 text-primary-800 dark:bg-primary-900/30 dark:text-primary-300 tabular-nums">
                     Top Elo {bestSeederElo.toFixed(1)}
                   </span>
                 {/if}
               {/if}
             </div>
-            <p class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-2 truncate">
-              {searchResult.hash}
-            </p>
+            <p class="text-[11px] text-gray-500 dark:text-gray-400 font-mono mt-1.5 truncate" title={searchResult.hash}>{searchResult.hash}</p>
             {#if searchResult.seeders.length > 0}
-              <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                Seeder availability is verified when download starts
+              <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-1">
+                Seeder availability is verified when the download starts.
               </p>
             {/if}
           </div>
@@ -2164,16 +2215,17 @@
 
     <!-- Search Error -->
     {#if searchError}
-      <div class="mt-6 bg-red-50 dark:bg-red-900/30 rounded-lg p-4 border border-red-200 dark:border-red-800">
-        <div class="flex items-center gap-3">
-          <AlertCircle class="w-5 h-5 text-red-500 dark:text-red-400" />
-          <p class="text-sm text-red-700 dark:text-red-300">{searchError}</p>
-        </div>
+      <div class="flex items-start gap-3 px-4 py-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+        <AlertCircle class="w-4 h-4 text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+        <p class="text-sm text-red-700 dark:text-red-300 min-w-0">{searchError}</p>
       </div>
     {/if}
   </div>
 
-  <!-- Downloads -->
+  <!-- Downloads — filterable list. Page-level stats strip above already
+       shows Active/Completed/Failed/Downloaded totals; this card's
+       header just has the section title, filter chips, and the
+       clear-all action. -->
   <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700">
     <div class="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 gap-3 flex-wrap">
       <div class="flex items-center gap-2">
@@ -2216,44 +2268,16 @@
       {/if}
     </div>
 
-    <!-- Stats strip — Active / Completed / Failed / Bytes downloaded -->
-    {#if downloads.length > 0 || downloadHistory.length > 0}
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700">
-        <div class="bg-white dark:bg-gray-800 px-4 py-3">
-          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Active</div>
-          <div class="text-base font-semibold text-primary-600 dark:text-primary-400 tabular-nums mt-0.5">
-            {activeCount}
-          </div>
-        </div>
-        <div class="bg-white dark:bg-gray-800 px-4 py-3">
-          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Completed</div>
-          <div class="text-base font-semibold text-green-600 dark:text-green-400 tabular-nums mt-0.5">
-            {completedCount}
-          </div>
-        </div>
-        <div class="bg-white dark:bg-gray-800 px-4 py-3">
-          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Failed</div>
-          <div class="text-base font-semibold {failedCount > 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-600 dark:text-gray-300'} tabular-nums mt-0.5">
-            {failedCount}
-          </div>
-        </div>
-        <div class="bg-white dark:bg-gray-800 px-4 py-3">
-          <div class="text-[10px] uppercase tracking-wider text-gray-500 dark:text-gray-400">Downloaded</div>
-          <div class="text-base font-semibold text-gray-900 dark:text-white tabular-nums mt-0.5">
-            {formatFileSize(totalDownloadedBytes)}
-          </div>
-        </div>
-      </div>
-    {/if}
-
     {#if downloads.length === 0 && downloadHistory.length === 0}
-      <div class="text-center py-16 px-6">
-        <Download class="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-3" />
-        <p class="text-gray-500 dark:text-gray-400">No downloads yet</p>
-        <p class="text-sm text-gray-400 dark:text-gray-500 mt-1">Search for a file above to start downloading</p>
+      <div class="flex flex-col items-center text-center py-14 px-6">
+        <div class="p-3 rounded-full bg-gray-100 dark:bg-gray-700 mb-3">
+          <Download class="w-7 h-7 text-gray-400 dark:text-gray-500" />
+        </div>
+        <p class="text-sm font-medium text-gray-700 dark:text-gray-200">No downloads yet</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Paste a hash, magnet, or .torrent above to start a transfer.</p>
       </div>
     {:else if filteredDownloads.length === 0 && filteredHistory.length === 0}
-      <div class="text-center py-12 px-6">
+      <div class="text-center py-10 px-6">
         <p class="text-sm text-gray-500 dark:text-gray-400">No {downloadFilter} downloads</p>
         <button
           onclick={() => (downloadFilter = 'all')}
