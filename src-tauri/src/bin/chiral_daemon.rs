@@ -1107,8 +1107,13 @@ async fn wallet_send(
         return json_error(StatusCode::BAD_REQUEST, "from, to, amount, privateKey required");
     }
 
-    let endpoint = chiral_network::geth::effective_rpc_endpoint();
-    match chiral_network::wallet::send_transaction(&endpoint, &from, &to, &amount, &private_key).await {
+    // Headless daemon uses its own local geth when available
+    // (effective_rpc_endpoint returns 127.0.0.1:8545 in that case) and
+    // falls back to the configured remote otherwise. Single-element
+    // list — no second endpoint to fall back to from the daemon's
+    // perspective.
+    let endpoints = [chiral_network::geth::effective_rpc_endpoint()];
+    match chiral_network::wallet::send_transaction(&endpoints, &from, &to, &amount, &private_key).await {
         Ok(result) => Json(json!(result)).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }

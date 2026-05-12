@@ -130,25 +130,59 @@ pub async fn get_balance(endpoint: &str, address: &str) -> Result<WalletBalanceR
 }
 
 /// Send a signed transaction.
+///
+/// Takes an ordered list of RPC endpoints. The pre-tx batch
+/// (`nonce + balance + gasPrice`) walks the list and uses the first
+/// endpoint that responds; the actual `eth_sendRawTransaction`
+/// broadcast then pins to that same endpoint. This preserves the
+/// no-double-broadcast invariant — only one endpoint ever sees the
+/// signed tx — while letting writes survive a downed primary (e.g.
+/// the canonical relay's direct :8545 is loopback-only and clients
+/// have to fall back to the :8080 proxy).
 pub async fn send_transaction(
-    endpoint: &str,
+    endpoints: &[String],
     from_address: &str,
     to_address: &str,
     amount: &str,
     private_key: &str,
 ) -> Result<SendTransactionResult, String> {
+    if endpoints.is_empty() {
+        return Err("send_transaction: no RPC endpoints configured".to_string());
+    }
     let pk_hex = private_key.trim_start_matches("0x");
     let pk_bytes = hex::decode(pk_hex).map_err(|e| format!("Invalid private key hex: {}", e))?;
     let secp = Secp256k1::new();
     let secret_key = SecretKey::from_slice(&pk_bytes).map_err(|e| format!("Invalid private key: {}", e))?;
     let amount_wei = parse_chi_to_wei(amount)?;
 
-    // Batch: nonce + balance + gasPrice in one request
-    let mut batch = rpc_client::batch();
-    let nonce_idx = batch.add("eth_getTransactionCount", serde_json::json!([from_address, "pending"]));
-    let bal_idx = batch.add("eth_getBalance", serde_json::json!([from_address, "pending"]));
-    let gas_idx = batch.add("eth_gasPrice", serde_json::json!([]));
-    let results = batch.execute(endpoint).await?;
+    // Batch: nonce + balance + gasPrice in one request. Walk the
+    // fallback list — first endpoint whose batch succeeds is the one
+    // we'll also use for the broadcast.
+    let mut last_err = String::new();
+    let mut working_endpoint: Option<&str> = None;
+    let mut results: Vec<Result<serde_json::Value, String>> = Vec::new();
+    for ep in endpoints {
+        let mut batch = rpc_client::batch();
+        batch.add("eth_getTransactionCount", serde_json::json!([from_address, "pending"]));
+        batch.add("eth_getBalance", serde_json::json!([from_address, "pending"]));
+        batch.add("eth_gasPrice", serde_json::json!([]));
+        match batch.execute(ep).await {
+            Ok(r) => {
+                results = r;
+                working_endpoint = Some(ep.as_str());
+                break;
+            }
+            Err(e) => {
+                last_err = format!("{}: {}", ep, e);
+            }
+        }
+    }
+    let endpoint = working_endpoint.ok_or_else(|| {
+        format!("all RPC endpoints failed pre-tx batch: {}", last_err)
+    })?;
+    let nonce_idx = 0;
+    let bal_idx = 1;
+    let gas_idx = 2;
 
     let nonce = rpc_client::hex_to_u64(results[nonce_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
     let balance_wei = rpc_client::hex_to_u128(results[bal_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
@@ -299,11 +333,14 @@ pub async fn request_faucet(address: &str) -> Result<SendTransactionResult, Stri
 pub async fn send_payment(
     from: &str, to: &str, amount_chi: &str, private_key: &str,
 ) -> Result<PaymentResult, String> {
-    // Canonical RPC — see wallet_rpc_endpoint doc. File-payment txs have
-    // to be visible to the receiver's geth, which means they can't land
-    // on an isolated local chain.
-    let endpoint = crate::geth::wallet_rpc_endpoint();
-    let result = send_transaction(&endpoint, from, to, amount_chi, private_key).await?;
+    // Canonical RPC fallback list — see wallet_rpc_endpoints doc.
+    // File-payment txs have to be visible to the receiver's geth, which
+    // means they can't land on an isolated local chain. The list also
+    // lets the relay's :8080 proxy stand in when direct :8545 is
+    // unreachable (e.g. canonical relay's loopback-only bind post the
+    // 2026-05 lockdown).
+    let endpoints = crate::geth::wallet_rpc_endpoints();
+    let result = send_transaction(&endpoints, from, to, amount_chi, private_key).await?;
     Ok(PaymentResult {
         tx_hash: result.hash,
         balance_before: result.balance_before,

@@ -2988,9 +2988,12 @@ async fn get_wallet_balance(
 
 
 /// Send a transaction from one address to another (signs locally).
-/// Routes through the canonical RPC — a user running local geth that's
-/// isolated from the network would otherwise submit the tx to their own
-/// private chain, where nobody (including the CDN) can see it.
+/// Routes through the canonical RPC fallback list — a user running
+/// local geth that's isolated from the network would otherwise submit
+/// the tx to their own private chain, where nobody (including the CDN)
+/// can see it. The fallback list lets the relay's :8080 proxy stand in
+/// when the direct :8545 is firewalled off (e.g. on the canonical
+/// relay box after the 2026-05 lockdown).
 #[tauri::command]
 async fn send_transaction(
     from_address: String,
@@ -2998,8 +3001,8 @@ async fn send_transaction(
     amount: String,
     private_key: String,
 ) -> Result<wallet::SendTransactionResult, String> {
-    let endpoint = geth::wallet_rpc_endpoint();
-    wallet::send_transaction(&endpoint, &from_address, &to_address, &amount, &private_key).await
+    let endpoints = geth::wallet_rpc_endpoints();
+    wallet::send_transaction(&endpoints, &from_address, &to_address, &amount, &private_key).await
 }
 
 #[tauri::command]
@@ -4522,9 +4525,9 @@ async fn publish_site_to_cdn(
             p.total_cost_chi = Some(total_cost_chi.clone());
             emit_stage(p);
         }
-        let endpoint = geth::wallet_rpc_endpoint();
+        let endpoints = geth::wallet_rpc_endpoints();
         let result = match wallet::send_transaction(
-            &endpoint,
+            &endpoints,
             &owner_wallet,
             &cdn_wallet,
             &total_cost_chi,
