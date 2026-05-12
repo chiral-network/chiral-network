@@ -445,16 +445,14 @@
 
 <svelte:head><title>Account | Chiral Network</title></svelte:head>
 
-<div class="p-4 sm:p-6 space-y-6 max-w-6xl mx-auto">
+<div class="p-4 sm:p-6 space-y-4 max-w-[1400px] mx-auto">
   <div>
-    <div>
-      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Account</h1>
-      <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Manage your wallet and account settings</p>
-    </div>
+    <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Account</h1>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Your wallet, send / receive, transaction history, and reputation.</p>
   </div>
 
   {#if $walletAccount}
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
     <!-- Wallet Overview Card -->
     <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
       <div class="bg-gradient-to-r from-primary-600 to-primary-700 p-6 text-white">
@@ -983,10 +981,14 @@
     </div>
 
   {:else}
-    <div class="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-200 dark:border-gray-700 p-12 text-center">
-      <Wallet class="w-16 h-16 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
-      <h2 class="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">No Wallet Connected</h2>
-      <p class="text-gray-500 dark:text-gray-400 mb-6">Please create or import a wallet to view account details.</p>
+    <div class="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-12">
+      <div class="flex flex-col items-center text-center">
+        <div class="p-3 rounded-full bg-gray-100 dark:bg-gray-700 mb-3">
+          <Wallet class="w-7 h-7 text-gray-400 dark:text-gray-500" />
+        </div>
+        <h2 class="text-base font-semibold text-gray-700 dark:text-gray-300">No wallet connected</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Create or import a wallet to view your balance, send CHI, and check your reputation.</p>
+      </div>
     </div>
   {/if}
 </div>

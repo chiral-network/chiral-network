@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { Send, X, Check, History, User, FileIcon, Upload, Coins, Search } from 'lucide-svelte';
+  import { Send, X, Check, History, User, FileIcon, Upload, Coins, Search, Inbox } from 'lucide-svelte';
   import {
     userAlias,
     nearbyPeers,
@@ -572,31 +572,36 @@
 
 <svelte:head><title>ChiralDrop | Chiral Network</title></svelte:head>
 
-<div class="p-4 sm:p-6 h-[calc(100vh-64px)] flex flex-col gap-4 sm:gap-6">
-  <!-- Header -->
-  <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-    <div class="space-y-1">
+<div class="p-4 sm:p-6 h-[calc(100vh-64px)] flex flex-col gap-4">
+  <!-- Header — matches Drive / Download / Mining / Hosts: H1 + subtitle
+       on the left, contextual chips and primary action on the right. -->
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+    <div>
       <h1 class="text-2xl font-bold text-gray-900 dark:text-white">ChiralDrop</h1>
       <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-        Your alias:
-        <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>
+        Direct peer-to-peer file transfers. You appear as
+        <span class="font-semibold" style="color: {$userAlias.colorHex}">{$userAlias.displayName}</span>.
       </p>
     </div>
-    <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-      <div class="inline-flex items-center rounded-full border border-primary-200/70 bg-primary-50/80 px-3 py-1 text-xs font-medium text-primary-700 dark:border-primary-800/60 dark:bg-primary-900/30 dark:text-primary-300">
-        {$nearbyPeers.length} peers online
+    <div class="flex flex-wrap items-center gap-2">
+      <div class="inline-flex items-center gap-1.5 rounded-full border border-primary-200/70 bg-primary-50/80 px-2.5 py-1 text-xs font-medium text-primary-700 dark:border-primary-800/60 dark:bg-primary-900/30 dark:text-primary-300">
+        <span class="w-1.5 h-1.5 rounded-full bg-primary-500 {$nearbyPeers.length > 0 ? 'animate-pulse' : 'opacity-50'}"></span>
+        <span class="tabular-nums">{$nearbyPeers.length}</span>
+        peers online
       </div>
       {#if $incomingPendingTransfers.length > 0}
-        <div class="inline-flex items-center rounded-full border border-amber-200/70 bg-amber-50/80 px-3 py-1 text-xs font-medium text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/30 dark:text-amber-300">
-          {$incomingPendingTransfers.length} pending request{$incomingPendingTransfers.length === 1 ? '' : 's'}
+        <div class="inline-flex items-center gap-1.5 rounded-full border border-amber-200/70 bg-amber-50/80 px-2.5 py-1 text-xs font-medium text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/30 dark:text-amber-300">
+          <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+          <span class="tabular-nums">{$incomingPendingTransfers.length}</span>
+          pending request{$incomingPendingTransfers.length === 1 ? '' : 's'}
         </div>
       {/if}
       <button
         onclick={() => showHistory = !showHistory}
-        class="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
       >
-        <History class="h-4 w-4" />
-        <span>{showHistory ? 'Hide History' : 'Show History'}</span>
+        <History class="h-3.5 w-3.5" />
+        <span>{showHistory ? 'Hide history' : 'Show history'}</span>
       </button>
     </div>
   </div>
@@ -709,7 +714,12 @@
       <!-- Incoming Transfer Requests -->
       {#if $incomingPendingTransfers.length > 0}
         <div class="rounded-2xl border border-amber-200/70 bg-white/90 p-4 shadow-sm backdrop-blur dark:border-amber-900/60 dark:bg-gray-800/85">
-          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Incoming Transfers</h3>
+          <div class="flex items-center gap-2 mb-3">
+            <div class="p-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/30">
+              <Inbox class="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            </div>
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Incoming transfers</h3>
+          </div>
           <div class="space-y-3 max-h-56 overflow-y-auto pr-1">
             {#each $incomingPendingTransfers as transfer (transfer.id)}
               <div class="rounded-xl border border-amber-100 bg-amber-50/60 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
@@ -765,10 +775,16 @@
       {#if $selectedPeer}
         <div class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
           <div class="mb-4 flex items-center justify-between">
-            <h3 class="font-semibold text-gray-900 dark:text-white">Send to Peer</h3>
+            <div class="flex items-center gap-2">
+              <div class="p-1.5 rounded-lg bg-primary-100 dark:bg-primary-900/30">
+                <Send class="w-4 h-4 text-primary-600 dark:text-primary-400" />
+              </div>
+              <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Send to peer</h3>
+            </div>
             <button
               onclick={() => selectPeer(null)}
               class="rounded-lg p-1 transition hover:bg-gray-100 dark:hover:bg-gray-700"
+              title="Clear selection"
             >
               <X class="h-4 w-4 text-gray-500 dark:text-gray-400" />
             </button>
@@ -827,7 +843,12 @@
       <!-- Transaction History -->
       {#if showHistory}
         <div class="flex min-h-0 flex-1 flex-col rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <h3 class="font-semibold text-gray-900 dark:text-white mb-3">Transaction History</h3>
+          <div class="flex items-center gap-2 mb-3">
+            <div class="p-1.5 rounded-lg bg-gray-100 dark:bg-gray-700">
+              <History class="w-4 h-4 text-gray-600 dark:text-gray-400" />
+            </div>
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-white">Transaction history</h3>
+          </div>
           <div class="flex-1 space-y-2 overflow-y-auto pr-1">
             {#if $transferHistory.length === 0}
               <p class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">No transfers yet</p>
