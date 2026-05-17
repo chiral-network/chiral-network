@@ -28,6 +28,15 @@ use axum::{
 /// releases.
 const ALLOWED_METHOD_PREFIXES: &[&str] = &["eth_", "net_", "web3_", "txpool_"];
 
+/// A method passes the allowlist iff it starts with one of the four
+/// read-only namespace prefixes.
+///
+/// The example-based tests in this file enumerate known dangerous and
+/// known safe method names; the proof at
+/// `verified/method_allowlist.rs` (checked by Verus, not cargo)
+/// upgrades them to the universal statement that EVERY string
+/// starting with `miner_`, `personal_`, `debug_`, or `admin_` is
+/// rejected — including method names geth hasn't shipped yet.
 fn is_allowed_method(method: &str) -> bool {
     ALLOWED_METHOD_PREFIXES
         .iter()
