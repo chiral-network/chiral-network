@@ -132,6 +132,28 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
     println!("✅ Unpublished host advertisement from DHT");
 }
 
+#[cfg(unix)]
+fn shutdown_signal_pair_from_results<T>(
+    sigint: std::io::Result<T>,
+    sigterm: std::io::Result<T>,
+) -> Result<(T, T), String> {
+    let sigint = sigint.map_err(|e| format!("failed to install SIGINT handler: {}", e))?;
+    let sigterm = sigterm.map_err(|e| format!("failed to install SIGTERM handler: {}", e))?;
+    Ok((sigint, sigterm))
+}
+
+#[cfg(unix)]
+fn install_shutdown_signal_handlers() -> Result<
+    (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
+    String,
+> {
+    use tokio::signal::unix::{signal, SignalKind};
+    shutdown_signal_pair_from_results(
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::terminate()),
+    )
+}
+
 async fn start_dht_internal(
     app: tauri::AppHandle,
     state: &AppState,
@@ -7308,9 +7330,13 @@ pub fn run() {
         rt.block_on(async {
             #[cfg(unix)]
             {
-                use tokio::signal::unix::{signal, SignalKind};
-                let mut sigint = signal(SignalKind::interrupt()).unwrap();
-                let mut sigterm = signal(SignalKind::terminate()).unwrap();
+                let (mut sigint, mut sigterm) = match install_shutdown_signal_handlers() {
+                    Ok(signals) => signals,
+                    Err(e) => {
+                        eprintln!("⚠️  Shutdown signal cleanup disabled: {}", e);
+                        return;
+                    }
+                };
                 tokio::select! {
                     _ = sigint.recv() => {
                         println!("🛑 SIGINT received — cleaning up before exit");
@@ -7717,6 +7743,47 @@ mod multi_seeder_tests {
         .expect_err("pre-epoch timestamp should be rejected");
 
         assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_signal_pair_accepts_registered_handlers() {
+        let pair = shutdown_signal_pair_from_results(Ok("sigint"), Ok("sigterm"))
+            .expect("both signal handlers should be accepted");
+
+        assert_eq!(pair, ("sigint", "sigterm"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_signal_pair_reports_sigint_failure() {
+        let err = shutdown_signal_pair_from_results::<&str>(
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "interrupt unavailable",
+            )),
+            Ok("sigterm"),
+        )
+        .expect_err("SIGINT setup failure should be reported");
+
+        assert!(err.contains("SIGINT"));
+        assert!(err.contains("interrupt unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_signal_pair_reports_sigterm_failure() {
+        let err = shutdown_signal_pair_from_results::<&str>(
+            Ok("sigint"),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "terminate unavailable",
+            )),
+        )
+        .expect_err("SIGTERM setup failure should be reported");
+
+        assert!(err.contains("SIGTERM"));
+        assert!(err.contains("terminate unavailable"));
     }
 
     #[test]
