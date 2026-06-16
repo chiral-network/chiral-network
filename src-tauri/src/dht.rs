@@ -335,6 +335,21 @@ pub enum ChunkResponse {
     },
 }
 
+fn parse_protocol_price_wei(price_wei: &str, field: &str) -> Result<u128, String> {
+    if price_wei.is_empty() {
+        return Ok(0);
+    }
+    let trimmed = price_wei.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "{field} must be empty, 0, or a valid u128 wei amount"
+        ));
+    }
+    trimmed
+        .parse::<u128>()
+        .map_err(|_| format!("{field} must be empty, 0, or a valid u128 wei amount"))
+}
+
 /// Length-prefixed canonical bytes for the FileInfo signature. Same
 /// encoding pattern as `version::canonical_signing_payload` and
 /// `SiteDirectoryEntry::sign_payload`: every variable-length field is
@@ -4120,9 +4135,32 @@ async fn handle_behaviour_event(
                         request_response::Message::Request {
                             request, channel, ..
                         } => {
-                            let is_paid = !request.price_wei.is_empty()
-                                && request.price_wei != "0"
-                                && request.price_wei.parse::<u128>().unwrap_or(0) > 0;
+                            let price_wei = match parse_protocol_price_wei(
+                                &request.price_wei,
+                                "FileTransferRequest.price_wei",
+                            ) {
+                                Ok(price_wei) => price_wei,
+                                Err(err) => {
+                                    println!(
+                                        "Rejecting malformed file transfer price from {}: {}",
+                                        peer, err
+                                    );
+                                    let response = FileTransferResponse {
+                                        transfer_id: request.transfer_id.clone(),
+                                        accepted: false,
+                                        error: Some(err),
+                                    };
+                                    if let Err(e) = swarm
+                                        .behaviour_mut()
+                                        .file_transfer
+                                        .send_response(channel, response)
+                                    {
+                                        println!("Failed to send file transfer response: {:?}", e);
+                                    }
+                                    return;
+                                }
+                            };
+                            let is_paid = price_wei > 0;
 
                             println!(
                                 "Received file transfer from {}: {} (paid: {})",
@@ -4879,11 +4917,44 @@ async fn handle_behaviour_event(
                                         return;
                                     }
 
+                                    let price = match parse_protocol_price_wei(
+                                        &price_wei,
+                                        "ChunkResponse::FileInfo.price_wei",
+                                    ) {
+                                        Ok(price) => price,
+                                        Err(err) => {
+                                            println!(
+                                                "❌ Invalid FileInfo price from peer {} for {}: {}",
+                                                peer, file_hash, err
+                                            );
+                                            let remaining = decrement_file_request_attempt(
+                                                pending_file_attempts,
+                                                &request_id,
+                                            );
+                                            if remaining > 0 {
+                                                println!(
+                                                    "🔁 Trying {} other seeder(s) for request {}",
+                                                    remaining, request_id
+                                                );
+                                                return;
+                                            }
+                                            pending_file_hashes.remove(&request_id);
+                                            let _ = events.emit(
+                                                "file-download-failed",
+                                                serde_json::json!({
+                                                    "requestId": request_id,
+                                                    "fileHash": file_hash,
+                                                    "error": err,
+                                                }),
+                                            );
+                                            return;
+                                        }
+                                    };
+
                                     // First successful seeder won this request.
                                     pending_file_attempts.remove(&request_id);
                                     pending_file_hashes.remove(&request_id);
 
-                                    let price: u128 = price_wei.parse().unwrap_or(0);
                                     println!("📋 Received FileInfo: {} ({} bytes, {} chunks, price={} wei)", file_name, file_size, total_chunks, price);
 
                                     // Determine output path
@@ -6316,6 +6387,34 @@ mod tests {
         assert_eq!(deserialized.file_hash, "deadbeef");
         assert_eq!(deserialized.file_size, 1048576);
         assert!(deserialized.file_data.is_empty());
+    }
+
+    #[test]
+    fn protocol_price_wei_accepts_free_and_paid_values() {
+        assert_eq!(parse_protocol_price_wei("", "test.price_wei").unwrap(), 0);
+        assert_eq!(parse_protocol_price_wei("0", "test.price_wei").unwrap(), 0);
+        assert_eq!(
+            parse_protocol_price_wei("1000000000000000000", "test.price_wei").unwrap(),
+            1_000_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn protocol_price_wei_rejects_malformed_chiraldrop_price() {
+        let err = parse_protocol_price_wei("not-a-number", "FileTransferRequest.price_wei")
+            .expect_err("malformed ChiralDrop price should fail closed");
+
+        assert!(err.contains("FileTransferRequest.price_wei"));
+        assert!(err.contains("valid u128 wei amount"));
+    }
+
+    #[test]
+    fn protocol_price_wei_rejects_malformed_file_info_price() {
+        let err = parse_protocol_price_wei("  ", "ChunkResponse::FileInfo.price_wei")
+            .expect_err("whitespace-only FileInfo price should fail closed");
+
+        assert!(err.contains("ChunkResponse::FileInfo.price_wei"));
+        assert!(err.contains("valid u128 wei amount"));
     }
 
     #[test]
