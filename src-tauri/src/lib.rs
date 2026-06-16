@@ -3808,10 +3808,23 @@ fn get_chain_id() -> u64 {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct FrontendCdnEndpointInfo {
+    url: String,
+    name: String,
+    region: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NetworkInfo {
     name: String,
     display_name: String,
     chain_id: u64,
+    relay_base_url: String,
+    rating_base_url: String,
+    drive_relay_base_url: String,
+    cdn_search_base_urls: Vec<String>,
+    cdn_servers: Vec<FrontendCdnEndpointInfo>,
 }
 
 fn network_info(cfg: &network::NetworkConfig) -> NetworkInfo {
@@ -3819,6 +3832,23 @@ fn network_info(cfg: &network::NetworkConfig) -> NetworkInfo {
         name: cfg.name.to_string(),
         display_name: cfg.display_name.to_string(),
         chain_id: cfg.chain_id,
+        relay_base_url: cfg.relay_base_url.to_string(),
+        rating_base_url: cfg.rating_base_url.to_string(),
+        drive_relay_base_url: cfg.drive_relay_base_url.to_string(),
+        cdn_search_base_urls: cfg
+            .cdn_search_base_urls
+            .iter()
+            .map(|url| (*url).to_string())
+            .collect(),
+        cdn_servers: cfg
+            .cdn_servers
+            .iter()
+            .map(|server| FrontendCdnEndpointInfo {
+                url: server.url.to_string(),
+                name: server.name.to_string(),
+                region: server.region.to_string(),
+            })
+            .collect(),
     }
 }
 

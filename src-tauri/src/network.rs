@@ -46,6 +46,17 @@ pub struct NetworkConfig {
     /// libp2p relay nodes (circuit relay reservation targets).
     pub libp2p_relay_addrs: &'static [&'static str],
 
+    /// Public relay base URL used by frontend/runtime services.
+    pub relay_base_url: &'static str,
+    /// Reputation API base URL. Usually the same deployment as the relay.
+    pub rating_base_url: &'static str,
+    /// Drive relay base URL used for public share registration and web CRUD fallback.
+    pub drive_relay_base_url: &'static str,
+    /// CDN search endpoints queried alongside DHT search results.
+    pub cdn_search_base_urls: &'static [&'static str],
+    /// CDN servers exposed in the Hosts page.
+    pub cdn_servers: &'static [CdnEndpointConfig],
+
     /// `None` → persist state directly under `<data_dir>/chiral-network/` (the
     /// legacy unprefixed layout, kept for existing testnet installs).
     /// `Some("mainnet")` → persist under `<data_dir>/chiral-network/networks/mainnet/`
@@ -53,6 +64,29 @@ pub struct NetworkConfig {
     /// identity, wallet tx history, or Drive files.
     pub data_subdir: Option<&'static str>,
 }
+
+#[derive(Debug, Clone)]
+pub struct CdnEndpointConfig {
+    pub url: &'static str,
+    pub name: &'static str,
+    pub region: &'static str,
+}
+
+pub const LAUNCH_RELAY_BASE_URL: &str = "http://130.245.173.73:8080";
+pub const LAUNCH_CDN_SERVERS: &[CdnEndpointConfig] = &[
+    CdnEndpointConfig {
+        url: "http://130.245.173.73:9420",
+        name: "CDN Primary (US East)",
+        region: "New York",
+    },
+    CdnEndpointConfig {
+        url: "http://130.245.173.231:9420",
+        name: "CDN Secondary (US East)",
+        region: "Stony Brook",
+    },
+];
+pub const LAUNCH_CDN_SEARCH_BASE_URLS: &[&str] =
+    &["http://130.245.173.73:9420", "http://130.245.173.231:9420"];
 
 pub const TESTNET: NetworkConfig = NetworkConfig {
     name: "testnet",
@@ -75,6 +109,11 @@ pub const TESTNET: NetworkConfig = NetworkConfig {
         "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
     ],
+    relay_base_url: LAUNCH_RELAY_BASE_URL,
+    rating_base_url: LAUNCH_RELAY_BASE_URL,
+    drive_relay_base_url: LAUNCH_RELAY_BASE_URL,
+    cdn_search_base_urls: LAUNCH_CDN_SEARCH_BASE_URLS,
+    cdn_servers: LAUNCH_CDN_SERVERS,
     // Legacy unprefixed layout — existing installs already live here.
     data_subdir: None,
 };
@@ -114,6 +153,11 @@ pub const FRESHNET: NetworkConfig = NetworkConfig {
         "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
     ],
+    relay_base_url: LAUNCH_RELAY_BASE_URL,
+    rating_base_url: LAUNCH_RELAY_BASE_URL,
+    drive_relay_base_url: LAUNCH_RELAY_BASE_URL,
+    cdn_search_base_urls: LAUNCH_CDN_SEARCH_BASE_URLS,
+    cdn_servers: LAUNCH_CDN_SERVERS,
     data_subdir: Some("freshnet"),
 };
 
@@ -150,7 +194,8 @@ pub fn set_active(name: &str) -> Result<(), String> {
     }
     let path = active_network_file();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
     std::fs::write(&path, name).map_err(|e| format!("write {}: {}", path.display(), e))?;
     Ok(())
