@@ -2175,6 +2175,14 @@ fn remove_active_download_for_cleanup(
     removed
 }
 
+fn add_backup_peer(download: &mut ActiveChunkedDownload, peer: PeerId) -> bool {
+    if download.peer_id == peer || download.backup_peers.iter().any(|p| *p == peer) {
+        return false;
+    }
+    download.backup_peers.push(peer);
+    true
+}
+
 fn looks_like_file_metadata(value: &serde_json::Value) -> bool {
     value
         .as_object()
@@ -4773,13 +4781,10 @@ async fn handle_behaviour_event(
                                     {
                                         let mut downloads = active_downloads.lock().await;
                                         if let Some(existing) = downloads.get_mut(&request_id) {
-                                            if existing.peer_id != peer
-                                                && !existing.backup_peers.iter().any(|p| *p == peer)
-                                            {
-                                                existing.backup_peers.push(peer);
+                                            if add_backup_peer(existing, peer) {
                                                 println!(
                                                     "🧭 Added backup seeder {} for request {} ({} backups total)",
-                                                    existing.backup_peers.last().unwrap(),
+                                                    peer,
                                                     request_id,
                                                     existing.backup_peers.len()
                                                 );
@@ -5834,6 +5839,10 @@ mod tests {
     use super::*;
 
     fn test_active_download(request_id: &str) -> ActiveChunkedDownload {
+        test_active_download_with_peer(request_id, PeerId::random())
+    }
+
+    fn test_active_download_with_peer(request_id: &str, peer_id: PeerId) -> ActiveChunkedDownload {
         ActiveChunkedDownload {
             request_id: request_id.to_string(),
             file_hash: "file-hash".to_string(),
@@ -5844,7 +5853,7 @@ mod tests {
             received_chunks: vec![false],
             output_path: std::env::temp_dir().join(format!("{request_id}.download")),
             bytes_written: 0,
-            peer_id: PeerId::random(),
+            peer_id,
             backup_peers: vec![],
             retry_counts: vec![0],
             current_chunk_index: 0,
@@ -5898,6 +5907,39 @@ mod tests {
 
         assert!(peer_timestamp_secs_at(pre_epoch).is_err());
         assert!(peer_timestamp_millis_at(pre_epoch).is_err());
+    }
+
+    #[test]
+    fn add_backup_peer_accepts_first_distinct_peer() {
+        let active_peer = PeerId::random();
+        let backup_peer = PeerId::random();
+        let mut download = test_active_download_with_peer("req-1", active_peer);
+
+        assert!(add_backup_peer(&mut download, backup_peer));
+
+        assert_eq!(download.backup_peers, vec![backup_peer]);
+    }
+
+    #[test]
+    fn add_backup_peer_rejects_active_peer() {
+        let active_peer = PeerId::random();
+        let mut download = test_active_download_with_peer("req-1", active_peer);
+
+        assert!(!add_backup_peer(&mut download, active_peer));
+
+        assert!(download.backup_peers.is_empty());
+    }
+
+    #[test]
+    fn add_backup_peer_rejects_duplicate_backup_peer() {
+        let active_peer = PeerId::random();
+        let backup_peer = PeerId::random();
+        let mut download = test_active_download_with_peer("req-1", active_peer);
+
+        assert!(add_backup_peer(&mut download, backup_peer));
+        assert!(!add_backup_peer(&mut download, backup_peer));
+
+        assert_eq!(download.backup_peers, vec![backup_peer]);
     }
 
     #[tokio::test]
