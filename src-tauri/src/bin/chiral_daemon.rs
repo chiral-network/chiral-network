@@ -144,6 +144,25 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+const DEFAULT_HEADLESS_MINED_BLOCK_HISTORY: u64 = 500;
+const MAX_HEADLESS_MINED_BLOCK_HISTORY: u64 = 500;
+
+fn validate_headless_mined_block_history_limit(max: Option<u64>) -> Result<u64, String> {
+    let limit = max.unwrap_or(DEFAULT_HEADLESS_MINED_BLOCK_HISTORY);
+    if limit == 0 {
+        return Err("max must be greater than zero".to_string());
+    }
+
+    if limit > MAX_HEADLESS_MINED_BLOCK_HISTORY {
+        return Err(format!(
+            "max must be at most {} blocks",
+            MAX_HEADLESS_MINED_BLOCK_HISTORY
+        ));
+    }
+
+    Ok(limit)
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -871,8 +890,13 @@ async fn mining_blocks(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Query(q): Query<BlocksQuery>,
 ) -> Response {
+    let max_blocks = match validate_headless_mined_block_history_limit(q.max) {
+        Ok(max_blocks) => max_blocks,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let geth = state.geth.lock().await;
-    match geth.get_mined_blocks(q.max.unwrap_or(500)).await {
+    match geth.get_mined_blocks(max_blocks).await {
         Ok(blocks) => Json(blocks).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -1843,5 +1867,109 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    async fn response_json(response: Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value = serde_json::from_slice(&body).expect("response body should be JSON");
+
+        (status, value)
+    }
+
+    #[test]
+    fn headless_mined_block_history_limit_defaults_and_accepts_valid_values() {
+        assert_eq!(
+            validate_headless_mined_block_history_limit(None).expect("default should be valid"),
+            DEFAULT_HEADLESS_MINED_BLOCK_HISTORY
+        );
+        assert_eq!(
+            validate_headless_mined_block_history_limit(Some(1)).expect("one should be valid"),
+            1
+        );
+        assert_eq!(
+            validate_headless_mined_block_history_limit(Some(MAX_HEADLESS_MINED_BLOCK_HISTORY))
+                .expect("max should be valid"),
+            MAX_HEADLESS_MINED_BLOCK_HISTORY
+        );
+    }
+
+    #[test]
+    fn headless_mined_block_history_limit_rejects_zero_and_over_limit() {
+        assert_eq!(
+            validate_headless_mined_block_history_limit(Some(0)).expect_err("zero should fail"),
+            "max must be greater than zero"
+        );
+        assert_eq!(
+            validate_headless_mined_block_history_limit(Some(MAX_HEADLESS_MINED_BLOCK_HISTORY + 1))
+                .expect_err("over-limit max should fail"),
+            format!(
+                "max must be at most {} blocks",
+                MAX_HEADLESS_MINED_BLOCK_HISTORY
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn mining_blocks_rejects_zero_and_over_limit_before_history_lookup() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let (status, value) = response_json(
+            mining_blocks(
+                State(Arc::clone(&state)),
+                Query(BlocksQuery { max: Some(0) }),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(value["error"], "max must be greater than zero");
+
+        let (status, value) = response_json(
+            mining_blocks(
+                State(state),
+                Query(BlocksQuery {
+                    max: Some(MAX_HEADLESS_MINED_BLOCK_HISTORY + 1),
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            value["error"],
+            format!(
+                "max must be at most {} blocks",
+                MAX_HEADLESS_MINED_BLOCK_HISTORY
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn mining_blocks_accepts_absent_and_valid_limits() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let (status, value) = response_json(
+            mining_blocks(State(Arc::clone(&state)), Query(BlocksQuery { max: None })).await,
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(value
+            .as_array()
+            .expect("blocks response should be array")
+            .is_empty());
+
+        let (status, value) =
+            response_json(mining_blocks(State(state), Query(BlocksQuery { max: Some(42) })).await)
+                .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(value
+            .as_array()
+            .expect("blocks response should be array")
+            .is_empty());
     }
 }
