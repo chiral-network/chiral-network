@@ -4055,6 +4055,28 @@ fn common_prefix(a: &Path, b: &Path) -> PathBuf {
     out
 }
 
+fn hosted_site_relative_path(src: &Path, common_root: &Path) -> Result<PathBuf, String> {
+    let file_name = src.file_name().ok_or_else(|| {
+        format!(
+            "Uploaded hosted-site path has no file name: {}",
+            src.display()
+        )
+    })?;
+
+    let rel_path = src
+        .strip_prefix(common_root)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(file_name));
+
+    if rel_path.as_os_str().is_empty() {
+        return Err("Invalid relative path computed for uploaded file".to_string());
+    }
+
+    Ok(rel_path)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HostingServerStatus {
@@ -4095,10 +4117,13 @@ async fn create_hosted_site(
             return Err(format!("File not found: {}", src.display()));
         }
         // Path inside the hosted site
-        let rel_path = src
-            .strip_prefix(&common_root)
-            .unwrap_or_else(|_| Path::new(src.file_name().unwrap()))
-            .to_path_buf();
+        let rel_path = match hosted_site_relative_path(src, &common_root) {
+            Ok(path) => path,
+            Err(err) => {
+                let _ = std::fs::remove_dir_all(&site_dir);
+                return Err(err);
+            }
+        };
 
         if rel_path.as_os_str().is_empty() {
             let _ = std::fs::remove_dir_all(&site_dir);
@@ -7918,6 +7943,36 @@ mod multi_seeder_tests {
 
         assert!(err.contains("shutdown cleanup runtime"));
         assert!(err.contains("runtime unavailable"));
+    }
+
+    #[test]
+    fn hosted_site_relative_path_preserves_nested_paths() {
+        let rel = hosted_site_relative_path(
+            Path::new("/tmp/chiral-site/assets/app.js"),
+            Path::new("/tmp/chiral-site"),
+        )
+        .expect("nested file should have a relative path");
+
+        assert_eq!(rel, PathBuf::from("assets/app.js"));
+    }
+
+    #[test]
+    fn hosted_site_relative_path_falls_back_to_file_name() {
+        let rel = hosted_site_relative_path(
+            Path::new("/tmp/chiral-site/index.html"),
+            Path::new("/other/root"),
+        )
+        .expect("file-name fallback should be valid");
+
+        assert_eq!(rel, PathBuf::from("index.html"));
+    }
+
+    #[test]
+    fn hosted_site_relative_path_rejects_path_without_file_name() {
+        let err = hosted_site_relative_path(Path::new("/"), Path::new("/tmp/chiral-site"))
+            .expect_err("root path has no file name");
+
+        assert!(err.contains("has no file name"));
     }
 
     #[test]
