@@ -4360,7 +4360,7 @@ async fn publish_site_to_relay(
     // The shared client's 5s default is tuned for JSON-RPC; relay
     // register can take longer on a congested or distant relay. Bring
     // this in line with the share-register path's 30s budget.
-    let resp = rpc_client::client()
+    let resp = rpc_client::client()?
         .post(&url)
         .json(&serde_json::json!({
             "site_id": site_id,
@@ -4456,7 +4456,7 @@ async fn unpublish_site_from_relay(
     let signature = wallet::sign_message(&private_key, &proof_payload)
         .map_err(|e| format!("Failed to sign unregister proof: {}", e))?;
 
-    let resp = rpc_client::client()
+    let resp = rpc_client::client()?
         .delete(&url)
         .header("X-Owner", &owner_lower)
         .header("X-Owner-Sig", format!("{}:{}", ts, signature))
@@ -4652,7 +4652,8 @@ async fn publish_site_to_cdn(
         "{}/api/cdn/pricing?bytes={}&durationDays={}",
         cdn_base, total_size, duration_days
     );
-    let pricing: serde_json::Value = match rpc_client::client().get(&pricing_url).send().await {
+    let http_client = rpc_client::client()?;
+    let pricing: serde_json::Value = match http_client.get(&pricing_url).send().await {
         Ok(r) => match r.json().await {
             Ok(j) => j,
             Err(e) => {
@@ -4676,7 +4677,7 @@ async fn publish_site_to_cdn(
         }
     };
 
-    let status: serde_json::Value = match rpc_client::client()
+    let status: serde_json::Value = match http_client
         .get(&format!("{}/api/cdn/status", cdn_base))
         .send()
         .await
@@ -4813,7 +4814,7 @@ async fn publish_site_to_cdn(
     // bound kills with `error sending request: operation timed out`.
     // Override with a per-request 180s timeout — long enough for big
     // sites + slow chain confirms, short enough to surface real hangs.
-    let resp = match rpc_client::client()
+    let resp = match http_client
         .post(&upload_url)
         .timeout(std::time::Duration::from_secs(180))
         .header("X-Site-Id", &site_id)
@@ -4928,7 +4929,7 @@ async fn unpublish_site_from_cdn(
         .map_err(|e| format!("Failed to sign unpublish proof: {}", e))?;
 
     let url = format!("{}{}", cdn_base, path);
-    let resp = rpc_client::client()
+    let resp = rpc_client::client()?
         .delete(&url)
         .header("X-Owner", &owner_lower)
         .header("X-Owner-Sig", format!("{}:{}", ts, signature))
@@ -7244,7 +7245,18 @@ async fn ensure_version_supported(_state: &AppState) -> Result<(), String> {
 /// non-zero issuance always wins.
 async fn fetch_and_log_remote_version_policy() {
     let url = "http://130.245.173.73:8080/api/version-policy";
-    let resp = match rpc_client::client()
+    let client = match rpc_client::client() {
+        Ok(client) => client,
+        Err(e) => {
+            println!(
+                "[VERSION] Local build {} — shared HTTP client unavailable: {}",
+                version::CURRENT_VERSION,
+                e
+            );
+            return;
+        }
+    };
+    let resp = match client
         .get(url)
         .timeout(std::time::Duration::from_secs(8))
         .send()
