@@ -242,11 +242,49 @@ async fn save_sites_registry(path: &PathBuf, entries: &[CdnSiteEntry]) {
 
 /// Price per MB per month, in wei. Operator sets `CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH`
 /// as a CHI decimal (e.g. `0.001`); default 0.001 CHI = 1e15 wei.
+const CDN_PRICE_ENV: &str = "CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH";
+const DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH: u128 = 1_000_000_000_000_000; // 0.001 CHI
+
+fn parse_price_env_value(value: &str) -> Result<u128, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("value must be a CHI decimal, not empty".to_string());
+    }
+    crate::wallet::parse_chi_to_wei(trimmed)
+        .map_err(|err| format!("value must be a valid CHI decimal: {}", err))
+}
+
+fn price_env_value(value: Option<&str>) -> Result<u128, String> {
+    match value {
+        Some(value) => parse_price_env_value(value),
+        None => Ok(DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH),
+    }
+}
+
 fn read_price_env() -> u128 {
-    const DEFAULT_WEI: u128 = 1_000_000_000_000_000; // 0.001 CHI
-    match std::env::var("CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH") {
-        Ok(v) => crate::wallet::parse_chi_to_wei(&v).unwrap_or(DEFAULT_WEI),
-        Err(_) => DEFAULT_WEI,
+    match std::env::var(CDN_PRICE_ENV) {
+        Ok(value) => match price_env_value(Some(&value)) {
+            Ok(price) => price,
+            Err(err) => {
+                eprintln!(
+                    "[CDN] Invalid {}={:?}: {}; using default {} CHI per MB-month",
+                    CDN_PRICE_ENV,
+                    value,
+                    err,
+                    wei_to_chi(DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH)
+                );
+                DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH
+            }
+        },
+        Err(std::env::VarError::NotPresent) => DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!(
+                "[CDN] Invalid {}: value is not valid Unicode; using default {} CHI per MB-month",
+                CDN_PRICE_ENV,
+                wei_to_chi(DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH)
+            );
+            DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH
+        }
     }
 }
 
@@ -1482,6 +1520,37 @@ mod tests {
     #[test]
     fn parse_chi_or_zero_handles_valid_chi() {
         assert_eq!(parse_chi_or_zero("0.001"), 1_000_000_000_000_000);
+    }
+
+    #[test]
+    fn price_env_value_uses_default_when_unset() {
+        assert_eq!(
+            price_env_value(None).expect("unset price env should use default"),
+            DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH
+        );
+    }
+
+    #[test]
+    fn price_env_value_accepts_valid_chi_decimal() {
+        assert_eq!(
+            price_env_value(Some("0.0025")).expect("valid price env should parse"),
+            2_500_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn price_env_value_rejects_invalid_chi_decimal() {
+        let err = price_env_value(Some("not-a-price"))
+            .expect_err("malformed price env should be rejected");
+
+        assert!(err.contains("valid CHI decimal"));
+    }
+
+    #[test]
+    fn price_env_value_rejects_empty_value() {
+        let err = price_env_value(Some("  ")).expect_err("empty price env should be rejected");
+
+        assert!(err.contains("not empty"));
     }
 
     /// Zero-input identities — the upload handler returns 0 immediately
