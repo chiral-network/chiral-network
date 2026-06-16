@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_nonzero_32_byte_key() {
-        let invalid = hex::encode([0xffu8; 32]);
+        let invalid = hex::encode([0x42u8; 32]);
 
         let err = parse_policy_public_key_hex(&invalid).unwrap_err();
 
