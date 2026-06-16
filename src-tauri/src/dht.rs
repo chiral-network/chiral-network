@@ -582,12 +582,24 @@ impl DhtBootstrapGate {
     }
 
     async fn wait_ready(&self, timeout: Duration) -> bool {
+        self.wait_ready_inner(timeout, || {}).await
+    }
+
+    async fn wait_ready_inner<F>(&self, timeout: Duration, mut before_ready_check: F) -> bool
+    where
+        F: FnMut(),
+    {
         if self.is_ready() {
             return true;
         }
         tokio::time::timeout(timeout, async {
             loop {
-                self.notify.notified().await;
+                let notified = self.notify.notified();
+                before_ready_check();
+                if self.is_ready() {
+                    return;
+                }
+                notified.await;
                 if self.is_ready() {
                     return;
                 }
@@ -5122,6 +5134,28 @@ mod tests {
         gate.mark_ready();
 
         assert!(waiter.await.unwrap());
+        assert!(gate.is_ready());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_gate_wait_ready_does_not_miss_racing_mark_ready() {
+        let gate = DhtBootstrapGate::new();
+        let mut marked = false;
+
+        let result = tokio::time::timeout(Duration::from_millis(50), async {
+            gate.wait_ready_inner(Duration::from_secs(180), || {
+                if !marked {
+                    marked = true;
+                    gate.mark_ready();
+                }
+            })
+            .await
+        })
+        .await
+        .expect("wait_ready should not wait for timeout when mark_ready races");
+
+        assert!(result);
+        assert!(marked);
         assert!(gate.is_ready());
     }
 
