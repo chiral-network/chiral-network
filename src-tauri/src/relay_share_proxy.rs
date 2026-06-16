@@ -926,7 +926,20 @@ async fn proxy_request_direct(target: &str) -> Response {
             .into_response();
     }
 
-    let upstream = match crate::rpc_client::client().get(target).send().await {
+    let client = match crate::rpc_client::client() {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("[RELAY-SHARE] Shared HTTP client unavailable: {e}");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(offline_page(
+                    "The owner is currently offline. Please try again later.",
+                )),
+            )
+                .into_response();
+        }
+    };
+    let upstream = match client.get(target).send().await {
         Ok(r) => r,
         Err(_) => {
             return (

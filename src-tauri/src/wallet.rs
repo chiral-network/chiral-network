@@ -372,6 +372,7 @@ pub async fn get_transaction_history(
     let mut cursor = latest_block;
     let started = std::time::Instant::now();
     let mut batches = 0u64;
+    let http_client = rpc_client::client()?;
 
     'outer: loop {
         if batches >= MAX_BATCHES || started.elapsed() >= MAX_DURATION { break; }
@@ -386,7 +387,7 @@ pub async fn get_transaction_history(
             }))
             .collect();
 
-        let resp = rpc_client::client().post(endpoint).json(&payloads).send().await;
+        let resp = http_client.post(endpoint).json(&payloads).send().await;
         batches += 1;
 
         if let Ok(response) = resp {
