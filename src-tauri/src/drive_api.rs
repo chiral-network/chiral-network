@@ -105,10 +105,28 @@ fn parse_hex_u128(hex: &str) -> Result<u128, String> {
     u128::from_str_radix(value, 16).map_err(|e| format!("Invalid hex value: {}", e))
 }
 
+fn parse_hex_u64(hex: &str) -> Result<u64, String> {
+    let value = hex.trim_start_matches("0x");
+    u64::from_str_radix(value, 16).map_err(|e| format!("Invalid hex value: {}", e))
+}
+
+fn validate_share_payment_timing(
+    block_timestamp_secs: u64,
+    share_created_at: u64,
+) -> Result<(), String> {
+    if block_timestamp_secs < share_created_at {
+        return Err(
+            "Transaction was mined before this share was created. Please pay again.".to_string(),
+        );
+    }
+    Ok(())
+}
+
 async fn verify_payment_tx(
     tx_hash: &str,
     expected_to: &str,
     min_value_wei: u128,
+    share_created_at: u64,
 ) -> Result<(), String> {
     if !tx_hash.starts_with("0x") || tx_hash.len() != 66 {
         return Err("Invalid transaction hash".to_string());
@@ -181,6 +199,36 @@ async fn verify_payment_tx(
         return Err("Transaction failed on-chain".to_string());
     }
 
+    let block_number = receipt
+        .get("blockNumber")
+        .and_then(|v| v.as_str())
+        .ok_or("Receipt block number missing")?;
+    let block_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [block_number, false],
+        "id": 3
+    });
+    let block_resp = client
+        .post(&rpc)
+        .json(&block_payload)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to query tx block: {}", e))?;
+    let block_json: serde_json::Value = block_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse block response: {}", e))?;
+    let block = block_json.get("result").ok_or("Block result missing")?;
+    if block.is_null() {
+        return Err("Transaction block not found".to_string());
+    }
+    let block_timestamp = block
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .ok_or("Block timestamp missing")?;
+    validate_share_payment_timing(parse_hex_u64(block_timestamp)?, share_created_at)?;
+
     Ok(())
 }
 
@@ -240,7 +288,14 @@ async fn verify_share_access(share: &ShareLink, access: Option<&str>) -> Result<
             // permanent. If on-chain check fails, the binding is rolled
             // back so a transient RPC error doesn't permanently waste
             // the buyer's tx.
-            match verify_payment_tx(tx_hash, &share.recipient_wallet, required_wei).await {
+            match verify_payment_tx(
+                tx_hash,
+                &share.recipient_wallet,
+                required_wei,
+                share.created_at,
+            )
+            .await
+            {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     release_share_tx(tx_hash).await;
@@ -799,15 +854,13 @@ async fn delete_item(
     // Delete files in parallel — the async runtime can schedule many
     // remove_file calls concurrently, which is much faster than serial
     // blocking I/O on a folder with many files.
-    let removals = file_paths
-        .into_iter()
-        .map(|path| async move {
-            match tokio::fs::remove_file(&path).await {
-                Ok(_) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(format!("{}: {}", path.display(), e)),
-            }
-        });
+    let removals = file_paths.into_iter().map(|path| async move {
+        match tokio::fs::remove_file(&path).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("{}: {}", path.display(), e)),
+        }
+    });
     let errors: Vec<String> = futures_util::future::join_all(removals)
         .await
         .into_iter()
@@ -1834,6 +1887,20 @@ mod tests {
     }
 
     #[test]
+    fn validate_share_payment_timing_accepts_post_share_payment() {
+        validate_share_payment_timing(1_700_000_010, 1_700_000_000)
+            .expect("post-share payment should be accepted");
+    }
+
+    #[test]
+    fn validate_share_payment_timing_rejects_pre_share_payment() {
+        let err = validate_share_payment_timing(1_699_999_999, 1_700_000_000)
+            .expect_err("pre-share payment should be rejected");
+
+        assert!(err.contains("before this share was created"));
+    }
+
+    #[test]
     fn claim_share_tx_in_map_rejects_reused_transaction_for_different_share() {
         let mut map = HashMap::new();
 
@@ -1881,7 +1948,9 @@ pub fn drive_routes(state: Arc<DriveState>) -> Router {
         .route("/api/drive/share", post(create_share))
         .route("/api/drive/share/:token", delete(revoke_share))
         .route("/api/drive/shares", get(list_shares))
-        .layer(axum::middleware::from_fn(crate::auth::owner_proof_middleware));
+        .layer(axum::middleware::from_fn(
+            crate::auth::owner_proof_middleware,
+        ));
 
     // Public browse/download routes are intentionally unauthenticated:
     // visitors hit them with an `?access=<txhash>` query (which
