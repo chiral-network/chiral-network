@@ -48,13 +48,6 @@ Format per entry:
 - **Why it's still here:** Needs an exchange step where each peer publishes its Ed25519 verifying key under a well-known DHT key, signed by something the verifier already trusts (the libp2p identity key, or the wallet's secp256k1 key). Non-trivial.
 - **Workaround:** Reputation panel currently displays raw verdicts without signature verification; consumers should treat scores as advisory.
 
-### `is_safe_origin_url` over-blocks legitimate private networks
-
-- **Where:** `src-tauri/src/relay_share_proxy.rs::is_safe_origin_url`
-- **Symptom:** Origin URL allowlist rejects RFC1918 + CGNAT (`100.64/10`) + link-local + ULA. This correctly blocks SSRF against AWS metadata at `169.254.169.254`, but it also blocks Tailscale (uses `100.64/10`), most home networks behind a router, and corporate networks behind a NAT — anyone trying to register a relay share to a non-public origin URL gets rejected even when the origin is legitimately reachable.
-- **Why it's still here:** Trade-off between SSRF defense and reachability. Loopback (127/8) is exempted because `fix_origin_url` substitutes the registrant's public IP at request time; expanding the exemption to RFC1918 needs the same substitution path or an explicit operator-controlled allowlist.
-- **Workaround:** Self-hosted users can run the relay on a public-IP machine they control.
-
 ### CDN file metadata blob lookup is timing-sensitive across daemon restarts
 
 - **Where:** `src-tauri/src/cdn_server.rs::register_in_dht` and the matching paths in `lib.rs` / `chiral_daemon.rs`
