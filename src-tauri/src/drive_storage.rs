@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A single item (file or folder) in the Drive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,19 +118,100 @@ pub fn load_manifest() -> DriveManifest {
     let Some(path) = manifest_path() else {
         return DriveManifest::default();
     };
-    let Ok(data) = std::fs::read_to_string(&path) else {
-        return DriveManifest::default();
+    load_manifest_from_path(&path)
+}
+
+fn load_manifest_from_path(path: &Path) -> DriveManifest {
+    let data = match std::fs::read_to_string(path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return DriveManifest::default(),
+        Err(e) => {
+            eprintln!(
+                "[Drive] Failed to read Drive manifest {}: {}; starting with an empty manifest",
+                path.display(),
+                e
+            );
+            return DriveManifest::default();
+        }
     };
-    serde_json::from_str(&data).unwrap_or_default()
+
+    match serde_json::from_str(&data) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            match quarantine_malformed_manifest(path) {
+                Ok(quarantine) => eprintln!(
+                    "[Drive] Malformed Drive manifest {} quarantined at {}: {}",
+                    path.display(),
+                    quarantine.display(),
+                    e
+                ),
+                Err(quarantine_err) => eprintln!(
+                    "[Drive] Malformed Drive manifest {} could not be quarantined: {}; starting with an empty manifest",
+                    path.display(),
+                    quarantine_err
+                ),
+            }
+            DriveManifest::default()
+        }
+    }
+}
+
+fn quarantine_malformed_manifest(path: &Path) -> Result<PathBuf, String> {
+    let quarantine = malformed_manifest_quarantine_path(path);
+    std::fs::rename(path, &quarantine).map_err(|e| {
+        format!(
+            "rename {} to {}: {}",
+            path.display(),
+            quarantine.display(),
+            e
+        )
+    })?;
+    Ok(quarantine)
+}
+
+fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("manifest.json");
+    for attempt in 0..1000 {
+        let suffix = if attempt == 0 {
+            format!("malformed-{timestamp}")
+        } else {
+            format!("malformed-{timestamp}-{attempt}")
+        };
+        let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow"))
 }
 
 pub fn save_manifest(manifest: &DriveManifest) {
     let Some(path) = manifest_path() else { return };
+    save_manifest_to_path(manifest, &path);
+}
+
+fn save_manifest_to_path(manifest: &DriveManifest, path: &Path) {
+    if let Ok(data) = std::fs::read_to_string(path) {
+        if serde_json::from_str::<DriveManifest>(&data).is_err() {
+            eprintln!(
+                "[Drive] Refusing to overwrite malformed Drive manifest at {}; fix or remove it manually",
+                path.display()
+            );
+            return;
+        }
+    }
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string_pretty(manifest) {
-        let _ = std::fs::write(&path, json);
+        let _ = std::fs::write(path, json);
     }
 }
 
@@ -209,6 +290,105 @@ pub fn collect_descendants(parent_id: &str, items: &[DriveItem]) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    fn test_drive_item(id: &str) -> DriveItem {
+        DriveItem {
+            id: id.into(),
+            name: "Test file".into(),
+            item_type: "file".into(),
+            parent_id: None,
+            size: Some(100),
+            mime_type: None,
+            created_at: 0,
+            modified_at: 0,
+            starred: false,
+            storage_path: Some("files/test".into()),
+            owner: "test-owner".into(),
+            is_public: true,
+            merkle_root: None,
+            protocol: None,
+            price_chi: None,
+            payment_wallet: None,
+            seed_enabled: true,
+            seeding: true,
+        }
+    }
+
+    #[test]
+    fn load_manifest_missing_file_starts_empty() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+
+        let manifest = load_manifest_from_path(&path);
+
+        assert!(manifest.items.is_empty());
+        assert!(manifest.shares.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn load_manifest_reads_valid_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("item-1")],
+            shares: Vec::new(),
+        };
+        save_manifest_to_path(&manifest, &path);
+
+        let loaded = load_manifest_from_path(&path);
+
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.items[0].id, "item-1");
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn load_manifest_quarantines_malformed_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let malformed = "{not valid json";
+        std::fs::write(&path, malformed).unwrap();
+
+        let loaded = load_manifest_from_path(&path);
+
+        assert!(loaded.items.is_empty());
+        assert!(loaded.shares.is_empty());
+        assert!(!path.exists());
+
+        let quarantines: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("manifest.json.malformed-")
+            })
+            .collect();
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(quarantines[0].path()).unwrap(),
+            malformed
+        );
+    }
+
+    #[test]
+    fn save_manifest_refuses_to_overwrite_malformed_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let malformed = "{still not valid json";
+        std::fs::write(&path, malformed).unwrap();
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("replacement")],
+            shares: Vec::new(),
+        };
+
+        save_manifest_to_path(&manifest, &path);
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
+    }
 
     #[test]
     fn test_generate_share_token() {
