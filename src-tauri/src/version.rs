@@ -13,6 +13,10 @@
 
 use serde::{Deserialize, Serialize};
 
+#[path = "policy_key_validation.rs"]
+mod policy_key_validation;
+use policy_key_validation::{is_placeholder_policy_key, parse_policy_public_key_hex};
+
 /// The compile-time semantic version of this build, sourced from the
 /// `version = "..."` field in `src-tauri/Cargo.toml`. Used everywhere the
 /// client/daemon needs to identify itself (HTTP header in Phase 3,
@@ -146,10 +150,6 @@ pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str 
 /// `chiral-policy-sign keygen`.
 include!(concat!(env!("OUT_DIR"), "/policy_public_key.rs"));
 
-fn is_placeholder_policy_key(key: &[u8; 32]) -> bool {
-    *key == [0u8; 32]
-}
-
 /// Resolve the active policy public key. Reads the
 /// `CHIRAL_POLICY_PUBLIC_KEY` env var on first call and caches it; if
 /// the env var is absent or malformed, falls back to the compile-time
@@ -162,26 +162,23 @@ pub fn policy_public_key() -> [u8; 32] {
             Ok(v) => v,
             Err(_) => return POLICY_PUBLIC_KEY,
         };
-        let cleaned = raw.trim().trim_start_matches("0x");
-        match hex::decode(cleaned) {
-            Ok(bytes) if bytes.len() == 32 => {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&bytes);
+        match parse_policy_public_key_hex(&raw) {
+            Ok(key) if !is_placeholder_policy_key(&key) => {
                 println!(
                     "[VERSION] CHIRAL_POLICY_PUBLIC_KEY override active: {}",
-                    cleaned
+                    raw.trim()
                 );
-                out
+                key
             }
             Ok(_) => {
                 eprintln!(
-                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY must decode to 32 bytes — falling back to compile-time placeholder"
+                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY is the all-zero placeholder — falling back to compile-time policy key"
                 );
                 POLICY_PUBLIC_KEY
             }
             Err(e) => {
                 eprintln!(
-                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY not valid hex ({}) — falling back to compile-time placeholder",
+                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY invalid ({}) — falling back to compile-time policy key",
                     e
                 );
                 POLICY_PUBLIC_KEY
