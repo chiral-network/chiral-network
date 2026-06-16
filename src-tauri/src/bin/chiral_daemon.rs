@@ -144,6 +144,50 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn validate_headless_action_transfer_id(value: &str) -> Result<String, String> {
+    const MAX_TRANSFER_ID_LEN: usize = 128;
+
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("transferId required".to_string());
+    }
+    if value.len() > MAX_TRANSFER_ID_LEN {
+        return Err(format!(
+            "transferId must be at most {} characters",
+            MAX_TRANSFER_ID_LEN
+        ));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+    {
+        return Err(
+            "transferId may contain only ASCII letters, digits, '-', '_', '.', or ':'".to_string(),
+        );
+    }
+    Ok(value.to_string())
+}
+
+fn validate_headless_download_dir(value: Option<String>) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.contains('\0') {
+        return Err("downloadDir must not contain NUL bytes".to_string());
+    }
+
+    let path = PathBuf::from(value);
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => Ok(Some(path.to_string_lossy().to_string())),
+        Ok(_) => Err("downloadDir must be an existing directory".to_string()),
+        Err(e) => Err(format!("downloadDir must be an existing directory: {}", e)),
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -320,8 +364,17 @@ struct UnregisterSharedFileRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AcceptTransferRequest {
+    #[serde(default)]
     transfer_id: String,
+    #[serde(default)]
     download_dir: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeclineTransferRequest {
+    #[serde(default, alias = "key")]
+    transfer_id: String,
 }
 
 #[derive(Deserialize)]
@@ -777,9 +830,18 @@ async fn drop_accept(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<AcceptTransferRequest>,
 ) -> Response {
+    let transfer_id = match validate_headless_action_transfer_id(&req.transfer_id) {
+        Ok(transfer_id) => transfer_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let download_dir = match validate_headless_download_dir(req.download_dir) {
+        Ok(download_dir) => download_dir,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let svc = state.file_transfer.lock().await;
     match svc
-        .accept_transfer(EventSink::noop(), req.transfer_id, req.download_dir)
+        .accept_transfer(EventSink::noop(), transfer_id, download_dir)
         .await
     {
         Ok(path) => Json(json!({ "status": "accepted", "path": path })).into_response(),
@@ -789,10 +851,15 @@ async fn drop_accept(
 
 async fn drop_decline(
     State(state): State<Arc<HeadlessRuntimeState>>,
-    Json(req): Json<KeyRequest>,
+    Json(req): Json<DeclineTransferRequest>,
 ) -> Response {
+    let transfer_id = match validate_headless_action_transfer_id(&req.transfer_id) {
+        Ok(transfer_id) => transfer_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let svc = state.file_transfer.lock().await;
-    match svc.decline_transfer(req.key).await {
+    match svc.decline_transfer(transfer_id).await {
         Ok(()) => Json(json!({ "status": "declined" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -1823,6 +1890,31 @@ async fn main() {
 mod tests {
     use super::*;
 
+    async fn response_error(response: Response) -> String {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+        value["error"]
+            .as_str()
+            .expect("error response should include message")
+            .to_string()
+    }
+
+    async fn add_pending_transfer(state: &Arc<HeadlessRuntimeState>, transfer_id: &str) {
+        let svc = state.file_transfer.lock().await;
+        svc.receive_file_request(
+            EventSink::noop(),
+            "peer-a".to_string(),
+            "payload.txt".to_string(),
+            b"payload".to_vec(),
+            transfer_id.to_string(),
+        )
+        .await
+        .expect("pending transfer should be inserted");
+    }
+
     #[cfg(unix)]
     #[test]
     fn daemon_sigterm_handler_accepts_registered_handler() {
@@ -1843,5 +1935,184 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    #[test]
+    fn headless_action_transfer_id_validation_accepts_existing_shapes() {
+        assert_eq!(
+            validate_headless_action_transfer_id("transfer_1234567890_abcd").unwrap(),
+            "transfer_1234567890_abcd"
+        );
+        assert_eq!(
+            validate_headless_action_transfer_id("drop-123-456").unwrap(),
+            "drop-123-456"
+        );
+    }
+
+    #[test]
+    fn headless_action_transfer_id_validation_rejects_missing_or_malformed() {
+        assert_eq!(
+            validate_headless_action_transfer_id("").unwrap_err(),
+            "transferId required"
+        );
+        assert!(validate_headless_action_transfer_id("bad/id")
+            .unwrap_err()
+            .contains("ASCII letters"));
+        assert!(validate_headless_action_transfer_id(&"a".repeat(129))
+            .unwrap_err()
+            .contains("at most 128"));
+    }
+
+    #[test]
+    fn headless_download_dir_validation_accepts_absent_empty_and_directory() {
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+        assert_eq!(validate_headless_download_dir(None).unwrap(), None);
+        assert_eq!(
+            validate_headless_download_dir(Some("   ".to_string())).unwrap(),
+            None
+        );
+        assert_eq!(
+            validate_headless_download_dir(Some(temp_dir.path().to_string_lossy().to_string()))
+                .unwrap()
+                .as_deref(),
+            Some(temp_dir.path().to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn headless_download_dir_validation_rejects_invalid_directory() {
+        let temp_file = tempfile::NamedTempFile::new().expect("temp file should be created");
+
+        assert!(validate_headless_download_dir(Some(
+            temp_file.path().to_string_lossy().to_string()
+        ))
+        .unwrap_err()
+        .contains("existing directory"));
+        assert!(validate_headless_download_dir(Some(
+            temp_file
+                .path()
+                .join("missing")
+                .to_string_lossy()
+                .to_string()
+        ))
+        .unwrap_err()
+        .contains("existing directory"));
+    }
+
+    #[test]
+    fn decline_transfer_request_accepts_key_alias() {
+        let req: DeclineTransferRequest = serde_json::from_value(json!({ "key": "drop-123-456" }))
+            .expect("key alias should deserialize");
+
+        assert_eq!(req.transfer_id, "drop-123-456");
+    }
+
+    #[tokio::test]
+    async fn drop_accept_rejects_missing_transfer_id_before_service_call() {
+        let response = drop_accept(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(AcceptTransferRequest {
+                transfer_id: String::new(),
+                download_dir: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_error(response).await, "transferId required");
+    }
+
+    #[tokio::test]
+    async fn drop_accept_rejects_malformed_transfer_id_before_service_call() {
+        let response = drop_accept(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(AcceptTransferRequest {
+                transfer_id: "bad/id".to_string(),
+                download_dir: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("ASCII letters"));
+    }
+
+    #[tokio::test]
+    async fn drop_accept_rejects_invalid_download_dir_before_service_call() {
+        let response = drop_accept(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(AcceptTransferRequest {
+                transfer_id: "drop-123-456".to_string(),
+                download_dir: Some("/path/that/does/not/exist".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("downloadDir"));
+    }
+
+    #[tokio::test]
+    async fn drop_accept_accepts_valid_transfer_and_download_dir() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        add_pending_transfer(&state, "drop-123-456").await;
+        let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+
+        let response = drop_accept(
+            State(state),
+            Json(AcceptTransferRequest {
+                transfer_id: "drop-123-456".to_string(),
+                download_dir: Some(temp_dir.path().to_string_lossy().to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(temp_dir.path().join("payload.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn drop_decline_rejects_missing_transfer_id_before_service_call() {
+        let response = drop_decline(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(DeclineTransferRequest {
+                transfer_id: String::new(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_error(response).await, "transferId required");
+    }
+
+    #[tokio::test]
+    async fn drop_decline_rejects_malformed_transfer_id_before_service_call() {
+        let response = drop_decline(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(DeclineTransferRequest {
+                transfer_id: "bad/id".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("ASCII letters"));
+    }
+
+    #[tokio::test]
+    async fn drop_decline_accepts_valid_transfer_id() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        add_pending_transfer(&state, "drop-123-456").await;
+
+        let response = drop_decline(
+            State(state),
+            Json(DeclineTransferRequest {
+                transfer_id: "drop-123-456".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
