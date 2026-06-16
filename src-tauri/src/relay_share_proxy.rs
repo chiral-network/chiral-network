@@ -554,6 +554,49 @@ fn is_safe_origin_url_with_allowlist(
     Ok(())
 }
 
+fn validate_normalized_origin_ip(
+    ip: IpAddr,
+    allowlist: &[PrivateOriginAllowEntry],
+) -> Result<(), String> {
+    match ip {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback() {
+                return Err(format!(
+                    "origin_url IP {} is loopback after normalization — not allowed",
+                    v4
+                ));
+            }
+            validate_ipv4_origin(v4, allowlist)
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return Err(format!(
+                    "origin_url IPv6 {} is loopback after normalization — not allowed",
+                    v6
+                ));
+            }
+            if let Some(mapped) = v6.to_ipv4() {
+                if mapped.is_loopback() {
+                    return Err(format!(
+                        "origin_url IP {} is loopback after normalization — not allowed",
+                        mapped
+                    ));
+                }
+            }
+            validate_ipv6_origin(v6, allowlist)
+        }
+    }
+}
+
+fn is_safe_normalized_origin_url(origin_url: &str) -> Result<(), String> {
+    let allowlist = private_origin_allowlist_from_env();
+    let host = origin_host(origin_url).map_err(|e| format!("normalized {e}"))?;
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        validate_normalized_origin_ip(ip, &allowlist).map_err(|e| format!("normalized {e}"))?;
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct ProxyQuery {
     #[serde(flatten)]
@@ -589,6 +632,36 @@ fn fix_origin_url(origin_url: &str, client_ip: std::net::IpAddr) -> String {
         }
     }
     origin_url.to_string()
+}
+
+fn normalize_origin_for_preflight(
+    origin_url: &str,
+    client_ip: std::net::IpAddr,
+) -> Result<String, String> {
+    let origin = fix_origin_url(origin_url, client_ip);
+    is_safe_normalized_origin_url(&origin)?;
+    Ok(origin)
+}
+
+async fn preflight_origin_reachable(origin_url: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        // The origin host has already passed `is_safe_origin_url`; do not
+        // follow attacker-controlled redirects to a different network target.
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("origin_url preflight client could not be initialized: {e}"))?;
+
+    client
+        .get(origin_url.trim_end_matches('/'))
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            format!(
+                "origin_url is not reachable from this relay: {e}. Ensure the owner server is running, the host/port is reachable from the relay, and firewall/NAT rules allow inbound HTTP."
+            )
+        })
 }
 
 /// POST /api/drive/relay-register — register a share origin
@@ -633,7 +706,13 @@ async fn register_share(
                 .into_response();
         }
     }
-    let origin = fix_origin_url(&req.origin_url, addr.ip());
+    let origin = match normalize_origin_for_preflight(&req.origin_url, addr.ip()) {
+        Ok(origin) => origin,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if let Err(e) = preflight_origin_reachable(&origin).await {
+        return (StatusCode::BAD_GATEWAY, e).into_response();
+    }
     println!(
         "[RELAY-SHARE] Registering share token={} origin={} (raw={}) owner={}",
         req.token, origin, req.origin_url, owner
@@ -984,7 +1063,13 @@ async fn register_site(
                 .into_response();
         }
     }
-    let origin = fix_origin_url(&req.origin_url, addr.ip());
+    let origin = match normalize_origin_for_preflight(&req.origin_url, addr.ip()) {
+        Ok(origin) => origin,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if let Err(e) = preflight_origin_reachable(&origin).await {
+        return (StatusCode::BAD_GATEWAY, e).into_response();
+    }
     println!(
         "[RELAY-SITE] Registering site={} origin={} (raw={}) owner={}",
         req.site_id, origin, req.origin_url, owner
@@ -1149,6 +1234,14 @@ pub fn relay_share_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    const TEST_PRIVATE_KEY: &str =
+        "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     // -----------------------------------------------------------------------
     // is_safe_origin_url — FM-A04
@@ -1294,6 +1387,173 @@ mod tests {
             fix_origin_url("http://203.0.113.5:9419", ip),
             "http://203.0.113.5:9419"
         );
+    }
+
+    #[test]
+    fn test_normalize_origin_for_preflight_allows_public_substitution() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+
+        assert_eq!(
+            normalize_origin_for_preflight("http://localhost:9419", ip).unwrap(),
+            "http://203.0.113.5:9419"
+        );
+    }
+
+    #[test]
+    fn test_normalize_origin_for_preflight_rejects_unsafe_substitution() {
+        let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let private = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
+
+        let loopback_err = normalize_origin_for_preflight("http://localhost:9419", loopback)
+            .expect_err("loopback normalized target should fail closed");
+        assert!(loopback_err.contains("normalized origin_url"));
+        assert!(loopback_err.contains("loopback"));
+
+        let private_err = normalize_origin_for_preflight("http://localhost:9419", private)
+            .expect_err("private normalized target should fail closed");
+        assert!(private_err.contains("normalized origin_url"));
+        assert!(private_err.contains("private"));
+    }
+
+    async fn one_shot_http_response(response: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream.write_all(&response).await;
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    async fn one_shot_http_origin() -> String {
+        one_shot_http_response(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec())
+            .await
+    }
+
+    async fn one_shot_redirect_origin(location: &str) -> String {
+        one_shot_http_response(
+            format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n")
+                .into_bytes(),
+        )
+        .await
+    }
+
+    async fn closed_loopback_origin() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{}", addr)
+    }
+
+    fn test_owner_wallet() -> String {
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, b"owner").unwrap();
+        crate::wallet::recover_signer(b"owner", &signature).unwrap()
+    }
+
+    fn signed_register_request(token: &str, origin_url: &str) -> RegisterRequest {
+        let owner_wallet = test_owner_wallet();
+        let payload = register_payload("share", token, &owner_wallet, origin_url);
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, &payload).unwrap();
+        RegisterRequest {
+            token: token.to_string(),
+            origin_url: origin_url.to_string(),
+            owner_wallet,
+            signature,
+        }
+    }
+
+    fn signed_site_register_request(site_id: &str, origin_url: &str) -> SiteRegisterRequest {
+        let owner_wallet = test_owner_wallet();
+        let payload = register_payload("site", site_id, &owner_wallet, origin_url);
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, &payload).unwrap();
+        SiteRegisterRequest {
+            site_id: site_id.to_string(),
+            origin_url: origin_url.to_string(),
+            owner_wallet,
+            signature,
+        }
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_accepts_reachable_http_origin() {
+        let origin = one_shot_http_origin().await;
+
+        preflight_origin_reachable(&origin)
+            .await
+            .expect("reachable origin should pass preflight");
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_reports_unreachable_origin() {
+        let origin = closed_loopback_origin().await;
+
+        let err = preflight_origin_reachable(&origin)
+            .await
+            .expect_err("closed origin should fail preflight");
+
+        assert!(err.contains("not reachable"));
+        assert!(err.contains("firewall/NAT"));
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_does_not_follow_redirects() {
+        let closed_target = closed_loopback_origin().await;
+        let origin = one_shot_redirect_origin(&closed_target).await;
+
+        preflight_origin_reachable(&origin)
+            .await
+            .expect("redirect response should count as origin reachability without following it");
+    }
+
+    #[tokio::test]
+    async fn register_share_rejects_loopback_normalized_origin_before_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(RelayShareRegistry::new(dir.path().to_path_buf()));
+        let req = signed_register_request("unsafe-token", "http://localhost:9");
+
+        let response = register_share(
+            Extension(registry.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 51111))),
+            Json(req),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(registry.lookup("unsafe-token").await.is_none());
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("normalized origin_url"));
+        assert!(body.contains("loopback"));
+    }
+
+    #[tokio::test]
+    async fn register_site_rejects_private_normalized_origin_before_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(RelayShareRegistry::new(dir.path().to_path_buf()));
+        let req = signed_site_register_request("unsafe-site", "http://localhost:9");
+
+        let response = register_site(
+            Extension(registry.clone()),
+            ConnectInfo(SocketAddr::from(([10, 0, 0, 7], 51111))),
+            Json(req),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(registry.lookup_site("unsafe-site").await.is_none());
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("normalized origin_url"));
+        assert!(body.contains("private"));
     }
 
     // -----------------------------------------------------------------------
