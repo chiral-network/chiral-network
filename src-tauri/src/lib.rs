@@ -932,6 +932,29 @@ struct HostRegistryEntry {
     updated_at: u64,
 }
 
+pub fn validate_host_ad_wallet_address(wallet_address: Option<&str>) -> Result<String, String> {
+    let wallet_address = wallet_address.unwrap_or_default().trim();
+    if wallet_address.is_empty() {
+        return Err("Host advertisement walletAddress is required".to_string());
+    }
+    Ok(wallet_address.to_string())
+}
+
+fn host_advertisement_payload(
+    advertisement_json: &str,
+    peer_id: &str,
+) -> Result<(String, String), String> {
+    let mut ad: serde_json::Value = serde_json::from_str(advertisement_json)
+        .map_err(|e| format!("Invalid advertisement JSON: {}", e))?;
+    let wallet_address =
+        validate_host_ad_wallet_address(ad.get("walletAddress").and_then(|v| v.as_str()))?;
+    ad["peerId"] = serde_json::Value::String(peer_id.to_string());
+    ad["walletAddress"] = serde_json::Value::String(wallet_address.clone());
+    let ad_json = serde_json::to_string(&ad)
+        .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
+    Ok((ad_json, wallet_address))
+}
+
 #[tauri::command]
 async fn publish_host_advertisement(
     state: tauri::State<'_, AppState>,
@@ -942,14 +965,7 @@ async fn publish_host_advertisement(
     if let Some(dht) = dht_guard.as_ref() {
         let peer_id = dht.get_peer_id().await.ok_or("Peer ID not available")?;
 
-        // Parse advertisement to extract wallet address, inject peer_id
-        let mut ad: serde_json::Value = serde_json::from_str(&advertisement_json)
-            .map_err(|e| format!("Invalid advertisement JSON: {}", e))?;
-        ad["peerId"] = serde_json::Value::String(peer_id.clone());
-        let ad_json = serde_json::to_string(&ad)
-            .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
-
-        let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
+        let (ad_json, wallet_address) = host_advertisement_payload(&advertisement_json, &peer_id)?;
 
         // Store individual advertisement
         let host_key = format!("chiral_host_{}", peer_id);
@@ -7999,6 +8015,56 @@ mod multi_seeder_tests {
         assert_eq!(
             signed_reseed_credentials(Some("0xwallet"), Some("private-key")),
             Some(("0xwallet", "private-key"))
+        );
+    }
+
+    #[test]
+    fn host_advertisement_payload_rejects_missing_wallet() {
+        let ad = serde_json::json!({
+            "maxStorageBytes": 1024,
+            "pricePerMbPerDayWei": "1",
+            "minDepositWei": "1",
+        })
+        .to_string();
+        let err = host_advertisement_payload(&ad, "peer-a")
+            .expect_err("missing wallet should be rejected before DHT writes");
+
+        assert!(err.contains("walletAddress is required"));
+    }
+
+    #[test]
+    fn host_advertisement_payload_rejects_empty_wallet() {
+        let ad = serde_json::json!({
+            "walletAddress": "  ",
+            "maxStorageBytes": 1024,
+            "pricePerMbPerDayWei": "1",
+            "minDepositWei": "1",
+        })
+        .to_string();
+        let err = host_advertisement_payload(&ad, "peer-a")
+            .expect_err("empty wallet should be rejected before DHT writes");
+
+        assert!(err.contains("walletAddress is required"));
+    }
+
+    #[test]
+    fn host_advertisement_payload_accepts_valid_wallet() {
+        let ad = serde_json::json!({
+            "walletAddress": " 0xwallet ",
+            "maxStorageBytes": 1024,
+            "pricePerMbPerDayWei": "1",
+            "minDepositWei": "1",
+        })
+        .to_string();
+        let (ad_json, wallet_address) = host_advertisement_payload(&ad, "peer-a")
+            .expect("valid wallet should build advertisement payload");
+        let ad: serde_json::Value = serde_json::from_str(&ad_json).unwrap();
+
+        assert_eq!(wallet_address, "0xwallet");
+        assert_eq!(ad.get("peerId").and_then(|v| v.as_str()), Some("peer-a"));
+        assert_eq!(
+            ad.get("walletAddress").and_then(|v| v.as_str()),
+            Some("0xwallet")
         );
     }
 
