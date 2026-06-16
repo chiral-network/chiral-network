@@ -144,6 +144,88 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn validate_headless_peer_id(field: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{} required", field));
+    }
+    value
+        .parse::<libp2p::PeerId>()
+        .map_err(|e| format!("{} must be a valid libp2p peer ID: {}", field, e))?;
+    Ok(value.to_string())
+}
+
+fn validate_headless_content_hash(field: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{} required", field));
+    }
+    if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("{} must be a 64-character hex string", field));
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn validate_optional_headless_content_hash(field: &str, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    validate_headless_content_hash(field, value)
+}
+
+fn validate_optional_headless_folder_hash(value: Option<String>) -> Result<Option<String>, String> {
+    match value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => validate_headless_content_hash("folderHash", value).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn validate_headless_transfer_id(field: &str, value: &str) -> Result<String, String> {
+    const MAX_TRANSFER_ID_LEN: usize = 128;
+
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{} required", field));
+    }
+    if value.len() > MAX_TRANSFER_ID_LEN {
+        return Err(format!(
+            "{} must be at most {} characters",
+            field, MAX_TRANSFER_ID_LEN
+        ));
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+    {
+        return Err(format!(
+            "{} may contain only ASCII letters, digits, '-', '_', '.', or ':'",
+            field
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn validate_headless_multiaddrs(multiaddrs: Vec<String>) -> Result<Vec<String>, String> {
+    multiaddrs
+        .into_iter()
+        .enumerate()
+        .map(|(index, addr)| {
+            let addr = addr.trim();
+            if addr.is_empty() {
+                return Err(format!("multiaddrs[{}] required", index));
+            }
+            addr.parse::<libp2p::Multiaddr>()
+                .map_err(|e| format!("multiaddrs[{}] must be a valid multiaddr: {}", index, e))?;
+            Ok(addr.to_string())
+        })
+        .collect()
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -578,18 +660,33 @@ async fn dht_request_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<RequestFileRequest>,
 ) -> Response {
+    let peer_id = match validate_headless_peer_id("peerId", &req.peer_id) {
+        Ok(peer_id) => peer_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let file_hash = match validate_headless_content_hash("fileHash", &req.file_hash) {
+        Ok(file_hash) => file_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let request_id = match validate_headless_transfer_id("requestId", &req.request_id) {
+        Ok(request_id) => request_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let multiaddrs = match validate_headless_multiaddrs(req.multiaddrs) {
+        Ok(multiaddrs) => multiaddrs,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let folder_hash = match validate_optional_headless_folder_hash(req.folder_hash) {
+        Ok(folder_hash) => folder_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
 
     match svc
-        .request_file(
-            req.peer_id,
-            req.file_hash,
-            req.request_id,
-            req.multiaddrs,
-            req.folder_hash,
-        )
+        .request_file(peer_id, file_hash, request_id, multiaddrs, folder_hash)
         .await
     {
         Ok(()) => Json(json!({ "status": "ok" })).into_response(),
@@ -601,6 +698,19 @@ async fn dht_send_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<SendFileRequest>,
 ) -> Response {
+    let peer_id = match validate_headless_peer_id("peerId", &req.peer_id) {
+        Ok(peer_id) => peer_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let transfer_id = match validate_headless_transfer_id("transferId", &req.transfer_id) {
+        Ok(transfer_id) => transfer_id,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let file_hash = match validate_optional_headless_content_hash("fileHash", &req.file_hash) {
+        Ok(file_hash) => file_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let data = match tokio::fs::read(&req.file_path).await {
         Ok(v) => v,
         Err(e) => {
@@ -618,13 +728,13 @@ async fn dht_send_file(
     let file_size = req.file_size.unwrap_or(data.len() as u64);
     match svc
         .send_file(
-            req.peer_id,
-            req.transfer_id,
+            peer_id,
+            transfer_id,
             req.file_name,
             data,
             req.price_wei,
             req.sender_wallet,
-            req.file_hash,
+            file_hash,
             file_size,
         )
         .await
@@ -1823,6 +1933,29 @@ async fn main() {
 mod tests {
     use super::*;
 
+    const VALID_CONTENT_HASH: &str =
+        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+
+    fn valid_peer_id() -> String {
+        libp2p::PeerId::random().to_string()
+    }
+
+    fn valid_multiaddr(peer_id: &str) -> String {
+        format!("/ip4/127.0.0.1/tcp/4001/p2p/{}", peer_id)
+    }
+
+    async fn response_error(response: Response) -> String {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value: serde_json::Value =
+            serde_json::from_slice(&body).expect("response body should be JSON");
+        value["error"]
+            .as_str()
+            .expect("error response should include message")
+            .to_string()
+    }
+
     #[cfg(unix)]
     #[test]
     fn daemon_sigterm_handler_accepts_registered_handler() {
@@ -1843,5 +1976,215 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    #[test]
+    fn headless_dht_transfer_validation_accepts_valid_inputs() {
+        let peer_id = valid_peer_id();
+
+        assert_eq!(
+            validate_headless_peer_id("peerId", &peer_id).unwrap(),
+            peer_id
+        );
+        assert_eq!(
+            validate_headless_content_hash("fileHash", &VALID_CONTENT_HASH.to_uppercase()).unwrap(),
+            VALID_CONTENT_HASH
+        );
+        assert_eq!(
+            validate_optional_headless_content_hash("fileHash", "").unwrap(),
+            ""
+        );
+        assert_eq!(
+            validate_optional_headless_folder_hash(Some(VALID_CONTENT_HASH.to_uppercase()))
+                .unwrap()
+                .as_deref(),
+            Some(VALID_CONTENT_HASH)
+        );
+        assert_eq!(
+            validate_headless_transfer_id("requestId", "download-abc_123.4:5").unwrap(),
+            "download-abc_123.4:5"
+        );
+        assert_eq!(
+            validate_headless_multiaddrs(vec![valid_multiaddr(&peer_id)]).unwrap(),
+            vec![valid_multiaddr(&peer_id)]
+        );
+    }
+
+    #[test]
+    fn headless_dht_transfer_validation_rejects_malformed_inputs() {
+        assert!(validate_headless_peer_id("peerId", "")
+            .unwrap_err()
+            .contains("required"));
+        assert!(validate_headless_peer_id("peerId", "not-a-peer")
+            .unwrap_err()
+            .contains("valid libp2p peer ID"));
+        assert!(validate_headless_content_hash("fileHash", "abc123")
+            .unwrap_err()
+            .contains("64-character hex"));
+        assert!(validate_headless_transfer_id("transferId", "bad/id")
+            .unwrap_err()
+            .contains("ASCII letters"));
+        assert!(
+            validate_headless_multiaddrs(vec!["not-a-multiaddr".to_string()])
+                .unwrap_err()
+                .contains("multiaddrs[0]")
+        );
+    }
+
+    #[tokio::test]
+    async fn dht_request_file_rejects_malformed_peer_before_dht_access() {
+        let response = dht_request_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(RequestFileRequest {
+                peer_id: "not-a-peer".to_string(),
+                file_hash: VALID_CONTENT_HASH.to_string(),
+                request_id: "download-abc-1".to_string(),
+                folder_hash: None,
+                multiaddrs: Vec::new(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("peerId"));
+    }
+
+    #[tokio::test]
+    async fn dht_request_file_rejects_malformed_hash_before_dht_access() {
+        let response = dht_request_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(RequestFileRequest {
+                peer_id: valid_peer_id(),
+                file_hash: "abc123".to_string(),
+                request_id: "download-abc-1".to_string(),
+                folder_hash: None,
+                multiaddrs: Vec::new(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("fileHash"));
+    }
+
+    #[tokio::test]
+    async fn dht_request_file_rejects_malformed_request_id_before_dht_access() {
+        let response = dht_request_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(RequestFileRequest {
+                peer_id: valid_peer_id(),
+                file_hash: VALID_CONTENT_HASH.to_string(),
+                request_id: "bad/id".to_string(),
+                folder_hash: None,
+                multiaddrs: Vec::new(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("requestId"));
+    }
+
+    #[tokio::test]
+    async fn dht_request_file_rejects_malformed_multiaddr_before_dht_access() {
+        let response = dht_request_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(RequestFileRequest {
+                peer_id: valid_peer_id(),
+                file_hash: VALID_CONTENT_HASH.to_string(),
+                request_id: "download-abc-1".to_string(),
+                folder_hash: None,
+                multiaddrs: vec!["not-a-multiaddr".to_string()],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("multiaddrs[0]"));
+    }
+
+    #[tokio::test]
+    async fn dht_request_file_accepts_valid_inputs_before_requiring_dht() {
+        let peer_id = valid_peer_id();
+        let response = dht_request_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(RequestFileRequest {
+                peer_id: peer_id.clone(),
+                file_hash: VALID_CONTENT_HASH.to_string(),
+                request_id: "download-abc-1".to_string(),
+                folder_hash: Some(VALID_CONTENT_HASH.to_uppercase()),
+                multiaddrs: vec![valid_multiaddr(&peer_id)],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_error(response).await, "DHT not running");
+    }
+
+    #[tokio::test]
+    async fn dht_send_file_rejects_malformed_transfer_id_before_file_read() {
+        let response = dht_send_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(SendFileRequest {
+                peer_id: valid_peer_id(),
+                transfer_id: "bad/id".to_string(),
+                file_name: "payload.txt".to_string(),
+                file_path: "/path/that/does/not/exist".to_string(),
+                price_wei: "0".to_string(),
+                sender_wallet: String::new(),
+                file_hash: String::new(),
+                file_size: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("transferId"));
+    }
+
+    #[tokio::test]
+    async fn dht_send_file_rejects_malformed_optional_hash_before_file_read() {
+        let response = dht_send_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(SendFileRequest {
+                peer_id: valid_peer_id(),
+                transfer_id: "drop-abc-1".to_string(),
+                file_name: "payload.txt".to_string(),
+                file_path: "/path/that/does/not/exist".to_string(),
+                price_wei: "0".to_string(),
+                sender_wallet: String::new(),
+                file_hash: "abc123".to_string(),
+                file_size: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("fileHash"));
+    }
+
+    #[tokio::test]
+    async fn dht_send_file_accepts_valid_inputs_before_requiring_dht() {
+        let temp_file = tempfile::NamedTempFile::new().expect("temp file should be created");
+        std::fs::write(temp_file.path(), b"payload").expect("temp file should be writable");
+
+        let response = dht_send_file(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(SendFileRequest {
+                peer_id: valid_peer_id(),
+                transfer_id: "drop-abc-1".to_string(),
+                file_name: "payload.txt".to_string(),
+                file_path: temp_file.path().to_string_lossy().into_owned(),
+                price_wei: "0".to_string(),
+                sender_wallet: String::new(),
+                file_hash: VALID_CONTENT_HASH.to_string(),
+                file_size: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_error(response).await, "DHT not running");
     }
 }
