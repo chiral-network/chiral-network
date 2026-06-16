@@ -7332,7 +7332,16 @@ fn get_version_policy() -> version::VersionPolicy {
 #[tauri::command]
 fn get_version_status() -> VersionStatus {
     let policy = version::effective_policy();
-    let status = version::compare_to_policy(version::CURRENT_VERSION, &policy);
+    let status = match version::compare_to_policy(version::CURRENT_VERSION, &policy) {
+        Ok(status) => status,
+        Err(e) => {
+            eprintln!(
+                "[VERSION] Failed to compare local build to effective policy: {}; treating update as required",
+                e
+            );
+            "required"
+        }
+    };
     VersionStatus {
         current_version: version::CURRENT_VERSION.to_string(),
         status: status.to_string(),
@@ -7347,14 +7356,23 @@ fn get_version_status() -> VersionStatus {
 /// it via direct Tauri invokes.
 async fn ensure_version_supported(_state: &AppState) -> Result<(), String> {
     let policy = version::effective_policy();
-    if version::compare_to_policy(version::CURRENT_VERSION, &policy) == "required" {
-        return Err(format!(
-            "This client (v{}) is below the network's required version (v{}). \
-             Update from {} to continue.",
-            version::CURRENT_VERSION,
-            policy.min_required,
-            policy.download_url
-        ));
+    match version::compare_to_policy(version::CURRENT_VERSION, &policy) {
+        Ok("required") => {
+            return Err(format!(
+                "This client (v{}) is below the network's required version (v{}). \
+                 Update from {} to continue.",
+                version::CURRENT_VERSION,
+                policy.min_required,
+                policy.download_url
+            ));
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return Err(format!(
+                "Version policy check failed closed: {}. Update from {} or verify the relay policy.",
+                e, policy.download_url
+            ));
+        }
     }
     Ok(())
 }
@@ -7417,7 +7435,10 @@ async fn fetch_and_log_remote_version_policy() {
     // Hand the candidate to the global slot; it applies the
     // signed-or-permissive + rollback rules and tells us whether it
     // accepted.
-    let outcome = version::compare_to_policy(version::CURRENT_VERSION, &remote);
+    let outcome = match version::compare_to_policy(version::CURRENT_VERSION, &remote) {
+        Ok(status) => status.to_string(),
+        Err(e) => format!("invalid policy ({e})"),
+    };
     let accepted = version::update_effective_policy(remote.clone());
     if accepted {
         println!(

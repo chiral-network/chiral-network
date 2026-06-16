@@ -84,43 +84,81 @@ pub fn bundled_policy() -> VersionPolicy {
 /// Lightweight semver-ish comparator: parses each side as
 /// `[0-9]+ ('.' [0-9]+)*` (ignoring any pre-release / build suffix after
 /// the first non-digit/dot) and lexicographically compares the integer
-/// component tuples. Phase 5 will swap this for a real semver crate
-/// once the policy comes signed and we care about pre-release ordering.
-pub fn version_is_below(a: &str, b: &str) -> bool {
-    fn parts(s: &str) -> Vec<u64> {
-        s.trim_start_matches('v')
-            .split(|c: char| !(c.is_ascii_digit() || c == '.'))
-            .next()
-            .unwrap_or(s)
-            .split('.')
-            .map(|p| p.parse::<u64>().unwrap_or(0))
-            .collect()
-    }
-    let ap = parts(a);
-    let bp = parts(b);
+/// component tuples. Malformed numeric prefixes now return an error
+/// instead of silently becoming zero.
+pub fn version_is_below(a: &str, b: &str) -> Result<bool, String> {
+    version_is_below_named(a, "left", b, "right")
+}
+
+pub fn version_is_below_named(
+    a: &str,
+    a_label: &str,
+    b: &str,
+    b_label: &str,
+) -> Result<bool, String> {
+    let ap = parse_version_parts(a, a_label)?;
+    let bp = parse_version_parts(b, b_label)?;
     let n = ap.len().max(bp.len());
     for i in 0..n {
         let av = ap.get(i).copied().unwrap_or(0);
         let bv = bp.get(i).copied().unwrap_or(0);
         if av < bv {
-            return true;
+            return Ok(true);
         }
         if av > bv {
-            return false;
+            return Ok(false);
         }
     }
-    false
+    Ok(false)
+}
+
+fn parse_version_parts(raw: &str, label: &str) -> Result<Vec<u64>, String> {
+    let trimmed = raw.trim();
+    let without_prefix = trimmed.trim_start_matches('v');
+    let core = without_prefix
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .next()
+        .unwrap_or(without_prefix);
+    if core.is_empty() {
+        return Err(format!(
+            "{label} version {raw:?} does not start with a numeric version"
+        ));
+    }
+
+    let mut parts = Vec::new();
+    for part in core.split('.') {
+        if part.is_empty() {
+            return Err(format!(
+                "{label} version {raw:?} contains an empty numeric component"
+            ));
+        }
+        let parsed = part.parse::<u64>().map_err(|e| {
+            format!("{label} version {raw:?} contains an invalid numeric component {part:?}: {e}")
+        })?;
+        parts.push(parsed);
+    }
+    Ok(parts)
 }
 
 /// Three-way comparison of `current` against the policy thresholds.
 /// Returns "ok" / "recommended" / "required".
-pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str {
-    if version_is_below(current, &policy.min_required) {
-        "required"
-    } else if version_is_below(current, &policy.recommended) {
-        "recommended"
+pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> Result<&'static str, String> {
+    if version_is_below_named(
+        current,
+        "current",
+        &policy.min_required,
+        "policy min_required",
+    )? {
+        Ok("required")
+    } else if version_is_below_named(
+        current,
+        "current",
+        &policy.recommended,
+        "policy recommended",
+    )? {
+        Ok("recommended")
     } else {
-        "ok"
+        Ok("ok")
     }
 }
 
@@ -293,7 +331,18 @@ pub fn is_acceptable_remote_policy(remote: &VersionPolicy, current: &VersionPoli
     // floor. The binary's bundled `min_required` is the hard floor —
     // unsigned policies can relax / nudge but never raise it.
     let bundled = bundled_policy();
-    !version_is_below(&bundled.min_required, &remote.min_required)
+    match version_is_below_named(
+        &bundled.min_required,
+        "bundled min_required",
+        &remote.min_required,
+        "remote min_required",
+    ) {
+        Ok(is_tighter) => !is_tighter,
+        Err(e) => {
+            eprintln!("[VERSION] Rejecting malformed remote policy: {e}");
+            false
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,45 +397,48 @@ mod tests {
 
     #[test]
     fn version_is_below_basic_ordering() {
-        assert!(version_is_below("1.0.0", "1.0.1"));
-        assert!(version_is_below("1.0.0", "1.1.0"));
-        assert!(version_is_below("1.0.0", "2.0.0"));
-        assert!(!version_is_below("1.0.0", "1.0.0"));
-        assert!(!version_is_below("2.0.0", "1.9.9"));
+        assert_eq!(version_is_below("1.0.0", "1.0.1"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "1.1.0"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "2.0.0"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "1.0.0"), Ok(false));
+        assert_eq!(version_is_below("2.0.0", "1.9.9"), Ok(false));
     }
 
     #[test]
     fn version_is_below_padding_and_v_prefix() {
         // "1.0" should equal "1.0.0", not be below it.
-        assert!(!version_is_below("1.0", "1.0.0"));
-        assert!(!version_is_below("1.0.0", "1.0"));
+        assert_eq!(version_is_below("1.0", "1.0.0"), Ok(false));
+        assert_eq!(version_is_below("1.0.0", "1.0"), Ok(false));
         // Leading 'v' tolerated on either side.
-        assert!(version_is_below("v1.0.0", "v1.0.1"));
-        assert!(version_is_below("1.0.0", "v1.0.1"));
+        assert_eq!(version_is_below("v1.0.0", "v1.0.1"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "v1.0.1"), Ok(true));
     }
 
     #[test]
     fn version_is_below_strips_pre_release_suffix() {
         // "1.0.0-rc1" parses as 1.0.0, equal to "1.0.0".
-        assert!(!version_is_below("1.0.0-rc1", "1.0.0"));
-        assert!(version_is_below("1.0.0+build", "1.0.1"));
+        assert_eq!(version_is_below("1.0.0-rc1", "1.0.0"), Ok(false));
+        assert_eq!(version_is_below("1.0.0+build", "1.0.1"), Ok(true));
     }
 
     #[test]
-    fn version_is_below_handles_empty_and_garbage() {
-        // Garbage should not panic and should parse as zero.
-        assert!(!version_is_below("", "0.0.0"));
-        assert!(version_is_below("garbage", "0.0.1"));
+    fn version_is_below_rejects_empty_and_garbage() {
+        let empty = version_is_below("", "0.0.0").expect_err("empty versions should be rejected");
+        assert!(empty.contains("numeric version"));
+
+        let garbage =
+            version_is_below("garbage", "0.0.1").expect_err("garbage versions should be rejected");
+        assert!(garbage.contains("numeric version"));
     }
 
     #[test]
     fn compare_to_policy_three_states() {
         let p = policy("1.0.0", "2.0.0", 0);
-        assert_eq!(compare_to_policy("0.9.0", &p), "required");
-        assert_eq!(compare_to_policy("1.0.0", &p), "recommended");
-        assert_eq!(compare_to_policy("1.5.0", &p), "recommended");
-        assert_eq!(compare_to_policy("2.0.0", &p), "ok");
-        assert_eq!(compare_to_policy("3.0.0", &p), "ok");
+        assert_eq!(compare_to_policy("0.9.0", &p), Ok("required"));
+        assert_eq!(compare_to_policy("1.0.0", &p), Ok("recommended"));
+        assert_eq!(compare_to_policy("1.5.0", &p), Ok("recommended"));
+        assert_eq!(compare_to_policy("2.0.0", &p), Ok("ok"));
+        assert_eq!(compare_to_policy("3.0.0", &p), Ok("ok"));
     }
 
     #[test]
@@ -394,7 +446,35 @@ mod tests {
         // Misconfigured policy where min_required > recommended must
         // still treat versions below min as "required" (fail-safe).
         let p = policy("2.0.0", "1.0.0", 0);
-        assert_eq!(compare_to_policy("1.5.0", &p), "required");
+        assert_eq!(compare_to_policy("1.5.0", &p), Ok("required"));
+    }
+
+    #[test]
+    fn compare_to_policy_rejects_malformed_current_version() {
+        let p = policy("1.0.0", "2.0.0", 0);
+        let err = compare_to_policy("not-a-version", &p)
+            .expect_err("malformed current version should be rejected");
+
+        assert!(err.contains("current version"));
+    }
+
+    #[test]
+    fn compare_to_policy_rejects_malformed_policy_version() {
+        let p = policy("1.x.0", "2.0.0", 0);
+        let err = compare_to_policy("1.0.0", &p)
+            .expect_err("malformed policy version should be rejected");
+
+        assert!(err.contains("policy min_required"));
+    }
+
+    #[test]
+    fn is_acceptable_unsigned_rejects_malformed_remote_minimum() {
+        let bundled = bundled_policy();
+        let mut remote = bundled.clone();
+        remote.min_required = "not-a-version".into();
+        remote.issued_at = bundled.issued_at + 1;
+
+        assert!(!is_acceptable_remote_policy(&remote, &bundled));
     }
 
     #[test]
