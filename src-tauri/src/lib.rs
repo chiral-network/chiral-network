@@ -5202,6 +5202,15 @@ async fn drive_upload_file(
     Ok(item)
 }
 
+fn validate_drive_item_price_update(price_chi: String) -> Result<Option<String>, String> {
+    if price_chi.is_empty() {
+        return Ok(None);
+    }
+    wallet::parse_chi_to_wei(&price_chi)
+        .map_err(|err| format!("Invalid Drive item price: {}", err))?;
+    Ok(Some(price_chi))
+}
+
 #[tauri::command]
 async fn drive_update_item(
     state: tauri::State<'_, AppState>,
@@ -5234,7 +5243,7 @@ async fn drive_update_item(
         item.starred = s;
     }
     if let Some(p) = price_chi {
-        item.price_chi = if p.is_empty() { None } else { Some(p) };
+        item.price_chi = validate_drive_item_price_update(p)?;
     }
     item.modified_at = ds::now_secs();
     let updated = item.clone();
@@ -8008,6 +8017,29 @@ mod multi_seeder_tests {
 
         assert!(err.contains("invalid Drive item price"));
         assert!(err.contains("refusing to auto-reseed as free"));
+    }
+
+    #[test]
+    fn drive_item_price_update_accepts_valid_price() {
+        assert_eq!(
+            validate_drive_item_price_update("0.25".to_string())
+                .expect("valid Drive item price should be accepted"),
+            Some("0.25".to_string())
+        );
+    }
+
+    #[test]
+    fn drive_item_price_update_clears_empty_price() {
+        assert_eq!(validate_drive_item_price_update(String::new()).unwrap(), None);
+    }
+
+    #[test]
+    fn drive_item_price_update_rejects_malformed_price() {
+        let err = validate_drive_item_price_update("not-a-price".to_string())
+            .expect_err("malformed Drive item price should be rejected");
+
+        assert!(err.contains("Invalid Drive item price"));
+        assert!(err.contains("Invalid amount"));
     }
 
     /// Manifests signed before folder-level pricing existed must still
