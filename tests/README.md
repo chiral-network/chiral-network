@@ -18,6 +18,16 @@ npm run test:coverage
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+## Run Live DHT/Relay Tests
+
+The relay circuit integration tests are opt-in because they start live libp2p
+swarms and exercise relay reservations/circuits. Normal backend test runs keep
+these tests deterministic by skipping the live portions unless this flag is set:
+
+```bash
+CHIRAL_RUN_LIVE_DHT_TESTS=1 cargo test --manifest-path src-tauri/Cargo.toml --test relay_circuit_test -- --nocapture
+```
+
 ## Run Everything
 
 ```bash

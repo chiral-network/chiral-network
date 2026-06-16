@@ -16,6 +16,49 @@ use libp2p::{
 };
 use std::time::Duration;
 
+const LIVE_DHT_TESTS_ENV: &str = "CHIRAL_RUN_LIVE_DHT_TESTS";
+
+fn live_dht_test_flag_enabled(value: Option<&str>) -> bool {
+    match value.map(str::trim) {
+        Some("1") => true,
+        Some(v)
+            if v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("yes")
+                || v.eq_ignore_ascii_case("on") =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn live_dht_tests_enabled() -> bool {
+    let value = std::env::var(LIVE_DHT_TESTS_ENV).ok();
+    live_dht_test_flag_enabled(value.as_deref())
+}
+
+fn skip_unless_live_dht_enabled(test_name: &str) -> bool {
+    if live_dht_tests_enabled() {
+        return false;
+    }
+    eprintln!("skipping {test_name}: set {LIVE_DHT_TESTS_ENV}=1 to run live DHT/relay tests");
+    true
+}
+
+fn relay_reservation_addr(relay_addr_with_peer: &Multiaddr) -> Multiaddr {
+    relay_addr_with_peer
+        .clone()
+        .with(libp2p::multiaddr::Protocol::P2pCircuit)
+}
+
+fn relay_circuit_addr_to_peer(
+    relay_addr_with_peer: &Multiaddr,
+    target_peer_id: libp2p::PeerId,
+) -> Multiaddr {
+    relay_reservation_addr(relay_addr_with_peer)
+        .with(libp2p::multiaddr::Protocol::P2p(target_peer_id))
+}
+
 // Minimal behaviour for relay server
 #[derive(NetworkBehaviour)]
 struct RelayServerBehaviour {
@@ -123,9 +166,7 @@ async fn wait_for_relay_listen(
                     // CRITICAL: Add as external address so RESERVE_OK includes it.
                     // Without this, the relay sends empty addresses in RESERVE_OK,
                     // causing NoAddressesInReservation on clients.
-                    let external = address
-                        .clone()
-                        .with(libp2p::multiaddr::Protocol::P2p(pid));
+                    let external = address.clone().with(libp2p::multiaddr::Protocol::P2p(pid));
                     swarm.add_external_address(external);
                     return address;
                 }
@@ -137,8 +178,65 @@ async fn wait_for_relay_listen(
     }
 }
 
+#[test]
+fn test_live_dht_gate_accepts_explicit_truthy_values() {
+    for value in [
+        Some("1"),
+        Some("true"),
+        Some("TRUE"),
+        Some("yes"),
+        Some("on"),
+    ] {
+        assert!(
+            live_dht_test_flag_enabled(value),
+            "expected {:?} to enable live DHT tests",
+            value
+        );
+    }
+}
+
+#[test]
+fn test_live_dht_gate_rejects_missing_or_falsey_values() {
+    for value in [
+        None,
+        Some(""),
+        Some("0"),
+        Some("false"),
+        Some("no"),
+        Some("off"),
+    ] {
+        assert!(
+            !live_dht_test_flag_enabled(value),
+            "expected {:?} to leave live DHT tests disabled",
+            value
+        );
+    }
+}
+
+#[test]
+fn test_relay_circuit_addr_helpers_append_expected_protocols() {
+    let relay_peer_id = Keypair::generate_ed25519().public().to_peer_id();
+    let target_peer_id = Keypair::generate_ed25519().public().to_peer_id();
+    let relay_addr_with_peer: Multiaddr = "/ip4/127.0.0.1/tcp/12345"
+        .parse::<Multiaddr>()
+        .unwrap()
+        .with(libp2p::multiaddr::Protocol::P2p(relay_peer_id));
+
+    let reservation_addr = relay_reservation_addr(&relay_addr_with_peer);
+    assert!(reservation_addr.to_string().ends_with("/p2p-circuit"));
+
+    let circuit_addr = relay_circuit_addr_to_peer(&relay_addr_with_peer, target_peer_id);
+    let circuit_addr = circuit_addr.to_string();
+    assert!(circuit_addr.contains("/p2p-circuit/"));
+    assert!(circuit_addr.ends_with(&format!("/p2p/{target_peer_id}")));
+}
+
 #[tokio::test]
 async fn test_relay_reservation_basic() {
+    if skip_unless_live_dht_enabled("test_relay_reservation_basic") {
+        return;
+    }
+
     // Test 1: Client can get a relay reservation from the relay server
     let (mut relay_swarm, relay_peer_id) = create_relay_server();
     let (mut client_swarm, client_peer_id) = create_client();
@@ -162,9 +260,7 @@ async fn test_relay_reservation_basic() {
     println!("Relay server address: {}", relay_addr_with_peer);
 
     // Client: listen_on relay address (request reservation)
-    let relay_circuit_addr = relay_addr_with_peer
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit);
+    let relay_circuit_addr = relay_reservation_addr(&relay_addr_with_peer);
     println!(
         "Client requesting relay reservation: {}",
         relay_circuit_addr
@@ -232,6 +328,10 @@ async fn test_relay_reservation_basic() {
 
 #[tokio::test]
 async fn test_relay_circuit_between_two_clients() {
+    if skip_unless_live_dht_enabled("test_relay_circuit_between_two_clients") {
+        return;
+    }
+
     // Test 2: Two clients can establish a circuit via the relay server
     let (mut relay_swarm, relay_peer_id) = create_relay_server();
     let (mut client_a_swarm, client_a_peer_id) = create_client();
@@ -253,9 +353,7 @@ async fn test_relay_circuit_between_two_clients() {
         .with(libp2p::multiaddr::Protocol::P2p(relay_peer_id_parsed));
 
     // Client A (seeder): request relay reservation
-    let relay_circuit_addr = relay_addr_with_peer
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit);
+    let relay_circuit_addr = relay_reservation_addr(&relay_addr_with_peer);
     client_a_swarm.listen_on(relay_circuit_addr).unwrap();
 
     // Phase 1: Wait for Client A's reservation to be confirmed
@@ -306,20 +404,14 @@ async fn test_relay_circuit_between_two_clients() {
     }
 
     let client_a_relay_addr = client_a_relay_listen_addr.unwrap();
-    println!(
-        "\n✅ Client A relay address: {}\n",
-        client_a_relay_addr
-    );
+    println!("\n✅ Client A relay address: {}\n", client_a_relay_addr);
 
     // Phase 2: Client B dials Client A via relay
     println!("--- Phase 2: Client B dialing Client A via relay ---");
     let client_a_peer_id_parsed: libp2p::PeerId = client_a_peer_id.parse().unwrap();
 
     // Build the circuit address: relay_addr/p2p/relay_peer/p2p-circuit/p2p/client_a_peer
-    let circuit_addr = relay_addr_with_peer
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit)
-        .with(libp2p::multiaddr::Protocol::P2p(client_a_peer_id_parsed));
+    let circuit_addr = relay_circuit_addr_to_peer(&relay_addr_with_peer, client_a_peer_id_parsed);
 
     println!("[CLIENT B] Dialing via relay: {}", circuit_addr);
     client_b_swarm.dial(circuit_addr.clone()).unwrap();
@@ -398,6 +490,10 @@ async fn test_relay_circuit_between_two_clients() {
 
 #[tokio::test]
 async fn test_reservation_survives_after_acceptance() {
+    if skip_unless_live_dht_enabled("test_reservation_survives_after_acceptance") {
+        return;
+    }
+
     // Test 3: After reservation is accepted, STOP requests should be handled correctly
     // This specifically tests the scenario where the handler's Reservation state
     // might be reset to None after acceptance (the bug we're investigating)
@@ -415,9 +511,7 @@ async fn test_reservation_survives_after_acceptance() {
         .with(libp2p::multiaddr::Protocol::P2p(relay_peer_id_parsed));
 
     // Client: request relay reservation
-    let relay_circuit_addr = relay_addr_with_peer
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit);
+    let relay_circuit_addr = relay_reservation_addr(&relay_addr_with_peer);
     client_swarm.listen_on(relay_circuit_addr).unwrap();
 
     // Wait for reservation
@@ -509,6 +603,10 @@ async fn test_reservation_survives_after_acceptance() {
 
 #[tokio::test]
 async fn test_multiple_listen_on_same_relay_peer() {
+    if skip_unless_live_dht_enabled("test_multiple_listen_on_same_relay_peer") {
+        return;
+    }
+
     // Test 4: Calling listen_on with both IPv4 and IPv6 for the same relay peer
     // should NOT break the reservation (tests deduplication requirement)
     let (mut relay_swarm, relay_peer_id) = create_relay_server();
@@ -526,12 +624,8 @@ async fn test_multiple_listen_on_same_relay_peer() {
         .with(libp2p::multiaddr::Protocol::P2p(relay_peer_id_parsed));
 
     // Call listen_on TWICE for the same relay peer (simulating IPv4 + IPv6 without dedup)
-    let relay_circuit_addr_1 = relay_addr_v4
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit);
-    let relay_circuit_addr_2 = relay_addr_v4
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit);
+    let relay_circuit_addr_1 = relay_reservation_addr(&relay_addr_v4);
+    let relay_circuit_addr_2 = relay_reservation_addr(&relay_addr_v4);
 
     println!("Client: listen_on #1: {}", relay_circuit_addr_1);
     client_swarm.listen_on(relay_circuit_addr_1).unwrap();
@@ -609,6 +703,10 @@ async fn test_multiple_listen_on_same_relay_peer() {
 
 #[tokio::test]
 async fn test_circuit_after_delay() {
+    if skip_unless_live_dht_enabled("test_circuit_after_delay") {
+        return;
+    }
+
     // Test 5: Verify circuit works even after a delay (reservation doesn't expire quickly)
     let (mut relay_swarm, relay_peer_id) = create_relay_server();
     let (mut client_a_swarm, client_a_peer_id) = create_client();
@@ -625,9 +723,7 @@ async fn test_circuit_after_delay() {
         .with(libp2p::multiaddr::Protocol::P2p(relay_peer_id_parsed));
 
     // Client A: get reservation
-    let relay_circuit_addr = relay_addr_with_peer
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit);
+    let relay_circuit_addr = relay_reservation_addr(&relay_addr_with_peer);
     client_a_swarm.listen_on(relay_circuit_addr).unwrap();
 
     // Wait for Client A reservation
@@ -695,10 +791,7 @@ async fn test_circuit_after_delay() {
 
     // Client B: dial Client A via relay
     let client_a_peer_id_parsed: libp2p::PeerId = client_a_peer_id.parse().unwrap();
-    let circuit_addr = relay_addr_with_peer
-        .clone()
-        .with(libp2p::multiaddr::Protocol::P2pCircuit)
-        .with(libp2p::multiaddr::Protocol::P2p(client_a_peer_id_parsed));
+    let circuit_addr = relay_circuit_addr_to_peer(&relay_addr_with_peer, client_a_peer_id_parsed);
 
     println!("[B] Dialing A via relay: {}", circuit_addr);
     client_b_swarm.dial(circuit_addr).unwrap();

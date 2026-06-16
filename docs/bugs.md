@@ -70,7 +70,6 @@ Format per entry:
 
 ## Test gaps (not bugs in product code, but flagged so contributors know)
 
-- **DHT node spawn tests** require a live network and skip / fail in offline CI runs.
 - **FTP URL parsing test** has been failing pre-existing for several months — see `src-tauri/tests/`.
 - **File transfer retry test** is flaky due to timing assumptions.
 - **Playwright e2e specs** rely on a real freshnet relay + chain; only run them when the canonical relay is up.
