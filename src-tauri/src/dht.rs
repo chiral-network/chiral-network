@@ -2080,6 +2080,42 @@ fn save_failed_peers(failed: &HashSet<PeerId>) {
     let _ = std::fs::write(&path, contents);
 }
 
+fn peer_timestamp_secs_at(now: SystemTime) -> Result<i64, std::time::SystemTimeError> {
+    now.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+}
+
+fn peer_timestamp_millis_at(now: SystemTime) -> Result<i64, std::time::SystemTimeError> {
+    now.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+}
+
+fn current_peer_timestamp_secs(context: &str) -> i64 {
+    match peer_timestamp_secs_at(SystemTime::now()) {
+        Ok(timestamp) => timestamp,
+        Err(err) => {
+            println!(
+                "⚠️ System clock is before UNIX_EPOCH while {}; using peer timestamp 0: {}",
+                context, err
+            );
+            0
+        }
+    }
+}
+
+fn current_peer_timestamp_millis(context: &str) -> i64 {
+    match peer_timestamp_millis_at(SystemTime::now()) {
+        Ok(timestamp) => timestamp,
+        Err(err) => {
+            println!(
+                "⚠️ System clock is before UNIX_EPOCH while {}; using peer timestamp 0: {}",
+                context, err
+            );
+            0
+        }
+    }
+}
+
 /// Decrement pending file-info seeder attempts for a download request.
 /// Returns the remaining number of candidate attempts.
 fn decrement_file_request_attempt(
@@ -2874,10 +2910,7 @@ async fn event_loop(
 
                         // Add to peers list so ChiralDrop and Network page can see them
                         let peer_id_str = peer_id.to_string();
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs() as i64;
+                        let now = current_peer_timestamp_secs("recording established peer connection");
                         let addr_str = endpoint.get_remote_address().to_string();
 
                         {
@@ -3457,10 +3490,7 @@ async fn handle_behaviour_event(
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
             let mut peers_guard = peers.lock().await;
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64;
+            let now = current_peer_timestamp_millis("recording mDNS peer discovery");
 
             for (peer_id, multiaddr) in list {
                 // Skip peers that previously failed to connect
@@ -5844,6 +5874,30 @@ mod tests {
 
         assert!(removed.is_none());
         assert!(downloads.is_empty());
+    }
+
+    #[test]
+    fn peer_timestamp_secs_at_returns_epoch_seconds() {
+        let timestamp = peer_timestamp_secs_at(UNIX_EPOCH + Duration::from_secs(42))
+            .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(timestamp, 42);
+    }
+
+    #[test]
+    fn peer_timestamp_millis_at_returns_epoch_millis() {
+        let timestamp = peer_timestamp_millis_at(UNIX_EPOCH + Duration::from_millis(1234))
+            .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(timestamp, 1234);
+    }
+
+    #[test]
+    fn peer_timestamp_helpers_reject_pre_epoch_clock() {
+        let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
+
+        assert!(peer_timestamp_secs_at(pre_epoch).is_err());
+        assert!(peer_timestamp_millis_at(pre_epoch).is_err());
     }
 
     #[tokio::test]
