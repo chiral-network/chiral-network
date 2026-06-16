@@ -6,6 +6,14 @@
   import { dhtService, type DhtHealthInfo } from '$lib/dhtService';
   import { toasts } from '$lib/toastStore';
   import {
+    appendDiagnosticsLogEntry,
+    EXPORT_DIAGNOSTICS_LOG_LIMIT,
+    formatDiagnosticsLogEntries,
+    formatDiagnosticsLogEntry,
+    VISIBLE_DIAGNOSTICS_LOG_LIMIT,
+    type DiagnosticsLogEntry as LogEntry,
+  } from '$lib/diagnosticsLogHistory';
+  import {
     RefreshCw,
     Loader2,
     Trash2,
@@ -23,14 +31,6 @@
   const log = logger('Diagnostics');
 
   // ---------- Types ----------
-
-  interface LogEntry {
-    id: number;
-    timestamp: Date;
-    level: 'info' | 'warn' | 'error' | 'debug';
-    source: string;
-    message: string;
-  }
 
   interface BootstrapHealthReport {
     totalNodes: number;
@@ -72,10 +72,12 @@
   // ---------- State ----------
 
   let logEntries = $state<LogEntry[]>([]);
+  let eventLogHistory = $state<LogEntry[]>([]);
   let nextLogId = 0;
   let logFilter = $state<'all' | 'info' | 'warn' | 'error' | 'debug'>('all');
   let sourceFilter = $state<'all' | 'dht' | 'bootstrap' | 'geth' | 'mining' | 'system'>('all');
-  const maxLogEntries = 500;
+  const maxLogEntries = VISIBLE_DIAGNOSTICS_LOG_LIMIT;
+  const maxExportLogEntries = EXPORT_DIAGNOSTICS_LOG_LIMIT;
 
   let dhtHealth = $state<DhtHealthInfo | null>(null);
   let isLoadingDht = $state(false);
@@ -126,7 +128,12 @@
       source,
       message,
     };
-    logEntries = [...logEntries.slice(-(maxLogEntries - 1)), entry];
+    const next = appendDiagnosticsLogEntry(logEntries, eventLogHistory, entry, {
+      visibleLimit: maxLogEntries,
+      historyLimit: maxExportLogEntries,
+    });
+    logEntries = next.visibleEntries;
+    eventLogHistory = next.historyEntries;
   }
 
   let filteredLogs = $derived(
@@ -427,7 +434,7 @@
   // ---------- Snapshot for support ----------
 
   /// Bundle every visible-state value into a single text blob the user can
-  /// paste into a bug report. Cuts log entries to the most recent 200 to
+  /// paste into a bug report. Cuts history entries to the most recent 200 to
   /// keep the clipboard payload manageable.
   function copySnapshot() {
     const lines: string[] = [];
@@ -484,10 +491,8 @@
     }
     lines.push('');
     lines.push('## Recent events (last 200)');
-    for (const e of logEntries.slice(-200)) {
-      lines.push(
-        `  [${e.timestamp.toISOString()}] [${e.level.toUpperCase()}] [${e.source}] ${e.message}`
-      );
+    for (const e of eventLogHistory.slice(-200)) {
+      lines.push(`  ${formatDiagnosticsLogEntry(e)}`);
     }
     const text = lines.join('\n');
     navigator.clipboard
@@ -512,15 +517,12 @@
 
   function clearLogs() {
     logEntries = [];
+    eventLogHistory = [];
     addLog('info', 'system', 'Logs cleared');
   }
 
   function copyLogs() {
-    const text = filteredLogs
-      .map(
-        (e) => `[${e.timestamp.toISOString()}] [${e.level.toUpperCase()}] [${e.source}] ${e.message}`
-      )
-      .join('\n');
+    const text = formatDiagnosticsLogEntries(filteredLogs);
     navigator.clipboard
       .writeText(text)
       .then(() => toasts.show('Logs copied', 'success'))
@@ -528,11 +530,7 @@
   }
 
   function exportLogs() {
-    const text = logEntries
-      .map(
-        (e) => `[${e.timestamp.toISOString()}] [${e.level.toUpperCase()}] [${e.source}] ${e.message}`
-      )
-      .join('\n');
+    const text = formatDiagnosticsLogEntries(eventLogHistory);
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
