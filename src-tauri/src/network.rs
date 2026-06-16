@@ -129,18 +129,50 @@ pub fn active() -> &'static NetworkConfig {
 }
 
 fn resolve_from_env_or_disk() -> &'static NetworkConfig {
-    let name = std::env::var("CHIRAL_NETWORK")
+    let selector = std::env::var("CHIRAL_NETWORK")
         .ok()
-        .or_else(|| std::fs::read_to_string(active_network_file()).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+        .map(|value| ("CHIRAL_NETWORK", value))
+        .or_else(|| {
+            std::fs::read_to_string(active_network_file())
+                .ok()
+                .map(|value| ("active-network", value))
+        });
+    let (cfg, warning) = resolve_config_from_selector(
+        selector
+            .as_ref()
+            .map(|(source, value)| (*source, value.as_str())),
+    );
+    if let Some(warning) = warning {
+        eprintln!("[NETWORK] {}", warning);
+    }
+    cfg
+}
+
+fn resolve_config_from_selector(
+    selector: Option<(&str, &str)>,
+) -> (&'static NetworkConfig, Option<String>) {
+    let Some((source, raw_name)) = selector else {
+        return (ALL[0], None);
+    };
+
+    let name = raw_name.trim();
+    if name.is_empty() {
+        return (ALL[0], None);
+    }
+
     for cfg in ALL {
         if cfg.name == name {
-            return cfg;
+            return (cfg, None);
         }
     }
-    // First entry in ALL is the default for new installs (currently FRESHNET).
-    ALL[0]
+    let default = ALL[0];
+    (
+        default,
+        Some(format!(
+            "Unknown {} network selector '{}'; using default network '{}'",
+            source, name, default.name
+        )),
+    )
 }
 
 /// Write the active-network choice to disk. Takes effect on next launch.
@@ -150,7 +182,8 @@ pub fn set_active(name: &str) -> Result<(), String> {
     }
     let path = active_network_file();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
     std::fs::write(&path, name).map_err(|e| format!("write {}: {}", path.display(), e))?;
     Ok(())
@@ -212,4 +245,36 @@ pub fn genesis_json(cfg: &NetworkConfig) -> String {
         "timestamp": cfg.genesis_timestamp
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_network_selector_uses_default_without_warning() {
+        let (cfg, warning) = resolve_config_from_selector(None);
+
+        assert_eq!(cfg.name, FRESHNET.name);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn valid_network_selector_uses_matching_config_without_warning() {
+        let (cfg, warning) = resolve_config_from_selector(Some(("CHIRAL_NETWORK", "testnet")));
+
+        assert_eq!(cfg.name, TESTNET.name);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn invalid_network_selector_warns_and_uses_default() {
+        let (cfg, warning) = resolve_config_from_selector(Some(("active-network", "unknownnet")));
+
+        assert_eq!(cfg.name, FRESHNET.name);
+        let warning = warning.expect("invalid selector should be surfaced");
+        assert!(warning.contains("unknownnet"));
+        assert!(warning.contains("active-network"));
+        assert!(warning.contains(FRESHNET.name));
+    }
 }
