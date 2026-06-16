@@ -39,6 +39,10 @@ pub struct DriveItem {
     /// Price in CHI tokens (as string, "0" = free).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_chi: Option<String>,
+    /// Wallet that receives folder-level payments. Only set for folder
+    /// sale items; legacy manifests fall back to `owner`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_wallet: Option<String>,
     /// Whether this file should auto-seed whenever DHT is running.
     /// This is persisted user intent.
     #[serde(default)]
@@ -232,6 +236,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                payment_wallet: None,
                 seed_enabled: false,
                 seeding: false,
             },
@@ -251,6 +256,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                payment_wallet: None,
                 seed_enabled: false,
                 seeding: false,
             },
@@ -270,6 +276,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                payment_wallet: None,
                 seed_enabled: false,
                 seeding: false,
             },
@@ -289,6 +296,7 @@ mod tests {
                 merkle_root: None,
                 protocol: None,
                 price_chi: None,
+                payment_wallet: None,
                 seed_enabled: false,
                 seeding: false,
             },

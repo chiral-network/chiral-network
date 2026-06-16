@@ -31,7 +31,7 @@ use geth::{
 // Bootstrap health is reported via inline placeholder structs in this file
 // — the legacy geth_bootstrap module was deleted with the geth rewrite.
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -260,6 +260,7 @@ async fn auto_reseed_drive_files(
             .filter(|item| item.item_type == "file" && (item.seed_enabled || item.seeding))
             .filter_map(|item| {
                 let storage_path = item.storage_path.clone()?;
+                let folder_access = paid_folder_policies_for_drive_item(&manifest, item);
                 Some((
                     item.id.clone(),
                     item.owner.clone(),
@@ -269,6 +270,7 @@ async fn auto_reseed_drive_files(
                     item.merkle_root.clone(),
                     item.protocol.clone(),
                     item.price_chi.clone(),
+                    folder_access,
                 ))
             })
             .collect::<Vec<_>>()
@@ -309,6 +311,7 @@ async fn auto_reseed_drive_files(
         existing_merkle_root,
         _protocol,
         price_chi,
+        folder_access,
     ) in candidates
     {
         attempted_ids.insert(item_id.clone());
@@ -397,7 +400,7 @@ async fn auto_reseed_drive_files(
         // we have no wallet (DHT auto-started before login), pass empty
         // string and the responder will refuse to serve until the next
         // reseed pass populates it.
-        dht.register_shared_file(
+        dht.register_shared_file_with_folder_access(
             file_hash.clone(),
             full_path.to_string_lossy().to_string(),
             file_name.clone(),
@@ -405,6 +408,7 @@ async fn auto_reseed_drive_files(
             price_wei,
             wallet_addr.clone(),
             private_key.map(|k| k.to_string()).unwrap_or_default(),
+            folder_access,
         )
         .await;
 
@@ -1773,6 +1777,7 @@ struct LocalDriveSeedCandidate {
     file_size_hint: Option<u64>,
     protocol: Option<String>,
     price_chi: Option<String>,
+    folder_access: Vec<dht::FolderAccessPolicy>,
 }
 
 async fn try_repair_local_drive_seed(
@@ -1795,9 +1800,9 @@ async fn try_repair_local_drive_seed(
                     && (item.seed_enabled || item.seeding)
             })
             .and_then(|item| {
-                item.storage_path
-                    .as_ref()
-                    .map(|sp| LocalDriveSeedCandidate {
+                item.storage_path.as_ref().map(|sp| {
+                    let folder_access = paid_folder_policies_for_drive_item(&manifest, item);
+                    LocalDriveSeedCandidate {
                         item_id: item.id.clone(),
                         owner: item.owner.clone(),
                         file_name: item.name.clone(),
@@ -1805,7 +1810,9 @@ async fn try_repair_local_drive_seed(
                         file_size_hint: item.size,
                         protocol: item.protocol.clone(),
                         price_chi: item.price_chi.clone(),
-                    })
+                        folder_access,
+                    }
+                })
             })
     }?;
 
@@ -1831,7 +1838,7 @@ async fn try_repair_local_drive_seed(
         return None;
     }
 
-    dht.register_shared_file(
+    dht.register_shared_file_with_folder_access(
         file_hash.to_string(),
         full_path.to_string_lossy().to_string(),
         candidate.file_name.clone(),
@@ -1843,6 +1850,7 @@ async fn try_repair_local_drive_seed(
         // fail this seeder and try another. User can re-seed
         // explicitly via the signed publishers.
         String::new(),
+        candidate.folder_access.clone(),
     )
     .await;
 
@@ -4962,6 +4970,7 @@ async fn drive_create_folder(
         merkle_root: None,
         protocol: None,
         price_chi: None,
+        payment_wallet: None,
         seed_enabled: false,
         seeding: false,
     };
@@ -5091,6 +5100,7 @@ async fn drive_upload_file(
         merkle_root: Some(computed_merkle_root),
         protocol: None,
         price_chi: None,
+        payment_wallet: None,
         seed_enabled: false,
         seeding: false,
     };
@@ -5412,7 +5422,7 @@ async fn publish_drive_file_inner(
     }
 
     // Look up the Drive item from the manifest.
-    let (file_name, storage_path, file_size_hint, existing_merkle_root) = {
+    let (file_name, storage_path, file_size_hint, existing_merkle_root, folder_access) = {
         let m = state.drive_state.manifest.read().await;
         let item = m
             .items
@@ -5428,6 +5438,7 @@ async fn publish_drive_file_inner(
             sp.clone(),
             item.size,
             item.merkle_root.clone(),
+            paid_folder_policies_for_drive_item(&m, item),
         )
     };
 
@@ -5522,7 +5533,7 @@ async fn publish_drive_file_inner(
         return Err("DHT peer ID unavailable. Try reconnecting to the network.".to_string());
     }
 
-    dht.register_shared_file(
+    dht.register_shared_file_with_folder_access(
         file_hash.clone(),
         full_path_str,
         file_name.clone(),
@@ -5530,6 +5541,7 @@ async fn publish_drive_file_inner(
         price_wei_val,
         wallet_addr.clone(),
         private_key.clone().unwrap_or_default(),
+        folder_access,
     )
     .await;
 
@@ -5602,7 +5614,7 @@ async fn seed_hosted_file(
     }
 
     // Find Drive item by merkle_root matching file_hash
-    let (item_id, file_name, storage_path, file_size) = {
+    let (item_id, file_name, storage_path, file_size, folder_access) = {
         let m = state.drive_state.manifest.read().await;
         let item = m
             .items
@@ -5620,6 +5632,7 @@ async fn seed_hosted_file(
             item.name.clone(),
             item.storage_path.clone().ok_or("No storage path")?,
             item.size.unwrap_or(0),
+            paid_folder_policies_for_drive_item(&m, item),
         )
     };
 
@@ -5647,10 +5660,11 @@ async fn seed_hosted_file(
     }
 
     // Register locally so we can serve chunks
-    dht.register_shared_file(
+    dht.register_shared_file_with_folder_access(
         file_hash.clone(), full_path_str, file_name.clone(),
         file_size, price_wei_val, wallet_address.clone(),
         private_key.clone().unwrap_or_default(),
+        folder_access,
     ).await;
 
     // Update DHT record to add ourselves as a seeder
@@ -5985,6 +5999,90 @@ fn collect_descendant_files(
     out
 }
 
+fn signing_key_matches_wallet(private_key: &str, wallet_address: &str) -> bool {
+    let key = private_key.trim();
+    let wallet_address = wallet_address.trim();
+    if key.is_empty() || wallet_address.is_empty() {
+        return false;
+    }
+    let payload = b"folder-manifest-owner-preflight-v1";
+    wallet::sign_message(key, payload)
+        .map(|sig| wallet::verify_signature(payload, &sig, wallet_address))
+        .unwrap_or(false)
+}
+
+fn positive_price_wei(price_chi: Option<&str>) -> Option<u128> {
+    let price = price_chi?.trim();
+    if price.is_empty() || price == "0" {
+        return None;
+    }
+    wallet::parse_chi_to_wei(price).ok().filter(|wei| *wei > 0)
+}
+
+fn paid_folder_policies_for_drive_item(
+    manifest: &ds::DriveManifest,
+    item: &ds::DriveItem,
+) -> Vec<dht::FolderAccessPolicy> {
+    let by_id: HashMap<&str, &ds::DriveItem> = manifest
+        .items
+        .iter()
+        .map(|candidate| (candidate.id.as_str(), candidate))
+        .collect();
+    let mut policies = Vec::new();
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut current_parent = item.parent_id.as_deref();
+
+    while let Some(parent_id) = current_parent {
+        if !visited.insert(parent_id) {
+            break;
+        }
+        let Some(folder) = by_id.get(parent_id).copied() else {
+            break;
+        };
+        if folder.item_type == "folder"
+            && folder.owner == item.owner
+            && (folder.seed_enabled || folder.seeding)
+        {
+            if let (Some(folder_hash), Some(price_wei)) = (
+                folder
+                    .merkle_root
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|h| !h.is_empty()),
+                positive_price_wei(folder.price_chi.as_deref()),
+            ) {
+                let wallet_address = folder
+                    .payment_wallet
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|wallet| !wallet.is_empty())
+                    .unwrap_or(folder.owner.trim());
+                if !wallet_address.is_empty() {
+                    policies.push(dht::FolderAccessPolicy {
+                        folder_hash: folder_hash.to_string(),
+                        price_wei,
+                        wallet_address: wallet_address.to_string(),
+                    });
+                }
+            }
+        }
+        current_parent = folder.parent_id.as_deref();
+    }
+
+    policies
+}
+
+async fn rollback_drive_folder_child_seeds(state: &AppState, owner: &str, file_ids: &[String]) {
+    for file_id in file_ids {
+        if let Err(e) = drive_stop_seeding_inner(state, owner, file_id).await {
+            println!(
+                "[DRIVE] Folder publish rollback failed for child {}: {}",
+                file_id, e
+            );
+        }
+    }
+}
+
 /// Publish a folder bundle for sale at a single folder-level price. Each
 /// child file is registered as a free seed (price 0) — payment is
 /// collected once at the folder level when the buyer presents a
@@ -6057,6 +6155,17 @@ async fn publish_drive_folder(
         .to_string();
     if folder_price_wei > 0 && folder_payment_wallet.is_empty() {
         return Err("Wallet address is required when setting a folder price".to_string());
+    }
+    if folder_price_wei > 0
+        && !private_key
+            .as_deref()
+            .map(|key| signing_key_matches_wallet(key, &owner))
+            .unwrap_or(false)
+    {
+        return Err(
+            "Wallet must be unlocked with the folder owner key to publish a paid folder"
+                .to_string(),
+        );
     }
 
     // First pass: per-file publishes happen in parallel so the per-file
@@ -6197,6 +6306,10 @@ async fn publish_drive_folder(
             })
             .collect()
     };
+    let manifest_file_ids: Vec<String> = manifest_entries
+        .iter()
+        .map(|(file_id, _)| file_id.clone())
+        .collect();
     let manifest_files: Vec<FolderManifestFile> =
         manifest_entries.iter().map(|(_, f)| f.clone()).collect();
 
@@ -6226,6 +6339,13 @@ async fn publish_drive_folder(
                 "[DRIVE] Folder manifest publish for {} skipped — wallet must be unlocked to sign the bundle",
                 hash
             );
+            if folder_price_wei > 0 {
+                rollback_drive_folder_child_seeds(state.inner(), &owner, &manifest_file_ids).await;
+                return Err(
+                    "Paid folder publish failed because the folder manifest could not be signed"
+                        .to_string(),
+                );
+            }
             None
         } else {
             let dht = {
@@ -6233,25 +6353,71 @@ async fn publish_drive_folder(
                 dht_guard.as_ref().cloned()
             };
             if let Some(dht) = dht {
-                if let Ok(json) = serde_json::to_string(&manifest) {
-                    if let Err(e) = dht.put_dht_value(folder_manifest_key(&hash), json).await {
-                        println!("[DRIVE] Folder manifest publish failed for {}: {}", hash, e);
+                match serde_json::to_string(&manifest) {
+                    Ok(json) => {
+                        if let Err(e) = dht.put_dht_value(folder_manifest_key(&hash), json).await {
+                            println!("[DRIVE] Folder manifest publish failed for {}: {}", hash, e);
+                            if folder_price_wei > 0 {
+                                rollback_drive_folder_child_seeds(
+                                    state.inner(),
+                                    &owner,
+                                    &manifest_file_ids,
+                                )
+                                .await;
+                                return Err(format!("Paid folder manifest publish failed: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if folder_price_wei > 0 {
+                            rollback_drive_folder_child_seeds(
+                                state.inner(),
+                                &owner,
+                                &manifest_file_ids,
+                            )
+                            .await;
+                            return Err(format!("Failed to serialize folder manifest: {}", e));
+                        }
                     }
                 }
                 // Register as a Kademlia provider for the folder hash so other
                 // peers' get_providers calls find this seller.
-                let _ = dht.start_providing_file(hash.clone()).await;
+                if let Err(e) = dht.start_providing_file(hash.clone()).await {
+                    println!("[DRIVE] Folder provider publish failed for {}: {}", hash, e);
+                    if folder_price_wei > 0 {
+                        rollback_drive_folder_child_seeds(
+                            state.inner(),
+                            &owner,
+                            &manifest_file_ids,
+                        )
+                        .await;
+                        return Err(format!("Paid folder provider publish failed: {}", e));
+                    }
+                }
                 let member_hashes: Vec<String> = manifest_entries
                     .iter()
                     .map(|(_, f)| f.file_hash.clone())
                     .collect();
-                dht.register_folder_bundle_access(
-                    hash.clone(),
-                    member_hashes,
-                    folder_price_wei,
-                    folder_payment_wallet.clone(),
-                )
-                .await;
+                let registered = dht
+                    .register_folder_bundle_access(
+                        hash.clone(),
+                        member_hashes.clone(),
+                        folder_price_wei,
+                        folder_payment_wallet.clone(),
+                    )
+                    .await;
+                if folder_price_wei > 0 && registered != member_hashes.len() {
+                    rollback_drive_folder_child_seeds(state.inner(), &owner, &manifest_file_ids)
+                        .await;
+                    return Err(format!(
+                        "Paid folder policy registration failed for {}/{} child files",
+                        member_hashes.len().saturating_sub(registered),
+                        member_hashes.len()
+                    ));
+                }
+            } else if folder_price_wei > 0 {
+                rollback_drive_folder_child_seeds(state.inner(), &owner, &manifest_file_ids).await;
+                return Err("DHT not running while publishing paid folder manifest".to_string());
             }
             Some(hash)
         }
@@ -6271,6 +6437,11 @@ async fn publish_drive_folder(
             .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
             .ok_or("Drive folder not found in manifest")?;
         item.price_chi = price_chi;
+        item.payment_wallet = if folder_payment_wallet.is_empty() {
+            None
+        } else {
+            Some(folder_payment_wallet.clone())
+        };
         item.protocol = protocol;
         item.seed_enabled = true;
         item.seeding = succeeded > 0;
@@ -6423,6 +6594,7 @@ async fn unpublish_drive_folder(
             .ok_or("Drive folder not found in manifest")?;
         item.seed_enabled = false;
         item.seeding = false;
+        item.payment_wallet = None;
         if folder_hash.is_some() {
             item.merkle_root = None;
         }
@@ -7521,6 +7693,79 @@ mod multi_seeder_tests {
             file_hash: file_hash.to_string(),
             file_size,
         }
+    }
+
+    fn test_drive_item(
+        id: &str,
+        item_type: &str,
+        parent_id: Option<&str>,
+        owner: &str,
+    ) -> ds::DriveItem {
+        ds::DriveItem {
+            id: id.to_string(),
+            name: id.to_string(),
+            item_type: item_type.to_string(),
+            parent_id: parent_id.map(str::to_string),
+            size: Some(1),
+            mime_type: None,
+            created_at: 1,
+            modified_at: 1,
+            starred: false,
+            storage_path: Some(format!("{}.bin", id)),
+            owner: owner.to_string(),
+            is_public: true,
+            merkle_root: None,
+            protocol: None,
+            price_chi: None,
+            payment_wallet: None,
+            seed_enabled: false,
+            seeding: false,
+        }
+    }
+
+    #[test]
+    fn paid_folder_policy_rehydrates_from_manifest_for_reseed() {
+        let owner = "0xowner";
+        let payment_wallet = "0xpayment";
+        let mut folder = test_drive_item("folder", "folder", None, owner);
+        folder.storage_path = None;
+        folder.size = None;
+        folder.merkle_root = Some("folder-hash".to_string());
+        folder.price_chi = Some("0.25".to_string());
+        folder.payment_wallet = Some(payment_wallet.to_string());
+        folder.seed_enabled = true;
+
+        let mut child = test_drive_item("child", "file", Some("folder"), owner);
+        child.merkle_root = Some("child-hash".to_string());
+        child.seed_enabled = true;
+
+        let manifest = ds::DriveManifest {
+            items: vec![folder, child.clone()],
+            shares: Vec::new(),
+        };
+        let policies = paid_folder_policies_for_drive_item(&manifest, &child);
+
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].folder_hash, "folder-hash");
+        assert_eq!(
+            policies[0].price_wei,
+            wallet::parse_chi_to_wei("0.25").unwrap()
+        );
+        assert_eq!(policies[0].wallet_address, payment_wallet);
+    }
+
+    #[test]
+    fn folder_manifest_signing_preflight_requires_owner_key() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let probe_sig = wallet::sign_message(private_key, b"probe").unwrap();
+        let owner_wallet = wallet::recover_signer(b"probe", &probe_sig).unwrap();
+
+        assert!(signing_key_matches_wallet(private_key, &owner_wallet));
+        assert!(!signing_key_matches_wallet("", &owner_wallet));
+        assert!(!signing_key_matches_wallet(
+            private_key,
+            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        ));
     }
 
     /// Folder hash is stable: same owner + same file set produces the

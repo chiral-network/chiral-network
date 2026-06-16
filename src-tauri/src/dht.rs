@@ -528,6 +528,14 @@ pub struct FolderAccessPolicy {
 }
 
 #[derive(Clone, Debug)]
+struct AuthorizedChunkAccess {
+    peer_id: PeerId,
+    scope: PaymentScope,
+}
+
+type SeederAuthorizedChunksMap = Arc<Mutex<HashMap<String, AuthorizedChunkAccess>>>;
+
+#[derive(Clone, Debug)]
 pub struct SharedFileInfo {
     pub file_path: String,
     pub file_name: String,
@@ -600,6 +608,74 @@ fn resolve_file_access(
         wallet_address: file_info.wallet_address.clone(),
         folder_hash: None,
     })
+}
+
+fn payment_scope_for_access(file_hash: &str, access: &ResolvedFileAccess) -> PaymentScope {
+    match access.folder_hash.clone() {
+        Some(folder_hash) => PaymentScope::Folder { folder_hash },
+        None => PaymentScope::DirectFile {
+            file_hash: file_hash.to_string(),
+        },
+    }
+}
+
+async fn remember_authorized_chunk_access(
+    authorized_chunks: &SeederAuthorizedChunksMap,
+    request_id: String,
+    peer_id: PeerId,
+    scope: PaymentScope,
+) {
+    authorized_chunks
+        .lock()
+        .await
+        .insert(request_id, AuthorizedChunkAccess { peer_id, scope });
+}
+
+fn authorized_scope_matches_file(
+    access: &AuthorizedChunkAccess,
+    peer_id: PeerId,
+    file_hash: &str,
+    file_info: &SharedFileInfo,
+) -> bool {
+    if access.peer_id != peer_id {
+        return false;
+    }
+
+    match &access.scope {
+        PaymentScope::DirectFile {
+            file_hash: paid_hash,
+        } => paid_hash.eq_ignore_ascii_case(file_hash),
+        PaymentScope::Folder { folder_hash } => file_info
+            .folder_access
+            .contains_key(&normalize_folder_hash(folder_hash)),
+    }
+}
+
+fn chunk_request_access_error(
+    authorized: Option<&AuthorizedChunkAccess>,
+    peer_id: PeerId,
+    file_hash: &str,
+    file_info: &SharedFileInfo,
+) -> Option<String> {
+    if let Ok(access) = resolve_file_access(file_info, None) {
+        if access.price_wei == 0 {
+            return None;
+        }
+    }
+
+    match authorized {
+        Some(access) if authorized_scope_matches_file(access, peer_id, file_hash, file_info) => {
+            None
+        }
+        Some(_) => Some(
+            "Payment proof does not authorize this chunk request for the requested file"
+                .to_string(),
+        ),
+        None => Some(
+            "Payment proof required before downloading chunks for this file or folder member"
+                .to_string(),
+        ),
+    }
 }
 
 fn file_info_error_response(
@@ -766,6 +842,30 @@ impl DhtService {
         wallet_address: String,
         private_key: String,
     ) {
+        self.register_shared_file_with_folder_access(
+            file_hash,
+            file_path,
+            file_name,
+            file_size,
+            price_wei,
+            wallet_address,
+            private_key,
+            Vec::new(),
+        )
+        .await;
+    }
+
+    pub async fn register_shared_file_with_folder_access(
+        &self,
+        file_hash: String,
+        file_path: String,
+        file_name: String,
+        file_size: u64,
+        price_wei: u128,
+        wallet_address: String,
+        private_key: String,
+        folder_access: Vec<FolderAccessPolicy>,
+    ) {
         println!("=== REGISTERING SHARED FILE ===");
         println!("  Name: {}", file_name);
         println!("  Hash: {}", file_hash);
@@ -777,6 +877,11 @@ impl DhtService {
         } else {
             println!("  Price: Free");
         }
+
+        let folder_access = folder_access
+            .into_iter()
+            .map(|policy| (normalize_folder_hash(&policy.folder_hash), policy))
+            .collect::<HashMap<_, _>>();
 
         let mut shared = self.shared_files.lock().await;
         shared.insert(
@@ -791,7 +896,7 @@ impl DhtService {
                 price_wei,
                 wallet_address,
                 private_key,
-                folder_access: HashMap::new(),
+                folder_access,
             },
         );
         println!("  Total shared files now: {}", shared.len());
@@ -845,7 +950,7 @@ impl DhtService {
         file_hashes: Vec<String>,
         price_wei: u128,
         wallet_address: String,
-    ) {
+    ) -> usize {
         let normalized_folder_hash = normalize_folder_hash(&folder_hash);
         let policy = FolderAccessPolicy {
             folder_hash,
@@ -859,12 +964,15 @@ impl DhtService {
             .collect();
 
         let mut shared = self.shared_files.lock().await;
+        let mut registered = 0usize;
         for (file_hash, info) in shared.iter_mut() {
             if file_hashes.contains(&file_hash.to_lowercase()) {
                 info.folder_access
                     .insert(normalized_folder_hash.clone(), policy.clone());
+                registered += 1;
             }
         }
+        registered
     }
 
     /// Unregister a shared file
@@ -1280,6 +1388,8 @@ async fn verify_payment_proof(
     scope: PaymentScope,
     request_id: String,
     events: &EventSink,
+    authorized_chunks: SeederAuthorizedChunksMap,
+    peer_id: PeerId,
 ) -> ChunkResponse {
     // Stage 3: replay guard — peek before doing any chain work so we
     // don't burn an RPC call on a tx that's already been redeemed.
@@ -1290,6 +1400,13 @@ async fn verify_payment_proof(
                 "✅ Reusing verified folder payment tx {} for member {}",
                 payment_tx, file_hash
             );
+            remember_authorized_chunk_access(
+                &authorized_chunks,
+                request_id.clone(),
+                peer_id,
+                scope.clone(),
+            )
+            .await;
             return ChunkResponse::PaymentAck {
                 request_id,
                 file_hash: file_hash.to_string(),
@@ -1376,6 +1493,13 @@ async fn verify_payment_proof(
                 "✅ Payment verified for {} from {}",
                 file_hash, payer_address
             );
+            remember_authorized_chunk_access(
+                &authorized_chunks,
+                request_id.clone(),
+                peer_id,
+                scope,
+            )
+            .await;
             let price_wei_str = expected_price.to_string();
             let _ = events.emit(
                 "chiraldrop-payment-received",
@@ -2381,6 +2505,10 @@ async fn event_loop(
     let mut pending_file_attempts: HashMap<String, usize> = HashMap::new();
     // request_id -> file_hash for final failure events when all seeder attempts are exhausted.
     let mut pending_file_hashes: HashMap<String, String> = HashMap::new();
+    // Seeder-side request IDs that are allowed to read chunks. Paid direct
+    // files and paid folder members are inserted only after PaymentProof
+    // succeeds; free direct files are inserted after a signed FileInfo.
+    let seeder_authorized_chunks: SeederAuthorizedChunksMap = Arc::new(Mutex::new(HashMap::new()));
     // Pending echo responses
     let mut pending_echo: HashMap<
         request_response::OutboundRequestId,
@@ -4010,6 +4138,9 @@ async fn handle_behaviour_event(
                                             let private_key = file_info.private_key.clone();
                                             let shared_clone = shared_files.clone();
                                             let cmd_tx_clone = cmd_tx.clone();
+                                            let authorized_chunks =
+                                                seeder_authorized_chunks.clone();
+                                            let peer_id_for_auth = peer;
                                             let request_id = request_id.clone();
                                             let file_hash_owned = file_hash.clone();
                                             drop(shared);
@@ -4054,6 +4185,18 @@ async fn handle_behaviour_event(
                                                                 access.folder_hash,
                                                             )
                                                         } else {
+                                                            if access.price_wei == 0 {
+                                                                remember_authorized_chunk_access(
+                                                                    &authorized_chunks,
+                                                                    request_id.clone(),
+                                                                    peer_id_for_auth,
+                                                                    payment_scope_for_access(
+                                                                        &file_hash_owned,
+                                                                        &access,
+                                                                    ),
+                                                                )
+                                                                .await;
+                                                            }
                                                             signed_file_info_response(
                                                                 request_id,
                                                                 file_hash_owned,
@@ -4120,6 +4263,17 @@ async fn handle_behaviour_event(
                                                         access.folder_hash,
                                                     )
                                                 } else {
+                                                    if access.price_wei == 0 {
+                                                        remember_authorized_chunk_access(
+                                                            &seeder_authorized_chunks,
+                                                            request_id.clone(),
+                                                            peer,
+                                                            payment_scope_for_access(
+                                                                &file_hash, &access,
+                                                            ),
+                                                        )
+                                                        .await;
+                                                    }
                                                     signed_file_info_response(
                                                         request_id,
                                                         file_hash,
@@ -4172,7 +4326,41 @@ async fn handle_behaviour_event(
                                     // peer's events the whole time.
                                     let shared = shared_files.lock().await;
                                     let file_path = match shared.get(&file_hash) {
-                                        Some(info) => info.file_path.clone(),
+                                        Some(info) => {
+                                            let authorized = {
+                                                let authorized_chunks =
+                                                    seeder_authorized_chunks.lock().await;
+                                                authorized_chunks.get(&request_id).cloned()
+                                            };
+                                            if let Some(err) = chunk_request_access_error(
+                                                authorized.as_ref(),
+                                                peer,
+                                                &file_hash,
+                                                info,
+                                            ) {
+                                                drop(shared);
+                                                let response = ChunkResponse::Chunk {
+                                                    request_id,
+                                                    file_hash,
+                                                    chunk_index,
+                                                    chunk_data: None,
+                                                    chunk_hash: String::new(),
+                                                    error: Some(err),
+                                                };
+                                                if let Err(e) = swarm
+                                                    .behaviour_mut()
+                                                    .file_request
+                                                    .send_response(channel, response)
+                                                {
+                                                    println!(
+                                                        "Failed to send chunk response: {:?}",
+                                                        e
+                                                    );
+                                                }
+                                                return;
+                                            }
+                                            info.file_path.clone()
+                                        }
                                         None => {
                                             drop(shared);
                                             let response = ChunkResponse::Chunk {
@@ -4308,14 +4496,8 @@ async fn handle_behaviour_event(
                                                     return;
                                                 }
                                             };
-                                            let scope = match access.folder_hash {
-                                                Some(folder_hash) => {
-                                                    PaymentScope::Folder { folder_hash }
-                                                }
-                                                None => PaymentScope::DirectFile {
-                                                    file_hash: file_hash.clone(),
-                                                },
-                                            };
+                                            let scope =
+                                                payment_scope_for_access(&file_hash, &access);
                                             (access.price_wei, access.wallet_address, scope)
                                         }
                                         None => {
@@ -4344,6 +4526,13 @@ async fn handle_behaviour_event(
                                     // Free-file fast path — no chain RPC,
                                     // no risk of stalling the reactor.
                                     if price_wei == 0 {
+                                        remember_authorized_chunk_access(
+                                            &seeder_authorized_chunks,
+                                            request_id.clone(),
+                                            peer,
+                                            payment_scope.clone(),
+                                        )
+                                        .await;
                                         let resp = ChunkResponse::PaymentAck {
                                             request_id,
                                             file_hash,
@@ -4375,6 +4564,8 @@ async fn handle_behaviour_event(
                                     let file_hash_owned = file_hash.clone();
                                     let payment_tx_owned = payment_tx.clone();
                                     let payer_address_owned = payer_address.clone();
+                                    let authorized_chunks = seeder_authorized_chunks.clone();
+                                    let peer_id_for_auth = peer;
                                     tokio::spawn(async move {
                                         let response = verify_payment_proof(
                                             &payment_tx_owned,
@@ -4385,6 +4576,8 @@ async fn handle_behaviour_event(
                                             payment_scope,
                                             request_id_owned,
                                             &events_clone,
+                                            authorized_chunks,
+                                            peer_id_for_auth,
                                         )
                                         .await;
                                         let _ =
@@ -6068,6 +6261,75 @@ mod tests {
             classify_payment_claim(&spent, tx, &file),
             PaymentClaimStatus::ClaimedOtherScope
         );
+    }
+
+    #[test]
+    fn paid_folder_child_chunk_request_requires_authorized_scope() {
+        let peer = PeerId::random();
+        let other_peer = PeerId::random();
+        let mut folder_access = HashMap::new();
+        folder_access.insert(
+            "folder-abc".to_string(),
+            FolderAccessPolicy {
+                folder_hash: "folder-abc".to_string(),
+                price_wei: 10_000,
+                wallet_address: "0xfolder".to_string(),
+            },
+        );
+        let info = SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+            chunk_hashes: Some(vec!["hash0".to_string()]),
+            price_wei: 0,
+            wallet_address: "0xdirect".to_string(),
+            private_key: String::new(),
+            folder_access,
+        };
+
+        assert!(
+            chunk_request_access_error(None, peer, "file-hash", &info).is_some(),
+            "direct Chunk requests must not bypass paid folder payment"
+        );
+
+        let folder_auth = AuthorizedChunkAccess {
+            peer_id: peer,
+            scope: PaymentScope::Folder {
+                folder_hash: "folder-abc".to_string(),
+            },
+        };
+        assert!(chunk_request_access_error(Some(&folder_auth), peer, "file-hash", &info).is_none());
+        assert!(
+            chunk_request_access_error(Some(&folder_auth), other_peer, "file-hash", &info)
+                .is_some(),
+            "another peer cannot reuse the paid request_id"
+        );
+
+        let wrong_file_auth = AuthorizedChunkAccess {
+            peer_id: peer,
+            scope: PaymentScope::DirectFile {
+                file_hash: "other-file".to_string(),
+            },
+        };
+        assert!(
+            chunk_request_access_error(Some(&wrong_file_auth), peer, "file-hash", &info).is_some()
+        );
+    }
+
+    #[test]
+    fn free_direct_chunk_request_is_allowed_without_payment_scope() {
+        let info = SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+            chunk_hashes: Some(vec!["hash0".to_string()]),
+            price_wei: 0,
+            wallet_address: "0xdirect".to_string(),
+            private_key: String::new(),
+            folder_access: HashMap::new(),
+        };
+
+        assert!(chunk_request_access_error(None, PeerId::random(), "file-hash", &info).is_none());
     }
 
     #[test]
