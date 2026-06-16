@@ -144,11 +144,14 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
+}
+
+fn now_secs_at(time: std::time::SystemTime) -> Result<u64, String> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| format!("system clock is before UNIX_EPOCH: {}", e))
 }
 
 #[cfg(unix)]
@@ -183,7 +186,7 @@ async fn auto_publish_wallet_advertisement(
     }
     let peer_id = peer_id.ok_or("Peer ID not available".to_string())?;
 
-    let now = now_secs();
+    let now = now_secs()?;
     // Match marketplace advertisement shape so existing browse/discovery code can consume it.
     let ad = json!({
         "peerId": peer_id,
@@ -1372,8 +1375,12 @@ async fn hosting_publish_ad(
     }
     let mut ad = body.clone();
     ad["peerId"] = serde_json::Value::String(peer_id.clone());
-    let ad_json = serde_json::to_string(&ad).unwrap_or_default();
     let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
+    let now = match now_secs() {
+        Ok(value) => value,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let ad_json = serde_json::to_string(&ad).unwrap_or_default();
 
     // Store individual ad
     let host_key = format!("chiral_host_{}", peer_id);
@@ -1388,7 +1395,6 @@ async fn hosting_publish_ad(
         _ => Vec::new(),
     };
     registry.retain(|e| e["peerId"].as_str() != Some(&peer_id));
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     registry.push(json!({"peerId": peer_id, "walletAddress": wallet_address, "updatedAt": now}));
     let registry_json = serde_json::to_string(&registry).unwrap_or_default();
     match dht.put_dht_value(registry_key, registry_json).await {
@@ -1822,6 +1828,23 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn now_secs_at_accepts_post_epoch_clock() {
+        let now =
+            now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+                .expect("post-epoch clock should be valid");
+
+        assert_eq!(now, 1_700_000_000);
+    }
+
+    #[test]
+    fn now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch clock should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
 
     #[cfg(unix)]
     #[test]
