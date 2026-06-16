@@ -1492,8 +1492,11 @@ async fn main() {
     let drive_state = Arc::new(DriveState::new());
     drive_state.load_from_disk_async().await;
 
-    let rating_state = Arc::new(RatingState::new(default_data_dir()));
     let runtime_state = Arc::new(HeadlessRuntimeState::new());
+    let rating_state = Arc::new(RatingState::new_with_issuer_dht(
+        default_data_dir(),
+        Some(Arc::clone(&runtime_state.dht)),
+    ));
 
     // Load wallet key at startup if --wallet-key-file (or
     // CHIRAL_WALLET_KEY_FILE) was set. This populates state.wallet
