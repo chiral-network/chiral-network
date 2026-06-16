@@ -92,6 +92,10 @@ impl RatingState {
         save_manifest(&self.data_dir, &m);
     }
 
+    pub fn issuer_key_store_configured(&self) -> bool {
+        self.issuer_dht.is_some()
+    }
+
     async fn issuer_dht_service(&self) -> Result<Arc<DhtService>, String> {
         let Some(dht_ref) = &self.issuer_dht else {
             return Err("DHT issuer key store is not configured".to_string());

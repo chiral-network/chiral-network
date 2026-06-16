@@ -354,6 +354,14 @@ async fn submit_transfer(
         }
     }
 
+    if !state.issuer_key_store_configured() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reputation issuer key store is not available on this server",
+        )
+            .into_response();
+    }
+
     let (issuer_wallet, verdict_signature) =
         match verify_transfer_verdict(&state, &req, &downloader_wallet, amount_wei).await {
             Ok(v) => v,
