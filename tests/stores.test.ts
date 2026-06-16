@@ -86,9 +86,11 @@ describe('stores', () => {
   describe('settings', () => {
     it('should initialize with default settings', async () => {
       const { settings } = await import('$lib/stores');
+      const { LAUNCH_DOWNLOAD_COST_PER_MB_WEI } = await import('$lib/launchFeePolicy');
       const s = get(settings);
       expect(s.theme).toBe('system');
       expect(s.reducedMotion).toBe(false);
+      expect(s.hostingConfig.pricePerMbPerDayWei).toBe(LAUNCH_DOWNLOAD_COST_PER_MB_WEI);
     });
 
     it('should persist settings to localStorage', async () => {

@@ -1,0 +1,6 @@
+{
+  "downloadCostPerMbChi": "0.01",
+  "downloadCostPerMbWei": "10000000000000000",
+  "platformFeeBps": 50,
+  "platformWallet": "0x9ad90a2f8b72092154a5b5259295e33df3541ede"
+}

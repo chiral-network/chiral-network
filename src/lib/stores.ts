@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import type { HostingConfig } from '$lib/types/hosting';
+import { LAUNCH_DOWNLOAD_COST_PER_MB_WEI } from '$lib/launchFeePolicy';
 
 // Check if we're in a browser environment
 const browser = typeof window !== 'undefined';
@@ -78,7 +79,7 @@ const defaultSettings: AppSettings = {
   hostingConfig: {
     enabled: false,
     maxStorageBytes: 10 * 1024 * 1024 * 1024, // 10 GB
-    pricePerMbPerDayWei: '10000000000000000',   // 0.01 CHI per MB/day
+    pricePerMbPerDayWei: LAUNCH_DOWNLOAD_COST_PER_MB_WEI,
     minDepositWei: '500000000000000000',        // 0.5 CHI
     autoAcceptByElo: false,
     minAutoAcceptElo: 60,

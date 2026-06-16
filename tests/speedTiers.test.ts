@@ -1,11 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   calculateCost,
+  calculateCostWei,
   formatCost,
   formatSpeed,
+  LAUNCH_DOWNLOAD_COST_PER_MB_WEI,
+  PLATFORM_FEE_BPS,
   PLATFORM_FEE_PERCENT,
   calculatePlatformFee,
-  calculateTotalWithFee,
+  calculatePlatformFeeWei,
+  splitPaymentWei,
 } from '$lib/speedTiers';
 
 describe('speedTiers', () => {
@@ -27,6 +31,7 @@ describe('speedTiers', () => {
       const cost = calculateCost(1);
       expect(cost).toBeGreaterThan(0);
       expect(cost).toBeLessThan(0.00001);
+      expect(calculateCostWei(1)).toBe(10_000_000_000n);
     });
 
     it('should scale linearly with file size', () => {
@@ -44,6 +49,7 @@ describe('speedTiers', () => {
     it('should cost 0.01 CHI per MB', () => {
       const cost = calculateCost(1_000_000); // 1 MB
       expect(cost).toBeCloseTo(0.01, 6);
+      expect(calculateCostWei(1_000_000)).toBe(BigInt(LAUNCH_DOWNLOAD_COST_PER_MB_WEI));
     });
 
     it('should handle 500 MB file', () => {
@@ -54,6 +60,7 @@ describe('speedTiers', () => {
 
   describe('platformFee', () => {
     it('should be 0.5%', () => {
+      expect(PLATFORM_FEE_BPS).toBe(50);
       expect(PLATFORM_FEE_PERCENT).toBe(0.5);
     });
 
@@ -74,25 +81,35 @@ describe('speedTiers', () => {
 
     it('should return 0 fee for 0 amount', () => {
       expect(calculatePlatformFee(0)).toBe(0);
+      expect(calculatePlatformFeeWei(0n)).toBe(0n);
     });
 
-    it('should calculate total with fee', () => {
-      const base = 1.0;
-      const total = calculateTotalWithFee(base);
-      expect(total).toBeCloseTo(1.005, 6);
+    it('should split the listed price instead of adding markup', () => {
+      const totalWei = 1_000_000_000_000_000_000n;
+      const split = splitPaymentWei(totalWei);
+      expect(split.platformFeeWei).toBe(5_000_000_000_000_000n);
+      expect(split.sellerWei).toBe(995_000_000_000_000_000n);
+      expect(split.sellerWei + split.platformFeeWei).toBe(totalWei);
     });
 
-    it('should calculate total for download: 100 MB', () => {
-      const baseCost = calculateCost(100_000_000); // 100 MB = 1.0 CHI
-      const total = calculateTotalWithFee(baseCost);
-      expect(baseCost).toBeCloseTo(1.0, 6);
-      expect(total).toBeCloseTo(1.005, 6);
+    it('should round fee up and preserve the split invariant for tiny totals', () => {
+      expect(splitPaymentWei(0n)).toEqual({ sellerWei: 0n, platformFeeWei: 0n });
+      expect(splitPaymentWei(1n)).toEqual({ sellerWei: 0n, platformFeeWei: 1n });
     });
 
-    it('should calculate total for download: 1 GB', () => {
-      const baseCost = calculateCost(1_000_000_000); // 1 GB = 10 CHI
-      const total = calculateTotalWithFee(baseCost);
-      expect(total).toBeCloseTo(10.05, 6);
+    it('should split download cost for 100 MB', () => {
+      const totalWei = calculateCostWei(100_000_000); // 100 MB = 1.0 CHI
+      const split = splitPaymentWei(totalWei);
+      expect(totalWei).toBe(1_000_000_000_000_000_000n);
+      expect(split.platformFeeWei).toBe(5_000_000_000_000_000n);
+      expect(split.sellerWei + split.platformFeeWei).toBe(totalWei);
+    });
+
+    it('should split download cost for 1 GB', () => {
+      const totalWei = calculateCostWei(1_000_000_000); // 1 GB = 10 CHI
+      const split = splitPaymentWei(totalWei);
+      expect(split.platformFeeWei).toBe(50_000_000_000_000_000n);
+      expect(split.sellerWei + split.platformFeeWei).toBe(totalWei);
     });
 
     it('fee should always be less than base cost', () => {
