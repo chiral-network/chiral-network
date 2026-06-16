@@ -2351,6 +2351,44 @@ async fn publish_drive_item(
     Ok(file_hash)
 }
 
+fn unpublish_metadata_update(
+    dht_key: &str,
+    raw_metadata: Option<&str>,
+    peer_id: &str,
+) -> Result<Option<String>, String> {
+    let Some(raw) = raw_metadata else {
+        return Ok(None);
+    };
+
+    let mut metadata = serde_json::from_str::<FileMetadata>(raw).map_err(|e| {
+        format!(
+            "Malformed remote file metadata for {}: {}; refusing to continue unpublish because remote seeder removal cannot be verified",
+            dht_key, e
+        )
+    })?;
+
+    metadata.seeders.retain(|s| s.peer_id != peer_id);
+    metadata.peer_id = metadata
+        .seeders
+        .first()
+        .map(|s| s.peer_id.clone())
+        .unwrap_or_default();
+    metadata.price_wei = metadata
+        .seeders
+        .first()
+        .map(|s| s.price_wei.clone())
+        .unwrap_or_default();
+    metadata.wallet_address = metadata
+        .seeders
+        .first()
+        .map(|s| s.wallet_address.clone())
+        .unwrap_or_default();
+
+    serde_json::to_string(&metadata)
+        .map(Some)
+        .map_err(|e| format!("Failed to serialize metadata: {}", e))
+}
+
 async fn unpublish_drive_item(owner: &str, item_id: &str, port: u16) -> Result<String, String> {
     let mut manifest = drive_storage::load_manifest();
     let Some(item) = manifest
@@ -2378,28 +2416,9 @@ async fn unpublish_drive_item(owner: &str, item_id: &str, port: u16) -> Result<S
     let dht_key = format!("chiral_file_{}", hash);
     let peer_id = dht_peer_id(port).await?;
 
-    if let Some(raw) = dht_get_value(port, &dht_key).await? {
-        if let Ok(mut metadata) = serde_json::from_str::<FileMetadata>(&raw) {
-            metadata.seeders.retain(|s| s.peer_id != peer_id);
-            metadata.peer_id = metadata
-                .seeders
-                .first()
-                .map(|s| s.peer_id.clone())
-                .unwrap_or_default();
-            metadata.price_wei = metadata
-                .seeders
-                .first()
-                .map(|s| s.price_wei.clone())
-                .unwrap_or_default();
-            metadata.wallet_address = metadata
-                .seeders
-                .first()
-                .map(|s| s.wallet_address.clone())
-                .unwrap_or_default();
-            let json = serde_json::to_string(&metadata)
-                .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-            dht_put_value(port, &dht_key, &json).await?;
-        }
+    let raw_metadata = dht_get_value(port, &dht_key).await?;
+    if let Some(json) = unpublish_metadata_update(&dht_key, raw_metadata.as_deref(), &peer_id)? {
+        dht_put_value(port, &dht_key, &json).await?;
     }
 
     daemon_post_json(
@@ -3774,6 +3793,71 @@ async fn handle_geth(cmd: GethCommand) -> Result<(), String> {
 
 async fn handle_hosting_daemon_passthrough(cmd: DaemonCommand) -> Result<(), String> {
     handle_daemon(cmd).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file_metadata(seeders: Vec<SeederInfo>) -> FileMetadata {
+        FileMetadata {
+            hash: "hash-1".to_string(),
+            file_name: "example.txt".to_string(),
+            file_size: 123,
+            protocol: "iroh".to_string(),
+            created_at: 42,
+            peer_id: "peer-a".to_string(),
+            price_wei: "10".to_string(),
+            wallet_address: "0xaaa".to_string(),
+            seeders,
+        }
+    }
+
+    fn seeder(peer_id: &str, price_wei: &str, wallet_address: &str) -> SeederInfo {
+        SeederInfo {
+            peer_id: peer_id.to_string(),
+            price_wei: price_wei.to_string(),
+            wallet_address: wallet_address.to_string(),
+            multiaddrs: vec![format!("/ip4/127.0.0.1/tcp/{}", price_wei)],
+        }
+    }
+
+    #[test]
+    fn unpublish_metadata_update_removes_matching_seeder() {
+        let metadata = file_metadata(vec![
+            seeder("peer-a", "10", "0xaaa"),
+            seeder("peer-b", "20", "0xbbb"),
+        ]);
+        let raw = serde_json::to_string(&metadata).unwrap();
+
+        let updated = unpublish_metadata_update("chiral_file_hash-1", Some(&raw), "peer-a")
+            .unwrap()
+            .expect("valid metadata should produce an updated DHT value");
+        let parsed: FileMetadata = serde_json::from_str(&updated).unwrap();
+
+        assert_eq!(parsed.seeders.len(), 1);
+        assert_eq!(parsed.seeders[0].peer_id, "peer-b");
+        assert_eq!(parsed.peer_id, "peer-b");
+        assert_eq!(parsed.price_wei, "20");
+        assert_eq!(parsed.wallet_address, "0xbbb");
+    }
+
+    #[test]
+    fn unpublish_metadata_update_skips_missing_metadata() {
+        assert_eq!(
+            unpublish_metadata_update("chiral_file_hash-1", None, "peer-a").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn unpublish_metadata_update_rejects_malformed_metadata() {
+        let err = unpublish_metadata_update("chiral_file_hash-1", Some("{not json"), "peer-a")
+            .expect_err("malformed remote metadata should fail closed");
+
+        assert!(err.contains("Malformed remote file metadata for chiral_file_hash-1"));
+        assert!(err.contains("refusing to continue unpublish"));
+    }
 }
 
 #[tokio::main]
