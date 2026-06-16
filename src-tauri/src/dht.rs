@@ -12,9 +12,10 @@ use std::error::Error;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, Notify};
 
 /// Custom CBOR codec with appropriate size limits for chunked file transfers.
 /// Individual chunks are 256 KB, but FileInfo responses can be large for big files
@@ -552,6 +553,51 @@ struct ActiveChunkedDownload {
 /// Map of request_id -> active chunked download state
 type ActiveDownloadsMap = HashMap<String, ActiveChunkedDownload>;
 
+#[derive(Clone)]
+struct DhtBootstrapGate {
+    ready: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl DhtBootstrapGate {
+    fn new() -> Self {
+        Self {
+            ready: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    fn reset(&self) {
+        self.ready.store(false, Ordering::SeqCst);
+    }
+
+    fn mark_ready(&self) {
+        if !self.ready.swap(true, Ordering::SeqCst) {
+            self.notify.notify_waiters();
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::SeqCst)
+    }
+
+    async fn wait_ready(&self, timeout: Duration) -> bool {
+        if self.is_ready() {
+            return true;
+        }
+        tokio::time::timeout(timeout, async {
+            loop {
+                self.notify.notified().await;
+                if self.is_ready() {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
+}
+
 /// Compute SHA-256 hashes for each chunk of a file
 fn compute_chunk_hashes(file_path: &str) -> Result<Vec<String>, String> {
     let mut file =
@@ -586,6 +632,7 @@ pub struct DhtService {
     download_directory: DownloadDirectoryRef,
     active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
     download_credentials: DownloadCredentialsMap,
+    bootstrap_gate: DhtBootstrapGate,
 }
 
 impl DhtService {
@@ -604,6 +651,7 @@ impl DhtService {
             download_directory,
             active_downloads: Arc::new(Mutex::new(HashMap::new())),
             download_credentials,
+            bootstrap_gate: DhtBootstrapGate::new(),
         }
     }
 
@@ -715,6 +763,7 @@ impl DhtService {
         if *running {
             return Err("DHT already running".to_string());
         }
+        self.bootstrap_gate.reset();
 
         // Create libp2p swarm
         let (swarm, peer_id) = create_swarm().await.map_err(|e| e.to_string())?;
@@ -744,6 +793,7 @@ impl DhtService {
         let download_dir_clone = self.download_directory.clone();
         let active_downloads_clone = self.active_downloads.clone();
         let download_credentials_clone = self.download_credentials.clone();
+        let bootstrap_gate = self.bootstrap_gate.clone();
         let events_clone = events.clone();
 
         tokio::spawn(async move {
@@ -759,6 +809,7 @@ impl DhtService {
                 download_dir_clone,
                 active_downloads_clone,
                 download_credentials_clone,
+                bootstrap_gate,
             )
             .await;
         });
@@ -772,8 +823,17 @@ impl DhtService {
 
         let mut peers = self.peers.lock().await;
         peers.clear();
+        self.bootstrap_gate.reset();
 
         Ok(())
+    }
+
+    pub fn is_bootstrap_ready(&self) -> bool {
+        self.bootstrap_gate.is_ready()
+    }
+
+    pub async fn wait_for_bootstrap_ready(&self, timeout: Duration) -> bool {
+        self.bootstrap_gate.wait_ready(timeout).await
     }
 
     pub async fn is_running(&self) -> bool {
@@ -2061,6 +2121,7 @@ async fn event_loop(
     download_directory: DownloadDirectoryRef,
     active_downloads: Arc<Mutex<ActiveDownloadsMap>>,
     download_credentials: DownloadCredentialsMap,
+    bootstrap_gate: DhtBootstrapGate,
 ) {
     // Track pending get queries
     let mut pending_get_queries: HashMap<
@@ -2267,6 +2328,7 @@ async fn event_loop(
                             &mut auto_peer_dial_attempts,
                             &mut pending_echo,
                             &cmd_tx,
+                            &bootstrap_gate,
                         )
                         .await;
                     }
@@ -2914,6 +2976,7 @@ async fn handle_behaviour_event(
         tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
     >,
     cmd_tx: &mpsc::UnboundedSender<SwarmCommand>,
+    bootstrap_gate: &DhtBootstrapGate,
 ) {
     match event {
         DhtBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
@@ -3477,12 +3540,12 @@ async fn handle_behaviour_event(
                             let _ = events.emit("peer-discovered", peers_guard.clone());
                         }
 
+                        bootstrap_gate.mark_ready();
                         let _ = events.emit("dht-bootstrap-complete", ());
                     }
                 }
                 kad::QueryResult::Bootstrap(Err(err)) => {
                     println!("Kademlia bootstrap failed: {:?}", err);
-                    // Emit anyway so auto-reseed isn't blocked forever
                     let _ = events.emit("dht-bootstrap-complete", ());
                 }
                 _ => {}
@@ -5045,6 +5108,32 @@ async fn handle_behaviour_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bootstrap_gate_waits_until_marked_ready() {
+        let gate = DhtBootstrapGate::new();
+        let waiter = {
+            let gate = gate.clone();
+            tokio::spawn(async move { gate.wait_ready(Duration::from_secs(5)).await })
+        };
+
+        tokio::task::yield_now().await;
+        assert!(!gate.is_ready());
+        gate.mark_ready();
+
+        assert!(waiter.await.unwrap());
+        assert!(gate.is_ready());
+    }
+
+    #[test]
+    fn bootstrap_gate_reset_clears_ready_state() {
+        let gate = DhtBootstrapGate::new();
+        gate.mark_ready();
+        assert!(gate.is_ready());
+
+        gate.reset();
+        assert!(!gate.is_ready());
+    }
 
     #[test]
     fn test_select_best_get_record_value_merges_seeder_multiaddrs() {

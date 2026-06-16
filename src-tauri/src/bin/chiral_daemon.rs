@@ -1624,21 +1624,39 @@ async fn main() {
             // Start DHT
             if auto_start_dht {
                 println!("[AUTO] Starting DHT...");
-                let mut guard = rt.dht.lock().await;
-                if guard.is_none() {
-                    let ft = Arc::clone(&rt.file_transfer);
-                    let dd = Arc::clone(&rt.download_directory);
-                    let dc = Arc::clone(&rt.download_credentials);
-                    let svc = Arc::new(dht::DhtService::new(ft, dd, dc));
-                    match svc.start_headless().await {
-                        Ok(_) => {
-                            *guard = Some(svc);
-                            println!("[AUTO] DHT started successfully");
+                let dht_for_bootstrap = {
+                    let mut guard = rt.dht.lock().await;
+                    if guard.is_none() {
+                        let ft = Arc::clone(&rt.file_transfer);
+                        let dd = Arc::clone(&rt.download_directory);
+                        let dc = Arc::clone(&rt.download_credentials);
+                        let svc = Arc::new(dht::DhtService::new(ft, dd, dc));
+                        match svc.start_headless().await {
+                            Ok(_) => {
+                                *guard = Some(svc.clone());
+                                println!("[AUTO] DHT started successfully");
+                                Some(svc)
+                            }
+                            Err(e) => {
+                                eprintln!("[AUTO] DHT start failed: {}", e);
+                                None
+                            }
                         }
-                        Err(e) => eprintln!("[AUTO] DHT start failed: {}", e),
+                    } else {
+                        guard.as_ref().cloned()
+                    }
+                };
+
+                if let Some(dht) = dht_for_bootstrap.as_ref() {
+                    if !dht
+                        .wait_for_bootstrap_ready(std::time::Duration::from_secs(180))
+                        .await
+                    {
+                        eprintln!(
+                            "[AUTO] DHT bootstrap did not complete within 180s; continuing startup"
+                        );
                     }
                 }
-                drop(guard);
 
                 let wallet_address = {
                     let wallet = rt.wallet.lock().await;
@@ -1651,8 +1669,6 @@ async fn main() {
                     }
                 }
 
-                // Wait for DHT bootstrap
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
 
             // Start Geth

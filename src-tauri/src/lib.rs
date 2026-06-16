@@ -63,6 +63,25 @@ pub struct AppState {
     // `version::effective_policy()` / `version::update_effective_policy()`.
 }
 
+const DHT_RESEED_BOOTSTRAP_TIMEOUT_SECS: u64 = 180;
+
+async fn wait_for_dht_bootstrap_for_reseed(dht: &Arc<DhtService>, label: &str) -> bool {
+    if dht
+        .wait_for_bootstrap_ready(std::time::Duration::from_secs(
+            DHT_RESEED_BOOTSTRAP_TIMEOUT_SECS,
+        ))
+        .await
+    {
+        return true;
+    }
+
+    println!(
+        "[DHT] {} skipped: bootstrap did not complete within {}s",
+        label, DHT_RESEED_BOOTSTRAP_TIMEOUT_SECS
+    );
+    false
+}
+
 /// Cleanup DHT seeder entries and host advertisement on shutdown.
 /// Called from both the Tauri close handler and the SIGINT signal handler.
 #[cfg(unix)]
@@ -136,7 +155,8 @@ async fn start_dht_internal(
         state.download_directory.clone(),
         state.download_credentials.clone(),
     ));
-    let app_for_delayed_reseed = app.clone();
+    let app_for_bootstrap_reseed = app.clone();
+    let dht_for_bootstrap_reseed = dht.clone();
     let result = dht.start(app).await?;
     *dht_guard = Some(dht);
     drop(dht_guard);
@@ -152,27 +172,14 @@ async fn start_dht_internal(
     // publish the signed DHT records.
     auto_reseed_drive_files(state, None, None).await;
 
-    // Run follow-up reseed passes after startup to absorb timing races between
-    // bootstrap, relay reservation, and Drive manifest load/refresh.
+    // Run one follow-up reseed pass once Kademlia bootstrap has actually
+    // completed, instead of guessing with fixed startup sleeps.
     tauri::async_runtime::spawn(async move {
-        // Use staggered retries over an extended startup window so reseed
-        // converges even when relay/bootstrap connectivity is delayed.
-        let retry_delays_secs = [2u64, 5, 10, 20, 30, 45, 60, 90, 120, 180, 240, 300];
-        for delay_secs in retry_delays_secs {
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-
-            let app_state = app_for_delayed_reseed.state::<AppState>();
-            let dht_running = {
-                let dht_guard = app_state.dht.lock().await;
-                dht_guard.is_some()
-            };
-            if !dht_running {
-                break;
-            }
-
+        if wait_for_dht_bootstrap_for_reseed(&dht_for_bootstrap_reseed, "Drive startup reseed")
+            .await
+        {
+            let app_state = app_for_bootstrap_reseed.state::<AppState>();
             app_state.drive_state.load_from_disk_async().await;
-            // Delayed retries also run without wallet creds — same caveat
-            // as the initial pass above.
             auto_reseed_drive_files(app_state.inner(), None, None).await;
         }
     });
@@ -560,6 +567,24 @@ async fn reseed_drive_files(
     wallet_address: Option<String>,
     private_key: Option<String>,
 ) -> Result<(), String> {
+    let will_publish_signed = wallet_address
+        .as_deref()
+        .map(|w| !w.trim().is_empty())
+        .unwrap_or(false)
+        && private_key
+            .as_deref()
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false);
+    if will_publish_signed {
+        let dht = {
+            let guard = state.dht.lock().await;
+            guard.as_ref().cloned().ok_or("DHT not running")?
+        };
+        if !wait_for_dht_bootstrap_for_reseed(&dht, "Drive signed reseed").await {
+            return Err("DHT bootstrap did not complete; reseed deferred".to_string());
+        }
+    }
+
     // Reload disk state first to avoid stale in-memory manifests after app restart.
     state.drive_state.load_from_disk_async().await;
     auto_reseed_drive_files(

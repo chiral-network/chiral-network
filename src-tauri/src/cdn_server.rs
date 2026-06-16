@@ -680,15 +680,41 @@ async fn update_price(
 // Background tasks
 // ============================================================================
 
+const CDN_STARTUP_RESEED_DHT_TIMEOUT_SECS: u64 = 180;
+
+async fn wait_for_startup_dht(state: &CdnState) -> Option<Arc<DhtService>> {
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(CDN_STARTUP_RESEED_DHT_TIMEOUT_SECS);
+    loop {
+        if let Some(dht) = {
+            let guard = state.dht.lock().await;
+            guard.as_ref().cloned()
+        } {
+            return Some(dht);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 /// Re-register every non-expired CDN file in the DHT on startup. Run once
 /// after the DHT service is ready.
 pub async fn reseed_on_startup(state: Arc<CdnState>) {
-    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-    let dht = {
-        let guard = state.dht.lock().await;
-        guard.as_ref().cloned()
+    let Some(dht) = wait_for_startup_dht(&state).await else {
+        println!("[CDN] Startup reseed skipped: DHT did not start within 180s");
+        return;
     };
-    let Some(dht) = dht else { return };
+    if !dht
+        .wait_for_bootstrap_ready(std::time::Duration::from_secs(
+            CDN_STARTUP_RESEED_DHT_TIMEOUT_SECS,
+        ))
+        .await
+    {
+        println!("[CDN] Startup reseed skipped: DHT bootstrap did not complete within 180s");
+        return;
+    }
     let now = now_secs();
     let active: Vec<CdnEntry> = state.snapshot().await.into_iter().filter(|e| e.expires_at > now).collect();
     for entry in &active {
