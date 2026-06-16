@@ -591,6 +591,27 @@ fn fix_origin_url(origin_url: &str, client_ip: std::net::IpAddr) -> String {
     origin_url.to_string()
 }
 
+async fn preflight_origin_reachable(origin_url: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        // The origin host has already passed `is_safe_origin_url`; do not
+        // follow attacker-controlled redirects to a different network target.
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("origin_url preflight client could not be initialized: {e}"))?;
+
+    client
+        .get(origin_url.trim_end_matches('/'))
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            format!(
+                "origin_url is not reachable from this relay: {e}. Ensure the owner server is running, the host/port is reachable from the relay, and firewall/NAT rules allow inbound HTTP."
+            )
+        })
+}
+
 /// POST /api/drive/relay-register — register a share origin
 async fn register_share(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
@@ -634,6 +655,9 @@ async fn register_share(
         }
     }
     let origin = fix_origin_url(&req.origin_url, addr.ip());
+    if let Err(e) = preflight_origin_reachable(&origin).await {
+        return (StatusCode::BAD_GATEWAY, e).into_response();
+    }
     println!(
         "[RELAY-SHARE] Registering share token={} origin={} (raw={}) owner={}",
         req.token, origin, req.origin_url, owner
@@ -985,6 +1009,9 @@ async fn register_site(
         }
     }
     let origin = fix_origin_url(&req.origin_url, addr.ip());
+    if let Err(e) = preflight_origin_reachable(&origin).await {
+        return (StatusCode::BAD_GATEWAY, e).into_response();
+    }
     println!(
         "[RELAY-SITE] Registering site={} origin={} (raw={}) owner={}",
         req.site_id, origin, req.origin_url, owner
@@ -1149,6 +1176,14 @@ pub fn relay_share_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    const TEST_PRIVATE_KEY: &str =
+        "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     // -----------------------------------------------------------------------
     // is_safe_origin_url — FM-A04
@@ -1294,6 +1329,142 @@ mod tests {
             fix_origin_url("http://203.0.113.5:9419", ip),
             "http://203.0.113.5:9419"
         );
+    }
+
+    async fn one_shot_http_response(response: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream.write_all(&response).await;
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    async fn one_shot_http_origin() -> String {
+        one_shot_http_response(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec())
+            .await
+    }
+
+    async fn one_shot_redirect_origin(location: &str) -> String {
+        one_shot_http_response(
+            format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n")
+                .into_bytes(),
+        )
+        .await
+    }
+
+    async fn closed_loopback_origin() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{}", addr)
+    }
+
+    fn test_owner_wallet() -> String {
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, b"owner").unwrap();
+        crate::wallet::recover_signer(b"owner", &signature).unwrap()
+    }
+
+    fn signed_register_request(token: &str, origin_url: &str) -> RegisterRequest {
+        let owner_wallet = test_owner_wallet();
+        let payload = register_payload("share", token, &owner_wallet, origin_url);
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, &payload).unwrap();
+        RegisterRequest {
+            token: token.to_string(),
+            origin_url: origin_url.to_string(),
+            owner_wallet,
+            signature,
+        }
+    }
+
+    fn signed_site_register_request(site_id: &str, origin_url: &str) -> SiteRegisterRequest {
+        let owner_wallet = test_owner_wallet();
+        let payload = register_payload("site", site_id, &owner_wallet, origin_url);
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, &payload).unwrap();
+        SiteRegisterRequest {
+            site_id: site_id.to_string(),
+            origin_url: origin_url.to_string(),
+            owner_wallet,
+            signature,
+        }
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_accepts_reachable_http_origin() {
+        let origin = one_shot_http_origin().await;
+
+        preflight_origin_reachable(&origin)
+            .await
+            .expect("reachable origin should pass preflight");
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_reports_unreachable_origin() {
+        let origin = closed_loopback_origin().await;
+
+        let err = preflight_origin_reachable(&origin)
+            .await
+            .expect_err("closed origin should fail preflight");
+
+        assert!(err.contains("not reachable"));
+        assert!(err.contains("firewall/NAT"));
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_does_not_follow_redirects() {
+        let closed_target = closed_loopback_origin().await;
+        let origin = one_shot_redirect_origin(&closed_target).await;
+
+        preflight_origin_reachable(&origin)
+            .await
+            .expect("redirect response should count as origin reachability without following it");
+    }
+
+    #[tokio::test]
+    async fn register_share_accepts_reachable_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(RelayShareRegistry::new(dir.path().to_path_buf()));
+        let origin = one_shot_http_origin().await;
+        let req = signed_register_request("reachable-token", &origin);
+
+        let response = register_share(
+            Extension(registry.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 51111))),
+            Json(req),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(registry.lookup("reachable-token").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn register_site_reports_unreachable_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(RelayShareRegistry::new(dir.path().to_path_buf()));
+        let origin = closed_loopback_origin().await;
+        let req = signed_site_register_request("offline-site", &origin);
+
+        let response = register_site(
+            Extension(registry.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 51111))),
+            Json(req),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(registry.lookup_site("offline-site").await.is_none());
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("origin_url is not reachable"));
+        assert!(body.contains("firewall/NAT"));
     }
 
     // -----------------------------------------------------------------------
