@@ -144,6 +144,25 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn validate_headless_content_hash(field: &str, value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err(format!("{} required", field));
+    }
+    if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("{} must be a 64-character hex string", field));
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn file_search_not_found_payload(providers: Vec<String>) -> serde_json::Value {
+    json!({"found": false, "providers": providers})
+}
+
+fn folder_search_not_found_payload() -> serde_json::Value {
+    json!({"found": false})
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1210,10 +1229,10 @@ async fn file_search(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let file_hash = body["fileHash"].as_str().unwrap_or("").to_string();
-    if file_hash.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "fileHash required");
-    }
+    let file_hash = match validate_headless_content_hash("fileHash", body["fileHash"].as_str()) {
+        Ok(file_hash) => file_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     let dht = match state.dht_service().await {
         Some(d) => d,
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
@@ -1282,7 +1301,7 @@ async fn file_search(
             "seeders": seeders,
         }))
         .into_response(),
-        Ok(None) => Json(json!({"found": false, "providers": providers})).into_response(),
+        Ok(None) => Json(file_search_not_found_payload(providers)).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
@@ -1293,10 +1312,11 @@ async fn folder_search(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let folder_hash = body["folderHash"].as_str().unwrap_or("").to_string();
-    if folder_hash.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "folderHash required");
-    }
+    let folder_hash =
+        match validate_headless_content_hash("folderHash", body["folderHash"].as_str()) {
+            Ok(folder_hash) => folder_hash,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+        };
     let dht = match state.dht_service().await {
         Some(d) => d,
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
@@ -1309,7 +1329,7 @@ async fn folder_search(
     .await
     {
         Ok(Ok(Some(json_str))) => json_str,
-        Ok(Ok(None)) => return Json(json!({"found": false})).into_response(),
+        Ok(Ok(None)) => return Json(folder_search_not_found_payload()).into_response(),
         Ok(Err(e)) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
         Err(_) => return Json(json!({"found": false, "error": "timeout"})).into_response(),
     };
@@ -1843,5 +1863,113 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    const VALID_CONTENT_HASH: &str =
+        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+
+    #[test]
+    fn headless_content_hash_validation_rejects_missing_value() {
+        let err = validate_headless_content_hash("fileHash", None)
+            .expect_err("missing file hash should be rejected");
+
+        assert_eq!(err, "fileHash required");
+    }
+
+    #[test]
+    fn headless_content_hash_validation_rejects_malformed_value() {
+        let err = validate_headless_content_hash("fileHash", Some("not-a-hash"))
+            .expect_err("malformed file hash should be rejected");
+
+        assert!(err.contains("64-character hex"));
+    }
+
+    #[test]
+    fn headless_content_hash_validation_accepts_and_normalizes_valid_value() {
+        let uppercase = VALID_CONTENT_HASH.to_uppercase();
+
+        assert_eq!(
+            validate_headless_content_hash("folderHash", Some(&uppercase)).unwrap(),
+            VALID_CONTENT_HASH
+        );
+    }
+
+    #[test]
+    fn file_search_not_found_payload_preserves_provider_list() {
+        assert_eq!(
+            file_search_not_found_payload(vec!["peer-a".to_string()]),
+            json!({"found": false, "providers": ["peer-a"]})
+        );
+    }
+
+    #[test]
+    fn folder_search_not_found_payload_preserves_contract() {
+        assert_eq!(folder_search_not_found_payload(), json!({"found": false}));
+    }
+
+    #[tokio::test]
+    async fn file_search_rejects_missing_hash_before_dht_access() {
+        let response = file_search(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({})),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn file_search_rejects_malformed_hash_before_dht_access() {
+        let response = file_search(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({ "fileHash": "abc123" })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn file_search_accepts_valid_hash_before_requiring_dht() {
+        let response = file_search(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({ "fileHash": VALID_CONTENT_HASH })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn folder_search_rejects_missing_hash_before_dht_access() {
+        let response = folder_search(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({})),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn folder_search_rejects_malformed_hash_before_dht_access() {
+        let response = folder_search(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({ "folderHash": "abc123" })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn folder_search_accepts_valid_hash_before_requiring_dht() {
+        let response = folder_search(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({ "folderHash": VALID_CONTENT_HASH })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
