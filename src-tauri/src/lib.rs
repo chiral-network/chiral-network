@@ -154,6 +154,17 @@ fn install_shutdown_signal_handlers() -> Result<
     )
 }
 
+fn shutdown_cleanup_runtime_error(error: std::io::Error) -> String {
+    format!("failed to build shutdown cleanup runtime: {}", error)
+}
+
+fn build_shutdown_cleanup_runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(shutdown_cleanup_runtime_error)
+}
+
 async fn start_dht_internal(
     app: tauri::AppHandle,
     state: &AppState,
@@ -7406,10 +7417,13 @@ pub fn run() {
     // Spawn a background task to stop Geth + cleanup DHT on SIGINT (Ctrl+C) or SIGTERM
     // This prevents orphaned Geth processes and stale DHT entries when the app is killed
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = match build_shutdown_cleanup_runtime() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("⚠️  Shutdown cleanup watcher disabled: {}", e);
+                return;
+            }
+        };
         rt.block_on(async {
             #[cfg(unix)]
             {
@@ -7884,6 +7898,26 @@ mod multi_seeder_tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("terminate unavailable"));
+    }
+
+    #[test]
+    fn build_shutdown_cleanup_runtime_runs_time_driver() {
+        let rt = build_shutdown_cleanup_runtime().expect("shutdown runtime should build");
+
+        rt.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+        });
+    }
+
+    #[test]
+    fn shutdown_cleanup_runtime_error_is_actionable() {
+        let err = shutdown_cleanup_runtime_error(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "runtime unavailable",
+        ));
+
+        assert!(err.contains("shutdown cleanup runtime"));
+        assert!(err.contains("runtime unavailable"));
     }
 
     #[test]
