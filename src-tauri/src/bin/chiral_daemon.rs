@@ -144,6 +144,30 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn is_hex_prefixed(value: &str, bytes: usize) -> bool {
+    value.len() == 2 + bytes * 2
+        && value.starts_with("0x")
+        && value[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_headless_miner_address(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err("minerAddress required".to_string());
+    }
+    if !is_hex_prefixed(value, 20) {
+        return Err("minerAddress must be a 0x-prefixed 20-byte hex string".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn validate_optional_headless_miner_address(value: Option<&str>) -> Result<Option<String>, String> {
+    match value {
+        Some(value) => validate_headless_miner_address(Some(value)).map(Some),
+        None => Ok(None),
+    }
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -810,8 +834,13 @@ async fn geth_start(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<StartGethRequest>,
 ) -> Response {
+    let miner_address = match validate_optional_headless_miner_address(req.miner_address.as_deref())
+    {
+        Ok(miner_address) => miner_address,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     let mut geth = state.geth.lock().await;
-    match geth.start(req.miner_address.as_deref()).await {
+    match geth.start(miner_address.as_deref()).await {
         Ok(()) => Json(json!({ "status": "started" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -882,8 +911,12 @@ async fn set_miner_address(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<MinerAddressRequest>,
 ) -> Response {
+    let address = match validate_headless_miner_address(Some(&req.address)) {
+        Ok(address) => address,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     let mut geth = state.geth.lock().await;
-    match geth.set_miner_address(&req.address).await {
+    match geth.set_miner_address(&address).await {
         Ok(()) => Json(json!({ "status": "ok" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -1511,6 +1544,14 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
 #[tokio::main]
 async fn main() {
     let args = DaemonArgs::parse();
+    let miner_address =
+        match validate_optional_headless_miner_address(args.miner_address.as_deref()) {
+            Ok(miner_address) => miner_address,
+            Err(err) => {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
+        };
     if let Some(port) = args.p2p_port {
         std::env::set_var("CHIRAL_P2P_PORT", port.to_string());
     }
@@ -1572,7 +1613,7 @@ async fn main() {
     // before CdnState is constructed — CdnState captures the wallet
     // address at build time, and an empty one means CDN clients have no
     // address to pay.
-    if let Some(ref addr) = args.miner_address {
+    if let Some(ref addr) = miner_address {
         let mut wallet_guard = runtime_state.wallet.lock().await;
         if wallet_guard.is_none() {
             *wallet_guard = Some(WalletInfo {
@@ -1652,7 +1693,6 @@ async fn main() {
     let auto_mine = args.auto_mine;
     let auto_start_dht = args.auto_start_dht || auto_mine;
     let auto_start_geth = args.auto_start_geth || auto_mine;
-    let miner_address = args.miner_address.clone();
     let mining_threads = args.mining_threads;
 
     // (Wallet pre-populate moved earlier — see above.)
@@ -1822,6 +1862,74 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const VALID_MINER_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
+
+    #[test]
+    fn headless_miner_address_validation_rejects_missing_value() {
+        let err = validate_headless_miner_address(None)
+            .expect_err("missing miner address should be rejected");
+
+        assert_eq!(err, "minerAddress required");
+    }
+
+    #[test]
+    fn headless_miner_address_validation_rejects_malformed_value() {
+        let err = validate_headless_miner_address(Some("0x1234"))
+            .expect_err("short miner address should be rejected");
+
+        assert!(err.contains("20-byte"));
+    }
+
+    #[test]
+    fn headless_miner_address_validation_accepts_valid_value() {
+        assert_eq!(
+            validate_headless_miner_address(Some(VALID_MINER_ADDRESS)).unwrap(),
+            VALID_MINER_ADDRESS
+        );
+    }
+
+    #[test]
+    fn optional_headless_miner_address_allows_absent_value() {
+        assert_eq!(
+            validate_optional_headless_miner_address(None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn optional_headless_miner_address_rejects_empty_value() {
+        let err = validate_optional_headless_miner_address(Some(""))
+            .expect_err("empty configured miner address should be rejected");
+
+        assert_eq!(err, "minerAddress required");
+    }
+
+    #[tokio::test]
+    async fn geth_start_rejects_malformed_miner_address_before_start() {
+        let response = geth_start(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(StartGethRequest {
+                miner_address: Some("0x1234".to_string()),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn set_miner_address_rejects_malformed_address_before_geth_call() {
+        let response = set_miner_address(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(MinerAddressRequest {
+                address: "0x1234".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     #[cfg(unix)]
     #[test]
