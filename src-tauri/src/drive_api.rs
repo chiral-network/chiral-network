@@ -6,7 +6,8 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -252,6 +253,10 @@ async fn verify_share_access(share: &ShareLink, access: Option<&str>) -> Result<
             "This payment was already used to unlock a different share. Please pay again."
                 .to_string(),
         ),
+        ShareTxClaim::LedgerUnavailable(reason) => Err(format!(
+            "Payment ledger is unavailable; cannot safely verify share access: {}",
+            reason
+        )),
     }
 }
 
@@ -259,69 +264,204 @@ async fn verify_share_access(share: &ShareLink, access: Option<&str>) -> Result<
 // Per-share spent-tx ledger — see verify_share_access above.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum ShareTxClaim {
     FirstUse,
     SameShare,
     DifferentShare,
+    LedgerUnavailable(String),
 }
 
-static SHARE_TX_STORE: tokio::sync::OnceCell<tokio::sync::Mutex<std::collections::HashMap<String, String>>> =
+struct ShareTxStoreState {
+    map: HashMap<String, String>,
+    load_error: Option<String>,
+}
+
+static SHARE_TX_STORE: tokio::sync::OnceCell<tokio::sync::Mutex<ShareTxStoreState>> =
     tokio::sync::OnceCell::const_new();
 
-fn share_tx_path() -> std::path::PathBuf {
+fn share_tx_path() -> PathBuf {
     crate::network::data_dir().join("drive_share_spent_tx.json")
 }
 
-async fn load_share_tx_map() -> std::collections::HashMap<String, String> {
+async fn load_share_tx_map() -> Result<HashMap<String, String>, String> {
     let path = share_tx_path();
-    match tokio::fs::read_to_string(&path).await {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-        Err(_) => std::collections::HashMap::new(),
+    load_share_tx_map_from_path(&path).await
+}
+
+async fn load_share_tx_map_from_path(path: &FsPath) -> Result<HashMap<String, String>, String> {
+    let contents = match tokio::fs::read(path).await {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => {
+            return Err(format!(
+                "failed to read Drive share spent-tx ledger {}: {}",
+                path.display(),
+                e
+            ))
+        }
+    };
+
+    match serde_json::from_slice(&contents) {
+        Ok(map) => Ok(map),
+        Err(e) => {
+            let reason = match quarantine_malformed_share_tx_map(path).await {
+                Ok(quarantine) => format!(
+                    "malformed Drive share spent-tx ledger {} quarantined at {}: {}",
+                    path.display(),
+                    quarantine.display(),
+                    e
+                ),
+                Err(quarantine_err) => format!(
+                    "malformed Drive share spent-tx ledger {} could not be quarantined: {}",
+                    path.display(),
+                    quarantine_err
+                ),
+            };
+            eprintln!("[Drive] {}", reason);
+            Err(reason)
+        }
     }
 }
 
-async fn share_tx_store() -> &'static tokio::sync::Mutex<std::collections::HashMap<String, String>> {
+async fn quarantine_malformed_share_tx_map(path: &FsPath) -> Result<PathBuf, String> {
+    let quarantine = malformed_share_tx_quarantine_path(path);
+    tokio::fs::rename(path, &quarantine).await.map_err(|e| {
+        format!(
+            "rename {} to {}: {}",
+            path.display(),
+            quarantine.display(),
+            e
+        )
+    })?;
+    Ok(quarantine)
+}
+
+fn malformed_share_tx_quarantine_path(path: &FsPath) -> PathBuf {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("drive_share_spent_tx.json");
+    for attempt in 0..1000 {
+        let suffix = if attempt == 0 {
+            format!("malformed-{timestamp}")
+        } else {
+            format!("malformed-{timestamp}-{attempt}")
+        };
+        let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow"))
+}
+
+async fn share_tx_store() -> &'static tokio::sync::Mutex<ShareTxStoreState> {
     SHARE_TX_STORE
-        .get_or_init(|| async { tokio::sync::Mutex::new(load_share_tx_map().await) })
+        .get_or_init(|| async {
+            let (map, load_error) = match load_share_tx_map().await {
+                Ok(map) => (map, None),
+                Err(error) => (HashMap::new(), Some(error)),
+            };
+            tokio::sync::Mutex::new(ShareTxStoreState { map, load_error })
+        })
         .await
 }
 
-async fn persist_share_tx_map(map: &std::collections::HashMap<String, String>) {
+async fn persist_share_tx_map(map: &HashMap<String, String>) -> Result<(), String> {
     let path = share_tx_path();
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+    persist_share_tx_map_to_path(map, &path).await
+}
+
+async fn persist_share_tx_map_to_path(
+    map: &HashMap<String, String>,
+    path: &FsPath,
+) -> Result<(), String> {
+    match tokio::fs::read(path).await {
+        Ok(contents) => {
+            if serde_json::from_slice::<HashMap<String, String>>(&contents).is_err() {
+                return Err(format!(
+                    "refusing to overwrite malformed Drive share spent-tx ledger at {}",
+                    path.display()
+                ));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(format!(
+                "refusing to overwrite unreadable Drive share spent-tx ledger at {}: {}",
+                path.display(),
+                e
+            ));
+        }
     }
-    if let Ok(json) = serde_json::to_string(map) {
-        let _ = tokio::fs::write(&path, json).await;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    let json = serde_json::to_string(map).map_err(|e| format!("serialize ledger: {}", e))?;
+    tokio::fs::write(path, json)
+        .await
+        .map_err(|e| format!("write {}: {}", path.display(), e))
+}
+
+fn claim_share_tx_in_map(
+    map: &mut HashMap<String, String>,
+    tx_hash: &str,
+    share_id: &str,
+) -> ShareTxClaim {
+    let key = tx_hash.to_lowercase();
+    match map.get(&key) {
+        Some(existing) if existing == share_id => ShareTxClaim::SameShare,
+        Some(_) => ShareTxClaim::DifferentShare,
+        None => {
+            map.insert(key, share_id.to_string());
+            ShareTxClaim::FirstUse
+        }
     }
 }
 
 async fn claim_share_tx(tx_hash: &str, share_id: &str) -> ShareTxClaim {
-    let key = tx_hash.to_lowercase();
     let store = share_tx_store().await;
     let mut guard = store.lock().await;
-    match guard.get(&key) {
-        Some(existing) if existing == share_id => ShareTxClaim::SameShare,
-        Some(_) => ShareTxClaim::DifferentShare,
-        None => {
-            guard.insert(key, share_id.to_string());
-            let snapshot = guard.clone();
-            drop(guard);
-            persist_share_tx_map(&snapshot).await;
-            ShareTxClaim::FirstUse
+    if let Some(error) = &guard.load_error {
+        return ShareTxClaim::LedgerUnavailable(error.clone());
+    }
+    let claim = claim_share_tx_in_map(&mut guard.map, tx_hash, share_id);
+    if matches!(&claim, ShareTxClaim::FirstUse) {
+        let key = tx_hash.to_lowercase();
+        let snapshot = guard.map.clone();
+        drop(guard);
+        if let Err(error) = persist_share_tx_map(&snapshot).await {
+            let mut guard = store.lock().await;
+            if guard.map.get(&key).map(String::as_str) == Some(share_id) {
+                guard.map.remove(&key);
+            }
+            guard.load_error = Some(error.clone());
+            return ShareTxClaim::LedgerUnavailable(error);
         }
     }
+    claim
 }
 
 async fn release_share_tx(tx_hash: &str) {
     let key = tx_hash.to_lowercase();
     let store = share_tx_store().await;
     let mut guard = store.lock().await;
-    guard.remove(&key);
-    let snapshot = guard.clone();
+    if guard.load_error.is_some() {
+        return;
+    }
+    guard.map.remove(&key);
+    let snapshot = guard.map.clone();
     drop(guard);
-    persist_share_tx_map(&snapshot).await;
+    if let Err(e) = persist_share_tx_map(&snapshot).await {
+        eprintln!("[Drive] Failed to persist share spent-tx ledger: {}", e);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1562,6 +1702,154 @@ fn url_encode(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ledger_path(root: &std::path::Path) -> PathBuf {
+        root.join("drive_share_spent_tx.json")
+    }
+
+    #[tokio::test]
+    async fn load_share_tx_map_missing_file_starts_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ledger_path(dir.path());
+
+        let loaded = load_share_tx_map_from_path(&path)
+            .await
+            .expect("missing ledger should start empty");
+
+        assert!(loaded.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn load_share_tx_map_reads_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ledger_path(dir.path());
+        let mut map = HashMap::new();
+        map.insert("0xtx".to_string(), "share-a".to_string());
+
+        persist_share_tx_map_to_path(&map, &path)
+            .await
+            .expect("valid ledger should persist");
+        let loaded = load_share_tx_map_from_path(&path)
+            .await
+            .expect("valid ledger should load");
+
+        assert_eq!(loaded.get("0xtx").map(String::as_str), Some("share-a"));
+    }
+
+    #[tokio::test]
+    async fn load_share_tx_map_quarantines_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ledger_path(dir.path());
+        let malformed = "{not valid json";
+        tokio::fs::write(&path, malformed).await.unwrap();
+
+        let err = load_share_tx_map_from_path(&path)
+            .await
+            .expect_err("malformed ledger should fail closed");
+
+        assert!(err.contains("malformed Drive share spent-tx ledger"));
+        assert!(!path.exists());
+        let quarantines: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("drive_share_spent_tx.json.malformed-")
+            })
+            .collect();
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(quarantines[0].path()).unwrap(),
+            malformed
+        );
+    }
+
+    #[tokio::test]
+    async fn load_share_tx_map_quarantines_invalid_utf8_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ledger_path(dir.path());
+        let corrupted = vec![0xff, 0xfe, 0xfd];
+        tokio::fs::write(&path, &corrupted).await.unwrap();
+
+        let err = load_share_tx_map_from_path(&path)
+            .await
+            .expect_err("invalid UTF-8 ledger should fail closed");
+
+        assert!(err.contains("malformed Drive share spent-tx ledger"));
+        assert!(!path.exists());
+        let quarantines: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("drive_share_spent_tx.json.malformed-")
+            })
+            .collect();
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(std::fs::read(quarantines[0].path()).unwrap(), corrupted);
+    }
+
+    #[tokio::test]
+    async fn persist_share_tx_map_refuses_to_overwrite_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ledger_path(dir.path());
+        let malformed = "{still not valid json";
+        tokio::fs::write(&path, malformed).await.unwrap();
+        let mut map = HashMap::new();
+        map.insert("0xtx".to_string(), "share-a".to_string());
+
+        let err = persist_share_tx_map_to_path(&map, &path)
+            .await
+            .expect_err("malformed ledger should not be overwritten");
+
+        assert!(err.contains("refusing to overwrite malformed"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
+    }
+
+    #[tokio::test]
+    async fn persist_share_tx_map_refuses_to_overwrite_invalid_utf8_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = ledger_path(dir.path());
+        let corrupted = vec![0xff, 0xfe, 0xfd];
+        tokio::fs::write(&path, &corrupted).await.unwrap();
+        let mut map = HashMap::new();
+        map.insert("0xtx".to_string(), "share-a".to_string());
+
+        let err = persist_share_tx_map_to_path(&map, &path)
+            .await
+            .expect_err("invalid UTF-8 ledger should not be overwritten");
+
+        assert!(err.contains("refusing to overwrite malformed"));
+        assert_eq!(std::fs::read(&path).unwrap(), corrupted);
+    }
+
+    #[test]
+    fn claim_share_tx_in_map_rejects_reused_transaction_for_different_share() {
+        let mut map = HashMap::new();
+
+        assert_eq!(
+            claim_share_tx_in_map(&mut map, "0xABC", "share-a"),
+            ShareTxClaim::FirstUse
+        );
+        assert_eq!(
+            claim_share_tx_in_map(&mut map, "0xabc", "share-a"),
+            ShareTxClaim::SameShare
+        );
+        assert_eq!(
+            claim_share_tx_in_map(&mut map, "0xabc", "share-b"),
+            ShareTxClaim::DifferentShare
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
