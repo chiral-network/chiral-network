@@ -144,6 +144,23 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn is_hex_prefixed(value: &str, bytes: usize) -> bool {
+    value.len() == 2 + bytes * 2
+        && value.starts_with("0x")
+        && value[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_headless_wallet_address(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err("address required".to_string());
+    }
+    if !is_hex_prefixed(value, 20) {
+        return Err("address must be a 0x-prefixed 20-byte hex string".to_string());
+    }
+    Ok(value.to_string())
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1175,10 +1192,10 @@ async fn wallet_history(
     State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let address = body["address"].as_str().unwrap_or("").to_string();
-    if address.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "address required");
-    }
+    let address = match validate_headless_wallet_address(body["address"].as_str()) {
+        Ok(address) => address,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     let endpoint = chiral_network::geth::effective_rpc_endpoint();
     let metadata = chiral_network::wallet::load_tx_metadata();
     match chiral_network::wallet::get_transaction_history(&endpoint, &address, &metadata).await {
@@ -1190,10 +1207,10 @@ async fn wallet_history(
 async fn wallet_faucet(
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let address = body["address"].as_str().unwrap_or("").to_string();
-    if address.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "address required");
-    }
+    let address = match validate_headless_wallet_address(body["address"].as_str()) {
+        Ok(address) => address,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     match chiral_network::wallet::request_faucet(&address).await {
         Ok(result) => Json(json!(result)).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
@@ -1822,6 +1839,53 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_wallet_address_validation_rejects_missing_value() {
+        let err =
+            validate_headless_wallet_address(None).expect_err("missing address should be rejected");
+
+        assert_eq!(err, "address required");
+    }
+
+    #[test]
+    fn headless_wallet_address_validation_rejects_malformed_value() {
+        let err = validate_headless_wallet_address(Some("0x1234"))
+            .expect_err("short address should be rejected");
+
+        assert!(err.contains("20-byte"));
+    }
+
+    #[test]
+    fn headless_wallet_address_validation_accepts_valid_value() {
+        let address = "0x1111111111111111111111111111111111111111";
+
+        assert_eq!(
+            validate_headless_wallet_address(Some(address)).unwrap(),
+            address
+        );
+    }
+
+    #[tokio::test]
+    async fn wallet_history_rejects_missing_address_before_rpc() {
+        let response = wallet_history(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({})),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wallet_faucet_rejects_malformed_address_before_request() {
+        let response = wallet_faucet(Json(json!({
+            "address": "0x1234",
+        })))
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     #[cfg(unix)]
     #[test]
