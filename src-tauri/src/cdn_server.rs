@@ -27,11 +27,12 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
@@ -214,35 +215,114 @@ impl CdnState {
 }
 
 async fn load_registry(path: &PathBuf) -> Vec<CdnEntry> {
-    match tokio::fs::read_to_string(path).await {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    load_registry_file(path, "CDN file registry").await
 }
 
 async fn save_registry(path: &PathBuf, entries: &[CdnEntry]) {
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(path, json).await;
-    }
+    save_registry_file(path, entries, "CDN file registry").await;
 }
 
 async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
-    match tokio::fs::read_to_string(path).await {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    load_registry_file(path, "CDN sites registry").await
 }
 
 async fn save_sites_registry(path: &PathBuf, entries: &[CdnSiteEntry]) {
+    save_registry_file(path, entries, "CDN sites registry").await;
+}
+
+async fn load_registry_file<T>(path: &Path, label: &str) -> Vec<T>
+where
+    T: DeserializeOwned,
+{
+    let data = match tokio::fs::read_to_string(path).await {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            eprintln!(
+                "[CDN] Failed to read {label} {}: {}; starting with an empty registry",
+                path.display(),
+                e
+            );
+            return Vec::new();
+        }
+    };
+
+    match serde_json::from_str(&data) {
+        Ok(entries) => entries,
+        Err(e) => {
+            match quarantine_malformed_registry(path).await {
+                Ok(quarantine) => eprintln!(
+                    "[CDN] Malformed {label} {} quarantined at {}: {}",
+                    path.display(),
+                    quarantine.display(),
+                    e
+                ),
+                Err(quarantine_err) => eprintln!(
+                    "[CDN] Malformed {label} {} could not be quarantined: {}; starting with an empty registry",
+                    path.display(),
+                    quarantine_err
+                ),
+            }
+            Vec::new()
+        }
+    }
+}
+
+async fn save_registry_file<T>(path: &Path, entries: &[T], label: &str)
+where
+    T: Serialize + DeserializeOwned,
+{
+    if let Ok(data) = tokio::fs::read_to_string(path).await {
+        if serde_json::from_str::<Vec<T>>(&data).is_err() {
+            eprintln!(
+                "[CDN] Refusing to overwrite malformed {label} at {}; fix or remove it manually",
+                path.display()
+            );
+            return;
+        }
+    }
     if let Some(parent) = path.parent() {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     if let Ok(json) = serde_json::to_string_pretty(entries) {
         let _ = tokio::fs::write(path, json).await;
     }
+}
+
+async fn quarantine_malformed_registry(path: &Path) -> Result<PathBuf, String> {
+    let quarantine = malformed_registry_quarantine_path(path);
+    tokio::fs::rename(path, &quarantine).await.map_err(|e| {
+        format!(
+            "rename {} to {}: {}",
+            path.display(),
+            quarantine.display(),
+            e
+        )
+    })?;
+    Ok(quarantine)
+}
+
+fn malformed_registry_quarantine_path(path: &Path) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("cdn_registry.json");
+    for attempt in 0..1000 {
+        let suffix = if attempt == 0 {
+            format!("malformed-{timestamp}")
+        } else {
+            format!("malformed-{timestamp}-{attempt}")
+        };
+        let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow"))
 }
 
 /// Price per MB per month, in wei. Operator sets `CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH`
@@ -1514,6 +1594,165 @@ fn download_price_from_update_body(body: &serde_json::Value) -> Result<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
+
+    fn test_cdn_entry(file_hash: &str) -> CdnEntry {
+        CdnEntry {
+            file_hash: file_hash.to_string(),
+            file_name: "test.bin".to_string(),
+            file_size: 42,
+            owner_wallet: "0xowner".to_string(),
+            price_chi_per_month: "0.001".to_string(),
+            download_price_chi: "0".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1,
+            expires_at: 2,
+        }
+    }
+
+    fn test_cdn_site_entry(site_id: &str) -> CdnSiteEntry {
+        CdnSiteEntry {
+            site_id: site_id.to_string(),
+            name: "Test site".to_string(),
+            owner_wallet: "0xowner".to_string(),
+            total_size_bytes: 123,
+            file_count: 2,
+            price_chi_per_month: "0.001".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1,
+            expires_at: 2,
+        }
+    }
+
+    fn malformed_files_with_prefix(dir: &Path, prefix: &str) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(prefix) {
+                    Some(entry.path())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn load_registry_missing_file_starts_empty() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_registry.json");
+
+        let loaded = load_registry(&path).await;
+
+        assert!(loaded.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn load_registry_reads_valid_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_registry.json");
+        let entries = vec![test_cdn_entry("hash-1")];
+        save_registry(&path, &entries).await;
+
+        let loaded = load_registry(&path).await;
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].file_hash, "hash-1");
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn load_registry_quarantines_malformed_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_registry.json");
+        let malformed = "{not valid json";
+        tokio::fs::write(&path, malformed).await.unwrap();
+
+        let loaded = load_registry(&path).await;
+
+        assert!(loaded.is_empty());
+        assert!(!path.exists());
+        let quarantines = malformed_files_with_prefix(dir.path(), "cdn_registry.json.malformed-");
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            tokio::fs::read_to_string(&quarantines[0]).await.unwrap(),
+            malformed
+        );
+    }
+
+    #[tokio::test]
+    async fn save_registry_refuses_to_overwrite_malformed_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_registry.json");
+        let malformed = "{still not valid json";
+        tokio::fs::write(&path, malformed).await.unwrap();
+
+        save_registry(&path, &[test_cdn_entry("replacement")]).await;
+
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), malformed);
+    }
+
+    #[tokio::test]
+    async fn load_sites_registry_missing_file_starts_empty() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_sites_registry.json");
+
+        let loaded = load_sites_registry(&path).await;
+
+        assert!(loaded.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn load_sites_registry_reads_valid_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_sites_registry.json");
+        let entries = vec![test_cdn_site_entry("site-1")];
+        save_sites_registry(&path, &entries).await;
+
+        let loaded = load_sites_registry(&path).await;
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].site_id, "site-1");
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn load_sites_registry_quarantines_malformed_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_sites_registry.json");
+        let malformed = "{not valid json";
+        tokio::fs::write(&path, malformed).await.unwrap();
+
+        let loaded = load_sites_registry(&path).await;
+
+        assert!(loaded.is_empty());
+        assert!(!path.exists());
+        let quarantines =
+            malformed_files_with_prefix(dir.path(), "cdn_sites_registry.json.malformed-");
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            tokio::fs::read_to_string(&quarantines[0]).await.unwrap(),
+            malformed
+        );
+    }
+
+    #[tokio::test]
+    async fn save_sites_registry_refuses_to_overwrite_malformed_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cdn_sites_registry.json");
+        let malformed = "{still not valid json";
+        tokio::fs::write(&path, malformed).await.unwrap();
+
+        save_sites_registry(&path, &[test_cdn_site_entry("replacement")]).await;
+
+        assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), malformed);
+    }
 
     #[test]
     fn pricing_arithmetic_one_mb_one_month() {
