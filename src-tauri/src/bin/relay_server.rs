@@ -149,15 +149,25 @@ fn parse_relay_server_args(args: &[String]) -> Result<RelayServerArgs, String> {
     Ok(parsed)
 }
 
-fn keypair_from_secret(secret: &str) -> libp2p::identity::Keypair {
+fn relay_secret_key_from_bytes(
+    bytes: Vec<u8>,
+) -> Result<libp2p::identity::ed25519::SecretKey, String> {
+    libp2p::identity::ed25519::SecretKey::try_from_bytes(bytes).map_err(|err| {
+        format!(
+            "Relay secret did not derive a valid 32-byte Ed25519 key: {:?}",
+            err
+        )
+    })
+}
+
+fn keypair_from_secret(secret: &str) -> Result<libp2p::identity::Keypair, String> {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
     let hash = hasher.finalize();
     // ed25519 needs exactly 32 bytes for the secret key
-    let secret_key = libp2p::identity::ed25519::SecretKey::try_from_bytes(hash.to_vec())
-        .expect("SHA-256 produces valid 32-byte ed25519 secret key");
+    let secret_key = relay_secret_key_from_bytes(hash.to_vec())?;
     let ed25519_keypair = libp2p::identity::ed25519::Keypair::from(secret_key);
-    libp2p::identity::Keypair::from(ed25519_keypair)
+    Ok(libp2p::identity::Keypair::from(ed25519_keypair))
 }
 
 #[tokio::main]
@@ -179,7 +189,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } = parsed_args;
 
     // Generate deterministic keypair from secret
-    let local_key = keypair_from_secret(&secret);
+    let local_key = match keypair_from_secret(&secret) {
+        Ok(keypair) => keypair,
+        Err(err) => {
+            eprintln!("ERROR: {}", err);
+            std::process::exit(1);
+        }
+    };
     let local_peer_id = PeerId::from(local_key.public());
 
     println!("=== Chiral Network v2 Relay Server ===");
@@ -457,5 +473,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keypair_from_secret_is_deterministic() {
+        let first = keypair_from_secret("stable relay secret")
+            .expect("secret hash should produce a keypair")
+            .public()
+            .to_peer_id();
+        let second = keypair_from_secret("stable relay secret")
+            .expect("secret hash should produce a keypair")
+            .public()
+            .to_peer_id();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn relay_secret_key_reports_invalid_key_material() {
+        let err = match relay_secret_key_from_bytes(vec![0; 31]) {
+            Ok(_) => panic!("short key material should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("Relay secret"));
+        assert!(err.contains("32-byte Ed25519 key"));
     }
 }
