@@ -144,6 +144,108 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+const MAX_HEADLESS_HOST_STORAGE_BYTES: u64 = 1024_u64 * 1024 * 1024 * 1024 * 1024;
+
+fn validate_headless_host_wallet_address(value: Option<&str>) -> Result<String, String> {
+    let address = value.unwrap_or_default().trim();
+    if address.is_empty() {
+        return Err("walletAddress required".to_string());
+    }
+
+    let Some(hex) = address.strip_prefix("0x") else {
+        return Err("walletAddress must be a 0x-prefixed 20-byte hex address".to_string());
+    };
+    if hex.len() != 40 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("walletAddress must be a 0x-prefixed 20-byte hex address".to_string());
+    }
+
+    Ok(address.to_string())
+}
+
+fn headless_host_ad_u64_field(ad: &serde_json::Value, field: &str) -> Result<u64, String> {
+    let Some(value) = ad.get(field) else {
+        return Err(format!("{field} required"));
+    };
+
+    if let Some(number) = value.as_u64() {
+        return Ok(number);
+    }
+
+    if let Some(raw) = value.as_str() {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(format!("{field} required"));
+        }
+        return raw
+            .parse::<u64>()
+            .map_err(|_| format!("{field} must be an unsigned integer"));
+    }
+
+    Err(format!("{field} must be an unsigned integer"))
+}
+
+fn headless_host_ad_wei_field(ad: &serde_json::Value, field: &str) -> Result<String, String> {
+    let Some(value) = ad.get(field) else {
+        return Err(format!("{field} required"));
+    };
+
+    let raw = match value {
+        serde_json::Value::String(value) => value.trim().to_string(),
+        serde_json::Value::Number(number) => number.to_string(),
+        _ => return Err(format!("{field} must be a decimal wei string")),
+    };
+
+    if raw.is_empty() {
+        return Err(format!("{field} required"));
+    }
+    if !raw.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("{field} must be a decimal wei string"));
+    }
+
+    raw.parse::<u128>()
+        .map(|value| value.to_string())
+        .map_err(|_| format!("{field} is too large"))
+}
+
+fn validate_headless_host_ad_payload(
+    body: &serde_json::Value,
+) -> Result<(serde_json::Value, String), String> {
+    if !body.is_object() {
+        return Err("host advertisement payload must be an object".to_string());
+    }
+
+    let mut ad = body.clone();
+    let wallet_address =
+        validate_headless_host_wallet_address(ad.get("walletAddress").and_then(|v| v.as_str()))?;
+    let max_storage_bytes = headless_host_ad_u64_field(&ad, "maxStorageBytes")?;
+    if max_storage_bytes == 0 {
+        return Err("maxStorageBytes must be greater than zero".to_string());
+    }
+    if max_storage_bytes > MAX_HEADLESS_HOST_STORAGE_BYTES {
+        return Err(format!(
+            "maxStorageBytes must be at most {} bytes",
+            MAX_HEADLESS_HOST_STORAGE_BYTES
+        ));
+    }
+
+    let used_storage_bytes = headless_host_ad_u64_field(&ad, "usedStorageBytes")?;
+    if used_storage_bytes > max_storage_bytes {
+        return Err("usedStorageBytes must be less than or equal to maxStorageBytes".to_string());
+    }
+
+    let price_per_mb_per_day_wei = headless_host_ad_wei_field(&ad, "pricePerMbPerDayWei")?;
+    let min_deposit_wei = headless_host_ad_wei_field(&ad, "minDepositWei")?;
+
+    ad["walletAddress"] = serde_json::Value::String(wallet_address.clone());
+    ad["maxStorageBytes"] = serde_json::Value::Number(serde_json::Number::from(max_storage_bytes));
+    ad["usedStorageBytes"] =
+        serde_json::Value::Number(serde_json::Number::from(used_storage_bytes));
+    ad["pricePerMbPerDayWei"] = serde_json::Value::String(price_per_mb_per_day_wei);
+    ad["minDepositWei"] = serde_json::Value::String(min_deposit_wei);
+
+    Ok((ad, wallet_address))
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1362,6 +1464,11 @@ async fn hosting_publish_ad(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
+    let (mut ad, wallet_address) = match validate_headless_host_ad_payload(&body) {
+        Ok(payload) => payload,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let dht = match state.dht_service().await {
         Some(d) => d,
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
@@ -1370,10 +1477,8 @@ async fn hosting_publish_ad(
     if peer_id.is_empty() {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Peer ID not available");
     }
-    let mut ad = body.clone();
     ad["peerId"] = serde_json::Value::String(peer_id.clone());
     let ad_json = serde_json::to_string(&ad).unwrap_or_default();
-    let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
 
     // Store individual ad
     let host_key = format!("chiral_host_{}", peer_id);
@@ -1843,5 +1948,128 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    async fn response_json(response: Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let value = serde_json::from_slice(&body).expect("response body should be JSON");
+
+        (status, value)
+    }
+
+    fn valid_host_ad_payload() -> serde_json::Value {
+        json!({
+            "walletAddress": "0x0000000000000000000000000000000000000001",
+            "maxStorageBytes": 10_737_418_240_u64,
+            "usedStorageBytes": 0_u64,
+            "pricePerMbPerDayWei": "1000000000000000",
+            "minDepositWei": "10000000000000000",
+            "uptimePercent": 100,
+            "publishedAt": 1_700_000_000_u64,
+            "lastHeartbeatAt": 1_700_000_000_u64,
+        })
+    }
+
+    #[test]
+    fn headless_host_ad_payload_rejects_missing_or_malformed_wallet() {
+        let mut payload = valid_host_ad_payload();
+        payload.as_object_mut().unwrap().remove("walletAddress");
+        let err =
+            validate_headless_host_ad_payload(&payload).expect_err("missing wallet should fail");
+        assert_eq!(err, "walletAddress required");
+
+        let mut payload = valid_host_ad_payload();
+        payload["walletAddress"] = serde_json::Value::String("0x1234".to_string());
+        let err =
+            validate_headless_host_ad_payload(&payload).expect_err("malformed wallet should fail");
+        assert_eq!(
+            err,
+            "walletAddress must be a 0x-prefixed 20-byte hex address"
+        );
+    }
+
+    #[test]
+    fn headless_host_ad_payload_rejects_invalid_storage() {
+        let mut payload = valid_host_ad_payload();
+        payload["maxStorageBytes"] = json!(0);
+        let err =
+            validate_headless_host_ad_payload(&payload).expect_err("zero max storage should fail");
+        assert_eq!(err, "maxStorageBytes must be greater than zero");
+
+        let mut payload = valid_host_ad_payload();
+        payload["usedStorageBytes"] = json!(20_000_000_000_u64);
+        let err = validate_headless_host_ad_payload(&payload)
+            .expect_err("used storage above max should fail");
+        assert_eq!(
+            err,
+            "usedStorageBytes must be less than or equal to maxStorageBytes"
+        );
+    }
+
+    #[test]
+    fn headless_host_ad_payload_rejects_malformed_price_and_deposit() {
+        let mut payload = valid_host_ad_payload();
+        payload["pricePerMbPerDayWei"] = serde_json::Value::String("1.5".to_string());
+        let err =
+            validate_headless_host_ad_payload(&payload).expect_err("malformed price should fail");
+        assert_eq!(err, "pricePerMbPerDayWei must be a decimal wei string");
+
+        let mut payload = valid_host_ad_payload();
+        payload["minDepositWei"] = serde_json::Value::String("-1".to_string());
+        let err =
+            validate_headless_host_ad_payload(&payload).expect_err("malformed deposit should fail");
+        assert_eq!(err, "minDepositWei must be a decimal wei string");
+    }
+
+    #[test]
+    fn headless_host_ad_payload_accepts_and_normalizes_valid_payload() {
+        let mut payload = valid_host_ad_payload();
+        payload["walletAddress"] =
+            serde_json::Value::String(" 0x0000000000000000000000000000000000000001 ".to_string());
+        payload["pricePerMbPerDayWei"] =
+            serde_json::Value::String("0001000000000000000".to_string());
+
+        let (ad, wallet_address) =
+            validate_headless_host_ad_payload(&payload).expect("valid payload should pass");
+
+        assert_eq!(wallet_address, "0x0000000000000000000000000000000000000001");
+        assert_eq!(
+            ad["walletAddress"],
+            "0x0000000000000000000000000000000000000001"
+        );
+        assert_eq!(ad["maxStorageBytes"].as_u64(), Some(10_737_418_240));
+        assert_eq!(ad["usedStorageBytes"].as_u64(), Some(0));
+        assert_eq!(ad["pricePerMbPerDayWei"].as_str(), Some("1000000000000000"));
+        assert_eq!(ad["minDepositWei"].as_str(), Some("10000000000000000"));
+    }
+
+    #[tokio::test]
+    async fn hosting_publish_ad_rejects_bad_payload_before_dht_lookup() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let mut payload = valid_host_ad_payload();
+        payload["walletAddress"] = serde_json::Value::String("not-a-wallet".to_string());
+
+        let (status, value) =
+            response_json(hosting_publish_ad(State(state), Json(payload)).await).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            value["error"],
+            "walletAddress must be a 0x-prefixed 20-byte hex address"
+        );
+    }
+
+    #[tokio::test]
+    async fn hosting_publish_ad_accepts_valid_payload_before_requiring_dht() {
+        let state = Arc::new(HeadlessRuntimeState::new());
+        let (status, value) =
+            response_json(hosting_publish_ad(State(state), Json(valid_host_ad_payload())).await)
+                .await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(value["error"], "DHT not running");
     }
 }
