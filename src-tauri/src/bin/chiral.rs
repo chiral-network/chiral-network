@@ -1805,6 +1805,143 @@ fn load_agreement(agreement_id: &str) -> Result<Option<String>, String> {
     Ok(Some(data))
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct AgreementCleanupReport {
+    removed: usize,
+    warnings: Vec<String>,
+}
+
+fn cleanup_agreements_in_dir(dir: &Path) -> Result<AgreementCleanupReport, String> {
+    let mut report = AgreementCleanupReport::default();
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("Failed to read agreements dir {}: {}", dir.display(), e))?;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                report.warnings.push(format!(
+                    "Failed to read agreement entry in {}: {}",
+                    dir.display(),
+                    e
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) => {
+                report.warnings.push(format!(
+                    "Failed to read agreement {}: {}",
+                    path.display(),
+                    e
+                ));
+                continue;
+            }
+        };
+        let json = match serde_json::from_str::<Value>(&raw) {
+            Ok(json) => json,
+            Err(e) => {
+                report
+                    .warnings
+                    .push(format!("Malformed agreement {}: {}", path.display(), e));
+                continue;
+            }
+        };
+        let status = json
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if matches!(status, "cancelled" | "completed" | "rejected") {
+            match std::fs::remove_file(&path) {
+                Ok(()) => report.removed += 1,
+                Err(e) => report.warnings.push(format!(
+                    "Failed to remove agreement {}: {}",
+                    path.display(),
+                    e
+                )),
+            }
+        }
+    }
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn write_agreement(dir: &Path, id: &str, status: &str) -> PathBuf {
+        let path = dir.join(format!("{id}.json"));
+        let raw = serde_json::json!({
+            "agreementId": id,
+            "status": status,
+        })
+        .to_string();
+        std::fs::write(&path, raw).unwrap();
+        path
+    }
+
+    #[test]
+    fn cleanup_removes_valid_terminal_agreements() {
+        let dir = tempdir().unwrap();
+        let cancelled = write_agreement(dir.path(), "cancelled", "cancelled");
+        let completed = write_agreement(dir.path(), "completed", "completed");
+        let rejected = write_agreement(dir.path(), "rejected", "rejected");
+
+        let report = cleanup_agreements_in_dir(dir.path()).unwrap();
+
+        assert_eq!(report.removed, 3);
+        assert!(report.warnings.is_empty());
+        assert!(!cancelled.exists());
+        assert!(!completed.exists());
+        assert!(!rejected.exists());
+    }
+
+    #[test]
+    fn cleanup_preserves_valid_active_agreement() {
+        let dir = tempdir().unwrap();
+        let active = write_agreement(dir.path(), "active", "active");
+
+        let report = cleanup_agreements_in_dir(dir.path()).unwrap();
+
+        assert_eq!(report.removed, 0);
+        assert!(report.warnings.is_empty());
+        assert!(active.exists());
+    }
+
+    #[test]
+    fn cleanup_warns_and_preserves_malformed_agreement() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("malformed.json");
+        std::fs::write(&path, "{not valid json").unwrap();
+
+        let report = cleanup_agreements_in_dir(dir.path()).unwrap();
+
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("Malformed agreement"));
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn cleanup_warns_and_preserves_unreadable_agreement_path() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("unreadable.json");
+        std::fs::create_dir(&path).unwrap();
+
+        let report = cleanup_agreements_in_dir(dir.path()).unwrap();
+
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings[0].contains("Failed to read agreement"));
+        assert!(path.exists());
+    }
+}
+
 fn compute_file_hash(path: &Path) -> Result<String, String> {
     let mut file = std::fs::File::open(path)
         .map_err(|e| format!("Failed to open {}: {}", path.display(), e))?;
@@ -3547,27 +3684,11 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
         }
         MarketCommand::Cleanup => {
             let dir = ensure_agreements_dir()?;
-            let mut removed = 0usize;
-            let entries = std::fs::read_dir(&dir)
-                .map_err(|e| format!("Failed to read agreements dir {}: {}", dir.display(), e))?;
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                let raw = std::fs::read_to_string(&path).unwrap_or_default();
-                if let Ok(json) = serde_json::from_str::<Value>(&raw) {
-                    let status = json
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    if matches!(status, "cancelled" | "completed" | "rejected") {
-                        let _ = std::fs::remove_file(&path);
-                        removed += 1;
-                    }
-                }
+            let report = cleanup_agreements_in_dir(&dir)?;
+            for warning in &report.warnings {
+                eprintln!("WARNING: {}", warning);
             }
-            println!("removed={}", removed);
+            println!("removed={}", report.removed);
             Ok(())
         }
     }
