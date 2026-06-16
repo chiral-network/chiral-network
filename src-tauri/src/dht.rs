@@ -4104,14 +4104,31 @@ async fn handle_behaviour_event(
                 .agent_version
                 .trim_start_matches("chiral/")
                 .trim_start_matches('v');
-            if crate::version::version_is_below(agent_v, &policy.min_required) {
-                println!(
-                    "🚫 Disconnecting peer {} (agent_version='{}' < min_required={})",
-                    peer_id, info.agent_version, policy.min_required
-                );
-                let _ = swarm.disconnect_peer_id(peer_id);
-                failed_peers.insert(peer_id);
-                return;
+            match crate::version::version_is_below_named(
+                agent_v,
+                "peer agent_version",
+                &policy.min_required,
+                "policy min_required",
+            ) {
+                Ok(true) => {
+                    println!(
+                        "🚫 Disconnecting peer {} (agent_version='{}' < min_required={})",
+                        peer_id, info.agent_version, policy.min_required
+                    );
+                    let _ = swarm.disconnect_peer_id(peer_id);
+                    failed_peers.insert(peer_id);
+                    return;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    println!(
+                        "🚫 Disconnecting peer {} due to malformed version policy comparison: {}",
+                        peer_id, e
+                    );
+                    let _ = swarm.disconnect_peer_id(peer_id);
+                    failed_peers.insert(peer_id);
+                    return;
+                }
             }
 
             // Skip peers that previously failed to connect

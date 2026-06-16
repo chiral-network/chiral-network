@@ -403,13 +403,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 .agent_version
                                 .trim_start_matches("chiral/")
                                 .trim_start_matches('v');
-                            if chiral_network::version::version_is_below(agent_v, &policy.min_required) {
-                                println!(
-                                    "🚫 [IDENTIFY] Disconnecting {} — agent_version='{}' < min_required={}",
-                                    peer_id, info.agent_version, policy.min_required
-                                );
-                                let _ = swarm.disconnect_peer_id(peer_id);
-                                continue;
+                            match chiral_network::version::version_is_below_named(
+                                agent_v,
+                                "peer agent_version",
+                                &policy.min_required,
+                                "policy min_required",
+                            ) {
+                                Ok(true) => {
+                                    println!(
+                                        "🚫 [IDENTIFY] Disconnecting {} — agent_version='{}' < min_required={}",
+                                        peer_id, info.agent_version, policy.min_required
+                                    );
+                                    let _ = swarm.disconnect_peer_id(peer_id);
+                                    continue;
+                                }
+                                Ok(false) => {}
+                                Err(e) => {
+                                    println!(
+                                        "🚫 [IDENTIFY] Disconnecting {} due to malformed version policy comparison: {}",
+                                        peer_id, e
+                                    );
+                                    let _ = swarm.disconnect_peer_id(peer_id);
+                                    continue;
+                                }
                             }
                         }
 

@@ -125,19 +125,34 @@ async fn version_gate_middleware(
     // so an updated min_required actually enforces. Earlier code read
     // bundled_policy() and silently bypassed any policy promotion.
     let policy = crate::version::effective_policy();
-    if crate::version::version_is_below(client_version, &policy.min_required) {
-        let body = serde_json::json!({
-            "error": "client version below network minimum",
-            "clientVersion": client_version,
-            "minRequired": policy.min_required,
-            "downloadUrl": policy.download_url,
-            "message": policy.message,
-        });
-        return (
-            axum::http::StatusCode::UPGRADE_REQUIRED,
-            axum::Json(body),
-        )
-            .into_response();
+    match crate::version::version_is_below_named(
+        client_version,
+        "client version",
+        &policy.min_required,
+        "policy min_required",
+    ) {
+        Ok(true) => {
+            let body = serde_json::json!({
+                "error": "client version below network minimum",
+                "clientVersion": client_version,
+                "minRequired": policy.min_required,
+                "downloadUrl": policy.download_url,
+                "message": policy.message,
+            });
+            return (axum::http::StatusCode::UPGRADE_REQUIRED, axum::Json(body)).into_response();
+        }
+        Ok(false) => {}
+        Err(e) => {
+            let body = serde_json::json!({
+                "error": "version policy comparison failed",
+                "detail": e,
+                "clientVersion": client_version,
+                "minRequired": policy.min_required,
+                "downloadUrl": policy.download_url,
+                "message": policy.message,
+            });
+            return (axum::http::StatusCode::UPGRADE_REQUIRED, axum::Json(body)).into_response();
+        }
     }
 
     next.run(req).await
