@@ -144,6 +144,16 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn require_headless_peer_id(peer_id: Option<String>) -> Result<String, String> {
+    let peer_id = peer_id.unwrap_or_default().trim().to_string();
+    if peer_id.is_empty() {
+        return Err(
+            "DHT peer ID unavailable; refusing to publish signed shared-file metadata".to_string(),
+        );
+    }
+    Ok(peer_id)
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -651,6 +661,15 @@ async fn dht_register_shared_file(
     };
 
     let price_wei = req.price_wei.parse::<u128>().unwrap_or(0);
+    let should_publish_to_dht = !req.private_key.is_empty() && !req.wallet_address.is_empty();
+    let peer_id = if should_publish_to_dht {
+        match require_headless_peer_id(svc.get_peer_id().await) {
+            Ok(peer_id) => peer_id,
+            Err(err) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
+    } else {
+        String::new()
+    };
 
     // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
@@ -667,21 +686,11 @@ async fn dht_register_shared_file(
     // Then publish to the DHT so other peers can discover us. Without this
     // step the file is only locally seeded and `file/search` from any
     // remote node returns "not found".
-    if req.private_key.is_empty() || req.wallet_address.is_empty() {
+    if !should_publish_to_dht {
         return Json(json!({
             "status": "ok",
             "dhtPublished": false,
             "warning": "No wallet/private key provided — file registered locally only; remote peers cannot discover it",
-        }))
-        .into_response();
-    }
-
-    let peer_id = svc.get_peer_id().await.unwrap_or_default();
-    if peer_id.is_empty() {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": "DHT peer ID unavailable",
         }))
         .into_response();
     }
@@ -1843,5 +1852,24 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    #[test]
+    fn headless_shared_file_peer_id_rejects_missing_values() {
+        for peer_id in [None, Some(String::new()), Some("   ".to_string())] {
+            let err = require_headless_peer_id(peer_id)
+                .expect_err("missing peer ID should fail signed shared-file publication");
+
+            assert!(err.contains("DHT peer ID unavailable"));
+            assert!(err.contains("shared-file metadata"));
+        }
+    }
+
+    #[test]
+    fn headless_shared_file_peer_id_accepts_present_value() {
+        assert_eq!(
+            require_headless_peer_id(Some("  peer-123  ".to_string())).unwrap(),
+            "peer-123"
+        );
     }
 }
