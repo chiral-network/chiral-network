@@ -2699,6 +2699,7 @@ async fn event_loop(
                             &mut outbound_request_map,
                             &mut pending_file_attempts,
                             &mut pending_file_hashes,
+                            &seeder_authorized_chunks,
                             &download_credentials,
                             &mut failed_peers,
                             &mut auto_peer_dial_attempts,
@@ -3349,6 +3350,7 @@ async fn handle_behaviour_event(
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
     pending_file_attempts: &mut HashMap<String, usize>,
     pending_file_hashes: &mut HashMap<String, String>,
+    seeder_authorized_chunks: &SeederAuthorizedChunksMap,
     download_credentials: &DownloadCredentialsMap,
     failed_peers: &mut HashSet<PeerId>,
     auto_peer_dial_attempts: &mut HashMap<PeerId, Instant>,
@@ -4168,7 +4170,7 @@ async fn handle_behaviour_event(
                                             let shared_clone = shared_files.clone();
                                             let cmd_tx_clone = cmd_tx.clone();
                                             let authorized_chunks =
-                                                seeder_authorized_chunks.clone();
+                                                Arc::clone(seeder_authorized_chunks);
                                             let peer_id_for_auth = peer;
                                             let request_id = request_id.clone();
                                             let file_hash_owned = file_hash.clone();
@@ -4294,7 +4296,7 @@ async fn handle_behaviour_event(
                                                 } else {
                                                     if access.price_wei == 0 {
                                                         remember_authorized_chunk_access(
-                                                            &seeder_authorized_chunks,
+                                                            seeder_authorized_chunks,
                                                             request_id.clone(),
                                                             peer,
                                                             payment_scope_for_access(
@@ -4556,7 +4558,7 @@ async fn handle_behaviour_event(
                                     // no risk of stalling the reactor.
                                     if price_wei == 0 {
                                         remember_authorized_chunk_access(
-                                            &seeder_authorized_chunks,
+                                            seeder_authorized_chunks,
                                             request_id.clone(),
                                             peer,
                                             payment_scope.clone(),
@@ -4593,7 +4595,7 @@ async fn handle_behaviour_event(
                                     let file_hash_owned = file_hash.clone();
                                     let payment_tx_owned = payment_tx.clone();
                                     let payer_address_owned = payer_address.clone();
-                                    let authorized_chunks = seeder_authorized_chunks.clone();
+                                    let authorized_chunks = Arc::clone(seeder_authorized_chunks);
                                     let peer_id_for_auth = peer;
                                     tokio::spawn(async move {
                                         let response = verify_payment_proof(
