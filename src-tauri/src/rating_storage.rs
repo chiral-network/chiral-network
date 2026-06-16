@@ -244,11 +244,14 @@ fn save_manifest_to_path(manifest: &RatingManifest, path: &Path) {
     }
 }
 
-pub fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+pub fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
+}
+
+pub fn now_secs_at(time: std::time::SystemTime) -> Result<u64, String> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| format!("system clock is before UNIX_EPOCH: {}", e))
 }
 
 pub fn generate_event_id(
@@ -490,6 +493,23 @@ mod tests {
         save_manifest_to_path(&manifest, &path);
 
         assert_eq!(std::fs::read(&path).unwrap(), corrupted);
+    }
+
+    #[test]
+    fn now_secs_at_accepts_post_epoch_clock() {
+        let now =
+            now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+                .expect("post-epoch clock should be valid");
+
+        assert_eq!(now, 1_700_000_000);
+    }
+
+    #[test]
+    fn now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch clock should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
 
     #[test]

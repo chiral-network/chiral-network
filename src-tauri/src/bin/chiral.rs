@@ -2684,7 +2684,7 @@ async fn handle_network(cmd: NetworkCommand) -> Result<(), String> {
 async fn handle_reputation(cmd: ReputationCommand) -> Result<(), String> {
     let state = RatingState::new(default_data_dir());
     let manifest = state.manifest.read().await;
-    let now = rating_storage::now_secs();
+    let now = rating_storage::now_secs()?;
 
     match cmd {
         ReputationCommand::Show { wallet } => {

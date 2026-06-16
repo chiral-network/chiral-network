@@ -7314,7 +7314,7 @@ fn compute_reputation_verdict_proof(
         issuer_wallet,
         verifying_key,
         owner_signature,
-        updated_at: rating_storage::now_secs(),
+        updated_at: rating_storage::now_secs()?,
         verdict_signature: hex::encode(verdict_signature.to_bytes()),
     })
 }
