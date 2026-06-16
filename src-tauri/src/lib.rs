@@ -955,6 +955,46 @@ fn host_advertisement_payload(
     Ok((ad_json, wallet_address))
 }
 
+fn host_registry_from_dht_value(
+    registry_json: Option<String>,
+) -> Result<Vec<HostRegistryEntry>, String> {
+    match registry_json {
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|e| format!("Malformed chiral_host_registry JSON: {}", e)),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn host_registry_from_dht_lookup(
+    lookup: Result<Option<String>, String>,
+) -> Result<Vec<HostRegistryEntry>, String> {
+    let registry_json = lookup.map_err(|e| format!("Failed to read chiral_host_registry: {}", e))?;
+    host_registry_from_dht_value(registry_json)
+}
+
+fn host_registry_after_publish(
+    mut registry: Vec<HostRegistryEntry>,
+    peer_id: String,
+    wallet_address: String,
+    updated_at: u64,
+) -> Vec<HostRegistryEntry> {
+    registry.retain(|e| e.peer_id != peer_id);
+    registry.push(HostRegistryEntry {
+        peer_id,
+        wallet_address,
+        updated_at,
+    });
+    registry
+}
+
+fn host_registry_after_unpublish(
+    mut registry: Vec<HostRegistryEntry>,
+    peer_id: &str,
+) -> Vec<HostRegistryEntry> {
+    registry.retain(|e| e.peer_id != peer_id);
+    registry
+}
+
 #[tauri::command]
 async fn publish_host_advertisement(
     state: tauri::State<'_, AppState>,
@@ -967,32 +1007,26 @@ async fn publish_host_advertisement(
 
         let (ad_json, wallet_address) = host_advertisement_payload(&advertisement_json, &peer_id)?;
 
-        // Store individual advertisement
-        let host_key = format!("chiral_host_{}", peer_id);
-        dht.put_dht_value(host_key, ad_json).await?;
-
-        // Update registry (read-modify-write)
+        // Update registry (read-modify-write). Refuse to publish when
+        // the shared registry is malformed so we do not replace it with
+        // a truncated single-entry registry.
         let registry_key = "chiral_host_registry".to_string();
-        let mut registry: Vec<HostRegistryEntry> =
-            match dht.get_dht_value(registry_key.clone()).await {
-                Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-                _ => Vec::new(),
-            };
+        let registry =
+            host_registry_from_dht_lookup(dht.get_dht_value(registry_key.clone()).await)?;
 
         // Remove existing entry for this peer, add fresh one
-        registry.retain(|e| e.peer_id != peer_id);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        registry.push(HostRegistryEntry {
-            peer_id,
-            wallet_address,
-            updated_at: now,
-        });
+        let registry = host_registry_after_publish(registry, peer_id.clone(), wallet_address, now);
 
         let registry_json = serde_json::to_string(&registry)
             .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+        // Store individual advertisement only after the existing shared
+        // registry has been proven trustworthy.
+        let host_key = format!("chiral_host_{}", peer_id);
+        dht.put_dht_value(host_key, ad_json).await?;
         dht.put_dht_value(registry_key, registry_json).await
     } else {
         Err("DHT not running".to_string())
@@ -1008,13 +1042,9 @@ async fn unpublish_host_advertisement(state: tauri::State<'_, AppState>) -> Resu
 
         // Remove from registry
         let registry_key = "chiral_host_registry".to_string();
-        let mut registry: Vec<HostRegistryEntry> =
-            match dht.get_dht_value(registry_key.clone()).await {
-                Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-                _ => Vec::new(),
-            };
-
-        registry.retain(|e| e.peer_id != peer_id);
+        let registry =
+            host_registry_from_dht_lookup(dht.get_dht_value(registry_key.clone()).await)?;
+        let registry = host_registry_after_unpublish(registry, &peer_id);
 
         let registry_json = serde_json::to_string(&registry)
             .map_err(|e| format!("Failed to serialize registry: {}", e))?;
@@ -8087,6 +8117,99 @@ mod multi_seeder_tests {
             ad.get("walletAddress").and_then(|v| v.as_str()),
             Some("0xwallet")
         );
+    }
+
+    fn host_registry_entry(
+        peer_id: &str,
+        wallet_address: &str,
+        updated_at: u64,
+    ) -> HostRegistryEntry {
+        HostRegistryEntry {
+            peer_id: peer_id.to_string(),
+            wallet_address: wallet_address.to_string(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn host_registry_missing_value_starts_empty() {
+        let registry = host_registry_from_dht_value(None)
+            .expect("missing registry should be treated as empty");
+
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn host_registry_reads_valid_json() {
+        let json = serde_json::to_string(&vec![
+            host_registry_entry("peer-a", "0xwallet-a", 10),
+            host_registry_entry("peer-b", "0xwallet-b", 20),
+        ])
+        .unwrap();
+
+        let registry = host_registry_from_dht_value(Some(json))
+            .expect("valid registry should parse");
+
+        assert_eq!(registry.len(), 2);
+        assert_eq!(registry[0].peer_id, "peer-a");
+        assert_eq!(registry[1].wallet_address, "0xwallet-b");
+    }
+
+    #[test]
+    fn host_registry_rejects_malformed_json() {
+        let err = host_registry_from_dht_value(Some("{not valid json".to_string()))
+            .expect_err("malformed registry must not be replaced with empty");
+
+        assert!(err.contains("Malformed chiral_host_registry JSON"));
+    }
+
+    #[test]
+    fn host_registry_lookup_errors_fail_closed() {
+        let err = host_registry_from_dht_lookup(Err("dht unavailable".to_string()))
+            .expect_err("registry read errors must not be replaced with empty");
+
+        assert!(err.contains("Failed to read chiral_host_registry"));
+        assert!(err.contains("dht unavailable"));
+    }
+
+    #[test]
+    fn host_registry_publish_update_replaces_existing_peer() {
+        let registry = vec![
+            host_registry_entry("peer-a", "0xold", 10),
+            host_registry_entry("peer-b", "0xwallet-b", 20),
+        ];
+
+        let registry = host_registry_after_publish(
+            registry,
+            "peer-a".to_string(),
+            "0xnew".to_string(),
+            30,
+        );
+
+        assert_eq!(registry.len(), 2);
+        assert!(registry
+            .iter()
+            .any(|entry| entry.peer_id == "peer-b" && entry.wallet_address == "0xwallet-b"));
+        let updated = registry
+            .iter()
+            .find(|entry| entry.peer_id == "peer-a")
+            .expect("peer-a should be present after publish");
+        assert_eq!(updated.wallet_address, "0xnew");
+        assert_eq!(updated.updated_at, 30);
+    }
+
+    #[test]
+    fn host_registry_unpublish_update_preserves_other_peers() {
+        let registry = vec![
+            host_registry_entry("peer-a", "0xwallet-a", 10),
+            host_registry_entry("peer-b", "0xwallet-b", 20),
+        ];
+
+        let registry = host_registry_after_unpublish(registry, "peer-a");
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry[0].peer_id, "peer-b");
+        assert_eq!(registry[0].wallet_address, "0xwallet-b");
     }
 
     #[test]
