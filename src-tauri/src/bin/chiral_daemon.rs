@@ -20,7 +20,7 @@ use chiral_network::dht;
 use chiral_network::drive_api::DriveState;
 use chiral_network::event_sink::EventSink;
 use chiral_network::file_transfer::{FileTransferService, PendingTransfer};
-use chiral_network::geth::{GethDownloader, GethProcess};
+use chiral_network::geth::{validate_mining_threads, GethDownloader, GethProcess};
 use chiral_network::hosting_server::{self, HostingServerState};
 use chiral_network::rating_storage::RatingState;
 
@@ -844,8 +844,12 @@ async fn mining_start(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<StartMiningRequest>,
 ) -> Response {
+    let threads = match validate_mining_threads(req.threads) {
+        Ok(threads) => threads,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
     let geth = state.geth.lock().await;
-    match geth.start_mining(req.threads.unwrap_or(1)).await {
+    match geth.start_mining(threads).await {
         Ok(()) => Json(json!({ "status": "started" })).into_response(),
         Err(err) => json_error(StatusCode::BAD_REQUEST, err),
     }
@@ -1511,6 +1515,13 @@ fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
 #[tokio::main]
 async fn main() {
     let args = DaemonArgs::parse();
+    let mining_threads = match validate_mining_threads(Some(args.mining_threads)) {
+        Ok(threads) => threads,
+        Err(err) => {
+            eprintln!("{}", err);
+            std::process::exit(1);
+        }
+    };
     if let Some(port) = args.p2p_port {
         std::env::set_var("CHIRAL_P2P_PORT", port.to_string());
     }
@@ -1653,7 +1664,6 @@ async fn main() {
     let auto_start_dht = args.auto_start_dht || auto_mine;
     let auto_start_geth = args.auto_start_geth || auto_mine;
     let miner_address = args.miner_address.clone();
-    let mining_threads = args.mining_threads;
 
     // (Wallet pre-populate moved earlier — see above.)
 
@@ -1843,5 +1853,29 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    #[tokio::test]
+    async fn mining_start_rejects_zero_threads_before_geth_call() {
+        let response = mining_start(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(StartMiningRequest { threads: Some(0) }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn mining_start_rejects_over_limit_threads_before_geth_call() {
+        let response = mining_start(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(StartMiningRequest {
+                threads: Some(chiral_network::geth::MAX_MINING_THREADS + 1),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

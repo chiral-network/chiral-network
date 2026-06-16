@@ -25,6 +25,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// so they route to the local node when it's up.
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
 
+pub const DEFAULT_MINING_THREADS: u32 = 1;
+pub const MAX_MINING_THREADS: u32 = 256;
+
+pub fn validate_mining_threads(threads: Option<u32>) -> Result<u32, String> {
+    let threads = threads.unwrap_or(DEFAULT_MINING_THREADS);
+    if threads == 0 {
+        return Err("mining threads must be at least 1".to_string());
+    }
+    if threads > MAX_MINING_THREADS {
+        return Err(format!(
+            "mining threads must be at most {}",
+            MAX_MINING_THREADS
+        ));
+    }
+    Ok(threads)
+}
+
 pub fn chain_id() -> u64 {
     network::active().chain_id
 }
@@ -564,9 +581,17 @@ impl GethProcess {
     }
 
     pub async fn start_mining(&self, threads: u32) -> Result<(), String> {
-        if !self.is_running() { return Err("Geth is not running".into()); }
-        rpc_client::call(&self.effective_rpc_endpoint(), "miner_start",
-            serde_json::json!([threads.max(1) as u64])).await.map(|_| ())
+        let threads = validate_mining_threads(Some(threads))?;
+        if !self.is_running() {
+            return Err("Geth is not running".into());
+        }
+        rpc_client::call(
+            &self.effective_rpc_endpoint(),
+            "miner_start",
+            serde_json::json!([threads as u64]),
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn stop_mining(&self) -> Result<(), String> {
@@ -740,6 +765,34 @@ mod tests {
     #[test]
     fn network_id_matches_chain_id() {
         assert_eq!(network_id(), chain_id());
+    }
+
+    #[test]
+    fn mining_thread_validation_defaults_absent_to_one() {
+        assert_eq!(
+            validate_mining_threads(None).unwrap(),
+            DEFAULT_MINING_THREADS
+        );
+    }
+
+    #[test]
+    fn mining_thread_validation_accepts_valid_count() {
+        assert_eq!(validate_mining_threads(Some(4)).unwrap(), 4);
+    }
+
+    #[test]
+    fn mining_thread_validation_rejects_zero() {
+        let err = validate_mining_threads(Some(0)).expect_err("zero threads should be rejected");
+
+        assert!(err.contains("at least 1"));
+    }
+
+    #[test]
+    fn mining_thread_validation_rejects_over_limit_count() {
+        let err = validate_mining_threads(Some(MAX_MINING_THREADS + 1))
+            .expect_err("over-limit threads should be rejected");
+
+        assert!(err.contains(&MAX_MINING_THREADS.to_string()));
     }
 
     #[test]
