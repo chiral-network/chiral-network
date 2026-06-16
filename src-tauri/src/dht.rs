@@ -701,6 +701,12 @@ fn file_info_error_response(
     }
 }
 
+fn file_info_chunk_hashes(file_info: &SharedFileInfo) -> Result<&[String], String> {
+    file_info.chunk_hashes.as_deref().ok_or_else(|| {
+        "FileInfo is missing chunk hashes; seeder has not prepared chunk metadata".to_string()
+    })
+}
+
 fn signed_file_info_response(
     request_id: String,
     file_hash: String,
@@ -4352,7 +4358,17 @@ async fn handle_behaviour_event(
                                         {
                                             Ok(access) => {
                                                 let chunk_hashes =
-                                                    file_info.chunk_hashes.as_ref().unwrap();
+                                                    match file_info_chunk_hashes(file_info) {
+                                                        Ok(chunk_hashes) => chunk_hashes,
+                                                        Err(err) => {
+                                                            return file_info_error_response(
+                                                                request_id,
+                                                                file_hash,
+                                                                err,
+                                                                access.folder_hash,
+                                                            );
+                                                        }
+                                                    };
                                                 let private_key = file_info.private_key.clone();
                                                 let file_name_owned = file_info.file_name.clone();
                                                 let file_size_owned = file_info.file_size;
@@ -4389,7 +4405,7 @@ async fn handle_behaviour_event(
                                                         file_hash,
                                                         file_name_owned,
                                                         file_size_owned,
-                                                        chunk_hashes.clone(),
+                                                        chunk_hashes.to_vec(),
                                                         access,
                                                         &private_key,
                                                     )
@@ -6292,6 +6308,37 @@ mod tests {
         } else {
             panic!("Expected FileInfo variant");
         }
+    }
+
+    fn shared_file_info_with_chunk_hashes(chunk_hashes: Option<Vec<String>>) -> SharedFileInfo {
+        SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+            chunk_hashes,
+            price_wei: 0,
+            wallet_address: "0xwallet".to_string(),
+            private_key: "private-key".to_string(),
+            folder_access: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn file_info_chunk_hashes_returns_present_hashes() {
+        let info = shared_file_info_with_chunk_hashes(Some(vec!["hash0".to_string()]));
+
+        let hashes = file_info_chunk_hashes(&info).expect("chunk hashes should be present");
+
+        assert_eq!(hashes, ["hash0"]);
+    }
+
+    #[test]
+    fn file_info_chunk_hashes_rejects_missing_hashes() {
+        let info = shared_file_info_with_chunk_hashes(None);
+
+        let err = file_info_chunk_hashes(&info).expect_err("missing chunk hashes should error");
+
+        assert!(err.contains("missing chunk hashes"));
     }
 
     #[test]
