@@ -159,7 +159,12 @@ async fn verify_transfer_verdict(
         .await?
         .ok_or_else(|| format!("No reputation issuer key published for {issuer_wallet}"))?;
     let verdict = transfer_verdict_payload(req, downloader_wallet, amount_wei);
-    reputation::verify_reputation_verdict(&issuer_record, &verdict, verdict_signature)?;
+    reputation::verify_reputation_verdict_for_wallet(
+        &issuer_record,
+        &issuer_wallet,
+        &verdict,
+        verdict_signature,
+    )?;
     Ok((issuer_wallet, verdict_signature.to_string()))
 }
 

@@ -137,12 +137,38 @@ pub fn validate_issuer_key_record(
     Ok(key)
 }
 
+pub fn validate_issuer_key_record_for_wallet(
+    record: &ReputationIssuerKeyRecord,
+    requested_wallet: &str,
+) -> Result<VerifyingKey, String> {
+    let requested_wallet = normalize_wallet(requested_wallet)?;
+    let record_wallet = normalize_wallet(&record.issuer_wallet)?;
+    if record_wallet != requested_wallet {
+        return Err(format!(
+            "issuer key record wallet {record_wallet} does not match requested wallet {requested_wallet}"
+        ));
+    }
+    validate_issuer_key_record(record)
+}
+
 pub fn verify_reputation_verdict(
     issuer_record: &ReputationIssuerKeyRecord,
     verdict: &ReputationVerdictPayload,
     signature_hex: &str,
 ) -> Result<(), String> {
     let key = validate_issuer_key_record(issuer_record)?;
+    let signature = decode_signature(signature_hex)?;
+    key.verify(&verdict_signing_payload(verdict), &signature)
+        .map_err(|_| "reputation verdict signature does not match issuer key".to_string())
+}
+
+pub fn verify_reputation_verdict_for_wallet(
+    issuer_record: &ReputationIssuerKeyRecord,
+    requested_wallet: &str,
+    verdict: &ReputationVerdictPayload,
+    signature_hex: &str,
+) -> Result<(), String> {
+    let key = validate_issuer_key_record_for_wallet(issuer_record, requested_wallet)?;
     let signature = decode_signature(signature_hex)?;
     key.verify(&verdict_signing_payload(verdict), &signature)
         .map_err(|_| "reputation verdict signature does not match issuer key".to_string())
@@ -169,7 +195,7 @@ pub async fn fetch_issuer_key(
     };
     let record: ReputationIssuerKeyRecord = serde_json::from_str(&raw)
         .map_err(|e| format!("invalid reputation issuer key record: {e}"))?;
-    validate_issuer_key_record(&record)?;
+    validate_issuer_key_record_for_wallet(&record, issuer_wallet)?;
     Ok(Some(record))
 }
 
@@ -181,12 +207,21 @@ mod tests {
 
     const TEST_PRIVATE_KEY: &str =
         "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const OTHER_PRIVATE_KEY: &str =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     fn signed_issuer_record(signing: &SigningKey) -> ReputationIssuerKeyRecord {
-        let issuer_wallet = test_wallet();
+        signed_issuer_record_for_key(signing, TEST_PRIVATE_KEY)
+    }
+
+    fn signed_issuer_record_for_key(
+        signing: &SigningKey,
+        wallet_private_key: &str,
+    ) -> ReputationIssuerKeyRecord {
+        let issuer_wallet = wallet_from_private_key(wallet_private_key);
         let verifying_key = hex::encode(signing.verifying_key().to_bytes());
         let payload = issuer_key_binding_payload(&issuer_wallet, &verifying_key);
-        let owner_signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, &payload).unwrap();
+        let owner_signature = crate::wallet::sign_message(wallet_private_key, &payload).unwrap();
         ReputationIssuerKeyRecord {
             issuer_wallet,
             verifying_key,
@@ -196,8 +231,12 @@ mod tests {
     }
 
     fn test_wallet() -> String {
+        wallet_from_private_key(TEST_PRIVATE_KEY)
+    }
+
+    fn wallet_from_private_key(private_key: &str) -> String {
         let probe = b"wallet-probe";
-        let sig = crate::wallet::sign_message(TEST_PRIVATE_KEY, probe).unwrap();
+        let sig = crate::wallet::sign_message(private_key, probe).unwrap();
         crate::wallet::recover_signer(probe, &sig).unwrap()
     }
 
@@ -222,6 +261,13 @@ mod tests {
 
         verify_reputation_verdict(&record, &payload, &hex::encode(sig.to_bytes()))
             .expect("valid issuer verdict should verify");
+        verify_reputation_verdict_for_wallet(
+            &record,
+            &test_wallet(),
+            &payload,
+            &hex::encode(sig.to_bytes()),
+        )
+        .expect("valid issuer verdict should verify for requested wallet");
     }
 
     #[test]
@@ -251,6 +297,25 @@ mod tests {
 
         let invalid_key = issuer_key_dht_key("not-a-wallet").expect_err("invalid wallet rejected");
         assert!(invalid_key.contains("issuer wallet"));
+    }
+
+    #[test]
+    fn issuer_key_record_for_different_wallet_rejects_requested_wallet() {
+        let signing = SigningKey::generate(&mut OsRng);
+        let record_for_other_wallet = signed_issuer_record_for_key(&signing, OTHER_PRIVATE_KEY);
+        let payload = verdict();
+        let sig = signing.sign(&verdict_signing_payload(&payload));
+
+        validate_issuer_key_record(&record_for_other_wallet)
+            .expect("record should be valid for its own wallet");
+        let err = verify_reputation_verdict_for_wallet(
+            &record_for_other_wallet,
+            &test_wallet(),
+            &payload,
+            &hex::encode(sig.to_bytes()),
+        )
+        .expect_err("wallet B record must not satisfy wallet A lookup");
+        assert!(err.contains("does not match requested wallet"));
     }
 
     #[test]
