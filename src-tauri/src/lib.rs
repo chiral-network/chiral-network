@@ -3193,8 +3193,11 @@ async fn get_wallet_balance(
         serde_json::json!([address, "latest"]),
     )
     .await?;
-    let hex = result.as_str().unwrap_or("0x0");
-    let wei = rpc_client::hex_to_u128(hex);
+    let hex = result
+        .as_str()
+        .ok_or_else(|| format!("eth_getBalance returned a non-string hex value: {result}"))?;
+    let wei = rpc_client::hex_to_u128(hex)
+        .map_err(|e| format!("eth_getBalance: {e}"))?;
     Ok(wallet::WalletBalanceResult {
         balance: rpc_client::wei_to_chi_string(wei),
         balance_wei: wei.to_string(),
@@ -3592,7 +3595,10 @@ async fn get_mining_balance_diagnostic(address: String) -> Result<MiningBalanceD
             serde_json::json!([addr, "latest"]),
         )
         .await?;
-        Ok(rpc_client::hex_to_u128(v.as_str().unwrap_or("0x0")))
+        let hex = v
+            .as_str()
+            .ok_or_else(|| format!("eth_getBalance returned a non-string hex value: {v}"))?;
+        rpc_client::hex_to_u128(hex).map_err(|e| format!("eth_getBalance: {e}"))
     }
     async fn fetch_wei_fallback(endpoints: &[String], addr: &str) -> Result<u128, String> {
         let v = rpc_client::call_with_fallbacks(
@@ -3601,7 +3607,10 @@ async fn get_mining_balance_diagnostic(address: String) -> Result<MiningBalanceD
             serde_json::json!([addr, "latest"]),
         )
         .await?;
-        Ok(rpc_client::hex_to_u128(v.as_str().unwrap_or("0x0")))
+        let hex = v
+            .as_str()
+            .ok_or_else(|| format!("eth_getBalance returned a non-string hex value: {v}"))?;
+        rpc_client::hex_to_u128(hex).map_err(|e| format!("eth_getBalance: {e}"))
     }
     let local_endpoint = "http://127.0.0.1:8545";
     let canonical_endpoints = geth::wallet_rpc_endpoints();

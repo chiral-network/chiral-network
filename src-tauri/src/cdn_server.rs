@@ -57,9 +57,14 @@ async fn describe_tx(tx_hash: &str) -> String {
     };
     let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("?");
     let to = v.get("to").and_then(|x| x.as_str()).unwrap_or("?");
-    let value_hex = v.get("value").and_then(|x| x.as_str()).unwrap_or("0x0");
-    let value_wei = crate::rpc_client::hex_to_u128(value_hex);
-    format!("from={from} to={to} amount={value_wei}")
+    let amount = match v.get("value").and_then(|x| x.as_str()) {
+        Some(value_hex) => match crate::rpc_client::hex_to_u128(value_hex) {
+            Ok(value_wei) => value_wei.to_string(),
+            Err(e) => format!("<invalid tx value: {e}>"),
+        },
+        None => "?".to_string(),
+    };
+    format!("from={from} to={to} amount={amount}")
 }
 
 /// Cost of an upload in wei: `ceil(price_wei_per_mb_month * bytes * days

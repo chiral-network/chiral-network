@@ -103,13 +103,48 @@ pub struct PaymentResult {
 // Core wallet operations
 // ============================================================================
 
+fn rpc_hex_str<'a>(value: &'a serde_json::Value, context: &str) -> Result<&'a str, String> {
+    value
+        .as_str()
+        .ok_or_else(|| format!("{context} returned a non-string hex value: {value}"))
+}
+
+fn rpc_hex_field_str<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, String> {
+    value
+        .get(field)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("{context} missing string `{field}` field"))
+}
+
+fn rpc_hex_u64(value: &serde_json::Value, context: &str) -> Result<u64, String> {
+    rpc_client::hex_to_u64(rpc_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn rpc_hex_u128(value: &serde_json::Value, context: &str) -> Result<u128, String> {
+    rpc_client::hex_to_u128(rpc_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn batch_hex_u64(result: &Result<serde_json::Value, String>, context: &str) -> Result<u64, String> {
+    let value = result.as_ref().map_err(|e| format!("{context} RPC failed: {e}"))?;
+    rpc_hex_u64(value, context)
+}
+
+fn batch_hex_u128(result: &Result<serde_json::Value, String>, context: &str) -> Result<u128, String> {
+    let value = result.as_ref().map_err(|e| format!("{context} RPC failed: {e}"))?;
+    rpc_hex_u128(value, context)
+}
+
 /// Get wallet balance (uses 5s cache).
 pub async fn get_balance(endpoint: &str, address: &str) -> Result<WalletBalanceResult, String> {
     let cache_key = address.to_lowercase();
 
     // Check cache first
     if let Some(cached) = BALANCE_CACHE.get(&cache_key).await {
-        let wei = rpc_client::hex_to_u128(cached.as_str().unwrap_or("0x0"));
+        let wei = rpc_hex_u128(&cached, "cached eth_getBalance")?;
         return Ok(WalletBalanceResult {
             balance: rpc_client::wei_to_chi_string(wei),
             balance_wei: wei.to_string(),
@@ -117,8 +152,7 @@ pub async fn get_balance(endpoint: &str, address: &str) -> Result<WalletBalanceR
     }
 
     let result = rpc_client::call(endpoint, "eth_getBalance", serde_json::json!([address, "latest"])).await?;
-    let balance_hex = result.as_str().unwrap_or("0x0");
-    let balance_wei = rpc_client::hex_to_u128(balance_hex);
+    let balance_wei = rpc_hex_u128(&result, "eth_getBalance")?;
 
     // Cache the raw hex result
     BALANCE_CACHE.set(cache_key, result).await;
@@ -184,10 +218,10 @@ pub async fn send_transaction(
     let bal_idx = 1;
     let gas_idx = 2;
 
-    let nonce = rpc_client::hex_to_u64(results[nonce_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
-    let balance_wei = rpc_client::hex_to_u128(results[bal_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
+    let nonce = batch_hex_u64(&results[nonce_idx], "eth_getTransactionCount")?;
+    let balance_wei = batch_hex_u128(&results[bal_idx], "eth_getBalance")?;
     let gas_price = {
-        let raw = rpc_client::hex_to_u64(results[gas_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
+        let raw = batch_hex_u64(&results[gas_idx], "eth_gasPrice")?;
         if raw == 0 { 1_000_000_000u64 } else { raw }
     };
 
@@ -358,7 +392,7 @@ pub async fn get_transaction_history(
     metadata: &HashMap<String, TransactionMeta>,
 ) -> Result<TransactionHistoryResult, String> {
     let result = rpc_client::call(endpoint, "eth_blockNumber", serde_json::json!([])).await?;
-    let latest_block = rpc_client::hex_to_u64(result.as_str().unwrap_or("0x0"));
+    let latest_block = rpc_hex_u64(&result, "eth_blockNumber")?;
 
     let mut transactions = Vec::new();
     let address_lower = address.to_lowercase();
@@ -396,20 +430,36 @@ pub async fn get_transaction_history(
                     if let Some(block) = item.get("result") {
                         if let Some(txs) = block.get("transactions").and_then(|t| t.as_array()) {
                             if txs.is_empty() { continue; }
-                            let block_ts = block.get("timestamp").and_then(|t| t.as_str())
-                                .map(rpc_client::hex_to_u64).unwrap_or(0);
-                            let block_num = block.get("number").and_then(|n| n.as_str())
-                                .map(rpc_client::hex_to_u64).unwrap_or(0);
+                            let block_ts = rpc_client::hex_to_u64(rpc_hex_field_str(
+                                block,
+                                "timestamp",
+                                "eth_getBlockByNumber block",
+                            )?)
+                            .map_err(|e| format!("eth_getBlockByNumber block timestamp: {e}"))?;
+                            let block_num = rpc_client::hex_to_u64(rpc_hex_field_str(
+                                block,
+                                "number",
+                                "eth_getBlockByNumber block",
+                            )?)
+                            .map_err(|e| format!("eth_getBlockByNumber block number: {e}"))?;
 
                             for tx in txs {
                                 let from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
                                 let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
 
                                 if from == address_lower || to == address_lower {
-                                    let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
-                                    let value_wei = rpc_client::hex_to_u128(value_hex);
-                                    let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
-                                    let gas_used = rpc_client::hex_to_u64(gas_hex);
+                                    let value_wei = rpc_client::hex_to_u128(rpc_hex_field_str(
+                                        tx,
+                                        "value",
+                                        "eth_getBlockByNumber transaction",
+                                    )?)
+                                    .map_err(|e| format!("eth_getBlockByNumber transaction value: {e}"))?;
+                                    let gas_used = rpc_client::hex_to_u64(rpc_hex_field_str(
+                                        tx,
+                                        "gas",
+                                        "eth_getBlockByNumber transaction",
+                                    )?)
+                                    .map_err(|e| format!("eth_getBlockByNumber transaction gas: {e}"))?;
                                     let tx_hash = tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
                                     let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
                                     let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
@@ -723,15 +773,24 @@ pub async fn verify_tx_details(
     }
     let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
     let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
-    let tx_value = tx.get("value").and_then(|v| v.as_str()).map(rpc_client::hex_to_u128).unwrap_or(0);
+    let tx_value = rpc_client::hex_to_u128(rpc_hex_field_str(
+        &tx,
+        "value",
+        "eth_getTransactionByHash",
+    )?)
+    .map_err(|e| format!("eth_getTransactionByHash value: {e}"))?;
     // EIP-155 / chain-id check: a tx mined on the chiral chain must
     // carry the chiral chainId. Without this, a signed tx replayed from
     // any other EVM chain with the same address pair would pass.
     let expected_chain_id = crate::geth::chain_id() as u128;
     let tx_chain_id = tx
         .get("chainId")
-        .and_then(|v| v.as_str())
-        .map(rpc_client::hex_to_u128);
+        .map(|value| {
+            let hex = rpc_hex_str(value, "eth_getTransactionByHash chainId")?;
+            rpc_client::hex_to_u128(hex)
+                .map_err(|e| format!("eth_getTransactionByHash chainId: {e}"))
+        })
+        .transpose()?;
     if let Some(observed) = tx_chain_id {
         if observed != expected_chain_id {
             return Ok(false);
