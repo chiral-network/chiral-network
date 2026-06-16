@@ -151,6 +151,18 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+#[cfg(unix)]
+fn daemon_sigterm_handler_from_result<T>(handler: std::io::Result<T>) -> Result<T, String> {
+    handler.map_err(|e| format!("failed to install SIGTERM handler: {}", e))
+}
+
+#[cfg(unix)]
+fn install_daemon_sigterm_handler() -> Result<tokio::signal::unix::Signal, String> {
+    daemon_sigterm_handler_from_result(tokio::signal::unix::signal(
+        tokio::signal::unix::SignalKind::terminate(),
+    ))
+}
+
 /// Publish a lightweight host advertisement so wallet identity is discoverable by peers.
 async fn auto_publish_wallet_advertisement(
     state: &HeadlessRuntimeState,
@@ -1752,9 +1764,15 @@ async fn main() {
 
         #[cfg(unix)]
         {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("failed to install SIGTERM handler");
+            let mut sigterm = match install_daemon_sigterm_handler() {
+                Ok(handler) => handler,
+                Err(e) => {
+                    eprintln!("SIGTERM shutdown handling disabled: {}", e);
+                    ctrl_c.await.ok();
+                    println!("Received SIGINT");
+                    return;
+                }
+            };
             tokio::select! {
                 _ = ctrl_c => println!("Received SIGINT"),
                 _ = sigterm.recv() => println!("Received SIGTERM"),
@@ -1783,4 +1801,31 @@ async fn main() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     remove_pid_file(&pid_file);
     println!("Daemon stopped.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_sigterm_handler_accepts_registered_handler() {
+        let handler = daemon_sigterm_handler_from_result(Ok("sigterm"))
+            .expect("successful handler result should pass through");
+
+        assert_eq!(handler, "sigterm");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_sigterm_handler_reports_install_failure() {
+        let err = daemon_sigterm_handler_from_result::<&str>(Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "sigterm unavailable",
+        )))
+        .expect_err("SIGTERM handler failure should be reported");
+
+        assert!(err.contains("SIGTERM"));
+        assert!(err.contains("sigterm unavailable"));
+    }
 }
