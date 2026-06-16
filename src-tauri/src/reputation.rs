@@ -286,8 +286,9 @@ mod tests {
     #[test]
     fn missing_or_unbound_issuer_key_rejects_before_verdict_trust() {
         let signing = SigningKey::generate(&mut OsRng);
+        let unbound_signing = SigningKey::generate(&mut OsRng);
         let mut record = signed_issuer_record(&signing);
-        record.verifying_key = hex::encode([7u8; 32]);
+        record.verifying_key = hex::encode(unbound_signing.verifying_key().to_bytes());
         let payload = verdict();
         let sig = signing.sign(&verdict_signing_payload(&payload));
 
