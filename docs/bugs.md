@@ -70,7 +70,6 @@ Format per entry:
 
 ## Test gaps (not bugs in product code, but flagged so contributors know)
 
-- **FTP URL parsing test** has been failing pre-existing for several months — see `src-tauri/tests/`.
 ---
 
 ## How to add a new entry
