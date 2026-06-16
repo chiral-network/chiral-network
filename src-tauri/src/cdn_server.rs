@@ -452,9 +452,17 @@ async fn upload(
     let payment_tx = hdr(&headers, "X-Payment-Tx");
     let owner_wallet = hdr(&headers, "X-Owner-Wallet");
     let duration_days: u64 = hdr(&headers, "X-Duration-Days").parse().unwrap_or(30);
-    let download_price_chi = {
-        let v = hdr(&headers, "X-Download-Price-Chi");
-        if v.is_empty() { "0".to_string() } else { v }
+    let (download_price_chi, download_price_wei) = {
+        let raw = hdr(&headers, "X-Download-Price-Chi");
+        match normalize_download_price_chi(&raw) {
+            Ok(price) => price,
+            Err(e) => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("Invalid X-Download-Price-Chi: {e}"),
+                )
+            }
+        }
     };
 
     if payment_tx.is_empty() || owner_wallet.is_empty() {
@@ -561,7 +569,6 @@ async fn upload(
     // Register in DHT so clients searching by hash find the CDN as a seeder.
     let now = now_secs();
     let expires = now + duration_days * 86400;
-    let download_price_wei = parse_chi_or_zero(&download_price_chi);
     if let Some(dht) = s.dht.lock().await.as_ref() {
         register_in_dht(
             dht,
@@ -668,10 +675,14 @@ async fn update_price(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_lowercase();
-    let new_price = match &body["downloadPriceChi"] {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        _ => "0".to_string(),
+    let (new_price, new_price_wei) = match download_price_from_update_body(&body) {
+        Ok(price) => price,
+        Err(e) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid downloadPriceChi: {e}"),
+            )
+        }
     };
     if owner.is_empty() {
         return err(StatusCode::BAD_REQUEST, "X-Owner header required");
@@ -693,7 +704,6 @@ async fn update_price(
     };
 
     // Re-register in DHT with the new price so searches pick it up.
-    let new_price_wei = parse_chi_or_zero(&new_price);
     if let Some(dht) = s.dht.lock().await.as_ref() {
         let file_path = s.storage_dir.join(&file_hash);
         if file_path.exists() {
@@ -760,7 +770,16 @@ pub async fn reseed_on_startup(state: Arc<CdnState>) {
         if !file_path.exists() {
             continue;
         }
-        let download_price_wei = parse_chi_or_zero(&entry.download_price_chi);
+        let download_price_wei = match parse_download_price_chi(&entry.download_price_chi) {
+            Ok(price_wei) => price_wei,
+            Err(e) => {
+                println!(
+                    "[CDN] Startup reseed skipped for {}: invalid download price {:?}: {}",
+                    entry.file_hash, entry.download_price_chi, e
+                );
+                continue;
+            }
+        };
         register_in_dht(
             &dht,
             &entry.file_hash,
@@ -1450,11 +1469,40 @@ fn wei_to_chi(wei: u128) -> String {
     format!("{}.{}", whole, trimmed)
 }
 
-fn parse_chi_or_zero(s: &str) -> u128 {
-    if s.is_empty() || s == "0" {
-        0
+fn parse_download_price_chi(price_chi: &str) -> Result<u128, String> {
+    if price_chi.is_empty() {
+        return Ok(0);
+    }
+    let trimmed = price_chi.trim();
+    if trimmed.is_empty() {
+        return Err("download price must be 0 or a valid CHI decimal".to_string());
+    }
+    if trimmed == "0" {
+        return Ok(0);
+    }
+    crate::wallet::parse_chi_to_wei(trimmed)
+        .map_err(|err| format!("download price must be 0 or a valid CHI decimal: {err}"))
+}
+
+fn normalize_download_price_chi(price_chi: &str) -> Result<(String, u128), String> {
+    let price_wei = parse_download_price_chi(price_chi)?;
+    let normalized = if price_chi.is_empty() {
+        "0".to_string()
     } else {
-        crate::wallet::parse_chi_to_wei(s).unwrap_or(0)
+        price_chi.trim().to_string()
+    };
+    Ok((normalized, price_wei))
+}
+
+fn download_price_from_update_body(body: &serde_json::Value) -> Result<(String, u128), String> {
+    match body
+        .get("downloadPriceChi")
+        .unwrap_or(&serde_json::Value::Null)
+    {
+        serde_json::Value::Null => Ok(("0".to_string(), 0)),
+        serde_json::Value::String(price) => normalize_download_price_chi(price),
+        serde_json::Value::Number(price) => normalize_download_price_chi(&price.to_string()),
+        _ => Err("downloadPriceChi must be a string or number".to_string()),
     }
 }
 
@@ -1512,14 +1560,52 @@ mod tests {
     }
 
     #[test]
-    fn parse_chi_or_zero_handles_zero_and_empty() {
-        assert_eq!(parse_chi_or_zero(""), 0);
-        assert_eq!(parse_chi_or_zero("0"), 0);
+    fn download_price_chi_handles_zero_and_empty() {
+        assert_eq!(parse_download_price_chi("").unwrap(), 0);
+        assert_eq!(parse_download_price_chi("0").unwrap(), 0);
+        assert_eq!(
+            normalize_download_price_chi("")
+                .expect("empty download price should normalize to free"),
+            ("0".to_string(), 0)
+        );
     }
 
     #[test]
-    fn parse_chi_or_zero_handles_valid_chi() {
-        assert_eq!(parse_chi_or_zero("0.001"), 1_000_000_000_000_000);
+    fn download_price_chi_handles_valid_chi() {
+        assert_eq!(
+            parse_download_price_chi("0.001").unwrap(),
+            1_000_000_000_000_000
+        );
+        assert_eq!(
+            normalize_download_price_chi(" 0.001 ").expect("valid download price should normalize"),
+            ("0.001".to_string(), 1_000_000_000_000_000)
+        );
+    }
+
+    #[test]
+    fn download_price_chi_rejects_malformed_values() {
+        let err = parse_download_price_chi("not-a-price")
+            .expect_err("malformed download price should fail closed");
+
+        assert!(err.contains("valid CHI decimal"));
+    }
+
+    #[test]
+    fn download_price_chi_rejects_whitespace_only_values() {
+        let err = parse_download_price_chi("  ")
+            .expect_err("whitespace-only persisted price should not become free");
+
+        assert!(err.contains("valid CHI decimal"));
+    }
+
+    #[test]
+    fn update_body_rejects_invalid_download_price_payload_type() {
+        let err = download_price_from_update_body(&serde_json::json!({
+            "downloadPriceChi": true
+        }))
+        .expect_err("invalid update payload type should be rejected");
+
+        assert!(err.contains("string or number"));
     }
 
     #[test]
