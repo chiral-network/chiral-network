@@ -258,6 +258,18 @@ fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+fn signed_reseed_credentials<'a>(
+    wallet_address: Option<&'a str>,
+    private_key: Option<&'a str>,
+) -> Option<(&'a str, &'a str)> {
+    let wallet_address = wallet_address?;
+    let private_key = private_key?;
+    if wallet_address.trim().is_empty() || private_key.trim().is_empty() {
+        return None;
+    }
+    Some((wallet_address, private_key))
+}
+
 /// Re-register Drive files that should be seeding.
 ///
 /// Always runs the local-side re-registration (so this node can serve
@@ -280,10 +292,7 @@ async fn auto_reseed_drive_files(
     let Some(dht) = dht else {
         return;
     };
-    let can_publish_signed = wallet_address
-        .map(|w| !w.trim().is_empty())
-        .unwrap_or(false)
-        && private_key.map(|k| !k.trim().is_empty()).unwrap_or(false);
+    let signed_credentials = signed_reseed_credentials(wallet_address, private_key);
 
     let files_dir = match ds::drive_files_dir() {
         Some(dir) => dir,
@@ -469,11 +478,9 @@ async fn auto_reseed_drive_files(
         // `reseed_drive_files` with the wallet creds) re-runs this loop
         // and publishes the signed records — that's what restores
         // search-by-hash discoverability after a fresh login.
-        if !can_publish_signed {
+        let Some((owner_wallet, pk)) = signed_credentials else {
             continue;
-        }
-        let owner_wallet = wallet_address.unwrap();
-        let pk = private_key.unwrap();
+        };
         let seeder_price_str = price_wei.to_string();
         // Sign + publish chiral_file_<hash> metadata blob.
         let Some(metadata) = try_make_signed_file_metadata(
@@ -7973,6 +7980,26 @@ mod multi_seeder_tests {
             .expect_err("root path has no file name");
 
         assert!(err.contains("has no file name"));
+    }
+
+    #[test]
+    fn signed_reseed_credentials_require_wallet_address() {
+        assert_eq!(signed_reseed_credentials(None, Some("private-key")), None);
+        assert_eq!(signed_reseed_credentials(Some("  "), Some("private-key")), None);
+    }
+
+    #[test]
+    fn signed_reseed_credentials_require_private_key() {
+        assert_eq!(signed_reseed_credentials(Some("0xwallet"), None), None);
+        assert_eq!(signed_reseed_credentials(Some("0xwallet"), Some("  ")), None);
+    }
+
+    #[test]
+    fn signed_reseed_credentials_accept_complete_pair() {
+        assert_eq!(
+            signed_reseed_credentials(Some("0xwallet"), Some("private-key")),
+            Some(("0xwallet", "private-key"))
+        );
     }
 
     #[test]
