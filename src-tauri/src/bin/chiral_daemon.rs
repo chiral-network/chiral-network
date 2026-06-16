@@ -261,6 +261,8 @@ struct RequestFileRequest {
     file_hash: String,
     request_id: String,
     #[serde(default)]
+    folder_hash: Option<String>,
+    #[serde(default)]
     multiaddrs: Vec<String>,
 }
 
@@ -569,7 +571,13 @@ async fn dht_request_file(
     };
 
     match svc
-        .request_file(req.peer_id, req.file_hash, req.request_id, req.multiaddrs)
+        .request_file(
+            req.peer_id,
+            req.file_hash,
+            req.request_id,
+            req.multiaddrs,
+            req.folder_hash,
+        )
         .await
     {
         Ok(()) => Json(json!({ "status": "ok" })).into_response(),

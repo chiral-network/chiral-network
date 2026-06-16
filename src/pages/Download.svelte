@@ -89,6 +89,8 @@
     createdAt: number;
     priceWei: string;
     walletAddress: string;
+    folderHash?: string;
+    folderPaymentTx?: string;
   }
 
   interface FolderSearchFile {
@@ -1136,6 +1138,7 @@
 
     folderDownloading = true;
     try {
+      let folderPaymentTx: string | null = null;
       // Single folder-level payment to the manifest's payment wallet,
       // then iterate file downloads. Each file inside the bundle is
       // published at price=0 so no further per-file tx is sent.
@@ -1148,6 +1151,7 @@
             amount: totalCostChi,
             privateKey: $walletAccount.privateKey || '',
           });
+          folderPaymentTx = tx.hash;
           toasts.show(
             `Folder payment sent: ${tx.hash.slice(0, 10)}… — starting downloads`,
             'success',
@@ -1174,6 +1178,8 @@
           // folder level above. Per-file payment proof is skipped.
           priceWei: '0',
           walletAddress: seeder.walletAddress,
+          folderHash: folderResult.hash,
+          folderPaymentTx: folderPaymentTx || undefined,
         };
         selectedSeederIndex = 0;
         try {
@@ -1315,6 +1321,12 @@
       if (seederPriceWei !== '0') {
         params.seederPriceWei = seederPriceWei;
         params.seederWalletAddress = seederWalletAddr;
+      }
+      if (result.folderHash) {
+        params.folderHash = result.folderHash;
+      }
+      if (result.folderPaymentTx) {
+        params.folderPaymentTx = result.folderPaymentTx;
       }
 
       const response = await withTimeout(
@@ -2728,4 +2740,3 @@
     </div>
   </div>
 {/if}
-

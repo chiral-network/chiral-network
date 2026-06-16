@@ -2193,6 +2193,8 @@ async fn start_download(
     private_key: Option<String>,
     seeder_price_wei: Option<String>,
     _seeder_wallet_address: Option<String>,
+    folder_hash: Option<String>,
+    folder_payment_tx: Option<String>,
 ) -> Result<DownloadStartResult, String> {
     // Phase 2 version gate: refuse paid downloads from out-of-date
     // clients (the frontend modal already prevents this for honest UIs;
@@ -2224,7 +2226,18 @@ async fn start_download(
     // authorised (to the seeder's wallet, at the seeder's price). Keeping a
     // separate flat burn fee alongside would double-charge users and muddy
     // the pay-the-chosen-seeder contract.
-    let _ = seeder_price_wei; // consumed by the event-loop payment path via DHT metadata.
+    // `seeder_price_wei` is consumed below when deciding whether to stash
+    // wallet credentials for the event-loop payment path.
+    let folder_hash_for_request = folder_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    let folder_payment_tx_for_request = folder_payment_tx
+        .as_deref()
+        .map(str::trim)
+        .filter(|tx| !tx.is_empty())
+        .map(str::to_string);
 
     // First, check if we have the file in local cache
     {
@@ -2441,7 +2454,7 @@ async fn start_download(
             .unwrap_or("0")
             .parse()
             .unwrap_or(0);
-        if seeder_price > 0 || wallet_address.is_some() {
+        if seeder_price > 0 || wallet_address.is_some() || folder_payment_tx_for_request.is_some() {
             if let (Some(ref addr), Some(ref key)) = (&wallet_address, &private_key) {
                 let mut creds = state.download_credentials.lock().await;
                 creds.insert(
@@ -2449,7 +2462,14 @@ async fn start_download(
                     dht::DownloadCredentials {
                         wallet_address: addr.clone(),
                         private_key: key.clone(),
+                        folder_hash: folder_hash_for_request.clone(),
+                        folder_payment_tx: folder_payment_tx_for_request.clone(),
                     },
+                );
+            } else if folder_payment_tx_for_request.is_some() {
+                return Err(
+                    "Wallet address is required when presenting a folder payment transaction"
+                        .to_string(),
                 );
             }
         }
@@ -2501,6 +2521,7 @@ async fn start_download(
                 file_hash.clone(),
                 request_id.clone(),
                 addrs,
+                folder_hash_for_request,
             )
             .await;
 
@@ -6220,15 +6241,18 @@ async fn publish_drive_folder(
                 // Register as a Kademlia provider for the folder hash so other
                 // peers' get_providers calls find this seller.
                 let _ = dht.start_providing_file(hash.clone()).await;
+                let member_hashes: Vec<String> = manifest_entries
+                    .iter()
+                    .map(|(_, f)| f.file_hash.clone())
+                    .collect();
+                dht.register_folder_bundle_access(
+                    hash.clone(),
+                    member_hashes,
+                    folder_price_wei,
+                    folder_payment_wallet.clone(),
+                )
+                .await;
             }
-            // Note: V1 limitation — child files are published at price=0
-            // and the seeder doesn't enforce folder-level payment. A
-            // buyer who has the FILE hash (not the folder hash) can
-            // download individual files for free without paying the
-            // folder owner. Closing this gap requires extending the
-            // chunked-transfer protocol with folder-level PaymentProof
-            // verification (tracked separately).
-            let _ = manifest_entries;
             Some(hash)
         }
     };
