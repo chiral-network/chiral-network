@@ -2214,6 +2214,30 @@ struct DownloadStartResult {
     status: String,
 }
 
+fn download_request_timestamp_millis_at(now: std::time::SystemTime) -> Result<u128, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .map_err(|err| {
+            format!(
+                "Cannot start download because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
+}
+
+fn download_request_id_at(
+    kind: &str,
+    file_hash: &str,
+    now: std::time::SystemTime,
+) -> Result<String, String> {
+    let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
+    let timestamp = download_request_timestamp_millis_at(now)?;
+    Ok(format!("{kind}-{file_hash_prefix}-{timestamp}"))
+}
+
+fn current_download_request_id(kind: &str, file_hash: &str) -> Result<String, String> {
+    download_request_id_at(kind, file_hash, std::time::SystemTime::now())
+}
 
 #[tauri::command]
 async fn start_download(
@@ -2283,15 +2307,7 @@ async fn start_download(
             let custom_dir = state.download_directory.lock().await.clone();
             let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
-            let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-            let request_id = format!(
-                "local-{}-{}",
-                file_hash_prefix,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
+            let request_id = current_download_request_id("local", &file_hash)?;
 
             let file_data_clone = file_data.clone();
             let app_clone = app.clone();
@@ -2393,15 +2409,7 @@ async fn start_download(
             let custom_dir = state.download_directory.lock().await.clone();
             let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
-            let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-            let request_id = format!(
-                "local-{}-{}",
-                file_hash_prefix,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
+            let request_id = current_download_request_id("local", &file_hash)?;
 
             let app_clone = app.clone();
             let hash_clone = file_hash.clone();
@@ -2472,15 +2480,7 @@ async fn start_download(
 
     if let Some(dht) = dht.as_ref() {
         // Generate a unique request ID
-        let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-        let request_id = format!(
-            "download-{}-{}",
-            file_hash_prefix,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        );
+        let request_id = current_download_request_id("download", &file_hash)?;
 
         // Store download credentials if wallet is available (needed for file payment in event loop)
         let seeder_price: u128 = seeder_price_wei
@@ -7628,6 +7628,60 @@ mod multi_seeder_tests {
     use tokio::sync::Mutex;
 
     // --- Serialization / Deserialization ---
+
+    #[test]
+    fn download_request_id_at_preserves_existing_id_shape() {
+        let request_id = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(1234),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(request_id, "download-abcdef12-1234");
+    }
+
+    #[test]
+    fn download_request_id_at_handles_short_hashes() {
+        let request_id = download_request_id_at(
+            "local",
+            "abc",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(7),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(request_id, "local-abc-7");
+    }
+
+    #[test]
+    fn download_request_id_at_changes_with_timestamp() {
+        let first = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(1),
+        )
+        .expect("post-epoch timestamp should be valid");
+        let second = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(2),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn download_request_id_at_rejects_pre_epoch_clock() {
+        let err = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
 
     #[test]
     fn seeder_info_roundtrip() {
