@@ -2658,6 +2658,24 @@ async fn calculate_download_cost(
     })
 }
 
+fn shared_file_credentials_for_price(
+    price_wei: u128,
+    wallet_address: Option<String>,
+    private_key: Option<String>,
+) -> Result<(String, String), String> {
+    let wallet_addr = wallet_address.unwrap_or_default().trim().to_string();
+    let private_key = private_key.unwrap_or_default().trim().to_string();
+    if price_wei > 0 {
+        if wallet_addr.is_empty() {
+            return Err("Wallet address is required when republishing a paid file".to_string());
+        }
+        if private_key.is_empty() {
+            return Err("Private key is required when republishing a paid file".to_string());
+        }
+    }
+    Ok((wallet_addr, private_key))
+}
+
 /// Re-register a previously shared file (called on app startup)
 #[tauri::command]
 async fn register_shared_file(
@@ -2690,7 +2708,8 @@ async fn register_shared_file(
     } else {
         0u128
     };
-    let wallet_addr = wallet_address.unwrap_or_default();
+    let (wallet_addr, private_key_value) =
+        shared_file_credentials_for_price(price_wei, wallet_address, private_key)?;
 
     // Get DHT service
     let dht_guard = state.dht.lock().await;
@@ -2702,7 +2721,7 @@ async fn register_shared_file(
             file_size,
             price_wei,
             wallet_addr,
-            private_key.unwrap_or_default(),
+            private_key_value,
         )
         .await;
         Ok(())
@@ -2744,7 +2763,8 @@ async fn republish_shared_file(
     } else {
         0u128
     };
-    let wallet_addr = wallet_address.unwrap_or_default();
+    let (wallet_addr, private_key_value) =
+        shared_file_credentials_for_price(price_wei, wallet_address, private_key)?;
 
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
@@ -2756,7 +2776,7 @@ async fn republish_shared_file(
             file_size,
             price_wei,
             wallet_addr.clone(),
-            private_key.clone().unwrap_or_default(),
+            private_key_value.clone(),
         )
         .await;
 
@@ -2768,13 +2788,18 @@ async fn republish_shared_file(
         if !peer_id.is_empty() {
             let dht_key = format!("chiral_file_{}", file_hash);
             let our_multiaddrs = dht.get_listening_addresses().await;
+            let signing_key = if private_key_value.is_empty() {
+                None
+            } else {
+                Some(private_key_value.as_str())
+            };
             let Some(our_seeder) = try_make_signed_seeder(
                 &peer_id,
                 &file_hash,
                 &price_wei.to_string(),
                 &wallet_addr,
                 our_multiaddrs,
-                private_key.as_deref(),
+                signing_key,
             ) else {
                 println!(
                     "Re-publish for {} skipped — wallet must be unlocked to sign records",
@@ -2790,7 +2815,7 @@ async fn republish_shared_file(
                 file_size,
                 "WebRTC",
                 &wallet_addr,
-                private_key.as_deref(),
+                signing_key,
             ) {
                 if let Ok(metadata_json) = serde_json::to_string(&metadata) {
                     let _ = dht.put_dht_value(dht_key, metadata_json).await;
@@ -8049,6 +8074,43 @@ mod multi_seeder_tests {
 
         assert!(err.contains("Invalid Drive item price"));
         assert!(err.contains("Invalid amount"));
+    }
+
+    #[test]
+    fn shared_file_credentials_allow_free_republish_without_wallet() {
+        assert_eq!(
+            shared_file_credentials_for_price(0, None, None).unwrap(),
+            (String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn shared_file_credentials_allow_paid_republish_with_wallet_and_key() {
+        assert_eq!(
+            shared_file_credentials_for_price(
+                1,
+                Some(" 0xwallet ".to_string()),
+                Some(" private-key ".to_string()),
+            )
+            .unwrap(),
+            ("0xwallet".to_string(), "private-key".to_string())
+        );
+    }
+
+    #[test]
+    fn shared_file_credentials_reject_paid_republish_without_wallet() {
+        let err = shared_file_credentials_for_price(1, None, Some("private-key".to_string()))
+            .expect_err("paid republish should require a wallet address");
+
+        assert!(err.contains("Wallet address is required"));
+    }
+
+    #[test]
+    fn shared_file_credentials_reject_paid_republish_without_private_key() {
+        let err = shared_file_credentials_for_price(1, Some("0xwallet".to_string()), None)
+            .expect_err("paid republish should require a private key");
+
+        assert!(err.contains("Private key is required"));
     }
 
     /// Manifests signed before folder-level pricing existed must still
