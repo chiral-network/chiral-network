@@ -1828,6 +1828,22 @@ struct LocalDriveSeedCandidate {
     folder_access: Vec<dht::FolderAccessPolicy>,
 }
 
+fn drive_reseed_price_wei(price_chi: Option<&str>) -> Result<u128, String> {
+    let Some(price) = price_chi else {
+        return Ok(0);
+    };
+    let trimmed = price.trim();
+    if trimmed.is_empty() || trimmed == "0" {
+        return Ok(0);
+    }
+    wallet::parse_chi_to_wei(trimmed).map_err(|err| {
+        format!(
+            "invalid Drive item price {:?}; refusing to auto-reseed as free: {}",
+            trimmed, err
+        )
+    })
+}
+
 async fn try_repair_local_drive_seed(
     state: &AppState,
     dht: &Arc<DhtService>,
@@ -1875,11 +1891,15 @@ async fn try_repair_local_drive_seed(
         _ => std::fs::metadata(&full_path).ok()?.len(),
     };
 
-    let price_wei = match candidate.price_chi.as_deref() {
-        Some(price) if !price.trim().is_empty() && price.trim() != "0" => {
-            wallet::parse_chi_to_wei(price).unwrap_or(0)
+    let price_wei = match drive_reseed_price_wei(candidate.price_chi.as_deref()) {
+        Ok(price_wei) => price_wei,
+        Err(err) => {
+            eprintln!(
+                "[DRIVE] Skipping auto-reseed repair for item {}: {}",
+                candidate.item_id, err
+            );
+            return None;
         }
-        _ => 0u128,
     };
     let wallet_addr = candidate.owner.trim().to_string();
     if price_wei > 0 && wallet_addr.is_empty() {
@@ -7964,6 +7984,30 @@ mod multi_seeder_tests {
         assert_eq!(parsed["seeders"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["seeders"][0]["peerId"], "PeerA");
         assert_eq!(parsed["fileName"], "test.txt");
+    }
+
+    #[test]
+    fn drive_reseed_price_wei_preserves_valid_paid_price() {
+        assert_eq!(
+            drive_reseed_price_wei(Some("0.25")).expect("valid Drive price should parse"),
+            wallet::parse_chi_to_wei("0.25").unwrap()
+        );
+    }
+
+    #[test]
+    fn drive_reseed_price_wei_keeps_free_values_free() {
+        assert_eq!(drive_reseed_price_wei(None).unwrap(), 0);
+        assert_eq!(drive_reseed_price_wei(Some("")).unwrap(), 0);
+        assert_eq!(drive_reseed_price_wei(Some(" 0 ")).unwrap(), 0);
+    }
+
+    #[test]
+    fn drive_reseed_price_wei_rejects_malformed_price() {
+        let err = drive_reseed_price_wei(Some("not-a-price"))
+            .expect_err("malformed Drive price should fail closed");
+
+        assert!(err.contains("invalid Drive item price"));
+        assert!(err.contains("refusing to auto-reseed as free"));
     }
 
     /// Manifests signed before folder-level pricing existed must still
