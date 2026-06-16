@@ -2,10 +2,13 @@ use std::path::Path;
 use tauri::Emitter;
 
 /// Fixed download cost: 0.01 CHI per MB
-const COST_PER_MB_WEI: u128 = 10_000_000_000_000_000; // 0.01 CHI = 10^16 wei
+pub const LAUNCH_DOWNLOAD_COST_PER_MB_WEI: u128 = 10_000_000_000_000_000; // 0.01 CHI = 10^16 wei
+pub const LAUNCH_DOWNLOAD_COST_PER_MB_CHI: &str = "0.01";
+const DECIMAL_BYTES_PER_MB: u128 = 1_000_000;
 
 /// Platform fee: 0.5% of all transactions
 pub const PLATFORM_FEE_BPS: u128 = 50; // 50 basis points = 0.5%
+const BASIS_POINTS_DENOMINATOR: u128 = 10_000;
 
 /// Platform wallet address (receives the 0.5% fee)
 pub const PLATFORM_WALLET: &str = "0x9ad90a2f8b72092154a5b5259295e33df3541ede";
@@ -16,7 +19,7 @@ pub fn calculate_cost(file_size_bytes: u64) -> u128 {
         return 0;
     }
     let size = file_size_bytes as u128;
-    (size * COST_PER_MB_WEI + 999_999) / 1_000_000 // Round up to nearest wei
+    (size * LAUNCH_DOWNLOAD_COST_PER_MB_WEI + DECIMAL_BYTES_PER_MB - 1) / DECIMAL_BYTES_PER_MB
 }
 
 /// Calculate the platform fee (0.5%) on a given amount in wei. The fee
@@ -24,7 +27,7 @@ pub fn calculate_cost(file_size_bytes: u64) -> u128 {
 /// buyer pays `total`, seller receives `total - fee`, platform receives
 /// `fee`. Always rounded up so the platform never under-collects.
 pub fn calculate_platform_fee(amount_wei: u128) -> u128 {
-    (amount_wei * PLATFORM_FEE_BPS + 9999) / 10000
+    (amount_wei * PLATFORM_FEE_BPS + BASIS_POINTS_DENOMINATOR - 1) / BASIS_POINTS_DENOMINATOR
 }
 
 /// Split a payment into `(seller_amount, platform_fee)`. The two
@@ -71,8 +74,7 @@ pub async fn write_file(
 ) -> Result<(), String> {
     let total_bytes = file_data.len();
 
-    std::fs::write(file_path, file_data)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
+    std::fs::write(file_path, file_data).map_err(|e| format!("Failed to write file: {}", e))?;
 
     let _ = app.emit(
         "download-progress",
@@ -93,6 +95,33 @@ pub async fn write_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SharedLaunchFeePolicy {
+        download_cost_per_mb_chi: String,
+        download_cost_per_mb_wei: String,
+        platform_fee_bps: u128,
+        platform_wallet: String,
+    }
+
+    #[test]
+    fn test_shared_launch_fee_policy_matches_backend_constants() {
+        let policy: SharedLaunchFeePolicy =
+            serde_json::from_str(include_str!("../../src/lib/launchFeePolicy.json")).unwrap();
+
+        assert_eq!(
+            policy.download_cost_per_mb_chi,
+            LAUNCH_DOWNLOAD_COST_PER_MB_CHI
+        );
+        assert_eq!(
+            policy.download_cost_per_mb_wei.parse::<u128>().unwrap(),
+            LAUNCH_DOWNLOAD_COST_PER_MB_WEI
+        );
+        assert_eq!(policy.platform_fee_bps, PLATFORM_FEE_BPS);
+        assert_eq!(policy.platform_wallet, PLATFORM_WALLET);
+    }
 
     #[test]
     fn test_cost_calculation() {
@@ -143,7 +172,12 @@ mod tests {
             1_234_567_890_987_654_321,
         ] {
             let (seller, fee) = split_payment(total);
-            assert_eq!(seller + fee, total, "split_payment({}) breaks invariant", total);
+            assert_eq!(
+                seller + fee,
+                total,
+                "split_payment({}) breaks invariant",
+                total
+            );
         }
     }
 
