@@ -2124,6 +2124,21 @@ fn take_next_backup_peer(download: &mut ActiveChunkedDownload) -> Option<PeerId>
     None
 }
 
+fn remove_active_download_for_cleanup(
+    downloads: &mut ActiveDownloadsMap,
+    request_id: &str,
+    context: &str,
+) -> Option<ActiveChunkedDownload> {
+    let removed = downloads.remove(request_id);
+    if removed.is_none() {
+        println!(
+            "⚠️ Missing active download state for request {} during {}; ignoring stale event",
+            request_id, context
+        );
+    }
+    removed
+}
+
 fn looks_like_file_metadata(value: &serde_json::Value) -> bool {
     value
         .as_object()
@@ -5151,7 +5166,16 @@ async fn handle_behaviour_event(
                                                     ));
                                                 } else {
                                                     // Max retries exceeded — abort
-                                                    let dl = downloads.remove(&request_id).unwrap();
+                                                    let Some(dl) =
+                                                        remove_active_download_for_cleanup(
+                                                            &mut downloads,
+                                                            &request_id,
+                                                            "chunk error retry exhaustion",
+                                                        )
+                                                    else {
+                                                        drop(downloads);
+                                                        return;
+                                                    };
                                                     let _ = std::fs::remove_file(&dl.output_path);
                                                     drop(downloads);
                                                     let _ = events.emit("file-download-failed", serde_json::json!({
@@ -5294,7 +5318,16 @@ async fn handle_behaviour_event(
                                                         .send_request(&next_peer, request);
                                                     outbound_request_map.insert(req_id, rid);
                                                 } else {
-                                                    let dl = downloads.remove(&request_id).unwrap();
+                                                    let Some(dl) =
+                                                        remove_active_download_for_cleanup(
+                                                            &mut downloads,
+                                                            &request_id,
+                                                            "chunk hash retry exhaustion",
+                                                        )
+                                                    else {
+                                                        drop(downloads);
+                                                        return;
+                                                    };
                                                     let _ = std::fs::remove_file(&dl.output_path);
                                                     drop(downloads);
                                                     let _ = events.emit("file-download-failed", serde_json::json!({
@@ -5319,7 +5352,14 @@ async fn handle_behaviour_event(
                                                 "❌ Failed to write chunk {}: {}",
                                                 chunk_index, e
                                             );
-                                            let dl = downloads.remove(&request_id).unwrap();
+                                            let Some(dl) = remove_active_download_for_cleanup(
+                                                &mut downloads,
+                                                &request_id,
+                                                "chunk write failure",
+                                            ) else {
+                                                drop(downloads);
+                                                return;
+                                            };
                                             let _ = std::fs::remove_file(&dl.output_path);
                                             drop(downloads);
                                             let _ = events.emit(
@@ -5545,9 +5585,16 @@ async fn handle_behaviour_event(
                                         request_id,
                                         dl.retry_counts.len()
                                     );
-                                    let dl = downloads.remove(&request_id).unwrap();
-                                    file_hash_for_error = Some(dl.file_hash.clone());
-                                    let _ = std::fs::remove_file(&dl.output_path);
+                                    if let Some(dl) = remove_active_download_for_cleanup(
+                                        &mut downloads,
+                                        &request_id,
+                                        "invalid outbound retry index",
+                                    ) {
+                                        file_hash_for_error = Some(dl.file_hash.clone());
+                                        let _ = std::fs::remove_file(&dl.output_path);
+                                    } else {
+                                        emit_failure = false;
+                                    }
                                 } else {
                                     dl.retry_counts[chunk_index as usize] += 1;
                                     let attempt = dl.retry_counts[chunk_index as usize];
@@ -5609,9 +5656,16 @@ async fn handle_behaviour_event(
                                             return;
                                         } else {
                                             // Max retries exceeded
-                                            let dl = downloads.remove(&request_id).unwrap();
-                                            file_hash_for_error = Some(dl.file_hash.clone());
-                                            let _ = std::fs::remove_file(&dl.output_path);
+                                            if let Some(dl) = remove_active_download_for_cleanup(
+                                                &mut downloads,
+                                                &request_id,
+                                                "outbound failure retry exhaustion",
+                                            ) {
+                                                file_hash_for_error = Some(dl.file_hash.clone());
+                                                let _ = std::fs::remove_file(&dl.output_path);
+                                            } else {
+                                                emit_failure = false;
+                                            }
                                         }
                                     }
                                 }
@@ -5748,6 +5802,49 @@ async fn handle_behaviour_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_active_download(request_id: &str) -> ActiveChunkedDownload {
+        ActiveChunkedDownload {
+            request_id: request_id.to_string(),
+            file_hash: "file-hash".to_string(),
+            file_name: "file.bin".to_string(),
+            file_size: 1,
+            total_chunks: 1,
+            chunk_hashes: vec!["chunk-hash".to_string()],
+            received_chunks: vec![false],
+            output_path: std::env::temp_dir().join(format!("{request_id}.download")),
+            bytes_written: 0,
+            peer_id: PeerId::random(),
+            backup_peers: vec![],
+            retry_counts: vec![0],
+            current_chunk_index: 0,
+            start_time: std::time::Instant::now(),
+            payment_confirmed: false,
+        }
+    }
+
+    #[test]
+    fn remove_active_download_for_cleanup_returns_existing_download() {
+        let mut downloads = ActiveDownloadsMap::new();
+        downloads.insert("req-1".to_string(), test_active_download("req-1"));
+
+        let removed = remove_active_download_for_cleanup(&mut downloads, "req-1", "test cleanup")
+            .expect("existing download should be removed");
+
+        assert_eq!(removed.request_id, "req-1");
+        assert!(!downloads.contains_key("req-1"));
+    }
+
+    #[test]
+    fn remove_active_download_for_cleanup_handles_missing_download() {
+        let mut downloads = ActiveDownloadsMap::new();
+
+        let removed =
+            remove_active_download_for_cleanup(&mut downloads, "missing-req", "late chunk");
+
+        assert!(removed.is_none());
+        assert!(downloads.is_empty());
+    }
 
     #[tokio::test]
     async fn bootstrap_gate_waits_until_marked_ready() {
