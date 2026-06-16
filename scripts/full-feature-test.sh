@@ -53,6 +53,23 @@ section() {
     echo -e "${CYAN}=== $1 ===${NC}"
 }
 
+truthy_env() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if ! truthy_env "${CHIRAL_RUN_LIVE_LOAD_TESTS:-}"; then
+    echo "=============================================="
+    echo "  CHIRAL NETWORK — FULL FEATURE TEST SUITE"
+    echo "=============================================="
+    skip "Full feature test suite" "requires a live 10-node cluster; set CHIRAL_RUN_LIVE_LOAD_TESTS=1 to run"
+    echo ""
+    echo "Run with: CHIRAL_RUN_LIVE_LOAD_TESTS=1 ./scripts/full-feature-test.sh"
+    exit 0
+fi
+
 # Helper: HTTP GET, store body in BODY, status in STATUS
 api_get() {
     local url="$1"

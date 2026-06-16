@@ -1,12 +1,12 @@
 /**
  * Load / stress tests for the Chiral relay server at http://130.245.173.73:8080
  *
- * All test suites use `describe.skip` so they never run in CI.
+ * Live suites are skipped unless CHIRAL_RUN_LIVE_LOAD_TESTS=1 is set.
  * To run locally:
- *   1. Change `describe.skip` to `describe` for the suite(s) you want.
- *   2. `npx vitest run tests/load/relay-server.test.ts`
+ *   CHIRAL_RUN_LIVE_LOAD_TESTS=1 npx vitest run tests/load/relay-server.test.ts
  */
 import { describe, it, expect } from "vitest";
+import { describeLiveLoad } from "./liveGate";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -159,7 +159,7 @@ async function runConcurrent(
 // 1. Ratings API load tests
 // ---------------------------------------------------------------------------
 
-describe.skip("Ratings API — load tests", () => {
+describeLiveLoad("Ratings API — load tests", () => {
   // ---- POST /api/ratings/batch ----
 
   describe("POST /api/ratings/batch — concurrent batch lookups", () => {
@@ -287,7 +287,7 @@ describe.skip("Ratings API — load tests", () => {
 // 2. Email endpoint stress test
 // ---------------------------------------------------------------------------
 
-describe.skip("Email endpoint — stress tests", () => {
+describeLiveLoad("Email endpoint — stress tests", () => {
   describe("POST /api/wallet/backup-email — invalid data rejection", () => {
     const invalidBodies = [
       { label: "empty object", body: {} },
@@ -377,7 +377,7 @@ describe.skip("Email endpoint — stress tests", () => {
 // 3. General server health
 // ---------------------------------------------------------------------------
 
-describe.skip("General server health — stress tests", () => {
+describeLiveLoad("General server health — stress tests", () => {
   describe("Burst test — rapid sequential requests", () => {
     it("survives 200 rapid sequential requests to /api/ratings/batch", async () => {
       const durations: number[] = [];

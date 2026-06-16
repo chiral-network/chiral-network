@@ -5,6 +5,13 @@ source /tests/lib.sh
 PHASE="phase-14-large-file-transfer"
 log_info "[$PHASE] Starting large file transfer test"
 
+truthy_env() {
+    case "${1:-}" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 ###############################################################################
 # Phase 14 — Large File Transfer
 #
@@ -12,6 +19,12 @@ log_info "[$PHASE] Starting large file transfer test"
 # DHT, then has multiple consumers download simultaneously. Verifies file
 # integrity by comparing sizes.
 ###############################################################################
+
+if ! truthy_env "${CHIRAL_RUN_LARGE_FILE_TESTS:-}"; then
+    log_warn "[$PHASE] Skipping large-memory live transfer; set CHIRAL_RUN_LARGE_FILE_TESTS=1 to run"
+    record_result "$PHASE" "large-file-transfer" "skip" "0" "Set CHIRAL_RUN_LARGE_FILE_TESTS=1 to run large-memory live transfer"
+    exit 0
+fi
 
 if [[ -z "${SEEDER_NODES:-}" ]]; then
     log_warn "[$PHASE] SEEDER_NODES is empty — skipping"
