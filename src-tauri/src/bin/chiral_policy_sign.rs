@@ -9,8 +9,9 @@
 //!                              fill `signature`, write to stdout (or --out).
 //!   verify --pub <hex>       — verify a signed policy against a public key.
 //!
-//! The matching public key gets pasted into `version::POLICY_PUBLIC_KEY`.
-//! The private key stays offline / in a CI secret — never checked in.
+//! The matching public key is supplied as `CHIRAL_POLICY_PUBLIC_KEY` when
+//! building release binaries. The private key stays offline / in a CI
+//! secret — never checked in.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -34,7 +35,7 @@ struct Cli {
 enum Cmd {
     /// Generate a fresh Ed25519 keypair. Prints `public=<hex>` and
     /// `secret=<hex>` to stdout. Paste the public into
-    /// `version::POLICY_PUBLIC_KEY`; keep the secret offline.
+    /// release builds as `CHIRAL_POLICY_PUBLIC_KEY`; keep the secret offline.
     Keygen,
     /// Sign a policy JSON. Reads from `--in` or stdin; writes the signed
     /// JSON to `--out` or stdout.

@@ -131,19 +131,24 @@ pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str 
 // unsigned policies that don't tighten beyond what's bundled — see
 // [`is_acceptable_remote_policy`]).
 //
-// The placeholder below is 32 zero bytes — *not* a real key. Replace it
-// with the project's real Ed25519 public key (32 bytes, hex-encoded
-// inline) when the operator generates one. The matching private key
-// stays offline / in a CI secret and only feeds the
-// `chiral-policy-sign` operator CLI.
+// Debug/test builds without a configured key use 32 zero bytes as a
+// placeholder. Release builds are blocked by build.rs unless
+// CHIRAL_POLICY_PUBLIC_KEY is set to a nonzero 32-byte hex key at build
+// time, which becomes the compiled fallback. The matching private key
+// stays offline / in a CI secret and only feeds the `chiral-policy-sign`
+// operator CLI.
 
 /// Compile-time fallback for the project policy-signing public key.
-/// **Placeholder zeros until the real key is generated.** Operators
-/// override this at runtime via the `CHIRAL_POLICY_PUBLIC_KEY` env var
-/// (32-byte hex, with or without leading `0x`) so a deployment can
-/// activate signed policies without recompiling. Generate a key with
+/// Release builds require `CHIRAL_POLICY_PUBLIC_KEY` at build time so
+/// production binaries cannot ship the all-zero placeholder. Operators
+/// may still override this at runtime with the same env var (32-byte
+/// hex, with or without leading `0x`). Generate a key with
 /// `chiral-policy-sign keygen`.
-pub const POLICY_PUBLIC_KEY: [u8; 32] = [0u8; 32];
+include!(concat!(env!("OUT_DIR"), "/policy_public_key.rs"));
+
+fn is_placeholder_policy_key(key: &[u8; 32]) -> bool {
+    *key == [0u8; 32]
+}
 
 /// Resolve the active policy public key. Reads the
 /// `CHIRAL_POLICY_PUBLIC_KEY` env var on first call and caches it; if
@@ -195,18 +200,16 @@ pub fn log_policy_key_status() {
     static LOGGED: OnceCell<()> = OnceCell::new();
     LOGGED.get_or_init(|| {
         let key = policy_public_key();
-        if key == [0u8; 32] {
+        if is_placeholder_policy_key(&key) {
             eprintln!(
                 "[VERSION] WARNING: policy-signing public key is the placeholder zeros. \
                  Signed policies cannot verify until a real key is generated \
                  (chiral-policy-sign keygen) and wired in via the CHIRAL_POLICY_PUBLIC_KEY \
-                 env var or the POLICY_PUBLIC_KEY constant. Only the unsigned-but-permissive \
+                 env var. Only the unsigned-but-permissive \
                  transition path is active."
             );
         } else {
-            println!(
-                "[VERSION] policy-signing public key configured (signed policies enabled)"
-            );
+            println!("[VERSION] policy-signing public key configured (signed policies enabled)");
         }
     });
 }
@@ -259,7 +262,8 @@ pub fn verify_policy(p: &VersionPolicy) -> bool {
         Ok(k) => k,
         Err(_) => return false,
     };
-    key.verify(&canonical_signing_payload(p), &signature).is_ok()
+    key.verify(&canonical_signing_payload(p), &signature)
+        .is_ok()
 }
 
 /// Decide whether a policy fetched from the network should replace the
@@ -457,6 +461,19 @@ mod tests {
         let mut p = policy("1.0.0", "2.0.0", 100);
         p.signature = hex::encode([1u8; 64]);
         assert!(!verify_policy(&p));
+    }
+
+    #[test]
+    fn placeholder_policy_key_detection() {
+        assert!(is_placeholder_policy_key(&[0u8; 32]));
+        assert!(!is_placeholder_policy_key(&[1u8; 32]));
+    }
+
+    #[test]
+    fn release_builds_do_not_embed_placeholder_policy_key() {
+        if !cfg!(debug_assertions) {
+            assert!(!is_placeholder_policy_key(&POLICY_PUBLIC_KEY));
+        }
     }
 
     #[test]
