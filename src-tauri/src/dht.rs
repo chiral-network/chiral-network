@@ -1393,7 +1393,7 @@ async fn verify_payment_proof(
 ) -> ChunkResponse {
     // Stage 3: replay guard — peek before doing any chain work so we
     // don't burn an RPC call on a tx that's already been redeemed.
-    match payment_claim_status(payment_tx, &scope).await {
+    match payment_claim_status(payment_tx, &scope, payer_address, &peer_id).await {
         PaymentClaimStatus::Available => {}
         PaymentClaimStatus::ClaimedSameFolder => {
             println!(
@@ -1466,7 +1466,7 @@ async fn verify_payment_proof(
         Ok(true) => {
             // Atomically claim this tx so concurrent replays can't slip
             // through between the peek above and this point.
-            match claim_payment_tx(payment_tx, &scope).await {
+            match claim_payment_tx(payment_tx, &scope, payer_address, &peer_id).await {
                 PaymentClaimStatus::Available => {}
                 PaymentClaimStatus::ClaimedSameFolder => {
                     println!(
@@ -1568,8 +1568,8 @@ async fn verify_payment_on_chain(
 //
 // Each successful payment tx is persisted under the scope it unlocked. Direct
 // file payments can only unlock one file delivery. Folder payments can unlock
-// every manifest member for that same folder, but cannot be replayed against
-// direct file downloads or a different folder.
+// every manifest member for that same folder, payer, and peer, but cannot be
+// replayed by another downloader that learns the public tx hash.
 //
 // Store: a set of lowercased claim keys, JSON-serialised as
 // `{"spent":[...]}`, persisted at `<data_dir>/seeder_spent_tx.json`.
@@ -1631,14 +1631,25 @@ async fn persist_spent_tx_set(set: &HashSet<String>) {
     let _ = tokio::fs::write(&path, json).await;
 }
 
-fn payment_scope_key(tx_hash: &str, scope: &PaymentScope) -> String {
+fn payment_scope_key(
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> String {
     let tx = tx_hash.to_lowercase();
     match scope {
         PaymentScope::DirectFile { file_hash } => {
             format!("file:{}:{}", tx, file_hash.to_lowercase())
         }
         PaymentScope::Folder { folder_hash } => {
-            format!("folder:{}:{}", tx, normalize_folder_hash(folder_hash))
+            format!(
+                "folder:{}:{}:{}:{}",
+                tx,
+                normalize_folder_hash(folder_hash),
+                payer_address.trim().to_lowercase(),
+                peer_id
+            )
         }
     }
 }
@@ -1651,7 +1662,13 @@ fn ledger_entry_uses_tx(entry: &str, tx_hash: &str) -> bool {
         || entry.starts_with(&format!("folder:{}:", tx))
 }
 
-fn ledger_entry_matches_scope(entry: &str, tx_hash: &str, scope: &PaymentScope) -> bool {
+fn ledger_entry_matches_scope(
+    entry: &str,
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> bool {
     let tx = tx_hash.to_lowercase();
     match scope {
         PaymentScope::DirectFile { file_hash } => {
@@ -1659,8 +1676,8 @@ fn ledger_entry_matches_scope(entry: &str, tx_hash: &str, scope: &PaymentScope) 
             entry == format!("file:{}:{}", tx, file_hash)
                 || entry == format!("{}:{}", tx, file_hash)
         }
-        PaymentScope::Folder { folder_hash } => {
-            entry == format!("folder:{}:{}", tx, normalize_folder_hash(folder_hash))
+        PaymentScope::Folder { .. } => {
+            entry == payment_scope_key(tx_hash, scope, payer_address, peer_id)
         }
     }
 }
@@ -1669,10 +1686,12 @@ fn classify_payment_claim(
     spent: &HashSet<String>,
     tx_hash: &str,
     scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
 ) -> PaymentClaimStatus {
     let exact_scope_match = spent
         .iter()
-        .any(|entry| ledger_entry_matches_scope(entry, tx_hash, scope));
+        .any(|entry| ledger_entry_matches_scope(entry, tx_hash, scope, payer_address, peer_id));
     if exact_scope_match {
         return match scope {
             PaymentScope::DirectFile { .. } => PaymentClaimStatus::ClaimedDirectFile,
@@ -1689,23 +1708,33 @@ fn classify_payment_claim(
     }
 }
 
-async fn payment_claim_status(tx_hash: &str, scope: &PaymentScope) -> PaymentClaimStatus {
+async fn payment_claim_status(
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> PaymentClaimStatus {
     let store = spent_tx_store().await;
     let guard = store.lock().await;
-    classify_payment_claim(&guard, tx_hash, scope)
+    classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id)
 }
 
 /// Records a verified payment claim. `Available` means this call inserted a
 /// new claim. A same-folder repeat is accepted because one folder payment
 /// unlocks all manifest members.
-async fn claim_payment_tx(tx_hash: &str, scope: &PaymentScope) -> PaymentClaimStatus {
+async fn claim_payment_tx(
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> PaymentClaimStatus {
     let store = spent_tx_store().await;
     let mut guard = store.lock().await;
-    let status = classify_payment_claim(&guard, tx_hash, scope);
+    let status = classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id);
     if status != PaymentClaimStatus::Available {
         return status;
     }
-    let key = payment_scope_key(tx_hash, scope);
+    let key = payment_scope_key(tx_hash, scope, payer_address, peer_id);
     guard.insert(key);
     let snapshot = guard.clone();
     drop(guard);
@@ -6237,6 +6266,10 @@ mod tests {
     #[test]
     fn folder_payment_claim_is_reusable_only_for_same_folder() {
         let tx = "0xabc";
+        let payer = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let other_payer = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let peer = PeerId::random();
+        let other_peer = PeerId::random();
         let folder_a = PaymentScope::Folder {
             folder_hash: "folder-a".to_string(),
         };
@@ -6247,18 +6280,26 @@ mod tests {
             file_hash: "file-a".to_string(),
         };
         let mut spent = HashSet::new();
-        spent.insert(payment_scope_key(tx, &folder_a));
+        spent.insert(payment_scope_key(tx, &folder_a, payer, &peer));
 
         assert_eq!(
-            classify_payment_claim(&spent, tx, &folder_a),
+            classify_payment_claim(&spent, tx, &folder_a, payer, &peer),
             PaymentClaimStatus::ClaimedSameFolder
         );
         assert_eq!(
-            classify_payment_claim(&spent, tx, &folder_b),
+            classify_payment_claim(&spent, tx, &folder_a, other_payer, &peer),
             PaymentClaimStatus::ClaimedOtherScope
         );
         assert_eq!(
-            classify_payment_claim(&spent, tx, &file),
+            classify_payment_claim(&spent, tx, &folder_a, payer, &other_peer),
+            PaymentClaimStatus::ClaimedOtherScope
+        );
+        assert_eq!(
+            classify_payment_claim(&spent, tx, &folder_b, payer, &peer),
+            PaymentClaimStatus::ClaimedOtherScope
+        );
+        assert_eq!(
+            classify_payment_claim(&spent, tx, &file, payer, &peer),
             PaymentClaimStatus::ClaimedOtherScope
         );
     }
