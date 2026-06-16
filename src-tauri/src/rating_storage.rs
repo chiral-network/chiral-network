@@ -2,7 +2,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+
+use crate::dht::DhtService;
+use crate::reputation::{self, ReputationIssuerKeyRecord};
 
 pub const BASE_ELO: f64 = 50.0;
 pub const MIN_ELO: f64 = 0.0;
@@ -36,6 +39,10 @@ pub struct ReputationEvent {
     pub rating_score: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_wallet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_signature: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -60,20 +67,61 @@ pub struct ReputationSnapshot {
 pub struct RatingState {
     pub manifest: Arc<RwLock<RatingManifest>>,
     data_dir: PathBuf,
+    issuer_dht: Option<Arc<Mutex<Option<Arc<DhtService>>>>>,
 }
 
 impl RatingState {
     pub fn new(data_dir: PathBuf) -> Self {
+        Self::new_with_issuer_dht(data_dir, None)
+    }
+
+    pub fn new_with_issuer_dht(
+        data_dir: PathBuf,
+        issuer_dht: Option<Arc<Mutex<Option<Arc<DhtService>>>>>,
+    ) -> Self {
         let manifest = load_manifest(&data_dir);
         Self {
             manifest: Arc::new(RwLock::new(manifest)),
             data_dir,
+            issuer_dht,
         }
     }
 
     pub async fn persist(&self) {
         let m = self.manifest.read().await;
         save_manifest(&self.data_dir, &m);
+    }
+
+    pub fn issuer_key_store_configured(&self) -> bool {
+        self.issuer_dht.is_some()
+    }
+
+    async fn issuer_dht_service(&self) -> Result<Arc<DhtService>, String> {
+        let Some(dht_ref) = &self.issuer_dht else {
+            return Err("DHT issuer key store is not configured".to_string());
+        };
+        dht_ref
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT is not running".to_string())
+    }
+
+    pub async fn publish_issuer_key(
+        &self,
+        record: ReputationIssuerKeyRecord,
+    ) -> Result<(), String> {
+        let dht = self.issuer_dht_service().await?;
+        reputation::publish_issuer_key(&dht, record).await
+    }
+
+    pub async fn fetch_issuer_key(
+        &self,
+        issuer_wallet: &str,
+    ) -> Result<Option<ReputationIssuerKeyRecord>, String> {
+        let dht = self.issuer_dht_service().await?;
+        reputation::fetch_issuer_key(&dht, issuer_wallet).await
     }
 }
 
@@ -219,6 +267,8 @@ mod tests {
             tx_hash: None,
             rating_score,
             rating_comment: None,
+            issuer_wallet: None,
+            verdict_signature: None,
             created_at,
             updated_at: created_at,
         }

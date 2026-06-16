@@ -13,6 +13,7 @@ use crate::rating_storage::{
     self, compute_reputation_for_wallet, RatingState, ReputationEvent, TransferOutcome,
     LOOKBACK_SECS,
 };
+use crate::reputation::{self, ReputationIssuerKeyRecord, ReputationVerdictPayload};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +26,19 @@ struct SubmitTransferRequest {
     amount_wei: String,
     #[serde(default)]
     tx_hash: Option<String>,
+    #[serde(default)]
+    issuer_wallet: Option<String>,
+    #[serde(default)]
+    verdict_signature: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishIssuerKeyRequest {
+    verifying_key: String,
+    owner_signature: String,
+    #[serde(default)]
+    updated_at: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +100,123 @@ fn parse_wei(value: &str) -> Result<u128, String> {
 fn parse_hex_u128(hex: &str) -> Result<u128, String> {
     let value = hex.trim_start_matches("0x");
     u128::from_str_radix(value, 16).map_err(|e| format!("Invalid hex value: {}", e))
+}
+
+fn outcome_label(outcome: TransferOutcome) -> &'static str {
+    match outcome {
+        TransferOutcome::Completed => "completed",
+        TransferOutcome::Failed => "failed",
+    }
+}
+
+fn transfer_verdict_payload(
+    req: &SubmitTransferRequest,
+    downloader_wallet: &str,
+    amount_wei: u128,
+) -> ReputationVerdictPayload {
+    ReputationVerdictPayload {
+        transfer_id: req.transfer_id.trim().to_string(),
+        seeder_wallet: req.seeder_wallet.trim().to_string(),
+        downloader_wallet: downloader_wallet.trim().to_string(),
+        file_hash: req.file_hash.trim().to_string(),
+        amount_wei: amount_wei.to_string(),
+        outcome: outcome_label(req.outcome).to_string(),
+        tx_hash: req
+            .tx_hash
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string),
+    }
+}
+
+async fn verify_transfer_verdict(
+    state: &RatingState,
+    req: &SubmitTransferRequest,
+    downloader_wallet: &str,
+    amount_wei: u128,
+) -> Result<(String, String), String> {
+    let issuer_wallet = req
+        .issuer_wallet
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| "issuerWallet is required for reputation verdicts".to_string())?;
+    let issuer_wallet = reputation::normalize_wallet(issuer_wallet)?;
+    if !issuer_wallet.eq_ignore_ascii_case(downloader_wallet) {
+        return Err("issuerWallet must match the authenticated X-Owner wallet".to_string());
+    }
+
+    let verdict_signature = req
+        .verdict_signature
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| "verdictSignature is required for reputation verdicts".to_string())?;
+
+    let issuer_record = state
+        .fetch_issuer_key(&issuer_wallet)
+        .await?
+        .ok_or_else(|| format!("No reputation issuer key published for {issuer_wallet}"))?;
+    let verdict = transfer_verdict_payload(req, downloader_wallet, amount_wei);
+    reputation::verify_reputation_verdict_for_wallet(
+        &issuer_record,
+        &issuer_wallet,
+        &verdict,
+        verdict_signature,
+    )?;
+    Ok((issuer_wallet, verdict_signature.to_string()))
+}
+
+/// POST /api/ratings/issuer-key — publish this wallet's Ed25519 issuer key.
+async fn publish_issuer_key(
+    Extension(state): Extension<Arc<RatingState>>,
+    headers: HeaderMap,
+    Json(req): Json<PublishIssuerKeyRequest>,
+) -> Response {
+    let issuer_wallet = match get_owner(&headers) {
+        Some(v) => v.to_lowercase(),
+        None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
+    };
+
+    let record = ReputationIssuerKeyRecord {
+        issuer_wallet,
+        verifying_key: req.verifying_key,
+        owner_signature: req.owner_signature,
+        updated_at: req.updated_at.unwrap_or_else(rating_storage::now_secs),
+    };
+
+    if let Err(err) = reputation::validate_issuer_key_record(&record) {
+        return (StatusCode::BAD_REQUEST, err).into_response();
+    }
+
+    match state.publish_issuer_key(record.clone()).await {
+        Ok(()) => (StatusCode::CREATED, Json(record)).into_response(),
+        Err(err) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Failed to publish reputation issuer key: {err}"),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/ratings/issuer-key/:wallet — retrieve a wallet's issuer key record.
+async fn get_issuer_key(
+    Extension(state): Extension<Arc<RatingState>>,
+    Path(wallet): Path<String>,
+) -> Response {
+    if let Err(err) = reputation::normalize_wallet(&wallet) {
+        return (StatusCode::BAD_REQUEST, err).into_response();
+    }
+    match state.fetch_issuer_key(&wallet).await {
+        Ok(Some(record)) => Json(record).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "reputation issuer key not found").into_response(),
+        Err(err) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Failed to retrieve reputation issuer key: {err}"),
+        )
+            .into_response(),
+    }
 }
 
 /// Validate paid transfer via on-chain transaction data.
@@ -223,6 +354,26 @@ async fn submit_transfer(
         }
     }
 
+    if !state.issuer_key_store_configured() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "reputation issuer key store is not available on this server",
+        )
+            .into_response();
+    }
+
+    let (issuer_wallet, verdict_signature) =
+        match verify_transfer_verdict(&state, &req, &downloader_wallet, amount_wei).await {
+            Ok(v) => v,
+            Err(err) => return (StatusCode::BAD_REQUEST, err).into_response(),
+        };
+    let tx_hash = req
+        .tx_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+
     let now = rating_storage::now_secs();
     let event_id = rating_storage::generate_event_id(
         &req.transfer_id,
@@ -235,7 +386,9 @@ async fn submit_transfer(
     if let Some(existing) = m.events.iter_mut().find(|e| e.id == event_id) {
         existing.outcome = req.outcome;
         existing.amount_wei = amount_wei.to_string();
-        existing.tx_hash = req.tx_hash.filter(|v| !v.trim().is_empty());
+        existing.tx_hash = tx_hash.clone();
+        existing.issuer_wallet = Some(issuer_wallet);
+        existing.verdict_signature = Some(verdict_signature);
         existing.updated_at = now;
         let updated = existing.clone();
         drop(m);
@@ -251,9 +404,11 @@ async fn submit_transfer(
         file_hash: req.file_hash.trim().to_string(),
         amount_wei: amount_wei.to_string(),
         outcome: req.outcome,
-        tx_hash: req.tx_hash.filter(|v| !v.trim().is_empty()),
+        tx_hash,
         rating_score: None,
         rating_comment: None,
+        issuer_wallet: Some(issuer_wallet),
+        verdict_signature: Some(verdict_signature),
         created_at: now,
         updated_at: now,
     };
@@ -330,12 +485,14 @@ pub fn rating_routes(state: Arc<RatingState>) -> Router {
     // the X-Owner address, otherwise anyone could submit a "Failed"
     // outcome against an arbitrary seeder and tank their Elo.
     let protected = Router::new()
+        .route("/api/ratings/issuer-key", post(publish_issuer_key))
         .route("/api/ratings/transfer", post(submit_transfer))
         .layer(axum::middleware::from_fn(crate::auth::owner_proof_middleware));
 
     // Read-only routes don't need authentication — Elo scores are
     // public anyway.
     let public = Router::new()
+        .route("/api/ratings/issuer-key/:wallet", get(get_issuer_key))
         .route("/api/ratings/batch", post(batch_reputation))
         .route("/api/ratings/:wallet", get(get_reputation));
 

@@ -14,6 +14,7 @@ pub mod hosting_server;
 pub mod network;
 pub mod rating_api;
 pub mod rating_storage;
+pub mod reputation;
 pub mod relay_share_proxy;
 pub mod rpc_client;
 mod speed_tiers;
@@ -7017,6 +7018,16 @@ struct OwnerProof {
     header: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReputationVerdictProof {
+    issuer_wallet: String,
+    verifying_key: String,
+    owner_signature: String,
+    updated_at: u64,
+    verdict_signature: String,
+}
+
 #[tauri::command]
 fn compute_owner_proof(
     method: String,
@@ -7039,6 +7050,111 @@ fn compute_owner_proof(
         timestamp: ts,
         header: format!("{}:{}", ts, signature),
         signature,
+    })
+}
+
+fn verify_private_key_matches_wallet(
+    private_key: &str,
+    wallet_address: &str,
+) -> Result<(), String> {
+    let probe = b"chiral-reputation-wallet-check-v1";
+    let signature = wallet::sign_message(private_key, probe)
+        .map_err(|e| format!("sign_message failed: {}", e))?;
+    let recovered = wallet::recover_signer(probe, &signature)
+        .map_err(|e| format!("recover_signer failed: {}", e))?;
+    if !recovered.eq_ignore_ascii_case(wallet_address) {
+        return Err("private_key does not match wallet_address".to_string());
+    }
+    Ok(())
+}
+
+fn derive_reputation_issuer_key(private_key: &str) -> Result<ed25519_dalek::SigningKey, String> {
+    use sha2::{Digest, Sha256};
+
+    let key_hex = private_key.trim().trim_start_matches("0x");
+    let key_bytes =
+        hex::decode(key_hex).map_err(|e| format!("private_key is not valid hex: {}", e))?;
+    if key_bytes.len() != 32 {
+        return Err("private_key must be 32 bytes".to_string());
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"chiral-reputation-issuer-key-v1");
+    hasher.update(&key_bytes);
+    let digest = hasher.finalize();
+    let mut secret = [0u8; 32];
+    secret.copy_from_slice(&digest);
+    Ok(ed25519_dalek::SigningKey::from_bytes(&secret))
+}
+
+#[tauri::command]
+fn compute_reputation_verdict_proof(
+    transfer_id: String,
+    seeder_wallet: String,
+    downloader_wallet: String,
+    file_hash: String,
+    amount_wei: String,
+    outcome: String,
+    tx_hash: Option<String>,
+    wallet_address: String,
+    private_key: String,
+) -> Result<ReputationVerdictProof, String> {
+    use ed25519_dalek::Signer;
+
+    if private_key.trim().is_empty() {
+        return Err("private_key required".to_string());
+    }
+
+    let issuer_wallet = reputation::normalize_wallet(&wallet_address)?;
+    let normalized_downloader = reputation::normalize_wallet(&downloader_wallet)?;
+    if issuer_wallet != normalized_downloader {
+        return Err("wallet_address must match downloader_wallet".to_string());
+    }
+    verify_private_key_matches_wallet(&private_key, &issuer_wallet)?;
+
+    let amount_wei = if amount_wei.trim().is_empty() {
+        "0".to_string()
+    } else {
+        amount_wei.trim().to_string()
+    };
+    amount_wei
+        .parse::<u128>()
+        .map_err(|_| "amountWei must be an integer wei string".to_string())?;
+
+    let outcome = match outcome.trim().to_lowercase().as_str() {
+        "completed" => "completed".to_string(),
+        "failed" => "failed".to_string(),
+        _ => return Err("outcome must be completed or failed".to_string()),
+    };
+
+    let tx_hash = tx_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    let signing_key = derive_reputation_issuer_key(&private_key)?;
+    let verifying_key = hex::encode(signing_key.verifying_key().to_bytes());
+    let owner_payload = reputation::issuer_key_binding_payload(&issuer_wallet, &verifying_key);
+    let owner_signature = wallet::sign_message(&private_key, &owner_payload)
+        .map_err(|e| format!("sign_message failed: {}", e))?;
+    let verdict = reputation::ReputationVerdictPayload {
+        transfer_id: transfer_id.trim().to_string(),
+        seeder_wallet: seeder_wallet.trim().to_string(),
+        downloader_wallet: issuer_wallet.clone(),
+        file_hash: file_hash.trim().to_string(),
+        amount_wei,
+        outcome,
+        tx_hash,
+    };
+    let verdict_signature = signing_key.sign(&reputation::verdict_signing_payload(&verdict));
+
+    Ok(ReputationVerdictProof {
+        issuer_wallet,
+        verifying_key,
+        owner_signature,
+        updated_at: rating_storage::now_secs(),
+        verdict_signature: hex::encode(verdict_signature.to_bytes()),
     })
 }
 
@@ -7386,6 +7502,7 @@ pub fn run() {
             get_version_policy,
             get_version_status,
             compute_owner_proof,
+            compute_reputation_verdict_proof,
             compute_relay_register_signature,
             get_mining_balance_diagnostic,
             // Bootstrap health commands
