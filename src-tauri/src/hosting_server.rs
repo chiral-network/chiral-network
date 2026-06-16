@@ -24,6 +24,19 @@ use crate::wallet_backup_api;
 /// Maximum total upload size per site (50 MB).
 const MAX_SITE_BYTES: usize = 50 * 1024 * 1024;
 
+fn unix_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| {
+            "System clock is before UNIX_EPOCH; refusing to timestamp hosted site upload"
+                .to_string()
+        })
+}
+
+fn unix_timestamp_secs() -> Result<u64, String> {
+    unix_timestamp_secs_at(std::time::SystemTime::now())
+}
+
 /// Shared state for the hosting HTTP server.
 #[derive(Clone)]
 pub struct HostingServerState {
@@ -342,6 +355,13 @@ async fn upload_site(
         decoded_files.push((upload_file.path.clone(), data));
     }
 
+    let now = match unix_timestamp_secs() {
+        Ok(timestamp) => timestamp,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+        }
+    };
+
     // Create site directory
     let base_dir = match hosting::sites_base_dir() {
         Some(d) => d,
@@ -384,11 +404,6 @@ async fn upload_site(
             size: data.len() as u64,
         });
     }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
 
     let site = HostedSite {
         id: req.id.clone(),
@@ -673,6 +688,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn upload_timestamp_accepts_post_epoch_clock() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(42);
+
+        assert_eq!(unix_timestamp_secs_at(now).unwrap(), 42);
+    }
+
+    #[test]
+    fn upload_timestamp_rejects_pre_epoch_clock() {
+        let now = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let err = unix_timestamp_secs_at(now)
+            .expect_err("pre-epoch clock should reject upload timestamp");
+
+        assert!(err.contains("System clock is before UNIX_EPOCH"));
+        assert!(err.contains("hosted site upload"));
+    }
+
     #[tokio::test]
     async fn test_health_check() {
         let state = Arc::new(HostingServerState::new());
@@ -835,6 +867,7 @@ mod tests {
         assert!(sites.contains_key("gw12test"));
         let site = &sites["gw12test"];
         assert_eq!(site.name, "Gateway Test");
+        assert!(site.created_at > 0);
         assert_eq!(site.files.len(), 1);
         drop(sites);
 
