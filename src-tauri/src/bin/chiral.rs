@@ -1940,6 +1940,22 @@ mod tests {
         assert!(report.warnings[0].contains("Failed to read agreement"));
         assert!(path.exists());
     }
+
+    #[test]
+    fn market_advertise_wallet_validation_rejects_empty_wallet() {
+        let err = chiral_network::validate_host_ad_wallet_address(Some("  "))
+            .expect_err("empty CLI wallet should be rejected");
+
+        assert!(err.contains("walletAddress is required"));
+    }
+
+    #[test]
+    fn market_advertise_wallet_validation_accepts_valid_wallet() {
+        assert_eq!(
+            chiral_network::validate_host_ad_wallet_address(Some(" 0xwallet ")).unwrap(),
+            "0xwallet"
+        );
+    }
 }
 
 fn compute_file_hash(path: &Path) -> Result<String, String> {
@@ -3530,6 +3546,7 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
             min_deposit_wei,
             port,
         } => {
+            let wallet = chiral_network::validate_host_ad_wallet_address(Some(&wallet))?;
             let peer_id = dht_peer_id(port).await?;
             let ad = serde_json::json!({
                 "peerId": peer_id,
