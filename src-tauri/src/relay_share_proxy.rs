@@ -22,7 +22,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{oneshot, RwLock};
@@ -307,11 +307,121 @@ fn is_valid_wallet(s: &str) -> bool {
     s.len() == 42 && s.starts_with("0x") && s[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Reject origin URLs that point at private/link-local infrastructure.
-/// Loopback is permitted at registration time because `fix_origin_url`
-/// substitutes the registrant's public IP at request handling.
-fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
-    use std::net::{IpAddr, Ipv4Addr};
+const PRIVATE_ORIGIN_ALLOWLIST_ENV: &str = "CHIRAL_RELAY_SHARE_PRIVATE_ORIGIN_ALLOWLIST";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PrivateOriginAllowEntry {
+    V4 { network: u32, prefix: u8 },
+    V6 { network: u128, prefix: u8 },
+}
+
+impl PrivateOriginAllowEntry {
+    fn contains(&self, ip: IpAddr) -> bool {
+        match (self, ip) {
+            (Self::V4 { network, prefix }, IpAddr::V4(v4)) => {
+                let mask = prefix_mask_v4(*prefix);
+                (u32::from(v4) & mask) == *network
+            }
+            (Self::V6 { network, prefix }, IpAddr::V6(v6)) => {
+                let mask = prefix_mask_v6(*prefix);
+                (u128::from(v6) & mask) == *network
+            }
+            _ => false,
+        }
+    }
+}
+
+fn prefix_mask_v4(prefix: u8) -> u32 {
+    if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    }
+}
+
+fn prefix_mask_v6(prefix: u8) -> u128 {
+    if prefix == 0 {
+        0
+    } else {
+        u128::MAX << (128 - prefix)
+    }
+}
+
+fn parse_private_origin_allow_entry(raw: &str) -> Result<PrivateOriginAllowEntry, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("empty allowlist entry".to_string());
+    }
+
+    let (ip_raw, prefix_raw) = trimmed.split_once('/').unwrap_or((trimmed, ""));
+    let ip: IpAddr = ip_raw
+        .parse()
+        .map_err(|_| format!("invalid IP allowlist entry `{}`", trimmed))?;
+
+    match ip {
+        IpAddr::V4(v4) => {
+            let prefix = if prefix_raw.is_empty() {
+                32
+            } else {
+                prefix_raw
+                    .parse::<u8>()
+                    .map_err(|_| format!("invalid IPv4 prefix in `{}`", trimmed))?
+            };
+            if prefix > 32 {
+                return Err(format!("IPv4 prefix out of range in `{}`", trimmed));
+            }
+            let mask = prefix_mask_v4(prefix);
+            Ok(PrivateOriginAllowEntry::V4 {
+                network: u32::from(v4) & mask,
+                prefix,
+            })
+        }
+        IpAddr::V6(v6) => {
+            let prefix = if prefix_raw.is_empty() {
+                128
+            } else {
+                prefix_raw
+                    .parse::<u8>()
+                    .map_err(|_| format!("invalid IPv6 prefix in `{}`", trimmed))?
+            };
+            if prefix > 128 {
+                return Err(format!("IPv6 prefix out of range in `{}`", trimmed));
+            }
+            let mask = prefix_mask_v6(prefix);
+            Ok(PrivateOriginAllowEntry::V6 {
+                network: u128::from(v6) & mask,
+                prefix,
+            })
+        }
+    }
+}
+
+fn parse_private_origin_allowlist(raw: &str) -> Vec<PrivateOriginAllowEntry> {
+    raw.split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            match parse_private_origin_allow_entry(entry) {
+                Ok(parsed) => Some(parsed),
+                Err(e) => {
+                    eprintln!("[RELAY-SHARE] Ignoring invalid private-origin allowlist entry: {e}");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+fn private_origin_allowlist_from_env() -> Vec<PrivateOriginAllowEntry> {
+    std::env::var(PRIVATE_ORIGIN_ALLOWLIST_ENV)
+        .ok()
+        .map(|raw| parse_private_origin_allowlist(&raw))
+        .unwrap_or_default()
+}
+
+fn origin_host(origin_url: &str) -> Result<String, String> {
     let lower = origin_url.trim().to_lowercase();
     let rest = if let Some(r) = lower.strip_prefix("http://") {
         r
@@ -344,59 +454,101 @@ fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
     if host.is_empty() {
         return Err("origin_url has no host".to_string());
     }
+    Ok(host.to_string())
+}
+
+fn allowlist_contains(allowlist: &[PrivateOriginAllowEntry], ip: IpAddr) -> bool {
+    allowlist.iter().any(|entry| entry.contains(ip))
+}
+
+fn is_cgnat_v4(v4: Ipv4Addr) -> bool {
+    let oct = v4.octets();
+    oct[0] == 100 && (oct[1] & 0xC0) == 64
+}
+
+fn validate_ipv4_origin(v4: Ipv4Addr, allowlist: &[PrivateOriginAllowEntry]) -> Result<(), String> {
+    if v4 == Ipv4Addr::UNSPECIFIED {
+        return Err("origin_url 0.0.0.0 is not routable".to_string());
+    }
+    if v4.is_loopback() {
+        // Allowed — fix_origin_url substitutes at request time.
+        return Ok(());
+    }
+    if v4.is_link_local() {
+        return Err(format!("origin_url IP {} is link-local — not allowed", v4));
+    }
+    if v4.is_broadcast() || v4.is_multicast() {
+        return Err(format!(
+            "origin_url IP {} is broadcast / multicast — not allowed",
+            v4
+        ));
+    }
+    if v4.is_private() || is_cgnat_v4(v4) {
+        if allowlist_contains(allowlist, IpAddr::V4(v4)) {
+            return Ok(());
+        }
+        return Err(format!(
+            "origin_url IP {} is private / CGNAT — not allowed without {}",
+            v4, PRIVATE_ORIGIN_ALLOWLIST_ENV
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ipv6_origin(v6: Ipv6Addr, allowlist: &[PrivateOriginAllowEntry]) -> Result<(), String> {
+    if v6.is_loopback() {
+        return Ok(());
+    }
+    if v6.is_unspecified() || v6.is_multicast() {
+        return Err(format!("origin_url IPv6 {} is not routable", v6));
+    }
+    if v6 == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254) {
+        return Err(format!("origin_url IPv6 {} is a metadata service", v6));
+    }
+    let seg0 = v6.segments()[0];
+    // Link-local fe80::/10 is never allowlisted: it includes local
+    // infrastructure and metadata-service style targets.
+    if (seg0 & 0xffc0) == 0xfe80 {
+        return Err(format!("origin_url IPv6 {} is link-local", v6));
+    }
+    // Detect IPv4-mapped (::ffff:0:0/96) and walk into v4 rules.
+    if let Some(mapped) = v6.to_ipv4() {
+        return validate_ipv4_origin(mapped, allowlist);
+    }
+    // Unique-local fc00::/7 may be reachable through VPN/corporate
+    // networks, but only when the relay operator explicitly allows it.
+    if (seg0 & 0xfe00) == 0xfc00 {
+        if allowlist_contains(allowlist, IpAddr::V6(v6)) {
+            return Ok(());
+        }
+        return Err(format!(
+            "origin_url IPv6 {} is unique-local — not allowed without {}",
+            v6, PRIVATE_ORIGIN_ALLOWLIST_ENV
+        ));
+    }
+    Ok(())
+}
+
+/// Reject origin URLs that point at private/link-local infrastructure.
+/// Loopback is permitted at registration time because `fix_origin_url`
+/// substitutes the registrant's public IP at request handling.
+fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
+    let allowlist = private_origin_allowlist_from_env();
+    is_safe_origin_url_with_allowlist(origin_url, &allowlist)
+}
+
+fn is_safe_origin_url_with_allowlist(
+    origin_url: &str,
+    allowlist: &[PrivateOriginAllowEntry],
+) -> Result<(), String> {
+    let host = origin_host(origin_url)?;
     // If the host is an IP literal, block private / link-local ranges.
     // DNS names pass — DNS rebinding is a separate attack we don't
     // address here (would need proxy-time IP re-validation).
     if let Ok(ip) = host.parse::<IpAddr>() {
         match ip {
-            IpAddr::V4(v4) => {
-                if v4 == Ipv4Addr::UNSPECIFIED {
-                    return Err("origin_url 0.0.0.0 is not routable".to_string());
-                }
-                if v4.is_loopback() {
-                    // Allowed — fix_origin_url substitutes at request time.
-                    return Ok(());
-                }
-                if v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_broadcast()
-                    || v4.is_multicast()
-                {
-                    return Err(format!(
-                        "origin_url IP {} is private / link-local / broadcast / multicast — not allowed",
-                        v4
-                    ));
-                }
-                // Block CGNAT 100.64.0.0/10 (carrier-grade NAT, rfc6598).
-                let oct = v4.octets();
-                if oct[0] == 100 && (oct[1] & 0xC0) == 64 {
-                    return Err(format!("origin_url IP {} is CGNAT — not allowed", v4));
-                }
-            }
-            IpAddr::V6(v6) => {
-                if v6.is_loopback() {
-                    return Ok(());
-                }
-                if v6.is_unspecified() || v6.is_multicast() {
-                    return Err(format!("origin_url IPv6 {} is not routable", v6));
-                }
-                let seg0 = v6.segments()[0];
-                // Unique-local fc00::/7
-                if (seg0 & 0xfe00) == 0xfc00 {
-                    return Err(format!("origin_url IPv6 {} is unique-local", v6));
-                }
-                // Link-local fe80::/10
-                if (seg0 & 0xffc0) == 0xfe80 {
-                    return Err(format!("origin_url IPv6 {} is link-local", v6));
-                }
-                // Detect IPv4-mapped (::ffff:0:0/96) and walk into v4 rules.
-                if let Some(mapped) = v6.to_ipv4() {
-                    return is_safe_origin_url(&origin_url.replace(
-                        host_with_port,
-                        &mapped.to_string(),
-                    ));
-                }
-            }
+            IpAddr::V4(v4) => validate_ipv4_origin(v4, allowlist)?,
+            IpAddr::V6(v6) => validate_ipv6_origin(v6, allowlist)?,
         }
     }
     Ok(())
@@ -450,7 +602,11 @@ async fn register_share(
     }
     let owner = req.owner_wallet.trim().to_lowercase();
     if !is_valid_wallet(&owner) {
-        return (StatusCode::BAD_REQUEST, "owner_wallet must be 0x-hex (42 chars)").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "owner_wallet must be 0x-hex (42 chars)",
+        )
+            .into_response();
     }
     if let Err(e) = is_safe_origin_url(&req.origin_url) {
         return (StatusCode::BAD_REQUEST, e).into_response();
@@ -675,6 +831,17 @@ fn tunnel_response_to_axum(resp: TunnelResponse) -> Response {
 
 /// Forward a GET request to the target URL directly and stream the response back.
 async fn proxy_request_direct(target: &str) -> Response {
+    if let Err(e) = is_safe_origin_url(target) {
+        eprintln!("[RELAY-SHARE] Blocking direct proxy to disallowed origin: {e}");
+        return (
+            StatusCode::FORBIDDEN,
+            Html(offline_page(
+                "The registered origin is blocked by relay policy.",
+            )),
+        )
+            .into_response();
+    }
+
     let upstream = match crate::rpc_client::client().get(target).send().await {
         Ok(r) => r,
         Err(_) => {
@@ -785,7 +952,11 @@ async fn register_site(
     }
     let owner = req.owner_wallet.trim().to_lowercase();
     if !is_valid_wallet(&owner) {
-        return (StatusCode::BAD_REQUEST, "owner_wallet must be 0x-hex (42 chars)").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "owner_wallet must be 0x-hex (42 chars)",
+        )
+            .into_response();
     }
     if let Err(e) = is_safe_origin_url(&req.origin_url) {
         return (StatusCode::BAD_REQUEST, e).into_response();
@@ -978,7 +1149,6 @@ pub fn relay_share_routes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
 
     // -----------------------------------------------------------------------
     // is_safe_origin_url — FM-A04
@@ -995,21 +1165,57 @@ mod tests {
 
     #[test]
     fn safe_origin_rejects_private_link_local_and_metadata() {
+        let allowlist = [];
         // RFC1918
-        assert!(is_safe_origin_url("http://10.0.0.1:8500").is_err());
-        assert!(is_safe_origin_url("http://192.168.1.1:8080").is_err());
-        assert!(is_safe_origin_url("http://172.16.1.1:8080").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://10.0.0.1:8500", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.1:8080", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://172.16.1.1:8080", &allowlist).is_err());
         // Link-local (AWS / cloud metadata, etc.)
-        assert!(is_safe_origin_url("http://169.254.169.254/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://169.254.169.254/", &allowlist).is_err());
         // CGNAT
-        assert!(is_safe_origin_url("http://100.64.0.1/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://100.64.0.1/", &allowlist).is_err());
         // 0.0.0.0
-        assert!(is_safe_origin_url("http://0.0.0.0:8080/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://0.0.0.0:8080/", &allowlist).is_err());
         // Multicast
-        assert!(is_safe_origin_url("http://224.0.0.1/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://224.0.0.1/", &allowlist).is_err());
         // IPv6 unique-local + link-local
-        assert!(is_safe_origin_url("http://[fc00::1]:8080/").is_err());
-        assert!(is_safe_origin_url("http://[fe80::1]:8080/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fc00::1]:8080/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fe80::1]:8080/", &allowlist).is_err());
+    }
+
+    #[test]
+    fn safe_origin_accepts_explicitly_allowed_private_networks() {
+        let allowlist = parse_private_origin_allowlist("10.0.0.0/8,100.64.0.0/10,fc00::/7");
+
+        assert!(is_safe_origin_url_with_allowlist("http://10.2.3.4:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://100.64.12.34:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://[fc00::1234]:9419", &allowlist).is_ok());
+
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.10:9419", &allowlist).is_err());
+    }
+
+    #[test]
+    fn safe_origin_accepts_explicit_private_ip_allowlist_entries() {
+        let allowlist = parse_private_origin_allowlist("192.168.1.42,fd00::42");
+
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.42:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.43:9419", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fd00::42]:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://[fd00::43]:9419", &allowlist).is_err());
+    }
+
+    #[test]
+    fn safe_origin_never_allows_link_local_metadata_or_non_routable_targets() {
+        let allowlist = parse_private_origin_allowlist("0.0.0.0/0,::/0");
+
+        assert!(is_safe_origin_url_with_allowlist("http://10.0.0.1:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://169.254.169.254/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://169.254.1.10/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://0.0.0.0:9419/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://224.0.0.1/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fd00:ec2::254]/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fe80::1]:9419/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[::]/", &allowlist).is_err());
     }
 
     #[test]
@@ -1021,11 +1227,16 @@ mod tests {
 
     #[test]
     fn safe_origin_handles_userinfo_and_brackets() {
+        let allowlist = [];
         // Userinfo is stripped before host check.
-        assert!(is_safe_origin_url("http://user:pass@10.0.0.1/").is_err());
+        assert!(
+            is_safe_origin_url_with_allowlist("http://user:pass@10.0.0.1/", &allowlist).is_err()
+        );
         assert!(is_safe_origin_url("http://user:pass@example.com/").is_ok());
         // IPv4-mapped IPv6 walks into v4 rules.
-        assert!(is_safe_origin_url("http://[::ffff:10.0.0.1]/").is_err());
+        assert!(
+            is_safe_origin_url_with_allowlist("http://[::ffff:10.0.0.1]/", &allowlist).is_err()
+        );
         assert!(is_safe_origin_url("http://[::ffff:203.0.113.5]/").is_ok());
     }
 
@@ -1121,7 +1332,11 @@ mod tests {
     fn test_now_secs_reasonable_timestamp() {
         let ts = now_secs();
         // Should be after 2024-01-01 (1704067200) and before 2100-01-01 (4102444800)
-        assert!(ts > 1_704_067_200, "timestamp {} is too far in the past", ts);
+        assert!(
+            ts > 1_704_067_200,
+            "timestamp {} is too far in the past",
+            ts
+        );
         assert!(
             ts < 4_102_444_800,
             "timestamp {} is too far in the future",
