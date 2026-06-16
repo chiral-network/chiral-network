@@ -40,16 +40,22 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
 function randomBase64Url(byteLength: number): string {
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(byteLength));
   return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-async function deriveBackupKey(secret: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveBackupKey(secret: string, salt: ArrayBuffer): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const keyMaterial = await globalThis.crypto.subtle.importKey(
     'raw',
-    encoder.encode(secret),
+    bytesToArrayBuffer(encoder.encode(secret)),
     'PBKDF2',
     false,
     ['deriveKey']
@@ -79,7 +85,7 @@ export async function createEncryptedWalletBackup(
   const backupKey = randomBase64Url(32);
   const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveBackupKey(backupKey, salt);
+  const key = await deriveBackupKey(backupKey, bytesToArrayBuffer(salt));
   const encoder = new TextEncoder();
   const plaintext = encoder.encode(JSON.stringify({
     version: BACKUP_VERSION,
@@ -88,7 +94,11 @@ export async function createEncryptedWalletBackup(
     privateKey: payload.privateKey,
     createdAt: new Date().toISOString(),
   }));
-  const encrypted = await globalThis.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  const encrypted = await globalThis.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
+    key,
+    bytesToArrayBuffer(plaintext)
+  );
 
   return {
     backupKey,
