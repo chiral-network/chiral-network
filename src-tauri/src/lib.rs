@@ -7304,6 +7304,14 @@ async fn fetch_and_log_remote_version_policy() {
     }
 }
 
+fn tauri_builder_startup_error(error: impl std::fmt::Display) -> String {
+    format!(
+        "Failed to build the Tauri application during startup: {}. \
+         Check tauri.conf.json, plugin initialization, and bundled resources.",
+        error
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let geth = Arc::new(Mutex::new(GethProcess::new()));
@@ -7377,7 +7385,7 @@ pub fn run() {
         });
     });
 
-    tauri::Builder::default()
+    let app = match tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             dht: dht_arc,
@@ -7610,56 +7618,62 @@ pub fn run() {
             // App lifecycle
             exit_app,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(move |_app, event| {
-            if let tauri::RunEvent::Exit = event {
-                println!("🛑 App exiting — stopping gateway server and relay tunnels");
-                if let Ok(mut shutdown_store) = hosting_shutdown_for_exit.try_lock() {
-                    if let Some(tx) = shutdown_store.take() {
-                        let _ = tx.send(());
-                    }
-                } else {
-                    println!("⚠️  Could not acquire hosting shutdown lock on exit");
-                }
+        .build(tauri::generate_context!()) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("{}", tauri_builder_startup_error(error));
+            return;
+        }
+    };
 
-                if let Ok(mut tunnel_store) = tunnel_handles_for_exit.try_lock() {
-                    for (_, handle) in tunnel_store.drain() {
-                        handle.abort();
-                    }
-                } else {
-                    println!("⚠️  Could not acquire tunnel handle lock on exit");
+    app.run(move |_app, event| {
+        if let tauri::RunEvent::Exit = event {
+            println!("🛑 App exiting — stopping gateway server and relay tunnels");
+            if let Ok(mut shutdown_store) = hosting_shutdown_for_exit.try_lock() {
+                if let Some(tx) = shutdown_store.take() {
+                    let _ = tx.send(());
                 }
+            } else {
+                println!("⚠️  Could not acquire hosting shutdown lock on exit");
+            }
 
-                // Stop Geth cleanly when the app exits (window close, quit, etc.)
-                // Use try_lock to avoid deadlock — if the mutex is held by another
-                // task (e.g. mining status poll), force-kill via PID file instead.
-                println!("🛑 App exiting — stopping Geth and mining");
-                match geth_for_exit.try_lock() {
-                    Ok(mut geth) => {
-                        let _ = geth.stop_fast();
-                    }
-                    Err(_) => {
-                        // Mutex is held — use synchronous force-kill as fallback
-                        println!("⚠️  Could not acquire Geth lock on exit, force-killing via PID");
-                        let data_dir = network::data_dir().join("geth");
-                        let pid_path = data_dir.join("geth.pid");
-                        if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                                println!("🛑 Force-killing Geth PID {} on exit", pid);
-                                let _ = std::process::Command::new("kill")
-                                    .arg(pid.to_string())
-                                    .output();
-                                let _ = std::process::Command::new("kill")
-                                    .args(["-9", &pid.to_string()])
-                                    .output();
-                            }
+            if let Ok(mut tunnel_store) = tunnel_handles_for_exit.try_lock() {
+                for (_, handle) in tunnel_store.drain() {
+                    handle.abort();
+                }
+            } else {
+                println!("⚠️  Could not acquire tunnel handle lock on exit");
+            }
+
+            // Stop Geth cleanly when the app exits (window close, quit, etc.)
+            // Use try_lock to avoid deadlock — if the mutex is held by another
+            // task (e.g. mining status poll), force-kill via PID file instead.
+            println!("🛑 App exiting — stopping Geth and mining");
+            match geth_for_exit.try_lock() {
+                Ok(mut geth) => {
+                    let _ = geth.stop_fast();
+                }
+                Err(_) => {
+                    // Mutex is held — use synchronous force-kill as fallback
+                    println!("⚠️  Could not acquire Geth lock on exit, force-killing via PID");
+                    let data_dir = network::data_dir().join("geth");
+                    let pid_path = data_dir.join("geth.pid");
+                    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+                        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                            println!("🛑 Force-killing Geth PID {} on exit", pid);
+                            let _ = std::process::Command::new("kill")
+                                .arg(pid.to_string())
+                                .output();
+                            let _ = std::process::Command::new("kill")
+                                .args(["-9", &pid.to_string()])
+                                .output();
                         }
-                        let _ = std::fs::remove_file(&pid_path);
                     }
+                    let _ = std::fs::remove_file(&pid_path);
                 }
             }
-        });
+        }
+    });
 }
 
 #[cfg(test)]
@@ -7743,6 +7757,17 @@ mod multi_seeder_tests {
         .expect_err("pre-epoch timestamp should be rejected");
 
         assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn tauri_builder_startup_error_is_actionable() {
+        let error = tauri_builder_startup_error("missing resource");
+
+        assert!(error.contains("Tauri application"));
+        assert!(error.contains("startup"));
+        assert!(error.contains("missing resource"));
+        assert!(error.contains("tauri.conf.json"));
+        assert!(error.contains("plugin initialization"));
     }
 
     #[cfg(unix)]
