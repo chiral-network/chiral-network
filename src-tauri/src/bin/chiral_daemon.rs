@@ -144,6 +144,19 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn parse_daemon_shared_file_price_wei(price_wei: &str) -> Result<u128, String> {
+    if price_wei.is_empty() {
+        return Ok(0);
+    }
+    let trimmed = price_wei.trim();
+    if trimmed.is_empty() {
+        return Err("priceWei must be empty, 0, or a valid u128 wei amount".to_string());
+    }
+    trimmed
+        .parse::<u128>()
+        .map_err(|_| "priceWei must be empty, 0, or a valid u128 wei amount".to_string())
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -650,7 +663,10 @@ async fn dht_register_shared_file(
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
 
-    let price_wei = req.price_wei.parse::<u128>().unwrap_or(0);
+    let price_wei = match parse_daemon_shared_file_price_wei(&req.price_wei) {
+        Ok(price_wei) => price_wei,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
 
     // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
@@ -1827,5 +1843,37 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    #[test]
+    fn daemon_shared_file_price_accepts_free_values() {
+        assert_eq!(parse_daemon_shared_file_price_wei("").unwrap(), 0);
+        assert_eq!(parse_daemon_shared_file_price_wei("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn daemon_shared_file_price_accepts_valid_paid_value() {
+        assert_eq!(
+            parse_daemon_shared_file_price_wei("1000000000000000000").unwrap(),
+            1_000_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn daemon_shared_file_price_rejects_malformed_value() {
+        let err = parse_daemon_shared_file_price_wei("not-a-number")
+            .expect_err("malformed daemon shared-file price should be rejected");
+
+        assert!(err.contains("priceWei"));
+        assert!(err.contains("valid u128 wei amount"));
+    }
+
+    #[test]
+    fn daemon_shared_file_price_rejects_whitespace_only_value() {
+        let err = parse_daemon_shared_file_price_wei("  ")
+            .expect_err("whitespace-only daemon shared-file price should be rejected");
+
+        assert!(err.contains("priceWei"));
+        assert!(err.contains("valid u128 wei amount"));
     }
 }
