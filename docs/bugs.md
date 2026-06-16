@@ -71,7 +71,6 @@ Format per entry:
 ## Test gaps (not bugs in product code, but flagged so contributors know)
 
 - **FTP URL parsing test** has been failing pre-existing for several months — see `src-tauri/tests/`.
-- **File transfer retry test** is flaky due to timing assumptions.
 - **Playwright e2e specs** rely on a real freshnet relay + chain; only run them when the canonical relay is up.
 - **Large file upload test** allocates ~500 MB and is gated to CI runs with sufficient memory.
 

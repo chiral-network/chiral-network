@@ -2111,6 +2111,10 @@ fn chunk_retry_delay(attempt: u8, chunk_index: u32) -> std::time::Duration {
     std::time::Duration::from_millis(base_ms + jitter_ms)
 }
 
+async fn wait_for_chunk_retry_delay(attempt: u8, chunk_index: u32) {
+    tokio::time::sleep(chunk_retry_delay(attempt, chunk_index)).await;
+}
+
 fn take_next_backup_peer(download: &mut ActiveChunkedDownload) -> Option<PeerId> {
     while let Some(candidate) = download.backup_peers.pop() {
         if candidate != download.peer_id {
@@ -5119,11 +5123,8 @@ async fn handle_behaviour_event(
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
-                                                tokio::time::sleep(chunk_retry_delay(
-                                                    attempt,
-                                                    chunk_index,
-                                                ))
-                                                .await;
+                                                wait_for_chunk_retry_delay(attempt, chunk_index)
+                                                    .await;
                                                 let request = ChunkRequest::Chunk {
                                                     request_id: rid.clone(),
                                                     file_hash: fh,
@@ -5247,11 +5248,8 @@ async fn handle_behaviour_event(
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
-                                                tokio::time::sleep(chunk_retry_delay(
-                                                    attempt,
-                                                    chunk_index,
-                                                ))
-                                                .await;
+                                                wait_for_chunk_retry_delay(attempt, chunk_index)
+                                                    .await;
                                                 let request = ChunkRequest::Chunk {
                                                     request_id: rid.clone(),
                                                     file_hash: fh,
@@ -5563,8 +5561,7 @@ async fn handle_behaviour_event(
                                         let fh = dl.file_hash.clone();
                                         let rid = dl.request_id.clone();
                                         drop(downloads);
-                                        tokio::time::sleep(chunk_retry_delay(attempt, chunk_index))
-                                            .await;
+                                        wait_for_chunk_retry_delay(attempt, chunk_index).await;
                                         let request = ChunkRequest::Chunk {
                                             request_id: rid.clone(),
                                             file_hash: fh,
@@ -5798,6 +5795,48 @@ mod tests {
 
         gate.reset();
         assert!(!gate.is_ready());
+    }
+
+    #[test]
+    fn test_chunk_retry_delay_is_deterministic() {
+        assert_eq!(
+            chunk_retry_delay(1, 0),
+            std::time::Duration::from_millis(167)
+        );
+        assert_eq!(
+            chunk_retry_delay(2, 0),
+            std::time::Duration::from_millis(434)
+        );
+        assert_eq!(
+            chunk_retry_delay(3, 0),
+            std::time::Duration::from_millis(951)
+        );
+        assert_eq!(
+            chunk_retry_delay(4, 0),
+            std::time::Duration::from_millis(968)
+        );
+        assert_eq!(chunk_retry_delay(2, 7), chunk_retry_delay(2, 7));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_chunk_retry_wait_uses_tokio_time() {
+        let delay = chunk_retry_delay(2, 7);
+        let started_at = tokio::time::Instant::now();
+        let wait = tokio::spawn(async move {
+            wait_for_chunk_retry_delay(2, 7).await;
+            tokio::time::Instant::now()
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!wait.is_finished());
+
+        tokio::time::advance(delay - std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
+        assert!(!wait.is_finished());
+
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+        let finished_at = wait.await.expect("retry sleep task should finish");
+        assert_eq!(finished_at.duration_since(started_at), delay);
     }
 
     #[test]
