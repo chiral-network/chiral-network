@@ -1105,8 +1105,24 @@ async fn wallet_balance(
         Ok(v) => v,
         Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     };
-    let hex = result.as_str().unwrap_or("0x0");
-    let wei = chiral_network::rpc_client::hex_to_u128(hex);
+    let hex = match result.as_str() {
+        Some(hex) => hex,
+        None => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("eth_getBalance returned a non-string hex value: {result}"),
+            )
+        }
+    };
+    let wei = match chiral_network::rpc_client::hex_to_u128(hex) {
+        Ok(wei) => wei,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("eth_getBalance: {e}"),
+            )
+        }
+    };
     Json(json!({
         "balance": chiral_network::rpc_client::wei_to_chi_string(wei),
         "balanceWei": wei.to_string(),

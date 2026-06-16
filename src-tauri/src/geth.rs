@@ -553,9 +553,9 @@ impl GethProcess {
         batch.add("eth_syncing",     serde_json::json!([]));
         let results = batch.execute(&endpoint).await?;
 
-        let current_block = as_hex_u64(results.first());
-        let peer_count = as_hex_u64(results.get(1)) as u32;
-        let (syncing, highest_block) = parse_syncing(results.get(2), current_block);
+        let current_block = batch_hex_u64(results.first(), "eth_blockNumber")?;
+        let peer_count = batch_hex_u64(results.get(1), "net_peerCount")? as u32;
+        let (syncing, highest_block) = parse_syncing(results.get(2), current_block)?;
 
         Ok(GethStatus {
             installed, running: true, local_running: true,
@@ -594,7 +594,7 @@ impl GethProcess {
 
         let mining = results.first()
             .and_then(|r| r.as_ref().ok()).and_then(|v| v.as_bool()).unwrap_or(false);
-        let hash_rate = as_hex_u64(results.get(1));
+        let hash_rate = batch_hex_u64(results.get(1), "eth_hashrate")?;
         let coinbase = results.get(2)
             .and_then(|r| r.as_ref().ok())
             .and_then(|v| v.as_str().map(str::to_owned))
@@ -607,7 +607,7 @@ impl GethProcess {
                 serde_json::json!([addr, "latest"])).await
             {
                 Ok(v) => {
-                    let wei = v.as_str().map(rpc_client::hex_to_u128).unwrap_or(0);
+                    let wei = value_hex_u128(&v, "eth_getBalance")?;
                     (wei.to_string(), wei as f64 / 1e18)
                 }
                 Err(_) => ("0".into(), 0.0),
@@ -632,11 +632,10 @@ impl GethProcess {
         let coinbase = self.miner_address.as_deref().unwrap_or("").to_lowercase();
         if coinbase.is_empty() { return Ok(Vec::new()); }
         let endpoint = self.effective_rpc_endpoint();
-        let head = rpc_client::call(&endpoint, "eth_blockNumber", serde_json::json!([]))
-            .await
-            .ok()
-            .and_then(|v| v.as_str().map(rpc_client::hex_to_u64))
-            .unwrap_or(0);
+        let head = match rpc_client::call(&endpoint, "eth_blockNumber", serde_json::json!([])).await {
+            Ok(v) => value_hex_u64(&v, "eth_blockNumber")?,
+            Err(_) => 0,
+        };
         if head == 0 { return Ok(Vec::new()); }
 
         let scan = max_blocks.min(500);
@@ -651,10 +650,10 @@ impl GethProcess {
             }
             out.push(MinedBlock {
                 block_number: n,
-                timestamp: block.get("timestamp").and_then(|v| v.as_str()).map(rpc_client::hex_to_u64).unwrap_or(0),
+                timestamp: field_hex_u64(&block, "timestamp", "eth_getBlockByNumber")?,
                 reward_wei: "5000000000000000000".into(),
                 reward_chi: 5.0,
-                difficulty: block.get("difficulty").and_then(|v| v.as_str()).map(rpc_client::hex_to_u64).unwrap_or(0),
+                difficulty: field_hex_u64(&block, "difficulty", "eth_getBlockByNumber")?,
             });
             if out.len() as u64 >= max_blocks { break; }
         }
@@ -673,23 +672,54 @@ impl Default for GethProcess {
 // Helpers
 // ============================================================================
 
-/// Extract a hex-encoded u64 from the Nth result of a batch call (or 0).
-fn as_hex_u64(r: Option<&Result<serde_json::Value, String>>) -> u64 {
-    r.and_then(|v| v.as_ref().ok())
+fn value_hex_str<'a>(value: &'a serde_json::Value, context: &str) -> Result<&'a str, String> {
+    value
+        .as_str()
+        .ok_or_else(|| format!("{context} returned a non-string hex value: {value}"))
+}
+
+fn value_hex_u64(value: &serde_json::Value, context: &str) -> Result<u64, String> {
+    rpc_client::hex_to_u64(value_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn value_hex_u128(value: &serde_json::Value, context: &str) -> Result<u128, String> {
+    rpc_client::hex_to_u128(value_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn field_hex_u64(value: &serde_json::Value, field: &str, context: &str) -> Result<u64, String> {
+    let hex = value
+        .get(field)
         .and_then(|v| v.as_str())
-        .map(rpc_client::hex_to_u64)
-        .unwrap_or(0)
+        .ok_or_else(|| format!("{context} missing string `{field}` field"))?;
+    rpc_client::hex_to_u64(hex).map_err(|e| format!("{context} {field}: {e}"))
+}
+
+/// Extract a hex-encoded u64 from the Nth result of a batch call.
+fn batch_hex_u64(r: Option<&Result<serde_json::Value, String>>, context: &str) -> Result<u64, String> {
+    let value = r
+        .ok_or_else(|| format!("{context} missing batch result"))?
+        .as_ref()
+        .map_err(|e| format!("{context} RPC failed: {e}"))?;
+    value_hex_u64(value, context)
 }
 
 /// Parse the polymorphic `eth_syncing` response. Returns (is_syncing, highest_block).
-fn parse_syncing(r: Option<&Result<serde_json::Value, String>>, current_block: u64) -> (bool, u64) {
-    let Some(Ok(v)) = r else { return (false, current_block) };
-    if let Some(b) = v.as_bool() { return (b, current_block); }
-    let Some(obj) = v.as_object() else { return (false, current_block); };
-    let hex = |k: &str| obj.get(k).and_then(|x| x.as_str()).map(rpc_client::hex_to_u64);
-    let current = hex("currentBlock").unwrap_or(current_block);
-    let highest = hex("highestBlock").unwrap_or(current_block);
-    (highest > current, highest.max(current))
+fn parse_syncing(
+    r: Option<&Result<serde_json::Value, String>>,
+    current_block: u64,
+) -> Result<(bool, u64), String> {
+    let Some(Ok(v)) = r else { return Ok((false, current_block)); };
+    if let Some(b) = v.as_bool() { return Ok((b, current_block)); }
+    let Some(obj) = v.as_object() else { return Ok((false, current_block)); };
+    let current = match obj.get("currentBlock") {
+        Some(value) => value_hex_u64(value, "eth_syncing currentBlock")?,
+        None => current_block,
+    };
+    let highest = match obj.get("highestBlock") {
+        Some(value) => value_hex_u64(value, "eth_syncing highestBlock")?,
+        None => current_block,
+    };
+    Ok((highest > current, highest.max(current)))
 }
 
 // ============================================================================
@@ -726,10 +756,18 @@ mod tests {
         let obj_behind = Ok(serde_json::json!({"currentBlock": "0x5", "highestBlock": "0xa"}));
         let obj_caught_up = Ok(serde_json::json!({"currentBlock": "0xa", "highestBlock": "0xa"}));
 
-        assert_eq!(parse_syncing(Some(&false_), 100), (false, 100));
-        assert_eq!(parse_syncing(Some(&true_), 100),  (true,  100));
-        assert_eq!(parse_syncing(Some(&obj_behind), 5),     (true,  10));
-        assert_eq!(parse_syncing(Some(&obj_caught_up), 10), (false, 10));
+        assert_eq!(parse_syncing(Some(&false_), 100).unwrap(), (false, 100));
+        assert_eq!(parse_syncing(Some(&true_), 100).unwrap(), (true, 100));
+        assert_eq!(parse_syncing(Some(&obj_behind), 5).unwrap(), (true, 10));
+        assert_eq!(parse_syncing(Some(&obj_caught_up), 10).unwrap(), (false, 10));
+    }
+
+    #[test]
+    fn parse_syncing_rejects_malformed_hex() {
+        let malformed =
+            Ok(serde_json::json!({"currentBlock": "0xnot-hex", "highestBlock": "0xa"}));
+
+        assert!(parse_syncing(Some(&malformed), 5).is_err());
     }
 
     #[test]

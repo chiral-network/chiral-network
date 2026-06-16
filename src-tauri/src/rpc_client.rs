@@ -306,14 +306,29 @@ impl RpcCache {
 // Hex parsing helpers
 // ============================================================================
 
+fn rpc_hex_digits<'a>(hex: &'a str, type_name: &str) -> Result<&'a str, String> {
+    let digits = hex
+        .strip_prefix("0x")
+        .or_else(|| hex.strip_prefix("0X"))
+        .unwrap_or(hex);
+    if digits.is_empty() {
+        return Err(format!("Invalid RPC hex {type_name} value: missing digits"));
+    }
+    Ok(digits)
+}
+
 /// Parse a hex string (with or without 0x prefix) to u64.
-pub fn hex_to_u64(hex: &str) -> u64 {
-    u64::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
+pub fn hex_to_u64(hex: &str) -> Result<u64, String> {
+    let digits = rpc_hex_digits(hex, "u64")?;
+    u64::from_str_radix(digits, 16)
+        .map_err(|e| format!("Invalid RPC hex u64 value `{hex}`: {e}"))
 }
 
 /// Parse a hex string (with or without 0x prefix) to u128.
-pub fn hex_to_u128(hex: &str) -> u128 {
-    u128::from_str_radix(hex.trim_start_matches("0x"), 16).unwrap_or(0)
+pub fn hex_to_u128(hex: &str) -> Result<u128, String> {
+    let digits = rpc_hex_digits(hex, "u128")?;
+    u128::from_str_radix(digits, 16)
+        .map_err(|e| format!("Invalid RPC hex u128 value `{hex}`: {e}"))
 }
 
 /// Convert wei (u128) to CHI (f64) string with 6 decimal places.
@@ -351,5 +366,43 @@ mod tests {
         assert!(error.contains("shared HTTP client"));
         assert!(error.contains("Chiral default headers"));
         assert!(error.contains("builder rejected configuration"));
+    }
+
+    #[test]
+    fn hex_to_u64_preserves_valid_zero() {
+        assert_eq!(hex_to_u64("0x0").unwrap(), 0);
+        assert_eq!(hex_to_u64("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn hex_to_u128_preserves_valid_zero() {
+        assert_eq!(hex_to_u128("0x0").unwrap(), 0);
+        assert_eq!(hex_to_u128("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn hex_to_u64_parses_valid_prefixed_hex() {
+        assert_eq!(hex_to_u64("0x2a").unwrap(), 42);
+    }
+
+    #[test]
+    fn hex_to_u128_parses_valid_uppercase_hex() {
+        assert_eq!(hex_to_u128("0XFF").unwrap(), 255);
+    }
+
+    #[test]
+    fn hex_to_u64_rejects_malformed_hex() {
+        assert!(hex_to_u64("0xnot-hex").is_err());
+    }
+
+    #[test]
+    fn hex_to_u128_rejects_empty_hex() {
+        assert!(hex_to_u128("").is_err());
+        assert!(hex_to_u128("0x").is_err());
+    }
+
+    #[test]
+    fn hex_to_u64_rejects_overflow() {
+        assert!(hex_to_u64("0x10000000000000000").is_err());
     }
 }
