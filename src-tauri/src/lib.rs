@@ -3112,6 +3112,26 @@ struct ExportTorrentResult {
     path: String,
 }
 
+fn torrent_creation_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            format!(
+                "Cannot export torrent because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
+}
+
+fn torrent_creation_date_entry_at(now: std::time::SystemTime) -> Result<String, String> {
+    let creation_date = torrent_creation_timestamp_secs_at(now)?;
+    Ok(format!("13:creation datei{}e", creation_date))
+}
+
+fn current_torrent_creation_date_entry() -> Result<String, String> {
+    torrent_creation_date_entry_at(std::time::SystemTime::now())
+}
+
 // Re-export wallet types used by AppState and Tauri commands
 use wallet::TransactionMeta;
 
@@ -3245,11 +3265,7 @@ async fn export_torrent_file(
     torrent_content.extend_from_slice(created_by_entry.as_bytes());
 
     // Creation date (Unix timestamp)
-    let creation_date = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let creation_date_entry = format!("13:creation datei{}e", creation_date);
+    let creation_date_entry = current_torrent_creation_date_entry()?;
     torrent_content.extend_from_slice(creation_date_entry.as_bytes());
 
     // Info dictionary
@@ -7676,6 +7692,26 @@ mod multi_seeder_tests {
         let err = download_request_id_at(
             "download",
             "abcdef1234567890",
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn torrent_creation_date_entry_at_preserves_bencode_output() {
+        let entry = torrent_creation_date_entry_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(entry, "13:creation datei1700000000e");
+    }
+
+    #[test]
+    fn torrent_creation_timestamp_rejects_pre_epoch_clock() {
+        let err = torrent_creation_date_entry_at(
             std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
         )
         .expect_err("pre-epoch timestamp should be rejected");
