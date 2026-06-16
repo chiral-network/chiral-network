@@ -144,6 +144,79 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+fn is_hex_prefixed(value: &str, bytes: usize) -> bool {
+    value.len() == 2 + bytes * 2
+        && value.starts_with("0x")
+        && value[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_headless_wallet_address(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err("address required".to_string());
+    }
+    if !is_hex_prefixed(value, 20) {
+        return Err("address must be a 0x-prefixed 20-byte hex string".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn validate_headless_wallet_address_field(
+    field: &str,
+    value: Option<&str>,
+) -> Result<String, String> {
+    validate_headless_wallet_address(value).map_err(|err| match err.as_str() {
+        "address required" => format!("{field} required"),
+        "address must be a 0x-prefixed 20-byte hex string" => {
+            format!("{field} must be a 0x-prefixed 20-byte hex string")
+        }
+        _ => err,
+    })
+}
+
+fn validate_headless_chi_amount(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err("amount required".to_string());
+    }
+
+    let mut parts = value.split('.');
+    let whole = parts.next().unwrap_or("");
+    let fractional = parts.next();
+    if parts.next().is_some() {
+        return Err("amount must be a valid CHI decimal".to_string());
+    }
+    if whole.is_empty() && fractional.unwrap_or("").is_empty() {
+        return Err("amount must be a valid CHI decimal".to_string());
+    }
+    if !whole.chars().all(|c| c.is_ascii_digit()) {
+        return Err("amount must be a valid CHI decimal".to_string());
+    }
+    if let Some(fractional) = fractional {
+        if fractional.is_empty()
+            || fractional.len() > 18
+            || !fractional.chars().all(|c| c.is_ascii_digit())
+        {
+            return Err("amount must be a valid CHI decimal with at most 18 decimals".to_string());
+        }
+    }
+    chiral_network::wallet::parse_chi_to_wei(value)
+        .map_err(|_| "amount must be a valid CHI decimal".to_string())?;
+    Ok(value.to_string())
+}
+
+fn validate_headless_private_key(value: Option<&str>) -> Result<String, String> {
+    let value = value.unwrap_or("").trim();
+    if value.is_empty() {
+        return Err("privateKey required".to_string());
+    }
+    let hex = value.strip_prefix("0x").unwrap_or(value);
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("privateKey must be a 32-byte hex string".to_string());
+    }
+    Ok(value.to_string())
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1134,14 +1207,22 @@ async fn wallet_send(
     State(_state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    let from = body["from"].as_str().unwrap_or("").to_string();
-    let to = body["to"].as_str().unwrap_or("").to_string();
-    let amount = body["amount"].as_str().unwrap_or("").to_string();
-    let private_key = body["privateKey"].as_str().unwrap_or("").to_string();
-
-    if from.is_empty() || to.is_empty() || amount.is_empty() || private_key.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "from, to, amount, privateKey required");
-    }
+    let from = match validate_headless_wallet_address_field("from", body["from"].as_str()) {
+        Ok(from) => from,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let to = match validate_headless_wallet_address_field("to", body["to"].as_str()) {
+        Ok(to) => to,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let amount = match validate_headless_chi_amount(body["amount"].as_str()) {
+        Ok(amount) => amount,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+    let private_key = match validate_headless_private_key(body["privateKey"].as_str()) {
+        Ok(private_key) => private_key,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
 
     // Headless daemon uses its own local geth when available
     // (effective_rpc_endpoint returns 127.0.0.1:8545 in that case) and
@@ -1822,6 +1903,131 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const VALID_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
+    const VALID_RECIPIENT: &str = "0x2222222222222222222222222222222222222222";
+    const VALID_PRIVATE_KEY: &str =
+        "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn headless_wallet_address_validation_rejects_missing_value() {
+        let err =
+            validate_headless_wallet_address(None).expect_err("missing address should be rejected");
+
+        assert_eq!(err, "address required");
+    }
+
+    #[test]
+    fn headless_wallet_address_validation_rejects_malformed_value() {
+        let err = validate_headless_wallet_address(Some("0x1234"))
+            .expect_err("short address should be rejected");
+
+        assert!(err.contains("20-byte"));
+    }
+
+    #[test]
+    fn headless_wallet_address_validation_accepts_valid_value() {
+        assert_eq!(
+            validate_headless_wallet_address(Some(VALID_ADDRESS)).unwrap(),
+            VALID_ADDRESS
+        );
+    }
+
+    #[test]
+    fn headless_wallet_send_amount_validation_rejects_missing_value() {
+        let err =
+            validate_headless_chi_amount(None).expect_err("missing amount should be rejected");
+
+        assert_eq!(err, "amount required");
+    }
+
+    #[test]
+    fn headless_wallet_send_amount_validation_rejects_malformed_value() {
+        let err = validate_headless_chi_amount(Some("1.2.3"))
+            .expect_err("malformed amount should be rejected");
+
+        assert!(err.contains("valid CHI decimal"));
+    }
+
+    #[test]
+    fn headless_wallet_send_amount_validation_accepts_valid_value() {
+        assert_eq!(
+            validate_headless_chi_amount(Some("0.001")).unwrap(),
+            "0.001"
+        );
+    }
+
+    #[test]
+    fn headless_wallet_send_private_key_validation_rejects_missing_value() {
+        let err = validate_headless_private_key(None)
+            .expect_err("missing private key should be rejected");
+
+        assert_eq!(err, "privateKey required");
+    }
+
+    #[test]
+    fn headless_wallet_send_private_key_validation_rejects_malformed_value() {
+        let err = validate_headless_private_key(Some("0x1234"))
+            .expect_err("short private key should be rejected");
+
+        assert!(err.contains("32-byte"));
+    }
+
+    #[test]
+    fn headless_wallet_send_private_key_validation_accepts_valid_value() {
+        assert_eq!(
+            validate_headless_private_key(Some(VALID_PRIVATE_KEY)).unwrap(),
+            VALID_PRIVATE_KEY
+        );
+    }
+
+    #[tokio::test]
+    async fn wallet_send_rejects_malformed_sender_before_rpc() {
+        let response = wallet_send(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({
+                "from": "0x1234",
+                "to": VALID_RECIPIENT,
+                "amount": "0.001",
+                "privateKey": VALID_PRIVATE_KEY,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wallet_send_rejects_malformed_amount_before_rpc() {
+        let response = wallet_send(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({
+                "from": VALID_ADDRESS,
+                "to": VALID_RECIPIENT,
+                "amount": "not-chi",
+                "privateKey": VALID_PRIVATE_KEY,
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wallet_send_rejects_malformed_private_key_before_rpc() {
+        let response = wallet_send(
+            State(Arc::new(HeadlessRuntimeState::new())),
+            Json(json!({
+                "from": VALID_ADDRESS,
+                "to": VALID_RECIPIENT,
+                "amount": "0.001",
+                "privateKey": "0x1234",
+            })),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     #[cfg(unix)]
     #[test]
