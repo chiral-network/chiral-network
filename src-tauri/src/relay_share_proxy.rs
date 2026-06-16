@@ -537,6 +537,11 @@ fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
     is_safe_origin_url_with_allowlist(origin_url, &allowlist)
 }
 
+/// Validate a relay-share origin URL against the public registration policy.
+pub fn validate_relay_share_origin_url(origin_url: &str) -> Result<(), String> {
+    is_safe_origin_url(origin_url)
+}
+
 fn is_safe_origin_url_with_allowlist(
     origin_url: &str,
     allowlist: &[PrivateOriginAllowEntry],
