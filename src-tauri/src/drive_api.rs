@@ -439,6 +439,7 @@ async fn create_folder(
         merkle_root: None,
         protocol: None,
         price_chi: None,
+        payment_wallet: None,
         seed_enabled: false,
         seeding: false,
     };
@@ -551,6 +552,7 @@ async fn upload_file(
         merkle_root: None,
         protocol: None,
         price_chi: None,
+        payment_wallet: None,
         seed_enabled: false,
         seeding: false,
     };

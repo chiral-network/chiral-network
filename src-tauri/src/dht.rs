@@ -269,6 +269,8 @@ pub enum ChunkRequest {
     FileInfo {
         request_id: String,
         file_hash: String,
+        #[serde(default)]
+        folder_hash: Option<String>,
     },
     /// Ask for a specific chunk by index
     Chunk {
@@ -280,6 +282,8 @@ pub enum ChunkRequest {
     PaymentProof {
         request_id: String,
         file_hash: String,
+        #[serde(default)]
+        folder_hash: Option<String>,
         payment_tx: String,
         payer_address: String,
     },
@@ -300,6 +304,10 @@ pub enum ChunkResponse {
         price_wei: String,
         /// Seeder's wallet address for payment
         wallet_address: String,
+        /// Folder bundle this FileInfo is scoped to, when the file is
+        /// being downloaded as a member of a paid folder bundle.
+        #[serde(default)]
+        folder_hash: Option<String>,
         /// ECDSA signature by `wallet_address` over the canonical
         /// payload of every other field (see `file_info_sign_payload`).
         /// Empty string means "unsigned" — readers reject unsigned
@@ -343,6 +351,7 @@ pub fn file_info_sign_payload(
     chunk_hashes: &[String],
     price_wei: &str,
     wallet_address: &str,
+    folder_hash: Option<&str>,
 ) -> Vec<u8> {
     let mut out = Vec::with_capacity(256 + chunk_hashes.len() * 36);
     out.extend_from_slice(b"file-info-v1");
@@ -363,6 +372,10 @@ pub fn file_info_sign_payload(
         out.extend_from_slice(&(h.len() as u32).to_le_bytes());
         out.extend_from_slice(h.as_bytes());
     }
+    if let Some(folder_hash) = folder_hash.filter(|h| !h.trim().is_empty()) {
+        out.extend_from_slice(&(folder_hash.len() as u32).to_le_bytes());
+        out.extend_from_slice(folder_hash.as_bytes());
+    }
     out
 }
 
@@ -382,6 +395,7 @@ enum SwarmCommand {
         peer_id: PeerId,
         request_id: String,
         file_hash: String,
+        folder_hash: Option<String>,
         /// Known multiaddresses for this peer (from DHT SeederInfo).
         /// Used to dial the peer directly when not already connected.
         multiaddrs: Vec<String>,
@@ -400,7 +414,9 @@ enum SwarmCommand {
     /// Remove a record from the local Kademlia store. Stops the automatic
     /// republish cycle for that key so stale records (e.g. per-seeder
     /// entries for files we no longer host) stop propagating.
-    RemoveDhtRecord { key: String },
+    RemoveDhtRecord {
+        key: String,
+    },
     HealthCheck {
         response_tx: tokio::sync::oneshot::Sender<DhtHealthInfo>,
     },
@@ -423,7 +439,9 @@ enum SwarmCommand {
         response_tx: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
     /// Stop advertising this node as a provider for a file hash.
-    StopProviding { file_hash: String },
+    StopProviding {
+        file_hash: String,
+    },
     /// Query the DHT for the current set of providers (live seeders) for a
     /// file hash. Results accumulate across multiple FoundProviders events
     /// and resolve when the query finishes.
@@ -441,6 +459,13 @@ enum SwarmCommand {
         channel: request_response::ResponseChannel<ChunkResponse>,
         response: ChunkResponse,
     },
+}
+
+#[derive(Clone, Debug)]
+struct PendingFileInfoRequest {
+    request_id: String,
+    file_hash: String,
+    folder_hash: Option<String>,
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -497,6 +522,21 @@ struct DhtBehaviour {
 pub type SharedFilesMap = Arc<Mutex<std::collections::HashMap<String, SharedFileInfo>>>;
 
 #[derive(Clone, Debug)]
+pub struct FolderAccessPolicy {
+    pub folder_hash: String,
+    pub price_wei: u128,
+    pub wallet_address: String,
+}
+
+#[derive(Clone, Debug)]
+struct AuthorizedChunkAccess {
+    peer_id: PeerId,
+    scope: PaymentScope,
+}
+
+type SeederAuthorizedChunksMap = Arc<Mutex<HashMap<String, AuthorizedChunkAccess>>>;
+
+#[derive(Clone, Debug)]
 pub struct SharedFileInfo {
     pub file_path: String,
     pub file_name: String,
@@ -515,6 +555,188 @@ pub struct SharedFileInfo {
     /// wallet" — FileInfo responses for that file refuse to serve
     /// rather than send an unsigned envelope.
     pub private_key: String,
+    /// Paid folder bundle contexts this file belongs to. When a child
+    /// file is published as part of a paid folder at price 0, direct
+    /// file-hash requests are rejected unless they carry one of these
+    /// folder hashes.
+    pub folder_access: HashMap<String, FolderAccessPolicy>,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedFileAccess {
+    price_wei: u128,
+    wallet_address: String,
+    folder_hash: Option<String>,
+}
+
+fn normalize_folder_hash(folder_hash: &str) -> String {
+    folder_hash.trim().to_lowercase()
+}
+
+fn resolve_file_access(
+    file_info: &SharedFileInfo,
+    requested_folder_hash: Option<&str>,
+) -> Result<ResolvedFileAccess, String> {
+    if let Some(folder_hash) = requested_folder_hash
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+    {
+        let normalized = normalize_folder_hash(folder_hash);
+        let policy = file_info
+            .folder_access
+            .get(&normalized)
+            .ok_or_else(|| "File is not a member of the requested folder bundle".to_string())?;
+        return Ok(ResolvedFileAccess {
+            price_wei: policy.price_wei,
+            wallet_address: policy.wallet_address.clone(),
+            folder_hash: Some(policy.folder_hash.clone()),
+        });
+    }
+
+    let paid_folder_only = file_info.price_wei == 0
+        && file_info
+            .folder_access
+            .values()
+            .any(|policy| policy.price_wei > 0);
+    if paid_folder_only {
+        return Err(
+            "File is part of a paid folder bundle; request it through the folder hash".to_string(),
+        );
+    }
+
+    Ok(ResolvedFileAccess {
+        price_wei: file_info.price_wei,
+        wallet_address: file_info.wallet_address.clone(),
+        folder_hash: None,
+    })
+}
+
+fn payment_scope_for_access(file_hash: &str, access: &ResolvedFileAccess) -> PaymentScope {
+    match access.folder_hash.clone() {
+        Some(folder_hash) => PaymentScope::Folder { folder_hash },
+        None => PaymentScope::DirectFile {
+            file_hash: file_hash.to_string(),
+        },
+    }
+}
+
+async fn remember_authorized_chunk_access(
+    authorized_chunks: &SeederAuthorizedChunksMap,
+    request_id: String,
+    peer_id: PeerId,
+    scope: PaymentScope,
+) {
+    authorized_chunks
+        .lock()
+        .await
+        .insert(request_id, AuthorizedChunkAccess { peer_id, scope });
+}
+
+fn authorized_scope_matches_file(
+    access: &AuthorizedChunkAccess,
+    peer_id: PeerId,
+    file_hash: &str,
+    file_info: &SharedFileInfo,
+) -> bool {
+    if access.peer_id != peer_id {
+        return false;
+    }
+
+    match &access.scope {
+        PaymentScope::DirectFile {
+            file_hash: paid_hash,
+        } => paid_hash.eq_ignore_ascii_case(file_hash),
+        PaymentScope::Folder { folder_hash } => file_info
+            .folder_access
+            .contains_key(&normalize_folder_hash(folder_hash)),
+    }
+}
+
+fn chunk_request_access_error(
+    authorized: Option<&AuthorizedChunkAccess>,
+    peer_id: PeerId,
+    file_hash: &str,
+    file_info: &SharedFileInfo,
+) -> Option<String> {
+    if let Ok(access) = resolve_file_access(file_info, None) {
+        if access.price_wei == 0 {
+            return None;
+        }
+    }
+
+    match authorized {
+        Some(access) if authorized_scope_matches_file(access, peer_id, file_hash, file_info) => {
+            None
+        }
+        Some(_) => Some(
+            "Payment proof does not authorize this chunk request for the requested file"
+                .to_string(),
+        ),
+        None => Some(
+            "Payment proof required before downloading chunks for this file or folder member"
+                .to_string(),
+        ),
+    }
+}
+
+fn file_info_error_response(
+    request_id: String,
+    file_hash: String,
+    error: impl Into<String>,
+    folder_hash: Option<String>,
+) -> ChunkResponse {
+    ChunkResponse::FileInfo {
+        request_id,
+        file_hash,
+        file_name: String::new(),
+        file_size: 0,
+        chunk_size: CHUNK_SIZE as u32,
+        total_chunks: 0,
+        chunk_hashes: vec![],
+        price_wei: "0".to_string(),
+        wallet_address: String::new(),
+        folder_hash,
+        signature: String::new(),
+        error: Some(error.into()),
+    }
+}
+
+fn signed_file_info_response(
+    request_id: String,
+    file_hash: String,
+    file_name: String,
+    file_size: u64,
+    chunk_hashes: Vec<String>,
+    access: ResolvedFileAccess,
+    private_key: &str,
+) -> ChunkResponse {
+    let price_str = access.price_wei.to_string();
+    let payload = file_info_sign_payload(
+        &file_hash,
+        &file_name,
+        file_size,
+        CHUNK_SIZE as u32,
+        chunk_hashes.len() as u32,
+        &chunk_hashes,
+        &price_str,
+        &access.wallet_address,
+        access.folder_hash.as_deref(),
+    );
+    let signature = crate::wallet::sign_message(private_key, &payload).unwrap_or_default();
+    ChunkResponse::FileInfo {
+        request_id,
+        file_hash,
+        file_name,
+        file_size,
+        chunk_size: CHUNK_SIZE as u32,
+        total_chunks: chunk_hashes.len() as u32,
+        chunk_hashes,
+        price_wei: price_str,
+        wallet_address: access.wallet_address,
+        folder_hash: access.folder_hash,
+        signature,
+        error: None,
+    }
 }
 
 /// Shared reference to the custom download directory setting
@@ -525,6 +747,8 @@ pub type DownloadDirectoryRef = Arc<Mutex<Option<String>>>;
 pub struct DownloadCredentials {
     pub wallet_address: String,
     pub private_key: String,
+    pub folder_hash: Option<String>,
+    pub folder_payment_tx: Option<String>,
 }
 
 /// Map of request_id -> download credentials for payment during chunked transfer
@@ -678,6 +902,30 @@ impl DhtService {
         wallet_address: String,
         private_key: String,
     ) {
+        self.register_shared_file_with_folder_access(
+            file_hash,
+            file_path,
+            file_name,
+            file_size,
+            price_wei,
+            wallet_address,
+            private_key,
+            Vec::new(),
+        )
+        .await;
+    }
+
+    pub async fn register_shared_file_with_folder_access(
+        &self,
+        file_hash: String,
+        file_path: String,
+        file_name: String,
+        file_size: u64,
+        price_wei: u128,
+        wallet_address: String,
+        private_key: String,
+        folder_access: Vec<FolderAccessPolicy>,
+    ) {
         println!("=== REGISTERING SHARED FILE ===");
         println!("  Name: {}", file_name);
         println!("  Hash: {}", file_hash);
@@ -689,6 +937,11 @@ impl DhtService {
         } else {
             println!("  Price: Free");
         }
+
+        let folder_access = folder_access
+            .into_iter()
+            .map(|policy| (normalize_folder_hash(&policy.folder_hash), policy))
+            .collect::<HashMap<_, _>>();
 
         let mut shared = self.shared_files.lock().await;
         shared.insert(
@@ -703,6 +956,7 @@ impl DhtService {
                 price_wei,
                 wallet_address,
                 private_key,
+                folder_access,
             },
         );
         println!("  Total shared files now: {}", shared.len());
@@ -744,6 +998,41 @@ impl DhtService {
                 }
             }
         });
+    }
+
+    /// Attach folder-level payment policy to already-registered child files.
+    /// The child file's direct price may be 0 because buyers pay once at
+    /// the folder level; this context prevents direct child-hash requests
+    /// from bypassing that folder payment.
+    pub async fn register_folder_bundle_access(
+        &self,
+        folder_hash: String,
+        file_hashes: Vec<String>,
+        price_wei: u128,
+        wallet_address: String,
+    ) -> usize {
+        let normalized_folder_hash = normalize_folder_hash(&folder_hash);
+        let policy = FolderAccessPolicy {
+            folder_hash,
+            price_wei,
+            wallet_address,
+        };
+        let file_hashes: HashSet<String> = file_hashes
+            .into_iter()
+            .map(|h| h.trim().to_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect();
+
+        let mut shared = self.shared_files.lock().await;
+        let mut registered = 0usize;
+        for (file_hash, info) in shared.iter_mut() {
+            if file_hashes.contains(&file_hash.to_lowercase()) {
+                info.folder_access
+                    .insert(normalized_folder_hash.clone(), policy.clone());
+                registered += 1;
+            }
+        }
+        registered
     }
 
     /// Unregister a shared file
@@ -1116,6 +1405,7 @@ impl DhtService {
         file_hash: String,
         request_id: String,
         multiaddrs: Vec<String>,
+        folder_hash: Option<String>,
     ) -> Result<(), String> {
         let sender = self.command_sender.lock().await;
         if let Some(tx) = sender.as_ref() {
@@ -1125,6 +1415,7 @@ impl DhtService {
                 peer_id: peer_id_parsed,
                 request_id,
                 file_hash,
+                folder_hash,
                 multiaddrs,
                 response_tx,
             })
@@ -1166,29 +1457,49 @@ async fn verify_payment_proof(
     expected_wallet: &str,
     expected_price: u128,
     file_hash: &str,
+    scope: PaymentScope,
     request_id: String,
     events: &EventSink,
+    authorized_chunks: SeederAuthorizedChunksMap,
+    peer_id: PeerId,
 ) -> ChunkResponse {
     // Stage 3: replay guard — peek before doing any chain work so we
     // don't burn an RPC call on a tx that's already been redeemed.
-    let already_spent = {
-        let store = spent_tx_store().await;
-        let guard = store.lock().await;
-        guard.contains(&payment_tx.to_lowercase())
-    };
-    if already_spent {
-        println!(
-            "❌ Payment tx {} already redeemed for a previous download",
-            payment_tx
-        );
-        return ChunkResponse::PaymentAck {
-            request_id,
-            file_hash: file_hash.to_string(),
-            accepted: false,
-            error: Some(
-                "Payment tx already redeemed — one payment serves one download".to_string(),
-            ),
-        };
+    match payment_claim_status(payment_tx, &scope, payer_address, &peer_id).await {
+        PaymentClaimStatus::Available => {}
+        PaymentClaimStatus::ClaimedSameFolder => {
+            println!(
+                "✅ Reusing verified folder payment tx {} for member {}",
+                payment_tx, file_hash
+            );
+            remember_authorized_chunk_access(
+                &authorized_chunks,
+                request_id.clone(),
+                peer_id,
+                scope.clone(),
+            )
+            .await;
+            return ChunkResponse::PaymentAck {
+                request_id,
+                file_hash: file_hash.to_string(),
+                accepted: true,
+                error: None,
+            };
+        }
+        PaymentClaimStatus::ClaimedDirectFile | PaymentClaimStatus::ClaimedOtherScope => {
+            println!(
+                "❌ Payment tx {} already redeemed for a different download scope",
+                payment_tx
+            );
+            return ChunkResponse::PaymentAck {
+                request_id,
+                file_hash: file_hash.to_string(),
+                accepted: false,
+                error: Some(
+                    "Payment tx already redeemed for a different file or folder".to_string(),
+                ),
+            };
+        }
     }
 
     // FM-A25: distinguish mined-vs-not so the buyer gets a retryable
@@ -1227,24 +1538,40 @@ async fn verify_payment_proof(
         Ok(true) => {
             // Atomically claim this tx so concurrent replays can't slip
             // through between the peek above and this point.
-            if !claim_spent_tx(payment_tx, file_hash).await {
-                println!(
-                    "❌ Race: tx {} redeemed by a concurrent request",
-                    payment_tx
-                );
-                return ChunkResponse::PaymentAck {
-                    request_id,
-                    file_hash: file_hash.to_string(),
-                    accepted: false,
-                    error: Some(
-                        "Payment tx already redeemed by a concurrent request".to_string(),
-                    ),
-                };
+            match claim_payment_tx(payment_tx, &scope, payer_address, &peer_id).await {
+                PaymentClaimStatus::Available => {}
+                PaymentClaimStatus::ClaimedSameFolder => {
+                    println!(
+                        "✅ Concurrent folder payment tx {} already claimed for this folder",
+                        payment_tx
+                    );
+                }
+                PaymentClaimStatus::ClaimedDirectFile | PaymentClaimStatus::ClaimedOtherScope => {
+                    println!(
+                        "❌ Race: tx {} redeemed by a concurrent request",
+                        payment_tx
+                    );
+                    return ChunkResponse::PaymentAck {
+                        request_id,
+                        file_hash: file_hash.to_string(),
+                        accepted: false,
+                        error: Some(
+                            "Payment tx already redeemed by a concurrent request".to_string(),
+                        ),
+                    };
+                }
             }
             println!(
                 "✅ Payment verified for {} from {}",
                 file_hash, payer_address
             );
+            remember_authorized_chunk_access(
+                &authorized_chunks,
+                request_id.clone(),
+                peer_id,
+                scope,
+            )
+            .await;
             let price_wei_str = expected_price.to_string();
             let _ = events.emit(
                 "chiraldrop-payment-received",
@@ -1304,26 +1631,42 @@ async fn verify_payment_on_chain(
         expected_sender,
         expected_recipient,
         expected_min_wei,
-    ).await
+    )
+    .await
 }
 
 // ============================================================================
 // Spent-tx guard (Stage 3).
 //
-// Each successful payment tx is persisted so it can only unlock one download.
-// Without this, a downloader could send one tx and replay the PaymentProof to
-// request the same file over and over (or swap request_ids to pull multiple
-// copies, or forward the proof to bypass paying on a re-request). This is the
-// seeder's "one payment = one delivery" enforcement.
+// Each successful payment tx is persisted under the scope it unlocked. Direct
+// file payments can only unlock one file delivery. Folder payments can unlock
+// every manifest member for that same folder, payer, and peer, but cannot be
+// replayed by another downloader that learns the public tx hash.
 //
-// Store: a set of lowercased tx hashes, JSON-serialised as `{"spent":[...]}`,
-// persisted at `<data_dir>/seeder_spent_tx.json`. Corruption on read is
-// treated as an empty store (the on-chain verification still prevents double
-// withdrawal of funds; worst case is one stale-replay delivery after a
-// corrupted restart, which we judge acceptable vs. crashing the seeder).
+// Store: a set of lowercased claim keys, JSON-serialised as
+// `{"spent":[...]}`, persisted at `<data_dir>/seeder_spent_tx.json`.
+// Corruption on read is treated as an empty store (the on-chain verification
+// still prevents double withdrawal of funds; worst case is one stale-replay
+// delivery after a corrupted restart, which we judge acceptable vs. crashing
+// the seeder).
 // ============================================================================
 
-static SPENT_TX_STORE: tokio::sync::OnceCell<Mutex<HashSet<String>>> = tokio::sync::OnceCell::const_new();
+static SPENT_TX_STORE: tokio::sync::OnceCell<Mutex<HashSet<String>>> =
+    tokio::sync::OnceCell::const_new();
+
+#[derive(Clone, Debug)]
+enum PaymentScope {
+    DirectFile { file_hash: String },
+    Folder { folder_hash: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaymentClaimStatus {
+    Available,
+    ClaimedDirectFile,
+    ClaimedSameFolder,
+    ClaimedOtherScope,
+}
 
 fn spent_tx_path() -> std::path::PathBuf {
     crate::network::data_dir().join("seeder_spent_tx.json")
@@ -1360,26 +1703,115 @@ async fn persist_spent_tx_set(set: &HashSet<String>) {
     let _ = tokio::fs::write(&path, json).await;
 }
 
-/// Returns true if the tx was newly recorded for this file, false if it
-/// had already been spent against this file (duplicate / replay). The
-/// seeder must reject the second case.
-///
-/// Entries are keyed by `(tx_hash, file_hash)` so the same payment can
-/// only redeem one delivery of one file. Without the file binding, a
-/// single payment to a wallet that seeds many priced files could be
-/// replayed across all of them (FM-A21).
-async fn claim_spent_tx(tx_hash: &str, file_hash: &str) -> bool {
-    let key = format!("{}:{}", tx_hash.to_lowercase(), file_hash.to_lowercase());
+fn payment_scope_key(
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> String {
+    let tx = tx_hash.to_lowercase();
+    match scope {
+        PaymentScope::DirectFile { file_hash } => {
+            format!("file:{}:{}", tx, file_hash.to_lowercase())
+        }
+        PaymentScope::Folder { folder_hash } => {
+            format!(
+                "folder:{}:{}:{}:{}",
+                tx,
+                normalize_folder_hash(folder_hash),
+                payer_address.trim().to_lowercase(),
+                peer_id
+            )
+        }
+    }
+}
+
+fn ledger_entry_uses_tx(entry: &str, tx_hash: &str) -> bool {
+    let tx = tx_hash.to_lowercase();
+    entry == tx
+        || entry.starts_with(&format!("{}:", tx))
+        || entry.starts_with(&format!("file:{}:", tx))
+        || entry.starts_with(&format!("folder:{}:", tx))
+}
+
+fn ledger_entry_matches_scope(
+    entry: &str,
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> bool {
+    let tx = tx_hash.to_lowercase();
+    match scope {
+        PaymentScope::DirectFile { file_hash } => {
+            let file_hash = file_hash.to_lowercase();
+            entry == format!("file:{}:{}", tx, file_hash)
+                || entry == format!("{}:{}", tx, file_hash)
+        }
+        PaymentScope::Folder { .. } => {
+            entry == payment_scope_key(tx_hash, scope, payer_address, peer_id)
+        }
+    }
+}
+
+fn classify_payment_claim(
+    spent: &HashSet<String>,
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> PaymentClaimStatus {
+    let exact_scope_match = spent
+        .iter()
+        .any(|entry| ledger_entry_matches_scope(entry, tx_hash, scope, payer_address, peer_id));
+    if exact_scope_match {
+        return match scope {
+            PaymentScope::DirectFile { .. } => PaymentClaimStatus::ClaimedDirectFile,
+            PaymentScope::Folder { .. } => PaymentClaimStatus::ClaimedSameFolder,
+        };
+    }
+    if spent
+        .iter()
+        .any(|entry| ledger_entry_uses_tx(entry, tx_hash))
+    {
+        PaymentClaimStatus::ClaimedOtherScope
+    } else {
+        PaymentClaimStatus::Available
+    }
+}
+
+async fn payment_claim_status(
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> PaymentClaimStatus {
+    let store = spent_tx_store().await;
+    let guard = store.lock().await;
+    classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id)
+}
+
+/// Records a verified payment claim. `Available` means this call inserted a
+/// new claim. A same-folder repeat is accepted because one folder payment
+/// unlocks all manifest members.
+async fn claim_payment_tx(
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> PaymentClaimStatus {
     let store = spent_tx_store().await;
     let mut guard = store.lock().await;
-    if guard.contains(&key) {
-        return false;
+    let status = classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id);
+    if status != PaymentClaimStatus::Available {
+        return status;
     }
+    let key = payment_scope_key(tx_hash, scope, payer_address, peer_id);
     guard.insert(key);
     let snapshot = guard.clone();
     drop(guard);
     persist_spent_tx_set(&snapshot).await;
-    true
+    PaymentClaimStatus::Available
 }
 
 // Legacy verify function kept for reference but replaced by wallet::verify_payment above
@@ -1447,8 +1879,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             StreamProtocol::new("/chiral/ping/1.0.0"),
             request_response::ProtocolSupport::Full,
         )],
-        request_response::Config::default()
-            .with_request_timeout(std::time::Duration::from_secs(5)),
+        request_response::Config::default().with_request_timeout(std::time::Duration::from_secs(5)),
     );
 
     let file_transfer = cbor_codec::Behaviour::new(
@@ -1474,8 +1905,7 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
             StreamProtocol::new("/chiral/echo/1.0.0"),
             request_response::ProtocolSupport::Full,
         )],
-        request_response::Config::default()
-            .with_request_timeout(std::time::Duration::from_secs(5)),
+        request_response::Config::default().with_request_timeout(std::time::Duration::from_secs(5)),
     );
 
     let mut swarm = libp2p::SwarmBuilder::with_existing_identity(local_key.clone())
@@ -1747,7 +2177,10 @@ fn merge_seeder_record(existing: &mut serde_json::Value, candidate: &serde_json:
             merged_addrs.push(serde_json::Value::String(trimmed.to_string()));
         }
     }
-    existing_obj.insert("multiaddrs".to_string(), serde_json::Value::Array(merged_addrs));
+    existing_obj.insert(
+        "multiaddrs".to_string(),
+        serde_json::Value::Array(merged_addrs),
+    );
 
     let existing_price = existing_obj
         .get("priceWei")
@@ -1819,7 +2252,12 @@ fn merge_file_metadata_records(records: &[String]) -> Option<String> {
 
     let mut base = parsed_records
         .iter()
-        .max_by_key(|record| record.get("createdAt").and_then(|v| v.as_u64()).unwrap_or(0))
+        .max_by_key(|record| {
+            record
+                .get("createdAt")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+        })
         .cloned()
         .unwrap_or_else(|| parsed_records[0].clone());
 
@@ -1892,10 +2330,7 @@ fn merge_file_metadata_records(records: &[String]) -> Option<String> {
             );
 
             if let Some(primary_seeder) = merged_seeders.iter().find(|s| {
-                s.get("peerId")
-                    .and_then(|v| v.as_str())
-                    .map(|v| v.trim())
-                    == Some(primary.as_str())
+                s.get("peerId").and_then(|v| v.as_str()).map(|v| v.trim()) == Some(primary.as_str())
             }) {
                 if let Some(price) = primary_seeder.get("priceWei").and_then(|v| v.as_str()) {
                     base_obj.insert(
@@ -1903,8 +2338,7 @@ fn merge_file_metadata_records(records: &[String]) -> Option<String> {
                         serde_json::Value::String(price.to_string()),
                     );
                 }
-                if let Some(wallet) = primary_seeder.get("walletAddress").and_then(|v| v.as_str())
-                {
+                if let Some(wallet) = primary_seeder.get("walletAddress").and_then(|v| v.as_str()) {
                     base_obj.insert(
                         "walletAddress".to_string(),
                         serde_json::Value::String(wallet.to_string()),
@@ -2161,7 +2595,8 @@ async fn event_loop(
     // transport needs the full /p2p-circuit/p2p/<target> address which only our
     // explicit swarm.dial(multiaddr) provides. Calling both causes DialPending→DialFailure.
     // Solution: dial explicitly, queue the request, send it on ConnectionEstablished.
-    let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<(String, String)>> = HashMap::new();
+    let mut pending_file_requests: HashMap<libp2p::PeerId, Vec<PendingFileInfoRequest>> =
+        HashMap::new();
     // Ping requests deferred until a connection exists to the target peer.
     // send_request() may race dialing and fail with DialFailure when only relay
     // circuit paths are viable. We explicitly dial relay addresses first, then
@@ -2172,6 +2607,10 @@ async fn event_loop(
     let mut pending_file_attempts: HashMap<String, usize> = HashMap::new();
     // request_id -> file_hash for final failure events when all seeder attempts are exhausted.
     let mut pending_file_hashes: HashMap<String, String> = HashMap::new();
+    // Seeder-side request IDs that are allowed to read chunks. Paid direct
+    // files and paid folder members are inserted only after PaymentProof
+    // succeeds; free direct files are inserted after a signed FileInfo.
+    let seeder_authorized_chunks: SeederAuthorizedChunksMap = Arc::new(Mutex::new(HashMap::new()));
     // Pending echo responses
     let mut pending_echo: HashMap<
         request_response::OutboundRequestId,
@@ -2197,13 +2636,11 @@ async fn event_loop(
     let mut auto_host_registry_refresh = tokio::time::interval(tokio::time::Duration::from_secs(
         AUTO_HOST_REGISTRY_REFRESH_SECS,
     ));
-    auto_host_registry_refresh
-        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    auto_host_registry_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     // Periodically sync Kademlia routing table entries into the peer list
     // so newly discovered peers become visible in the UI.
-    let mut kad_peer_sync_interval =
-        tokio::time::interval(tokio::time::Duration::from_secs(30));
+    let mut kad_peer_sync_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
     kad_peer_sync_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
@@ -2335,6 +2772,7 @@ async fn event_loop(
                             &mut outbound_request_map,
                             &mut pending_file_attempts,
                             &mut pending_file_hashes,
+                            &seeder_authorized_chunks,
                             &download_credentials,
                             &mut failed_peers,
                             &mut auto_peer_dial_attempts,
@@ -2384,13 +2822,14 @@ async fn event_loop(
                         // Send any file requests that were waiting for this connection
                         if let Some(pending) = pending_file_requests.remove(&peer_id) {
                             println!("📤 Sending {} deferred file request(s) to {}", pending.len(), peer_id);
-                            for (req_id, fhash) in pending {
+                            for pending_req in pending {
                                 let request = ChunkRequest::FileInfo {
-                                    request_id: req_id.clone(),
-                                    file_hash: fhash,
+                                    request_id: pending_req.request_id.clone(),
+                                    file_hash: pending_req.file_hash,
+                                    folder_hash: pending_req.folder_hash,
                                 };
                                 let outbound_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
-                                outbound_request_map.insert(outbound_id, req_id);
+                                outbound_request_map.insert(outbound_id, pending_req.request_id);
                             }
                         }
 
@@ -2528,7 +2967,8 @@ async fn event_loop(
                             // Fail any deferred file requests for this peer
                             if let Some(pending) = pending_file_requests.remove(&peer) {
                                 let peer_short = &peer.to_string()[..std::cmp::min(8, peer.to_string().len())];
-                                for (req_id, fhash) in pending {
+                                for pending_req in pending {
+                                    let req_id = pending_req.request_id;
                                     println!("❌ Deferred file request {} failed: peer unreachable", req_id);
                                     let remaining = decrement_file_request_attempt(
                                         &mut pending_file_attempts,
@@ -2538,7 +2978,7 @@ async fn event_loop(
                                         pending_file_hashes.remove(&req_id);
                                         let _ = events.emit("file-download-failed", serde_json::json!({
                                             "requestId": req_id,
-                                            "fileHash": fhash,
+                                            "fileHash": pending_req.file_hash,
                                             "error": format!("Seeder ({}...) is offline or unreachable via relay.", peer_short)
                                         }));
                                     } else {
@@ -2799,7 +3239,7 @@ async fn event_loop(
                             .collect();
                         let _ = response_tx.send(addrs);
                     }
-                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash, multiaddrs, response_tx } => {
+                    SwarmCommand::RequestFileInfo { peer_id, request_id, file_hash, folder_hash, multiaddrs, response_tx } => {
                         println!("Requesting file info for {} from peer {}", file_hash, peer_id);
                         pending_file_hashes
                             .entry(request_id.clone())
@@ -2811,6 +3251,7 @@ async fn event_loop(
                             let request = ChunkRequest::FileInfo {
                                 request_id: request_id.clone(),
                                 file_hash: file_hash.clone(),
+                                folder_hash: folder_hash.clone(),
                             };
                             let req_id = swarm.behaviour_mut().file_request.send_request(&peer_id, request);
                             outbound_request_map.insert(req_id, request_id.clone());
@@ -2924,7 +3365,11 @@ async fn event_loop(
                                 // Queue the request — will be sent on ConnectionEstablished
                                 pending_file_requests.entry(peer_id.clone())
                                     .or_default()
-                                    .push((request_id.clone(), file_hash.clone()));
+                                    .push(PendingFileInfoRequest {
+                                        request_id: request_id.clone(),
+                                        file_hash: file_hash.clone(),
+                                        folder_hash: folder_hash.clone(),
+                                    });
                                 println!("📋 File request queued, waiting for connection...");
                             } else {
                                 println!("❌ Cannot reach peer {}: all dial attempts failed", peer_id);
@@ -2953,7 +3398,6 @@ async fn event_loop(
                 }
             }
         }
-
     }
 }
 
@@ -2980,6 +3424,7 @@ async fn handle_behaviour_event(
     outbound_request_map: &mut HashMap<request_response::OutboundRequestId, String>,
     pending_file_attempts: &mut HashMap<String, usize>,
     pending_file_hashes: &mut HashMap<String, String>,
+    seeder_authorized_chunks: &SeederAuthorizedChunksMap,
     download_credentials: &DownloadCredentialsMap,
     failed_peers: &mut HashSet<PeerId>,
     auto_peer_dial_attempts: &mut HashMap<PeerId, Instant>,
@@ -3107,7 +3552,8 @@ async fn handle_behaviour_event(
                                                     .and_then(|v| v.as_str())
                                                 {
                                                     {
-                                                        let dir = crate::network::data_dir().join("agreements");
+                                                        let dir = crate::network::data_dir()
+                                                            .join("agreements");
                                                         let _ = std::fs::create_dir_all(&dir);
                                                         let _ = std::fs::write(
                                                             dir.join(format!("{}.json", id)),
@@ -3141,7 +3587,8 @@ async fn handle_behaviour_event(
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 {
-                                                        let dir = crate::network::data_dir().join("agreements");
+                                                    let dir = crate::network::data_dir()
+                                                        .join("agreements");
                                                     let path =
                                                         dir.join(format!("{}.json", agreement_id));
                                                     if let Ok(contents) =
@@ -3187,7 +3634,8 @@ async fn handle_behaviour_event(
 
                                             if !agreement_id.is_empty() {
                                                 {
-                                                        let dir = crate::network::data_dir().join("agreements");
+                                                    let dir = crate::network::data_dir()
+                                                        .join("agreements");
                                                     let path =
                                                         dir.join(format!("{}.json", agreement_id));
                                                     if let Ok(contents) =
@@ -3285,7 +3733,8 @@ async fn handle_behaviour_event(
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 {
-                                                        let dir = crate::network::data_dir().join("agreements");
+                                                    let dir = crate::network::data_dir()
+                                                        .join("agreements");
                                                     let path =
                                                         dir.join(format!("{}.json", agreement_id));
                                                     if let Ok(contents) =
@@ -3383,7 +3832,10 @@ async fn handle_behaviour_event(
                     // chiral_drive_share_*) are all ECDSA-signed by the
                     // publisher, so taking the first replica is safe — a
                     // forgery is rejected by the caller's verify step.
-                    pending_get_results.entry(id).or_default().push(value.clone());
+                    pending_get_results
+                        .entry(id)
+                        .or_default()
+                        .push(value.clone());
                     if let Some(tx) = pending_get_queries.remove(&id) {
                         let _ = tx.send(Ok(Some(value)));
                     }
@@ -3439,9 +3891,10 @@ async fn handle_behaviour_event(
                     // was incomplete, which is expected in sparse networks.
                     println!("⚠️ DHT put replication incomplete for query {:?} (record stored locally): {:?}", id, err);
                 }
-                kad::QueryResult::GetProviders(Ok(
-                    kad::GetProvidersOk::FoundProviders { providers, .. },
-                )) => {
+                kad::QueryResult::GetProviders(Ok(kad::GetProvidersOk::FoundProviders {
+                    providers,
+                    ..
+                })) => {
                     // First-hit: as soon as we see any providers, fire the
                     // response and let Kademlia keep walking in the
                     // background. Waiting for FinishedWithNoAdditionalRecord
@@ -3459,10 +3912,8 @@ async fn handle_behaviour_event(
                     }
                     if !providers.is_empty() {
                         if let Some(tx) = pending_get_providers_queries.remove(&id) {
-                            let peer_ids: Vec<String> = providers
-                                .into_iter()
-                                .map(|p| p.to_string())
-                                .collect();
+                            let peer_ids: Vec<String> =
+                                providers.into_iter().map(|p| p.to_string()).collect();
                             let _ = tx.send(Ok(peer_ids));
                         }
                     }
@@ -3530,9 +3981,8 @@ async fn handle_behaviour_event(
                         for bucket in swarm.behaviour_mut().kad.kbuckets() {
                             for entry in bucket.iter() {
                                 let pid = entry.node.key.preimage().to_string();
-                                let addrs: Vec<String> = entry.node.value.iter()
-                                    .map(|a| a.to_string())
-                                    .collect();
+                                let addrs: Vec<String> =
+                                    entry.node.value.iter().map(|a| a.to_string()).collect();
                                 kad_discovered.push((pid, addrs));
                             }
                         }
@@ -3548,7 +3998,10 @@ async fn handle_behaviour_event(
                                     });
                                 }
                             }
-                            println!("📡 Added {} Kademlia peers to visible peer list", kad_discovered.len());
+                            println!(
+                                "📡 Added {} Kademlia peers to visible peer list",
+                                kad_discovered.len()
+                            );
                             let _ = events.emit("peer-discovered", peers_guard.clone());
                         }
 
@@ -3735,6 +4188,7 @@ async fn handle_behaviour_event(
                                 ChunkRequest::FileInfo {
                                     request_id,
                                     file_hash,
+                                    folder_hash,
                                 } => {
                                     println!(
                                         "📋 Received FileInfo request from {}: hash={}",
@@ -3757,31 +4211,59 @@ async fn handle_behaviour_event(
                                     // swarm task continues servicing other
                                     // peers in the meantime.
                                     if let Some(file_info) = shared.get(&file_hash) {
+                                        let access = match resolve_file_access(
+                                            file_info,
+                                            folder_hash.as_deref(),
+                                        ) {
+                                            Ok(access) => access,
+                                            Err(err) => {
+                                                drop(shared);
+                                                let response = file_info_error_response(
+                                                    request_id,
+                                                    file_hash,
+                                                    err,
+                                                    folder_hash,
+                                                );
+                                                if let Err(e) = swarm
+                                                    .behaviour_mut()
+                                                    .file_request
+                                                    .send_response(channel, response)
+                                                {
+                                                    println!(
+                                                        "Failed to send FileInfo response: {:?}",
+                                                        e
+                                                    );
+                                                }
+                                                return;
+                                            }
+                                        };
                                         if file_info.chunk_hashes.is_none() {
                                             let path = file_info.file_path.clone();
                                             let file_name = file_info.file_name.clone();
                                             let file_size = file_info.file_size;
-                                            let price_str = file_info.price_wei.to_string();
-                                            let wallet = file_info.wallet_address.clone();
                                             let private_key = file_info.private_key.clone();
                                             let shared_clone = shared_files.clone();
                                             let cmd_tx_clone = cmd_tx.clone();
+                                            let authorized_chunks =
+                                                Arc::clone(seeder_authorized_chunks);
+                                            let peer_id_for_auth = peer;
                                             let request_id = request_id.clone();
                                             let file_hash_owned = file_hash.clone();
                                             drop(shared);
                                             tokio::spawn(async move {
                                                 let path_for_hash = path.clone();
-                                                let hash_result = match tokio::task::spawn_blocking(
-                                                    move || compute_chunk_hashes(&path_for_hash),
-                                                )
-                                                .await
-                                                {
-                                                    Ok(inner) => inner,
-                                                    Err(je) => Err(format!(
-                                                        "Hash task panicked: {}",
-                                                        je
-                                                    )),
-                                                };
+                                                let hash_result =
+                                                    match tokio::task::spawn_blocking(move || {
+                                                        compute_chunk_hashes(&path_for_hash)
+                                                    })
+                                                    .await
+                                                    {
+                                                        Ok(inner) => inner,
+                                                        Err(je) => Err(format!(
+                                                            "Hash task panicked: {}",
+                                                            je
+                                                        )),
+                                                    };
                                                 let response = match hash_result {
                                                     Ok(hashes) => {
                                                         // Cache the result so the next request
@@ -3790,58 +4272,46 @@ async fn handle_behaviour_event(
                                                         // populated it concurrently; either
                                                         // set wins.
                                                         let mut shared = shared_clone.lock().await;
-                                                        if let Some(info) = shared.get_mut(&file_hash_owned) {
+                                                        if let Some(info) =
+                                                            shared.get_mut(&file_hash_owned)
+                                                        {
                                                             if info.chunk_hashes.is_none() {
-                                                                info.chunk_hashes = Some(hashes.clone());
+                                                                info.chunk_hashes =
+                                                                    Some(hashes.clone());
                                                             }
                                                         }
                                                         drop(shared);
-                                                        if private_key.is_empty() || wallet.is_empty() {
-                                                            ChunkResponse::FileInfo {
+                                                        if private_key.is_empty()
+                                                            || access.wallet_address.is_empty()
+                                                        {
+                                                            file_info_error_response(
                                                                 request_id,
-                                                                file_hash: file_hash_owned,
-                                                                file_name,
-                                                                file_size: 0,
-                                                                chunk_size: CHUNK_SIZE as u32,
-                                                                total_chunks: 0,
-                                                                chunk_hashes: vec![],
-                                                                price_wei: "0".to_string(),
-                                                                wallet_address: String::new(),
-                                                                signature: String::new(),
-                                                                error: Some(
-                                                                    "Seeder cannot sign FileInfo (wallet not unlocked)"
-                                                                        .to_string(),
-                                                                ),
-                                                            }
-                                                        } else {
-                                                            let payload = file_info_sign_payload(
-                                                                &file_hash_owned,
-                                                                &file_name,
-                                                                file_size,
-                                                                CHUNK_SIZE as u32,
-                                                                hashes.len() as u32,
-                                                                &hashes,
-                                                                &price_str,
-                                                                &wallet,
-                                                            );
-                                                            let signature = crate::wallet::sign_message(
-                                                                &private_key,
-                                                                &payload,
+                                                                file_hash_owned,
+                                                                "Seeder cannot sign FileInfo (wallet not unlocked)",
+                                                                access.folder_hash,
                                                             )
-                                                            .unwrap_or_default();
-                                                            ChunkResponse::FileInfo {
+                                                        } else {
+                                                            if access.price_wei == 0 {
+                                                                remember_authorized_chunk_access(
+                                                                    &authorized_chunks,
+                                                                    request_id.clone(),
+                                                                    peer_id_for_auth,
+                                                                    payment_scope_for_access(
+                                                                        &file_hash_owned,
+                                                                        &access,
+                                                                    ),
+                                                                )
+                                                                .await;
+                                                            }
+                                                            signed_file_info_response(
                                                                 request_id,
-                                                                file_hash: file_hash_owned,
+                                                                file_hash_owned,
                                                                 file_name,
                                                                 file_size,
-                                                                chunk_size: CHUNK_SIZE as u32,
-                                                                total_chunks: hashes.len() as u32,
-                                                                chunk_hashes: hashes,
-                                                                price_wei: price_str,
-                                                                wallet_address: wallet,
-                                                                signature,
-                                                                error: None,
-                                                            }
+                                                                hashes,
+                                                                access,
+                                                                &private_key,
+                                                            )
                                                         }
                                                     }
                                                     Err(msg) => {
@@ -3849,25 +4319,20 @@ async fn handle_behaviour_event(
                                                             "Failed to compute chunk hashes for {}: {}",
                                                             file_hash_owned, msg
                                                         );
-                                                        ChunkResponse::FileInfo {
+                                                        file_info_error_response(
                                                             request_id,
-                                                            file_hash: file_hash_owned,
-                                                            file_name,
-                                                            file_size: 0,
-                                                            chunk_size: CHUNK_SIZE as u32,
-                                                            total_chunks: 0,
-                                                            chunk_hashes: vec![],
-                                                            price_wei: "0".to_string(),
-                                                            wallet_address: String::new(),
-                                                            signature: String::new(),
-                                                            error: Some(msg),
-                                                        }
+                                                            file_hash_owned,
+                                                            msg,
+                                                            access.folder_hash,
+                                                        )
                                                     }
                                                 };
-                                                let _ = cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
-                                                    channel,
-                                                    response,
-                                                });
+                                                let _ = cmd_tx_clone.send(
+                                                    SwarmCommand::SendChunkResponse {
+                                                        channel,
+                                                        response,
+                                                    },
+                                                );
                                             });
                                             return;
                                         }
@@ -3878,83 +4343,69 @@ async fn handle_behaviour_event(
                                     // synchronously while still on the
                                     // swarm task. No I/O here — just clones
                                     // + a (cheap) signature.
-                                    let response = if let Some(file_info) = shared.get(&file_hash)
-                                    {
-                                        let chunk_hashes = file_info.chunk_hashes.as_ref().unwrap();
-                                        let price_str = file_info.price_wei.to_string();
-                                        let wallet = file_info.wallet_address.clone();
-                                        let private_key = file_info.private_key.clone();
-                                        let file_name_owned = file_info.file_name.clone();
-                                        let file_size_owned = file_info.file_size;
-                                        println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
-                                                 file_name_owned, file_size_owned, chunk_hashes.len(), price_str, peer);
+                                    let response = if let Some(file_info) = shared.get(&file_hash) {
+                                        match resolve_file_access(file_info, folder_hash.as_deref())
+                                        {
+                                            Ok(access) => {
+                                                let chunk_hashes =
+                                                    file_info.chunk_hashes.as_ref().unwrap();
+                                                let private_key = file_info.private_key.clone();
+                                                let file_name_owned = file_info.file_name.clone();
+                                                let file_size_owned = file_info.file_size;
+                                                println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
+                                                         file_name_owned, file_size_owned, chunk_hashes.len(), access.price_wei, peer);
 
-                                        // Sign the FileInfo envelope with the seeder's
-                                        // wallet key so the downloader can verify the
-                                        // wallet_address claim. Without this, a hostile
-                                        // seeder could substitute its own wallet here
-                                        // and divert payment.
-                                        if private_key.is_empty() || wallet.is_empty() {
-                                            ChunkResponse::FileInfo {
+                                                // Sign the FileInfo envelope with the seeder's
+                                                // wallet key so the downloader can verify the
+                                                // wallet_address claim and, for folder downloads,
+                                                // the folder hash this child file is scoped to.
+                                                if private_key.is_empty()
+                                                    || access.wallet_address.is_empty()
+                                                {
+                                                    file_info_error_response(
+                                                        request_id,
+                                                        file_hash,
+                                                        "Seeder cannot sign FileInfo (wallet not unlocked)",
+                                                        access.folder_hash,
+                                                    )
+                                                } else {
+                                                    if access.price_wei == 0 {
+                                                        remember_authorized_chunk_access(
+                                                            seeder_authorized_chunks,
+                                                            request_id.clone(),
+                                                            peer,
+                                                            payment_scope_for_access(
+                                                                &file_hash, &access,
+                                                            ),
+                                                        )
+                                                        .await;
+                                                    }
+                                                    signed_file_info_response(
+                                                        request_id,
+                                                        file_hash,
+                                                        file_name_owned,
+                                                        file_size_owned,
+                                                        chunk_hashes.clone(),
+                                                        access,
+                                                        &private_key,
+                                                    )
+                                                }
+                                            }
+                                            Err(err) => file_info_error_response(
                                                 request_id,
                                                 file_hash,
-                                                file_name: file_name_owned,
-                                                file_size: 0,
-                                                chunk_size: CHUNK_SIZE as u32,
-                                                total_chunks: 0,
-                                                chunk_hashes: vec![],
-                                                price_wei: "0".to_string(),
-                                                wallet_address: String::new(),
-                                                signature: String::new(),
-                                                error: Some(
-                                                    "Seeder cannot sign FileInfo (wallet not unlocked)"
-                                                        .to_string(),
-                                                ),
-                                            }
-                                        } else {
-                                            let payload = file_info_sign_payload(
-                                                &file_hash,
-                                                &file_name_owned,
-                                                file_size_owned,
-                                                CHUNK_SIZE as u32,
-                                                chunk_hashes.len() as u32,
-                                                chunk_hashes,
-                                                &price_str,
-                                                &wallet,
-                                            );
-                                            let signature = crate::wallet::sign_message(
-                                                &private_key, &payload,
-                                            )
-                                            .unwrap_or_default();
-                                            ChunkResponse::FileInfo {
-                                                request_id,
-                                                file_hash,
-                                                file_name: file_name_owned,
-                                                file_size: file_size_owned,
-                                                chunk_size: CHUNK_SIZE as u32,
-                                                total_chunks: chunk_hashes.len() as u32,
-                                                chunk_hashes: chunk_hashes.clone(),
-                                                price_wei: price_str,
-                                                wallet_address: wallet,
-                                                signature,
-                                                error: None,
-                                            }
+                                                err,
+                                                folder_hash,
+                                            ),
                                         }
                                     } else {
                                         println!("File not found: {}", file_hash);
-                                        ChunkResponse::FileInfo {
+                                        file_info_error_response(
                                             request_id,
                                             file_hash,
-                                            file_name: String::new(),
-                                            file_size: 0,
-                                            chunk_size: CHUNK_SIZE as u32,
-                                            total_chunks: 0,
-                                            chunk_hashes: vec![],
-                                            price_wei: "0".to_string(),
-                                            wallet_address: String::new(),
-                                            signature: String::new(),
-                                            error: Some("File not found".to_string()),
-                                        }
+                                            "File not found",
+                                            folder_hash,
+                                        )
                                     };
                                     drop(shared);
 
@@ -3981,7 +4432,41 @@ async fn handle_behaviour_event(
                                     // peer's events the whole time.
                                     let shared = shared_files.lock().await;
                                     let file_path = match shared.get(&file_hash) {
-                                        Some(info) => info.file_path.clone(),
+                                        Some(info) => {
+                                            let authorized = {
+                                                let authorized_chunks =
+                                                    seeder_authorized_chunks.lock().await;
+                                                authorized_chunks.get(&request_id).cloned()
+                                            };
+                                            if let Some(err) = chunk_request_access_error(
+                                                authorized.as_ref(),
+                                                peer,
+                                                &file_hash,
+                                                info,
+                                            ) {
+                                                drop(shared);
+                                                let response = ChunkResponse::Chunk {
+                                                    request_id,
+                                                    file_hash,
+                                                    chunk_index,
+                                                    chunk_data: None,
+                                                    chunk_hash: String::new(),
+                                                    error: Some(err),
+                                                };
+                                                if let Err(e) = swarm
+                                                    .behaviour_mut()
+                                                    .file_request
+                                                    .send_response(channel, response)
+                                                {
+                                                    println!(
+                                                        "Failed to send chunk response: {:?}",
+                                                        e
+                                                    );
+                                                }
+                                                return;
+                                            }
+                                            info.file_path.clone()
+                                        }
                                         None => {
                                             drop(shared);
                                             let response = ChunkResponse::Chunk {
@@ -4009,22 +4494,28 @@ async fn handle_behaviour_event(
                                     let file_hash_owned = file_hash.clone();
                                     tokio::spawn(async move {
                                         let path_for_read = file_path.clone();
-                                        let read_result = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, String), String> {
-                                            let mut file = std::fs::File::open(&path_for_read)
-                                                .map_err(|e| format!("Failed to open file: {}", e))?;
-                                            let offset = chunk_index as u64 * CHUNK_SIZE as u64;
-                                            file.seek(SeekFrom::Start(offset))
-                                                .map_err(|e| format!("Failed to seek: {}", e))?;
-                                            let mut buf = vec![0u8; CHUNK_SIZE];
-                                            let bytes_read = file
-                                                .read(&mut buf)
-                                                .map_err(|e| format!("Failed to read chunk: {}", e))?;
-                                            buf.truncate(bytes_read);
-                                            let mut hasher = Sha256::new();
-                                            hasher.update(&buf);
-                                            let chunk_hash = hex::encode(hasher.finalize());
-                                            Ok((buf, chunk_hash))
-                                        })
+                                        let read_result = tokio::task::spawn_blocking(
+                                            move || -> Result<(Vec<u8>, String), String> {
+                                                let mut file = std::fs::File::open(&path_for_read)
+                                                    .map_err(|e| {
+                                                        format!("Failed to open file: {}", e)
+                                                    })?;
+                                                let offset = chunk_index as u64 * CHUNK_SIZE as u64;
+                                                file.seek(SeekFrom::Start(offset)).map_err(
+                                                    |e| format!("Failed to seek: {}", e),
+                                                )?;
+                                                let mut buf = vec![0u8; CHUNK_SIZE];
+                                                let bytes_read =
+                                                    file.read(&mut buf).map_err(|e| {
+                                                        format!("Failed to read chunk: {}", e)
+                                                    })?;
+                                                buf.truncate(bytes_read);
+                                                let mut hasher = Sha256::new();
+                                                hasher.update(&buf);
+                                                let chunk_hash = hex::encode(hasher.finalize());
+                                                Ok((buf, chunk_hash))
+                                            },
+                                        )
                                         .await;
                                         let response = match read_result {
                                             Ok(Ok((buf, chunk_hash))) => ChunkResponse::Chunk {
@@ -4049,18 +4540,23 @@ async fn handle_behaviour_event(
                                                 chunk_index,
                                                 chunk_data: None,
                                                 chunk_hash: String::new(),
-                                                error: Some(format!("Chunk read task panicked: {}", je)),
+                                                error: Some(format!(
+                                                    "Chunk read task panicked: {}",
+                                                    je
+                                                )),
                                             },
                                         };
-                                        let _ = cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
-                                            channel,
-                                            response,
-                                        });
+                                        let _ =
+                                            cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
+                                                channel,
+                                                response,
+                                            });
                                     });
                                 }
                                 ChunkRequest::PaymentProof {
                                     request_id,
                                     file_hash,
+                                    folder_hash,
                                     payment_tx,
                                     payer_address,
                                 } => {
@@ -4079,8 +4575,37 @@ async fn handle_behaviour_event(
                                     // pings/dials/chunks stalled, even if
                                     // they were unrelated to this download.
                                     let shared = shared_files.lock().await;
-                                    let (price_wei, expected_wallet) = match shared.get(&file_hash) {
-                                        Some(info) => (info.price_wei, info.wallet_address.clone()),
+                                    let (price_wei, expected_wallet, payment_scope) = match shared
+                                        .get(&file_hash)
+                                    {
+                                        Some(info) => {
+                                            let access = match resolve_file_access(
+                                                info,
+                                                folder_hash.as_deref(),
+                                            ) {
+                                                Ok(access) => access,
+                                                Err(err) => {
+                                                    drop(shared);
+                                                    let resp = ChunkResponse::PaymentAck {
+                                                        request_id,
+                                                        file_hash,
+                                                        accepted: false,
+                                                        error: Some(err),
+                                                    };
+                                                    if let Err(e) = swarm
+                                                        .behaviour_mut()
+                                                        .file_request
+                                                        .send_response(channel, resp)
+                                                    {
+                                                        println!("Failed to send PaymentAck response: {:?}", e);
+                                                    }
+                                                    return;
+                                                }
+                                            };
+                                            let scope =
+                                                payment_scope_for_access(&file_hash, &access);
+                                            (access.price_wei, access.wallet_address, scope)
+                                        }
                                         None => {
                                             drop(shared);
                                             let resp = ChunkResponse::PaymentAck {
@@ -4094,7 +4619,10 @@ async fn handle_behaviour_event(
                                                 .file_request
                                                 .send_response(channel, resp)
                                             {
-                                                println!("Failed to send PaymentAck response: {:?}", e);
+                                                println!(
+                                                    "Failed to send PaymentAck response: {:?}",
+                                                    e
+                                                );
                                             }
                                             return;
                                         }
@@ -4104,6 +4632,13 @@ async fn handle_behaviour_event(
                                     // Free-file fast path — no chain RPC,
                                     // no risk of stalling the reactor.
                                     if price_wei == 0 {
+                                        remember_authorized_chunk_access(
+                                            seeder_authorized_chunks,
+                                            request_id.clone(),
+                                            peer,
+                                            payment_scope.clone(),
+                                        )
+                                        .await;
                                         let resp = ChunkResponse::PaymentAck {
                                             request_id,
                                             file_hash,
@@ -4135,6 +4670,8 @@ async fn handle_behaviour_event(
                                     let file_hash_owned = file_hash.clone();
                                     let payment_tx_owned = payment_tx.clone();
                                     let payer_address_owned = payer_address.clone();
+                                    let authorized_chunks = Arc::clone(seeder_authorized_chunks);
+                                    let peer_id_for_auth = peer;
                                     tokio::spawn(async move {
                                         let response = verify_payment_proof(
                                             &payment_tx_owned,
@@ -4142,14 +4679,18 @@ async fn handle_behaviour_event(
                                             &expected_wallet,
                                             price_wei,
                                             &file_hash_owned,
+                                            payment_scope,
                                             request_id_owned,
                                             &events_clone,
+                                            authorized_chunks,
+                                            peer_id_for_auth,
                                         )
                                         .await;
-                                        let _ = cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
-                                            channel,
-                                            response,
-                                        });
+                                        let _ =
+                                            cmd_tx_clone.send(SwarmCommand::SendChunkResponse {
+                                                channel,
+                                                response,
+                                            });
                                     });
                                 }
                             }
@@ -4174,6 +4715,7 @@ async fn handle_behaviour_event(
                                     chunk_hashes,
                                     price_wei,
                                     wallet_address,
+                                    folder_hash,
                                     signature,
                                     error,
                                 } => {
@@ -4241,6 +4783,7 @@ async fn handle_behaviour_event(
                                         &chunk_hashes,
                                         &price_wei,
                                         &wallet_address,
+                                        folder_hash.as_deref(),
                                     );
                                     let sig_ok = !signature.is_empty()
                                         && !wallet_address.is_empty()
@@ -4255,7 +4798,10 @@ async fn handle_behaviour_event(
                                         } else {
                                             "FileInfo signature did not verify against wallet_address"
                                         };
-                                        println!("❌ {} from peer {} for {}", reason, peer, file_hash);
+                                        println!(
+                                            "❌ {} from peer {} for {}",
+                                            reason, peer, file_hash
+                                        );
                                         let remaining = decrement_file_request_attempt(
                                             pending_file_attempts,
                                             &request_id,
@@ -4368,36 +4914,105 @@ async fn handle_behaviour_event(
                                         };
 
                                         if let Some(creds) = creds {
-                                            // Split: 99.5% to seeder, 0.5% platform fee
-                                            let (seller_wei, fee_wei) = crate::speed_tiers::split_payment(price);
-                                            let seller_chi = crate::speed_tiers::format_wei_as_chi(seller_wei);
-                                            let fee_chi = crate::speed_tiers::format_wei_as_chi(fee_wei);
-
-                                            // Send seller payment
-                                            match crate::wallet::send_payment(
-                                                &creds.wallet_address,
-                                                &wallet_address,
-                                                &seller_chi,
-                                                &creds.private_key,
-                                            )
-                                            .await
+                                            if let Some(folder_hash_for_payment) =
+                                                folder_hash.clone()
                                             {
-                                                Ok(payment) => {
+                                                let expected_folder =
+                                                    normalize_folder_hash(&folder_hash_for_payment);
+                                                let creds_folder = creds
+                                                    .folder_hash
+                                                    .as_deref()
+                                                    .map(normalize_folder_hash);
+                                                let payment_tx = creds
+                                                    .folder_payment_tx
+                                                    .clone()
+                                                    .filter(|tx| !tx.trim().is_empty());
+                                                if creds_folder.as_deref()
+                                                    != Some(expected_folder.as_str())
+                                                    || payment_tx.is_none()
+                                                {
                                                     println!(
-                                                        "💰 Payment sent: tx={}",
-                                                        payment.tx_hash
+                                                        "❌ Missing folder payment proof for {}",
+                                                        folder_hash_for_payment
                                                     );
-                                                    // Send platform fee (best-effort)
-                                                    if fee_wei > 0 {
-                                                        let _ = crate::wallet::send_payment(
-                                                            &creds.wallet_address,
-                                                            crate::speed_tiers::PLATFORM_WALLET,
-                                                            &fee_chi,
-                                                            &creds.private_key,
-                                                        ).await;
+                                                    let mut downloads =
+                                                        active_downloads.lock().await;
+                                                    if let Some(dl) = downloads.remove(&request_id)
+                                                    {
+                                                        let _ =
+                                                            std::fs::remove_file(&dl.output_path);
                                                     }
-                                                    // Emit event so frontend can track in transaction history
-                                                    let _ = events.emit(
+                                                    let _ = events.emit("file-download-failed", serde_json::json!({
+                                                        "requestId": request_id,
+                                                        "fileHash": file_hash,
+                                                        "error": "Folder payment transaction is required for this paid folder member"
+                                                    }));
+                                                    return;
+                                                }
+
+                                                let payment_tx = payment_tx.unwrap();
+                                                let _ = events.emit(
+                                                    "chiraldrop-payment-sent",
+                                                    serde_json::json!({
+                                                        "requestId": request_id,
+                                                        "fileHash": file_hash,
+                                                        "fileName": file_name,
+                                                        "txHash": payment_tx.clone(),
+                                                        "priceWei": price_wei,
+                                                        "toWallet": wallet_address,
+                                                        "fromWallet": creds.wallet_address,
+                                                        "folderHash": folder_hash_for_payment.clone(),
+                                                    }),
+                                                );
+                                                let request = ChunkRequest::PaymentProof {
+                                                    request_id: request_id.clone(),
+                                                    file_hash: file_hash.clone(),
+                                                    folder_hash: Some(folder_hash_for_payment),
+                                                    payment_tx,
+                                                    payer_address: creds.wallet_address.clone(),
+                                                };
+                                                let req_id = swarm
+                                                    .behaviour_mut()
+                                                    .file_request
+                                                    .send_request(&peer, request);
+                                                outbound_request_map.insert(req_id, request_id);
+                                            } else {
+                                                // Split: 99.5% to seeder, 0.5% platform fee
+                                                let (seller_wei, fee_wei) =
+                                                    crate::speed_tiers::split_payment(price);
+                                                let seller_chi =
+                                                    crate::speed_tiers::format_wei_as_chi(
+                                                        seller_wei,
+                                                    );
+                                                let fee_chi =
+                                                    crate::speed_tiers::format_wei_as_chi(fee_wei);
+
+                                                // Send seller payment
+                                                match crate::wallet::send_payment(
+                                                    &creds.wallet_address,
+                                                    &wallet_address,
+                                                    &seller_chi,
+                                                    &creds.private_key,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(payment) => {
+                                                        println!(
+                                                            "💰 Payment sent: tx={}",
+                                                            payment.tx_hash
+                                                        );
+                                                        // Send platform fee (best-effort)
+                                                        if fee_wei > 0 {
+                                                            let _ = crate::wallet::send_payment(
+                                                                &creds.wallet_address,
+                                                                crate::speed_tiers::PLATFORM_WALLET,
+                                                                &fee_chi,
+                                                                &creds.private_key,
+                                                            )
+                                                            .await;
+                                                        }
+                                                        // Emit event so frontend can track in transaction history
+                                                        let _ = events.emit(
                                                         "chiraldrop-payment-sent",
                                                         serde_json::json!({
                                                             "requestId": request_id,
@@ -4411,33 +5026,40 @@ async fn handle_behaviour_event(
                                                             "balanceAfter": payment.balance_after,
                                                         }),
                                                     );
-                                                    // Send payment proof to seeder
-                                                    let request = ChunkRequest::PaymentProof {
-                                                        request_id: request_id.clone(),
-                                                        file_hash: file_hash.clone(),
-                                                        payment_tx: payment.tx_hash,
-                                                        payer_address: creds.wallet_address.clone(),
-                                                    };
-                                                    let req_id = swarm
-                                                        .behaviour_mut()
-                                                        .file_request
-                                                        .send_request(&peer, request);
-                                                    outbound_request_map.insert(req_id, request_id);
-                                                }
-                                                Err(e) => {
-                                                    println!("❌ Payment failed: {}", e);
-                                                    let mut downloads =
-                                                        active_downloads.lock().await;
-                                                    if let Some(dl) = downloads.remove(&request_id)
-                                                    {
-                                                        let _ =
-                                                            std::fs::remove_file(&dl.output_path);
+                                                        // Send payment proof to seeder
+                                                        let request = ChunkRequest::PaymentProof {
+                                                            request_id: request_id.clone(),
+                                                            file_hash: file_hash.clone(),
+                                                            folder_hash: None,
+                                                            payment_tx: payment.tx_hash,
+                                                            payer_address: creds
+                                                                .wallet_address
+                                                                .clone(),
+                                                        };
+                                                        let req_id = swarm
+                                                            .behaviour_mut()
+                                                            .file_request
+                                                            .send_request(&peer, request);
+                                                        outbound_request_map
+                                                            .insert(req_id, request_id);
                                                     }
-                                                    let _ = events.emit("file-download-failed", serde_json::json!({
+                                                    Err(e) => {
+                                                        println!("❌ Payment failed: {}", e);
+                                                        let mut downloads =
+                                                            active_downloads.lock().await;
+                                                        if let Some(dl) =
+                                                            downloads.remove(&request_id)
+                                                        {
+                                                            let _ = std::fs::remove_file(
+                                                                &dl.output_path,
+                                                            );
+                                                        }
+                                                        let _ = events.emit("file-download-failed", serde_json::json!({
                                                         "requestId": request_id,
                                                         "fileHash": file_hash,
                                                         "error": format!("Payment failed: {}", e)
                                                     }));
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -4478,24 +5100,30 @@ async fn handle_behaviour_event(
                                         println!("❌ Chunk {} error: {}", chunk_index, err);
                                         // Check if we should retry
                                         let mut downloads = active_downloads.lock().await;
-                                        let mut failover: Option<(PeerId, String, String, u32, String)> =
-                                            None;
+                                        let mut failover: Option<(
+                                            PeerId,
+                                            String,
+                                            String,
+                                            u32,
+                                            String,
+                                        )> = None;
                                         if let Some(dl) = downloads.get_mut(&request_id) {
                                             dl.retry_counts[chunk_index as usize] += 1;
                                             let attempt = dl.retry_counts[chunk_index as usize];
                                             if attempt <= MAX_CHUNK_RETRIES {
                                                 println!(
                                                     "🔄 Retrying chunk {} (attempt {}/{})",
-                                                    chunk_index,
-                                                    attempt,
-                                                    MAX_CHUNK_RETRIES
+                                                    chunk_index, attempt, MAX_CHUNK_RETRIES
                                                 );
                                                 let peer_id = dl.peer_id.clone();
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
-                                                tokio::time::sleep(chunk_retry_delay(attempt, chunk_index))
-                                                    .await;
+                                                tokio::time::sleep(chunk_retry_delay(
+                                                    attempt,
+                                                    chunk_index,
+                                                ))
+                                                .await;
                                                 let request = ChunkRequest::Chunk {
                                                     request_id: rid.clone(),
                                                     file_hash: fh,
@@ -4619,8 +5247,11 @@ async fn handle_behaviour_event(
                                                 let fh = dl.file_hash.clone();
                                                 let rid = dl.request_id.clone();
                                                 drop(downloads);
-                                                tokio::time::sleep(chunk_retry_delay(attempt, chunk_index))
-                                                    .await;
+                                                tokio::time::sleep(chunk_retry_delay(
+                                                    attempt,
+                                                    chunk_index,
+                                                ))
+                                                .await;
                                                 let request = ChunkRequest::Chunk {
                                                     request_id: rid.clone(),
                                                     file_hash: fh,
@@ -5222,20 +5853,13 @@ mod tests {
             .iter()
             .find(|s| s.get("peerId").and_then(|v| v.as_str()) == Some("peer-a"))
             .expect("peer-a seeder missing");
-        let peer_a_addrs = peer_a
-            .get("multiaddrs")
-            .and_then(|v| v.as_array())
-            .unwrap();
-        assert!(
-            peer_a_addrs
-                .iter()
-                .any(|a| a.as_str() == Some("/ip4/10.0.0.1/tcp/4001/p2p/peer-a"))
-        );
-        assert!(
-            peer_a_addrs
-                .iter()
-                .any(|a| a.as_str() == Some("/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-a"))
-        );
+        let peer_a_addrs = peer_a.get("multiaddrs").and_then(|v| v.as_array()).unwrap();
+        assert!(peer_a_addrs
+            .iter()
+            .any(|a| a.as_str() == Some("/ip4/10.0.0.1/tcp/4001/p2p/peer-a")));
+        assert!(peer_a_addrs
+            .iter()
+            .any(|a| a.as_str() == Some("/ip4/130.245.173.73/tcp/4001/p2p-circuit/p2p/peer-a")));
 
         assert_eq!(
             parsed.get("createdAt").and_then(|v| v.as_u64()),
@@ -5263,7 +5887,10 @@ mod tests {
         let seeders = parsed.get("seeders").and_then(|v| v.as_array()).unwrap();
         assert_eq!(seeders.len(), 1);
         let only = &seeders[0];
-        assert_eq!(only.get("peerId").and_then(|v| v.as_str()), Some("legacy-peer"));
+        assert_eq!(
+            only.get("peerId").and_then(|v| v.as_str()),
+            Some("legacy-peer")
+        );
         assert_eq!(only.get("priceWei").and_then(|v| v.as_str()), Some("9"));
         assert_eq!(
             only.get("walletAddress").and_then(|v| v.as_str()),
@@ -5297,8 +5924,11 @@ mod tests {
     fn test_testnet_bootstrap_addrs_contain_peer_ids() {
         for addr_str in crate::network::TESTNET.libp2p_bootstrap_addrs {
             let addr: Multiaddr = addr_str.parse().unwrap();
-            assert!(extract_peer_id_from_multiaddr(&addr).is_some(),
-                "No peer ID in: {}", addr_str);
+            assert!(
+                extract_peer_id_from_multiaddr(&addr).is_some(),
+                "No peer ID in: {}",
+                addr_str
+            );
         }
     }
 
@@ -5315,7 +5945,11 @@ mod tests {
                 }
             }
         }
-        assert_eq!(seen.len(), 1, "expected one unique peer across IPv4 + IPv6 entries");
+        assert_eq!(
+            seen.len(),
+            1,
+            "expected one unique peer across IPv4 + IPv6 entries"
+        );
     }
 
     #[test]
@@ -5484,16 +6118,19 @@ mod tests {
         let req = ChunkRequest::FileInfo {
             request_id: "req-001".to_string(),
             file_hash: "abc123def456".to_string(),
+            folder_hash: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let deserialized: ChunkRequest = serde_json::from_str(&json).unwrap();
         if let ChunkRequest::FileInfo {
             request_id,
             file_hash,
+            folder_hash,
         } = deserialized
         {
             assert_eq!(request_id, "req-001");
             assert_eq!(file_hash, "abc123def456");
+            assert!(folder_hash.is_none());
         } else {
             panic!("Expected FileInfo variant");
         }
@@ -5539,6 +6176,7 @@ mod tests {
             ],
             price_wei: "1000000000000000".to_string(),
             wallet_address: "0x1234567890abcdef".to_string(),
+            folder_hash: None,
             signature: String::new(),
             error: None,
         };
@@ -5604,6 +6242,7 @@ mod tests {
             chunk_hashes: vec![],
             price_wei: "0".to_string(),
             wallet_address: String::new(),
+            folder_hash: None,
             signature: String::new(),
             error: Some("File not found".to_string()),
         };
@@ -5625,12 +6264,26 @@ mod tests {
         // `wallet_address` starts with could shift content across
         // boundaries and let one signature attest to multiple envelopes.
         let a = file_info_sign_payload(
-            "abc", "report:0xVICTIM", 100, 256_000, 1, &["h1".to_string()],
-            "1000", "0xATTACKER",
+            "abc",
+            "report:0xVICTIM",
+            100,
+            256_000,
+            1,
+            &["h1".to_string()],
+            "1000",
+            "0xATTACKER",
+            None,
         );
         let b = file_info_sign_payload(
-            "abc", "report", 100, 256_000, 1, &["h1".to_string()],
-            "1000", "0xVICTIM:0xATTACKER",
+            "abc",
+            "report",
+            100,
+            256_000,
+            1,
+            &["h1".to_string()],
+            "1000",
+            "0xVICTIM:0xATTACKER",
+            None,
         );
         assert_ne!(a, b);
     }
@@ -5638,14 +6291,211 @@ mod tests {
     #[test]
     fn file_info_sign_payload_is_deterministic() {
         let p1 = file_info_sign_payload(
-            "abc", "doc.pdf", 1024, 256_000, 1, &["h1".to_string()],
-            "100", "0x1234",
+            "abc",
+            "doc.pdf",
+            1024,
+            256_000,
+            1,
+            &["h1".to_string()],
+            "100",
+            "0x1234",
+            None,
         );
         let p2 = file_info_sign_payload(
-            "abc", "doc.pdf", 1024, 256_000, 1, &["h1".to_string()],
-            "100", "0x1234",
+            "abc",
+            "doc.pdf",
+            1024,
+            256_000,
+            1,
+            &["h1".to_string()],
+            "100",
+            "0x1234",
+            None,
         );
         assert_eq!(p1, p2);
+    }
+
+    #[test]
+    fn file_info_sign_payload_binds_folder_hash_when_present() {
+        let direct = file_info_sign_payload(
+            "abc",
+            "doc.pdf",
+            1024,
+            256_000,
+            1,
+            &["h1".to_string()],
+            "100",
+            "0x1234",
+            None,
+        );
+        let folder_a = file_info_sign_payload(
+            "abc",
+            "doc.pdf",
+            1024,
+            256_000,
+            1,
+            &["h1".to_string()],
+            "100",
+            "0x1234",
+            Some("folder-a"),
+        );
+        let folder_b = file_info_sign_payload(
+            "abc",
+            "doc.pdf",
+            1024,
+            256_000,
+            1,
+            &["h1".to_string()],
+            "100",
+            "0x1234",
+            Some("folder-b"),
+        );
+        assert_ne!(direct, folder_a);
+        assert_ne!(folder_a, folder_b);
+    }
+
+    #[test]
+    fn paid_folder_child_rejects_direct_file_info_access() {
+        let mut folder_access = HashMap::new();
+        folder_access.insert(
+            "folder-abc".to_string(),
+            FolderAccessPolicy {
+                folder_hash: "folder-abc".to_string(),
+                price_wei: 10_000,
+                wallet_address: "0xfolder".to_string(),
+            },
+        );
+        let info = SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+            chunk_hashes: Some(vec!["hash0".to_string()]),
+            price_wei: 0,
+            wallet_address: "0xdirect".to_string(),
+            private_key: String::new(),
+            folder_access,
+        };
+
+        let direct = resolve_file_access(&info, None);
+        assert!(
+            direct.is_err(),
+            "paid folder children must not expose free direct FileInfo"
+        );
+
+        let folder = resolve_file_access(&info, Some("folder-abc")).unwrap();
+        assert_eq!(folder.price_wei, 10_000);
+        assert_eq!(folder.wallet_address, "0xfolder");
+        assert_eq!(folder.folder_hash.as_deref(), Some("folder-abc"));
+    }
+
+    #[test]
+    fn folder_payment_claim_is_reusable_only_for_same_folder() {
+        let tx = "0xabc";
+        let payer = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let other_payer = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let peer = PeerId::random();
+        let other_peer = PeerId::random();
+        let folder_a = PaymentScope::Folder {
+            folder_hash: "folder-a".to_string(),
+        };
+        let folder_b = PaymentScope::Folder {
+            folder_hash: "folder-b".to_string(),
+        };
+        let file = PaymentScope::DirectFile {
+            file_hash: "file-a".to_string(),
+        };
+        let mut spent = HashSet::new();
+        spent.insert(payment_scope_key(tx, &folder_a, payer, &peer));
+
+        assert_eq!(
+            classify_payment_claim(&spent, tx, &folder_a, payer, &peer),
+            PaymentClaimStatus::ClaimedSameFolder
+        );
+        assert_eq!(
+            classify_payment_claim(&spent, tx, &folder_a, other_payer, &peer),
+            PaymentClaimStatus::ClaimedOtherScope
+        );
+        assert_eq!(
+            classify_payment_claim(&spent, tx, &folder_a, payer, &other_peer),
+            PaymentClaimStatus::ClaimedOtherScope
+        );
+        assert_eq!(
+            classify_payment_claim(&spent, tx, &folder_b, payer, &peer),
+            PaymentClaimStatus::ClaimedOtherScope
+        );
+        assert_eq!(
+            classify_payment_claim(&spent, tx, &file, payer, &peer),
+            PaymentClaimStatus::ClaimedOtherScope
+        );
+    }
+
+    #[test]
+    fn paid_folder_child_chunk_request_requires_authorized_scope() {
+        let peer = PeerId::random();
+        let other_peer = PeerId::random();
+        let mut folder_access = HashMap::new();
+        folder_access.insert(
+            "folder-abc".to_string(),
+            FolderAccessPolicy {
+                folder_hash: "folder-abc".to_string(),
+                price_wei: 10_000,
+                wallet_address: "0xfolder".to_string(),
+            },
+        );
+        let info = SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+            chunk_hashes: Some(vec!["hash0".to_string()]),
+            price_wei: 0,
+            wallet_address: "0xdirect".to_string(),
+            private_key: String::new(),
+            folder_access,
+        };
+
+        assert!(
+            chunk_request_access_error(None, peer, "file-hash", &info).is_some(),
+            "direct Chunk requests must not bypass paid folder payment"
+        );
+
+        let folder_auth = AuthorizedChunkAccess {
+            peer_id: peer,
+            scope: PaymentScope::Folder {
+                folder_hash: "folder-abc".to_string(),
+            },
+        };
+        assert!(chunk_request_access_error(Some(&folder_auth), peer, "file-hash", &info).is_none());
+        assert!(
+            chunk_request_access_error(Some(&folder_auth), other_peer, "file-hash", &info)
+                .is_some(),
+            "another peer cannot reuse the paid request_id"
+        );
+
+        let wrong_file_auth = AuthorizedChunkAccess {
+            peer_id: peer,
+            scope: PaymentScope::DirectFile {
+                file_hash: "other-file".to_string(),
+            },
+        };
+        assert!(
+            chunk_request_access_error(Some(&wrong_file_auth), peer, "file-hash", &info).is_some()
+        );
+    }
+
+    #[test]
+    fn free_direct_chunk_request_is_allowed_without_payment_scope() {
+        let info = SharedFileInfo {
+            file_path: "/path/to/file.txt".to_string(),
+            file_name: "file.txt".to_string(),
+            file_size: 1024,
+            chunk_hashes: Some(vec!["hash0".to_string()]),
+            price_wei: 0,
+            wallet_address: "0xdirect".to_string(),
+            private_key: String::new(),
+            folder_access: HashMap::new(),
+        };
+
+        assert!(chunk_request_access_error(None, PeerId::random(), "file-hash", &info).is_none());
     }
 
     #[test]
@@ -5686,6 +6536,7 @@ mod tests {
             price_wei: 0,
             wallet_address: String::new(),
             private_key: String::new(),
+            folder_access: HashMap::new(),
         };
         assert_eq!(info.file_name, "file.txt");
         assert_eq!(info.file_size, 1024);
@@ -5703,6 +6554,7 @@ mod tests {
             price_wei: 5_000_000_000_000_000,
             wallet_address: "0xabc123".to_string(),
             private_key: String::new(),
+            folder_access: HashMap::new(),
         };
         assert_eq!(info.price_wei, 5_000_000_000_000_000);
         assert_eq!(info.wallet_address, "0xabc123");
@@ -5713,6 +6565,7 @@ mod tests {
         let req = ChunkRequest::PaymentProof {
             request_id: "req-001".to_string(),
             file_hash: "abc123".to_string(),
+            folder_hash: None,
             payment_tx: "0xdeadbeef".to_string(),
             payer_address: "0x1234".to_string(),
         };
@@ -5721,12 +6574,14 @@ mod tests {
         if let ChunkRequest::PaymentProof {
             request_id,
             file_hash,
+            folder_hash,
             payment_tx,
             payer_address,
         } = deserialized
         {
             assert_eq!(request_id, "req-001");
             assert_eq!(file_hash, "abc123");
+            assert!(folder_hash.is_none());
             assert_eq!(payment_tx, "0xdeadbeef");
             assert_eq!(payer_address, "0x1234");
         } else {
