@@ -118,10 +118,17 @@ echo ""
 
 NODE_LIST=$(echo "$NODE_NAMES" | tr '\n' ' ')
 
+if [[ -n "${CHIRAL_RUN_LARGE_FILE_TESTS:-}" ]]; then
+    echo "  Large-file phase flag passed: CHIRAL_RUN_LARGE_FILE_TESTS=${CHIRAL_RUN_LARGE_FILE_TESTS}"
+else
+    echo "  Large-file phase skipped unless CHIRAL_RUN_LARGE_FILE_TESTS=1 is set"
+fi
+
 $DC run --rm \
     -e NODE_LIST="$NODE_LIST" \
     -e NODE_COUNT="$TOTAL" \
     -e RELAY_URL="http://relay.chiral.local:8080" \
+    -e CHIRAL_RUN_LARGE_FILE_TESTS="${CHIRAL_RUN_LARGE_FILE_TESTS:-}" \
     scaled-test-runner
 
 TEST_EXIT=$?
