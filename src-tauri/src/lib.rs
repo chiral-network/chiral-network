@@ -794,6 +794,43 @@ async fn ping_peer(
     }
 }
 
+fn chiraldrop_send_metadata(
+    price_wei: Option<String>,
+    sender_wallet: Option<String>,
+    file_hash: Option<String>,
+) -> Result<(String, String, String), String> {
+    let normalized_price = match price_wei {
+        None => "0".to_string(),
+        Some(raw) if raw.is_empty() => "0".to_string(),
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || !trimmed.chars().all(|c| c.is_ascii_digit()) {
+                return Err("priceWei must be empty, 0, or a valid u128 wei amount".to_string());
+            }
+            trimmed
+                .parse::<u128>()
+                .map_err(|_| "priceWei must be empty, 0, or a valid u128 wei amount".to_string())?
+                .to_string()
+        }
+    };
+    let price = normalized_price
+        .parse::<u128>()
+        .map_err(|_| "priceWei must be empty, 0, or a valid u128 wei amount".to_string())?;
+    let sender_wallet = sender_wallet.unwrap_or_default().trim().to_string();
+    let file_hash = file_hash.unwrap_or_default().trim().to_string();
+
+    if price > 0 {
+        if sender_wallet.is_empty() {
+            return Err("senderWallet is required for paid ChiralDrop sends".to_string());
+        }
+        if file_hash.is_empty() {
+            return Err("fileHash is required for paid ChiralDrop sends".to_string());
+        }
+    }
+
+    Ok((normalized_price, sender_wallet, file_hash))
+}
+
 #[tauri::command]
 async fn send_file(
     state: tauri::State<'_, AppState>,
@@ -806,6 +843,8 @@ async fn send_file(
     file_hash: Option<String>,
     file_size: Option<u64>,
 ) -> Result<(), String> {
+    let (price_wei, sender_wallet, file_hash) =
+        chiraldrop_send_metadata(price_wei, sender_wallet, file_hash)?;
     let actual_size = file_size.unwrap_or(file_data.len() as u64);
     let dht_guard = state.dht.lock().await;
 
@@ -815,9 +854,9 @@ async fn send_file(
             transfer_id,
             file_name,
             file_data,
-            price_wei.unwrap_or_default(),
-            sender_wallet.unwrap_or_default(),
-            file_hash.unwrap_or_default(),
+            price_wei,
+            sender_wallet,
+            file_hash,
             actual_size,
         )
         .await
@@ -837,6 +876,8 @@ async fn send_file_by_path(
     sender_wallet: Option<String>,
     file_hash: Option<String>,
 ) -> Result<(), String> {
+    let (price_wei, sender_wallet, file_hash) =
+        chiraldrop_send_metadata(price_wei, sender_wallet, file_hash)?;
     let path = std::path::Path::new(&file_path);
     let file_name = path
         .file_name()
@@ -852,9 +893,9 @@ async fn send_file_by_path(
             transfer_id,
             file_name,
             file_data,
-            price_wei.unwrap_or_default(),
-            sender_wallet.unwrap_or_default(),
-            file_hash.unwrap_or_default(),
+            price_wei,
+            sender_wallet,
+            file_hash,
             file_size,
         )
         .await
@@ -1559,10 +1600,20 @@ pub fn try_make_signed_seeder(
         return None;
     }
     let payload = SeederInfo::sign_payload(peer_id, file_hash, wallet_address);
-    let signature = wallet::sign_message(key, &payload).unwrap_or_default();
-    if signature.is_empty() {
-        return None;
-    }
+    let signature = match wallet::sign_message(key, &payload) {
+        Ok(signature) if !signature.is_empty() => signature,
+        Ok(_) => {
+            println!(
+                "  ⚠️ Failed to sign SeederInfo for {} — empty signature",
+                file_hash
+            );
+            return None;
+        }
+        Err(e) => {
+            println!("  ⚠️ Failed to sign SeederInfo for {}: {}", file_hash, e);
+            return None;
+        }
+    };
     let entry = SeederInfo {
         peer_id: peer_id.to_string(),
         price_wei: price_wei.to_string(),
@@ -3860,22 +3911,48 @@ fn set_active_network(name: String) -> Result<(), String> {
 // Wallet Backup Email Command
 // ============================================================================
 
+const DEFAULT_WALLET_BACKUP_RELAY_URL: &str = "https://130.245.173.73:8080/api/wallet/backup-email";
+
+fn is_allowed_wallet_backup_relay_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+
+    match parsed.scheme() {
+        "https" => true,
+        "http" => matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")),
+        _ => false,
+    }
+}
+
+fn wallet_backup_relay_url() -> Result<String, String> {
+    let url = std::env::var("CHIRAL_WALLET_BACKUP_RELAY_URL")
+        .unwrap_or_else(|_| DEFAULT_WALLET_BACKUP_RELAY_URL.to_string());
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("Wallet backup relay URL is not configured".to_string());
+    }
+    if !is_allowed_wallet_backup_relay_url(trimmed) {
+        return Err("Wallet backup relay URL must use HTTPS".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Send wallet backup email via the relay server.
-/// The relay has SMTP configured server-side — no user configuration needed.
+/// The relay has SMTP configured server-side; wallet secrets are encrypted
+/// before this command is invoked, so the relay only receives ciphertext.
 #[tauri::command]
 async fn send_wallet_backup_email(
     email: String,
-    recovery_phrase: String,
     wallet_address: String,
-    private_key: String,
+    encrypted_backup: serde_json::Value,
 ) -> Result<(), String> {
-    const RELAY_URL: &str = "http://130.245.173.73:8080/api/wallet/backup-email";
+    let relay_url = wallet_backup_relay_url()?;
 
     let payload = serde_json::json!({
         "email": email.trim(),
-        "recoveryPhrase": recovery_phrase,
         "walletAddress": wallet_address,
-        "privateKey": private_key,
+        "encryptedBackup": encrypted_backup,
     });
 
     let client = reqwest::Client::builder()
@@ -3884,7 +3961,7 @@ async fn send_wallet_backup_email(
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let response = client
-        .post(RELAY_URL)
+        .post(relay_url)
         .json(&payload)
         .send()
         .await
@@ -7371,7 +7448,7 @@ fn compute_reputation_verdict_proof(
         issuer_wallet,
         verifying_key,
         owner_signature,
-        updated_at: rating_storage::now_secs(),
+        updated_at: rating_storage::now_secs()?,
         verdict_signature: hex::encode(verdict_signature.to_bytes()),
     })
 }
@@ -7901,6 +7978,28 @@ mod multi_seeder_tests {
     // --- Serialization / Deserialization ---
 
     #[test]
+    fn wallet_backup_relay_url_requires_secure_transport() {
+        assert!(is_allowed_wallet_backup_relay_url(
+            "https://relay.example.com/api/wallet/backup-email"
+        ));
+        assert!(is_allowed_wallet_backup_relay_url(
+            "http://127.0.0.1:9419/api/wallet/backup-email"
+        ));
+        assert!(is_allowed_wallet_backup_relay_url(
+            "http://localhost:9419/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://relay.example.com/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://localhost.example.com/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://127.0.0.1.example.com/api/wallet/backup-email"
+        ));
+    }
+
+    #[test]
     fn download_request_id_at_preserves_existing_id_shape() {
         let request_id = download_request_id_at(
             "download",
@@ -8259,6 +8358,51 @@ mod multi_seeder_tests {
         assert_eq!(deserialized.wallet_address, "0xabc123");
     }
 
+    fn wallet_address_from_private_key(private_key: &str) -> String {
+        let probe = b"seeder-test-wallet";
+        let signature = wallet::sign_message(private_key, probe).unwrap();
+        wallet::recover_signer(probe, &signature).unwrap()
+    }
+
+    #[test]
+    fn try_make_signed_seeder_signs_valid_entry() {
+        let private_key =
+            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+
+        let seeder = try_make_signed_seeder(
+            "12D3KooWTest1",
+            "abcdef0123456789",
+            "1000000000000000",
+            &wallet_address,
+            vec!["/ip4/127.0.0.1/tcp/9419".to_string()],
+            Some(private_key),
+        )
+        .expect("valid key and wallet should produce a signed seeder");
+
+        assert!(!seeder.signature.is_empty());
+        assert!(seeder.verify("abcdef0123456789"));
+        assert_eq!(seeder.wallet_address, wallet_address);
+    }
+
+    #[test]
+    fn try_make_signed_seeder_rejects_invalid_private_key() {
+        let private_key =
+            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+
+        let seeder = try_make_signed_seeder(
+            "12D3KooWTest1",
+            "abcdef0123456789",
+            "1000000000000000",
+            &wallet_address,
+            Vec::new(),
+            Some("not-a-private-key"),
+        );
+
+        assert!(seeder.is_none());
+    }
+
     #[tokio::test]
     async fn build_local_search_result_reads_local_shared_file() {
         let dht = Arc::new(DhtService::new(
@@ -8515,6 +8659,72 @@ mod multi_seeder_tests {
             .expect_err("paid republish should require a private key");
 
         assert!(err.contains("Private key is required"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_allows_free_send_without_paid_fields() {
+        assert_eq!(
+            chiraldrop_send_metadata(None, None, None).unwrap(),
+            ("0".to_string(), String::new(), String::new())
+        );
+        assert_eq!(
+            chiraldrop_send_metadata(Some(String::new()), None, None).unwrap(),
+            ("0".to_string(), String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_accepts_complete_paid_fields() {
+        assert_eq!(
+            chiraldrop_send_metadata(
+                Some(" 1000000000000000000 ".to_string()),
+                Some(" 0xwallet ".to_string()),
+                Some(" file-hash ".to_string()),
+            )
+            .unwrap(),
+            (
+                "1000000000000000000".to_string(),
+                "0xwallet".to_string(),
+                "file-hash".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_malformed_price() {
+        let err = chiraldrop_send_metadata(
+            Some("1.5".to_string()),
+            Some("0xwallet".to_string()),
+            Some("file-hash".to_string()),
+        )
+        .expect_err("Tauri boundary must receive wei, not CHI decimals");
+
+        assert!(err.contains("priceWei"));
+        assert!(err.contains("valid u128 wei amount"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_paid_send_without_wallet() {
+        let err = chiraldrop_send_metadata(
+            Some("1".to_string()),
+            None,
+            Some("file-hash".to_string()),
+        )
+        .expect_err("paid ChiralDrop sends require sender wallet metadata");
+
+        assert!(err.contains("senderWallet"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_paid_send_without_hash() {
+        let err = chiraldrop_send_metadata(
+            Some("1".to_string()),
+            Some("0xwallet".to_string()),
+            None,
+        )
+        .expect_err("paid ChiralDrop sends require file hash metadata");
+
+        assert!(err.contains("fileHash"));
     }
 
     /// Manifests signed before folder-level pricing existed must still

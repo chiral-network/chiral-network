@@ -178,7 +178,7 @@ struct TunnelRequest {
 }
 
 /// Messages sent client → relay over the WebSocket.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct TunnelResponse {
     id: String,
     status: u16,
@@ -186,6 +186,21 @@ struct TunnelResponse {
     headers: HashMap<String, String>,
     /// Base64-encoded body
     body: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TunnelResponseFrameOutcome {
+    Delivered { id: String },
+    UnknownId { id: String },
+    MalformedDelivered { id: String, error: String },
+    MalformedUnknownId { id: String, error: String },
+    MalformedUnrecoverable { error: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TunnelResponseFrameError {
+    id: Option<String>,
+    message: String,
 }
 
 /// Active tunnel: a sender half of an mpsc channel to push requests into the
@@ -244,6 +259,80 @@ impl TunnelRegistry {
                 // by the responder being dropped, so no leak here. But if the tunnel
                 // is consistently timing out, remove it.
                 None
+            }
+        }
+    }
+}
+
+fn parse_tunnel_response_frame(text: &str) -> Result<TunnelResponse, TunnelResponseFrameError> {
+    serde_json::from_str::<TunnelResponse>(text).map_err(|err| TunnelResponseFrameError {
+        id: recover_tunnel_response_id(text),
+        message: err.to_string(),
+    })
+}
+
+fn recover_tunnel_response_id(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(|id| id.to_string())
+        })
+}
+
+fn tunnel_frame_error_response(id: String, error: &str) -> TunnelResponse {
+    use base64::Engine;
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    );
+    TunnelResponse {
+        id,
+        status: StatusCode::BAD_GATEWAY.as_u16(),
+        headers,
+        body: base64::engine::general_purpose::STANDARD.encode(format!(
+            "Malformed tunnel response frame from owner: {error}"
+        )),
+    }
+}
+
+fn route_tunnel_response_frame(
+    pending: &mut HashMap<String, TunnelResponder>,
+    text: &str,
+) -> TunnelResponseFrameOutcome {
+    route_parsed_tunnel_response_frame(pending, parse_tunnel_response_frame(text))
+}
+
+fn route_parsed_tunnel_response_frame(
+    pending: &mut HashMap<String, TunnelResponder>,
+    parsed: Result<TunnelResponse, TunnelResponseFrameError>,
+) -> TunnelResponseFrameOutcome {
+    match parsed {
+        Ok(resp) => {
+            let id = resp.id.clone();
+            if let Some(tx) = pending.remove(&id) {
+                let _ = tx.send(resp);
+                TunnelResponseFrameOutcome::Delivered { id }
+            } else {
+                TunnelResponseFrameOutcome::UnknownId { id }
+            }
+        }
+        Err(err) => {
+            let error = err.message;
+            match err.id {
+                Some(id) => {
+                    if let Some(tx) = pending.remove(&id) {
+                        let _ = tx.send(tunnel_frame_error_response(id.clone(), &error));
+                        TunnelResponseFrameOutcome::MalformedDelivered { id, error }
+                    } else {
+                        TunnelResponseFrameOutcome::MalformedUnknownId { id, error }
+                    }
+                }
+                None => TunnelResponseFrameOutcome::MalformedUnrecoverable { error },
             }
         }
     }
@@ -805,10 +894,36 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Text(text) => {
-                    if let Ok(resp) = serde_json::from_str::<TunnelResponse>(&text) {
+                    let parsed = parse_tunnel_response_frame(&text);
+                    let outcome = {
                         let mut map = pending_for_read.write().await;
-                        if let Some(tx) = map.remove(&resp.id) {
-                            let _ = tx.send(resp);
+                        route_parsed_tunnel_response_frame(&mut map, parsed)
+                    };
+                    match outcome {
+                        TunnelResponseFrameOutcome::Delivered { .. } => {}
+                        TunnelResponseFrameOutcome::UnknownId { id } => {
+                            eprintln!(
+                                "[TUNNEL] Ignoring response for unknown request id={} key={}",
+                                id, read_key
+                            );
+                        }
+                        TunnelResponseFrameOutcome::MalformedDelivered { id, error } => {
+                            eprintln!(
+                                "[TUNNEL] Malformed response frame for key={} id={}: {}",
+                                read_key, id, error
+                            );
+                        }
+                        TunnelResponseFrameOutcome::MalformedUnknownId { id, error } => {
+                            eprintln!(
+                                "[TUNNEL] Malformed response frame for unknown request id={} key={}: {}",
+                                id, read_key, error
+                            );
+                        }
+                        TunnelResponseFrameOutcome::MalformedUnrecoverable { error } => {
+                            eprintln!(
+                                "[TUNNEL] Malformed response frame for key={} without recoverable id: {}",
+                                read_key, error
+                            );
                         }
                     }
                 }
@@ -1600,6 +1715,123 @@ mod tests {
         let qs = build_query_string(&params);
         // HashMap iteration order is not guaranteed, so check both possibilities
         assert!(qs == "?a=1&b=2" || qs == "?b=2&a=1");
+    }
+
+    // -----------------------------------------------------------------------
+    // WebSocket tunnel response frames
+    // -----------------------------------------------------------------------
+
+    fn pending_tunnel_response(
+        id: &str,
+    ) -> (
+        HashMap<String, TunnelResponder>,
+        tokio::sync::oneshot::Receiver<TunnelResponse>,
+    ) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut pending = HashMap::new();
+        pending.insert(id.to_string(), tx);
+        (pending, rx)
+    }
+
+    #[test]
+    fn tunnel_response_frame_routes_valid_response() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-1");
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "text/plain".to_string());
+        let frame = serde_json::to_string(&TunnelResponse {
+            id: "req-1".to_string(),
+            status: 204,
+            headers,
+            body: "".to_string(),
+        })
+        .unwrap();
+
+        let outcome = route_tunnel_response_frame(&mut pending, &frame);
+
+        assert_eq!(
+            outcome,
+            TunnelResponseFrameOutcome::Delivered {
+                id: "req-1".to_string()
+            }
+        );
+        assert!(pending.is_empty());
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-1");
+        assert_eq!(resp.status, 204);
+        assert_eq!(
+            resp.headers.get("content-type").map(String::as_str),
+            Some("text/plain")
+        );
+    }
+
+    #[test]
+    fn tunnel_response_frame_reports_unknown_response_ids() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-pending");
+        let frame = serde_json::to_string(&TunnelResponse {
+            id: "req-unknown".to_string(),
+            status: 200,
+            headers: HashMap::new(),
+            body: "".to_string(),
+        })
+        .unwrap();
+
+        let outcome = route_tunnel_response_frame(&mut pending, &frame);
+
+        assert_eq!(
+            outcome,
+            TunnelResponseFrameOutcome::UnknownId {
+                id: "req-unknown".to_string()
+            }
+        );
+        assert!(pending.contains_key("req-pending"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn malformed_tunnel_response_frame_fails_recovered_pending_request() {
+        use base64::Engine;
+
+        let (mut pending, mut rx) = pending_tunnel_response("req-2");
+        let frame = r#"{"id":"req-2","status":"not-a-number","body":""}"#;
+
+        let outcome = route_tunnel_response_frame(&mut pending, frame);
+
+        match outcome {
+            TunnelResponseFrameOutcome::MalformedDelivered { id, error } => {
+                assert_eq!(id, "req-2");
+                assert!(error.contains("invalid type"));
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+        assert!(pending.is_empty());
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-2");
+        assert_eq!(resp.status, StatusCode::BAD_GATEWAY.as_u16());
+        assert_eq!(
+            resp.headers.get("content-type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(resp.body)
+            .unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains("Malformed tunnel response frame from owner"));
+    }
+
+    #[test]
+    fn malformed_tunnel_response_frame_without_recoverable_id_keeps_pending_request() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-3");
+
+        let outcome = route_tunnel_response_frame(&mut pending, r#"{"id":"req-3","status":"#);
+
+        match outcome {
+            TunnelResponseFrameOutcome::MalformedUnrecoverable { error } => {
+                assert!(error.contains("EOF"));
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+        assert!(pending.contains_key("req-3"));
+        assert!(rx.try_recv().is_err());
     }
 
     // -----------------------------------------------------------------------

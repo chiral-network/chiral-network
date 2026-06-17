@@ -80,12 +80,45 @@ struct WalletInfo {
     private_key: String,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HostRegistryEntry {
     peer_id: String,
     wallet_address: String,
     updated_at: u64,
+}
+
+fn host_registry_from_dht_value(
+    registry_json: Option<String>,
+) -> Result<Vec<HostRegistryEntry>, String> {
+    match registry_json {
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|e| format!("Malformed chiral_host_registry JSON: {}", e)),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn host_registry_from_dht_lookup(
+    lookup: Result<Option<String>, String>,
+) -> Result<Vec<HostRegistryEntry>, String> {
+    let registry_json =
+        lookup.map_err(|e| format!("Failed to read chiral_host_registry: {}", e))?;
+    host_registry_from_dht_value(registry_json)
+}
+
+fn host_registry_after_publish(
+    mut registry: Vec<HostRegistryEntry>,
+    peer_id: String,
+    wallet_address: String,
+    updated_at: u64,
+) -> Vec<HostRegistryEntry> {
+    registry.retain(|e| e.peer_id != peer_id);
+    registry.push(HostRegistryEntry {
+        peer_id,
+        wallet_address,
+        updated_at,
+    });
+    registry
 }
 
 #[derive(Clone)]
@@ -200,24 +233,15 @@ async fn auto_publish_wallet_advertisement(
 
     let ad_json = serde_json::to_string(&ad)
         .map_err(|e| format!("Failed to serialize wallet advertisement: {}", e))?;
-    let host_key = format!("chiral_host_{}", peer_id);
-    dht.put_dht_value(host_key, ad_json).await?;
-
-    // Update host registry so other peers discover this wallet->peer mapping.
     let registry_key = "chiral_host_registry".to_string();
-    let mut registry: Vec<HostRegistryEntry> = match dht.get_dht_value(registry_key.clone()).await {
-        Ok(Some(raw)) => serde_json::from_str(&raw).unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    registry.retain(|e| e.peer_id != peer_id);
-    registry.push(HostRegistryEntry {
-        peer_id,
-        wallet_address: wallet_address.to_string(),
-        updated_at: now,
-    });
-
+    let registry = host_registry_from_dht_lookup(dht.get_dht_value(registry_key.clone()).await)?;
+    let registry =
+        host_registry_after_publish(registry, peer_id.clone(), wallet_address.to_string(), now);
     let registry_json = serde_json::to_string(&registry)
         .map_err(|e| format!("Failed to serialize host registry: {}", e))?;
+
+    let host_key = format!("chiral_host_{}", peer_id);
+    dht.put_dht_value(host_key, ad_json).await?;
     dht.put_dht_value(registry_key, registry_json).await
 }
 
@@ -1372,25 +1396,42 @@ async fn hosting_publish_ad(
     }
     let mut ad = body.clone();
     ad["peerId"] = serde_json::Value::String(peer_id.clone());
-    let ad_json = serde_json::to_string(&ad).unwrap_or_default();
+    let ad_json = match serde_json::to_string(&ad) {
+        Ok(json) => json,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to serialize advertisement: {}", e),
+            )
+        }
+    };
     let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
 
-    // Store individual ad
+    // Update registry
+    let registry_key = "chiral_host_registry".to_string();
+    let registry =
+        match host_registry_from_dht_lookup(dht.get_dht_value(registry_key.clone()).await) {
+            Ok(registry) => registry,
+            Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        };
+    let now = now_secs();
+    let registry = host_registry_after_publish(registry, peer_id.clone(), wallet_address, now);
+    let registry_json = match serde_json::to_string(&registry) {
+        Ok(json) => json,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to serialize host registry: {}", e),
+            )
+        }
+    };
+
+    // Store individual ad only after the shared registry parses cleanly.
     let host_key = format!("chiral_host_{}", peer_id);
     if let Err(e) = dht.put_dht_value(host_key, ad_json).await {
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, &e);
     }
 
-    // Update registry
-    let registry_key = "chiral_host_registry".to_string();
-    let mut registry: Vec<serde_json::Value> = match dht.get_dht_value(registry_key.clone()).await {
-        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-        _ => Vec::new(),
-    };
-    registry.retain(|e| e["peerId"].as_str() != Some(&peer_id));
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    registry.push(json!({"peerId": peer_id, "walletAddress": wallet_address, "updatedAt": now}));
-    let registry_json = serde_json::to_string(&registry).unwrap_or_default();
     match dht.put_dht_value(registry_key, registry_json).await {
         Ok(_) => Json(json!({"status": "published"})).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
@@ -1405,7 +1446,10 @@ async fn hosting_get_registry(
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
     };
     match dht.get_dht_value("chiral_host_registry".to_string()).await {
-        Ok(Some(json)) => Json(json!({"registry": serde_json::from_str::<serde_json::Value>(&json).unwrap_or(json!([]))})).into_response(),
+        Ok(Some(json)) => match host_registry_from_dht_value(Some(json)) {
+            Ok(registry) => Json(json!({"registry": registry})).into_response(),
+            Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        },
         Ok(None) => Json(json!({"registry": []})).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
@@ -1822,6 +1866,71 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn host_registry_entry(
+        peer_id: &str,
+        wallet_address: &str,
+        updated_at: u64,
+    ) -> HostRegistryEntry {
+        HostRegistryEntry {
+            peer_id: peer_id.to_string(),
+            wallet_address: wallet_address.to_string(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn headless_host_registry_missing_value_starts_empty() {
+        let registry =
+            host_registry_from_dht_value(None).expect("missing registry should be empty");
+
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn headless_host_registry_reads_valid_json() {
+        let json = serde_json::to_string(&vec![host_registry_entry("peer-a", "0xwallet", 10)])
+            .expect("test registry should serialize");
+        let registry =
+            host_registry_from_dht_value(Some(json)).expect("valid registry should parse");
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry[0].peer_id, "peer-a");
+        assert_eq!(registry[0].wallet_address, "0xwallet");
+        assert_eq!(registry[0].updated_at, 10);
+    }
+
+    #[test]
+    fn headless_host_registry_rejects_malformed_json() {
+        let err = host_registry_from_dht_value(Some("{not json".to_string()))
+            .expect_err("malformed registry must not be reset to empty");
+
+        assert!(err.contains("Malformed chiral_host_registry JSON"));
+    }
+
+    #[test]
+    fn headless_host_registry_publish_replaces_existing_peer() {
+        let registry = host_registry_after_publish(
+            vec![
+                host_registry_entry("peer-a", "0xold", 10),
+                host_registry_entry("peer-b", "0xother", 20),
+            ],
+            "peer-a".to_string(),
+            "0xnew".to_string(),
+            30,
+        );
+
+        assert_eq!(registry.len(), 2);
+        assert!(registry
+            .iter()
+            .any(|entry| entry.peer_id == "peer-b" && entry.wallet_address == "0xother"));
+        let updated = registry
+            .iter()
+            .find(|entry| entry.peer_id == "peer-a")
+            .expect("peer-a should be replaced");
+        assert_eq!(updated.wallet_address, "0xnew");
+        assert_eq!(updated.updated_at, 30);
+    }
 
     #[cfg(unix)]
     #[test]

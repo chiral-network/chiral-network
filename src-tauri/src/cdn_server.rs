@@ -85,6 +85,10 @@ fn required_upload_wei(price_wei_per_mb_month: u128, bytes: u128, days: u128) ->
     numer.saturating_add(denom - 1) / denom
 }
 
+const DEFAULT_CDN_PRICING_DURATION_DAYS: u64 = 30;
+/// Keep pricing quotes aligned with the finite CDN lease window.
+const MAX_CDN_PRICING_DURATION_DAYS: u64 = 3650;
+
 // ============================================================================
 // Types + state
 // ============================================================================
@@ -388,10 +392,10 @@ async fn pricing(
     State(s): State<Arc<CdnState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let duration_days: u64 = params
-        .get("durationDays")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30);
+    let duration_days = match pricing_duration_days_param(&params) {
+        Ok(days) => days,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
     let bytes: u128 = if let Some(b) = params.get("bytes").and_then(|s| s.parse().ok()) {
         b
     } else {
@@ -414,6 +418,25 @@ async fn pricing(
         "source": "fixed",
     }))
     .into_response()
+}
+
+fn pricing_duration_days_param(params: &HashMap<String, String>) -> Result<u64, String> {
+    let Some(raw) = params.get("durationDays") else {
+        return Ok(DEFAULT_CDN_PRICING_DURATION_DAYS);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("durationDays must be a positive integer number of days".to_string());
+    }
+    let days = trimmed
+        .parse::<u64>()
+        .map_err(|_| "durationDays must be a positive integer number of days".to_string())?;
+    if !(1..=MAX_CDN_PRICING_DURATION_DAYS).contains(&days) {
+        return Err(format!(
+            "durationDays must be between 1 and {MAX_CDN_PRICING_DURATION_DAYS} days"
+        ));
+    }
+    Ok(days)
 }
 
 /// GET /api/cdn/files?owner=0xABC — list this CDN's hosted files,
@@ -874,7 +897,14 @@ async fn register_in_dht(
         cdn_private_key.to_string(),
     )
     .await;
-    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    let peer_id = match cdn_provider_peer_id(dht.get_peer_id().await) {
+        Ok(peer_id) => peer_id,
+        Err(e) => {
+            println!("[CDN] DHT publish for {} skipped — {}", file_hash, e);
+            let _ = created_at;
+            return;
+        }
+    };
     let our_addrs = dht.get_listening_addresses().await;
 
     // Without a signing key the CDN can populate its local shared_files
@@ -1450,6 +1480,16 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn cdn_provider_peer_id(peer_id: Option<String>) -> Result<String, String> {
+    let peer_id = peer_id.unwrap_or_default().trim().to_string();
+    if peer_id.is_empty() {
+        return Err(
+            "local peer ID unavailable; start DHT before CDN provider publication".to_string(),
+        );
+    }
+    Ok(peer_id)
+}
+
 /// Format wei as a CHI decimal string LOSSLESSLY. The frontend feeds
 /// the returned string back into `parse_chi_to_wei` when it builds
 /// the upload payment, so any precision loss here makes the buyer
@@ -1529,6 +1569,63 @@ mod tests {
         let price_per_mb_month: u128 = 1_000_000_000_000_000;
         let total = (price_per_mb_month as f64 * 100.0 * (30.0 / 30.0)) as u128;
         assert_eq!(total, 100_000_000_000_000_000);
+    }
+
+    #[test]
+    fn pricing_duration_days_uses_default_when_absent() {
+        let params = HashMap::new();
+
+        assert_eq!(
+            pricing_duration_days_param(&params).unwrap(),
+            DEFAULT_CDN_PRICING_DURATION_DAYS
+        );
+    }
+
+    #[test]
+    fn pricing_duration_days_accepts_valid_values() {
+        let mut params = HashMap::new();
+        params.insert("durationDays".to_string(), " 60 ".to_string());
+
+        assert_eq!(pricing_duration_days_param(&params).unwrap(), 60);
+    }
+
+    #[test]
+    fn pricing_duration_days_rejects_malformed_values() {
+        let mut params = HashMap::new();
+        params.insert("durationDays".to_string(), "thirty".to_string());
+
+        let err = pricing_duration_days_param(&params)
+            .expect_err("malformed durationDays should fail closed");
+
+        assert!(err.contains("positive integer"));
+    }
+
+    #[test]
+    fn pricing_duration_days_rejects_empty_values() {
+        let mut params = HashMap::new();
+        params.insert("durationDays".to_string(), "  ".to_string());
+
+        let err = pricing_duration_days_param(&params)
+            .expect_err("empty durationDays should fail closed");
+
+        assert!(err.contains("positive integer"));
+    }
+
+    #[test]
+    fn pricing_duration_days_rejects_out_of_range_values() {
+        let mut zero_params = HashMap::new();
+        zero_params.insert("durationDays".to_string(), "0".to_string());
+        let too_large = (MAX_CDN_PRICING_DURATION_DAYS + 1).to_string();
+        let mut large_params = HashMap::new();
+        large_params.insert("durationDays".to_string(), too_large);
+
+        let zero_err = pricing_duration_days_param(&zero_params)
+            .expect_err("zero durationDays should fail closed");
+        let large_err = pricing_duration_days_param(&large_params)
+            .expect_err("oversized durationDays should fail closed");
+
+        assert!(zero_err.contains("between 1"));
+        assert!(large_err.contains(&MAX_CDN_PRICING_DURATION_DAYS.to_string()));
     }
 
     #[test]
@@ -1642,6 +1739,30 @@ mod tests {
         let err = price_env_value(Some("  ")).expect_err("empty price env should be rejected");
 
         assert!(err.contains("not empty"));
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_accepts_present_peer_id() {
+        let peer_id = cdn_provider_peer_id(Some("12D3KooWProviderPeer".to_string()))
+            .expect("present CDN peer id should be accepted");
+
+        assert_eq!(peer_id, "12D3KooWProviderPeer");
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_rejects_missing_peer_id() {
+        let err = cdn_provider_peer_id(None)
+            .expect_err("missing CDN peer id should fail provider publication");
+
+        assert!(err.contains("local peer ID unavailable"));
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_rejects_blank_peer_id() {
+        let err = cdn_provider_peer_id(Some("   ".to_string()))
+            .expect_err("blank CDN peer id should fail provider publication");
+
+        assert!(err.contains("start DHT"));
     }
 
     /// Zero-input identities — the upload handler returns 0 immediately
