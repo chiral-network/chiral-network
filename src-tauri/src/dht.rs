@@ -1898,6 +1898,30 @@ async fn claim_payment_tx_in_store(
 
 // Legacy verify function kept for reference but replaced by wallet::verify_payment above
 
+const P2P_PORT_ENV: &str = "CHIRAL_P2P_PORT";
+
+fn parse_configured_p2p_port(raw_port: Option<&str>) -> Result<u16, String> {
+    let Some(raw_port) = raw_port else {
+        return Ok(0);
+    };
+    raw_port.parse::<u16>().map_err(|_| {
+        format!(
+            "{} requires a valid port number from 0 to 65535, got '{}'",
+            P2P_PORT_ENV, raw_port
+        )
+    })
+}
+
+fn configured_p2p_port_from_env() -> Result<u16, String> {
+    match std::env::var(P2P_PORT_ENV) {
+        Ok(raw_port) => parse_configured_p2p_port(Some(&raw_port)),
+        Err(std::env::VarError::NotPresent) => parse_configured_p2p_port(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(format!("{} must be valid UTF-8", P2P_PORT_ENV))
+        }
+    }
+}
+
 async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>> {
     let local_key = load_or_generate_keypair();
     let local_peer_id = PeerId::from(local_key.public());
@@ -2021,10 +2045,8 @@ async fn create_swarm() -> Result<(Swarm<DhtBehaviour>, String), Box<dyn Error>>
     // (k3s/Docker) so the bound port matches the externally exposed NodePort.
     // Without it, the OS picks a random ephemeral port that won't be reachable
     // from outside the pod and will leave stale unreachable multiaddrs in the DHT.
-    let p2p_port: u16 = std::env::var("CHIRAL_P2P_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    let p2p_port = configured_p2p_port_from_env()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     swarm.listen_on(format!("/ip4/0.0.0.0/tcp/{}", p2p_port).parse()?)?;
     swarm.listen_on(format!("/ip6/::/tcp/{}", p2p_port).parse()?)?;
 
@@ -6061,6 +6083,34 @@ mod tests {
 
         assert!(peer_timestamp_secs_at(pre_epoch).is_err());
         assert!(peer_timestamp_millis_at(pre_epoch).is_err());
+    }
+
+    #[test]
+    fn p2p_port_config_uses_random_port_when_absent() {
+        assert_eq!(parse_configured_p2p_port(None).unwrap(), 0);
+    }
+
+    #[test]
+    fn p2p_port_config_accepts_valid_port() {
+        assert_eq!(parse_configured_p2p_port(Some("4100")).unwrap(), 4100);
+    }
+
+    #[test]
+    fn p2p_port_config_rejects_malformed_port() {
+        let err = parse_configured_p2p_port(Some("not-a-port"))
+            .expect_err("malformed port should be rejected");
+
+        assert!(err.contains(P2P_PORT_ENV));
+        assert!(err.contains("not-a-port"));
+    }
+
+    #[test]
+    fn p2p_port_config_rejects_out_of_range_port() {
+        let err = parse_configured_p2p_port(Some("70000"))
+            .expect_err("out-of-range port should be rejected");
+
+        assert!(err.contains(P2P_PORT_ENV));
+        assert!(err.contains("70000"));
     }
 
     #[test]
