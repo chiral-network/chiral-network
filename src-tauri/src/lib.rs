@@ -4006,30 +4006,44 @@ struct BootstrapHealthReport {
     healthy_enode_string: String,
 }
 
-fn current_bootstrap_health() -> BootstrapHealthReport {
+pub fn bootstrap_health_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            format!(
+                "Cannot report bootstrap health because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
+}
+
+fn current_bootstrap_health_at(
+    now: std::time::SystemTime,
+) -> Result<BootstrapHealthReport, String> {
     let cfg = network::active();
     let has_enode = !cfg.geth_bootstrap_enode.is_empty();
-    BootstrapHealthReport {
+    Ok(BootstrapHealthReport {
         total_nodes: if has_enode { 1 } else { 0 },
         healthy_nodes: if has_enode { 1 } else { 0 },
         nodes: Vec::new(),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        timestamp: bootstrap_health_timestamp_secs_at(now)?,
         is_healthy: true,
         healthy_enode_string: cfg.geth_bootstrap_enode.to_string(),
-    }
+    })
+}
+
+fn current_bootstrap_health() -> Result<BootstrapHealthReport, String> {
+    current_bootstrap_health_at(std::time::SystemTime::now())
 }
 
 #[tauri::command]
 async fn check_bootstrap_health() -> Result<BootstrapHealthReport, String> {
-    Ok(current_bootstrap_health())
+    current_bootstrap_health()
 }
 
 #[tauri::command]
 async fn get_bootstrap_health() -> Result<Option<BootstrapHealthReport>, String> {
-    Ok(Some(current_bootstrap_health()))
+    Ok(Some(current_bootstrap_health()?))
 }
 
 // ============================================================================
@@ -8044,6 +8058,37 @@ mod multi_seeder_tests {
         .expect_err("pre-epoch timestamp should be rejected");
 
         assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn bootstrap_health_timestamp_secs_at_preserves_seconds() {
+        let timestamp = bootstrap_health_timestamp_secs_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(123),
+        )
+        .expect("post-epoch bootstrap health timestamp should be valid");
+
+        assert_eq!(timestamp, 123);
+    }
+
+    #[test]
+    fn bootstrap_health_timestamp_rejects_pre_epoch_clock() {
+        let err = bootstrap_health_timestamp_secs_at(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch bootstrap health timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn current_bootstrap_health_at_preserves_timestamp() {
+        let report = current_bootstrap_health_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(456),
+        )
+        .expect("post-epoch bootstrap health report should be valid");
+
+        assert_eq!(report.timestamp, 456);
+        assert!(report.is_healthy);
     }
 
     #[test]
