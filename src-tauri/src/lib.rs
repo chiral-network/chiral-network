@@ -546,7 +546,13 @@ async fn auto_reseed_drive_files(
     let mut manifest_changed = false;
     if !hash_updates.is_empty() || !attempted_ids.is_empty() {
         let mut manifest = state.drive_state.manifest.write().await;
-        let now = ds::now_secs();
+        let now = match ds::now_secs() {
+            Ok(now) => now,
+            Err(err) => {
+                eprintln!("[DRIVE] Auto-reseed manifest update skipped: {}", err);
+                return;
+            }
+        };
         for item in manifest
             .items
             .iter_mut()
@@ -679,7 +685,7 @@ async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
     // DHT is offline: clear active-seeding runtime state in Drive manifest.
     if was_running {
         let mut changed = false;
-        let now = ds::now_secs();
+        let now = ds::now_secs()?;
         {
             let mut manifest = state.drive_state.manifest.write().await;
             for item in manifest
@@ -2133,6 +2139,13 @@ async fn try_repair_local_drive_seed(
 
     // Keep runtime Drive state consistent with repaired registration.
     {
+        let now = match ds::now_secs() {
+            Ok(now) => now,
+            Err(err) => {
+                eprintln!("[DRIVE] Skipping repaired seed manifest timestamp: {}", err);
+                return None;
+            }
+        };
         let mut manifest = state.drive_state.manifest.write().await;
         if let Some(item) = manifest
             .items
@@ -2141,11 +2154,11 @@ async fn try_repair_local_drive_seed(
         {
             if !item.seeding {
                 item.seeding = true;
-                item.modified_at = ds::now_secs();
+                item.modified_at = now;
             }
             if !item.seed_enabled {
                 item.seed_enabled = true;
-                item.modified_at = ds::now_secs();
+                item.modified_at = now;
             }
         }
     }
@@ -5368,6 +5381,7 @@ async fn drive_create_folder(
     if name.is_empty() || name.len() > 255 {
         return Err("Invalid folder name".into());
     }
+    let now = ds::now_secs()?;
     let item = DsItem {
         id: ds::generate_id(),
         name,
@@ -5375,8 +5389,8 @@ async fn drive_create_folder(
         parent_id,
         size: None,
         mime_type: None,
-        created_at: ds::now_secs(),
-        modified_at: ds::now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: None,
         owner,
@@ -5446,6 +5460,7 @@ async fn drive_upload_file(
         return Err("File exceeds 500 MB limit".into());
     }
 
+    let now = ds::now_secs()?;
     let item_id = ds::generate_id();
     let storage_name = format!("{}_{}", item_id, file_name);
     let mime = ds::mime_from_name(&file_name);
@@ -5505,8 +5520,8 @@ async fn drive_upload_file(
         parent_id,
         size: Some(copied_bytes),
         mime_type: Some(mime),
-        created_at: ds::now_secs(),
-        modified_at: ds::now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: Some(storage_name),
         owner,
@@ -5559,6 +5574,7 @@ async fn drive_update_item(
         .iter_mut()
         .find(|i| i.id == item_id && i.owner == owner)
         .ok_or("Item not found")?;
+    let now = ds::now_secs()?;
     if let Some(n) = name {
         if n.is_empty() || n.len() > 255 {
             return Err("Invalid name".into());
@@ -5574,7 +5590,7 @@ async fn drive_update_item(
     if let Some(p) = price_chi {
         item.price_chi = validate_drive_item_price_update(p)?;
     }
-    item.modified_at = ds::now_secs();
+    item.modified_at = now;
     let updated = item.clone();
     drop(m);
     state.drive_state.persist().await;
@@ -5714,11 +5730,12 @@ async fn drive_create_share(
         return Err("Share price must be greater than 0 CHI".into());
     }
 
+    let now = ds::now_secs()?;
     let token = ds::generate_share_token();
     let share = DsShareLink {
         id: token.clone(),
         item_id: item_id.clone(),
-        created_at: ds::now_secs(),
+        created_at: now,
         expires_at: None,
         price_chi: normalized_price,
         recipient_wallet: item.owner,
@@ -5796,8 +5813,9 @@ async fn drive_toggle_visibility(
         .iter_mut()
         .find(|i| i.id == item_id && i.owner == owner)
         .ok_or("Item not found")?;
+    let now = ds::now_secs()?;
     item.is_public = is_public;
-    item.modified_at = ds::now_secs();
+    item.modified_at = now;
     let updated = item.clone();
     drop(m);
     state.drive_state.persist().await;
@@ -6002,6 +6020,7 @@ async fn publish_drive_file_inner(
 
     // Update the Drive manifest with seeding metadata
     let updated_item = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6013,7 +6032,7 @@ async fn publish_drive_file_inner(
         item.price_chi = price_chi;
         item.seed_enabled = true;
         item.seeding = true;
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         let cloned = item.clone();
         cloned
     };
@@ -6130,12 +6149,13 @@ async fn seed_hosted_file(
 
     // Enable seeding in Drive manifest
     {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         if let Some(item) = m.items.iter_mut().find(|i| i.id == item_id) {
             item.seed_enabled = true;
             item.seeding = true;
             item.price_chi = price_chi;
-            item.modified_at = ds::now_secs();
+            item.modified_at = now;
         }
     }
     state.drive_state.persist().await;
@@ -6191,6 +6211,7 @@ async fn drive_stop_seeding_inner(
 
     // Update manifest
     let updated_item = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6199,7 +6220,7 @@ async fn drive_stop_seeding_inner(
             .ok_or("Drive item not found in manifest")?;
         item.seed_enabled = false;
         item.seeding = false;
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         let cloned = item.clone();
         cloned
     };
@@ -6747,11 +6768,12 @@ async fn publish_drive_folder(
         None
     } else {
         let hash = compute_folder_hash(&owner, &manifest_files);
+        let folder_created_at = ds::now_secs()?;
         let mut manifest = FolderManifest {
             hash: hash.clone(),
             name: folder_name,
             owner_wallet: owner.clone(),
-            created_at: ds::now_secs(),
+            created_at: folder_created_at,
             files: manifest_files,
             price_wei: folder_price_wei.to_string(),
             wallet_address: folder_payment_wallet.clone(),
@@ -6866,6 +6888,7 @@ async fn publish_drive_folder(
     // the folder hash on `merkle_root` so the existing "Copy Merkle Hash"
     // context-menu item works for sold folders too.
     let folder = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6884,7 +6907,7 @@ async fn publish_drive_folder(
         if folder_hash_opt.is_some() {
             item.merkle_root = folder_hash_opt.clone();
         }
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         item.clone()
     };
     state.drive_state.persist().await;
@@ -7022,6 +7045,7 @@ async fn unpublish_drive_folder(
     }
 
     let folder = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -7034,7 +7058,7 @@ async fn unpublish_drive_folder(
         if folder_hash.is_some() {
             item.merkle_root = None;
         }
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         item.clone()
     };
     state.drive_state.persist().await;
