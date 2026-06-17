@@ -80,7 +80,7 @@ struct WalletInfo {
     private_key: String,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HostRegistryEntry {
     peer_id: String,
