@@ -322,9 +322,12 @@ struct SendFileRequest {
 #[serde(rename_all = "camelCase")]
 struct RegisterSharedFileRequest {
     file_hash: String,
+    #[serde(default)]
     file_path: String,
+    #[serde(default)]
     file_name: String,
-    file_size: u64,
+    #[serde(default)]
+    file_size: Option<u64>,
     #[serde(default)]
     price_wei: String,
     #[serde(default)]
@@ -666,10 +669,186 @@ async fn dht_listening_addresses(State(state): State<Arc<HeadlessRuntimeState>>)
     Json(json!({ "addresses": svc.get_listening_addresses().await })).into_response()
 }
 
+async fn validate_headless_register_metadata(
+    file_path: &str,
+    file_name: &str,
+    file_size: Option<u64>,
+) -> Result<(String, String, u64), String> {
+    let file_path = file_path.trim();
+    if file_path.is_empty() {
+        return Err("filePath required".to_string());
+    }
+
+    let file_name = file_name.trim();
+    if file_name.is_empty() {
+        return Err("fileName required".to_string());
+    }
+
+    let Some(file_size) = file_size else {
+        return Err("fileSize required".to_string());
+    };
+
+    let metadata = tokio::fs::metadata(file_path)
+        .await
+        .map_err(|e| format!("filePath does not exist or cannot be read: {}", e))?;
+    if !metadata.is_file() {
+        return Err("filePath must point to a regular file".to_string());
+    }
+    let actual_size = metadata.len();
+    if actual_size != file_size {
+        return Err(format!(
+            "fileSize mismatch: request declared {} bytes but file is {} bytes",
+            file_size, actual_size
+        ));
+    }
+
+    Ok((file_path.to_string(), file_name.to_string(), file_size))
+}
+
+#[cfg(test)]
+mod register_metadata_tests {
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "chiral-daemon-register-metadata-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test directory should be created");
+        dir
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_missing_path() {
+        let err = validate_headless_register_metadata("", "file.bin", Some(1))
+            .await
+            .expect_err("missing filePath should be rejected");
+
+        assert!(err.contains("filePath required"));
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_blank_name() {
+        let dir = test_dir("blank-name");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            " ",
+            Some(3),
+        )
+        .await
+        .expect_err("blank fileName should be rejected");
+
+        assert!(err.contains("fileName required"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_missing_size() {
+        let dir = test_dir("missing-size");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            None,
+        )
+        .await
+        .expect_err("missing fileSize should be rejected");
+
+        assert!(err.contains("fileSize required"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_missing_file() {
+        let dir = test_dir("missing-file");
+        let file_path = dir.join("missing.bin");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            Some(3),
+        )
+        .await
+        .expect_err("nonexistent filePath should be rejected");
+
+        assert!(err.contains("filePath does not exist"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_directory_path() {
+        let dir = test_dir("directory-path");
+
+        let err = validate_headless_register_metadata(
+            dir.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            Some(3),
+        )
+        .await
+        .expect_err("directory filePath should be rejected");
+
+        assert!(err.contains("regular file"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_rejects_size_mismatch() {
+        let dir = test_dir("size-mismatch");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+
+        let err = validate_headless_register_metadata(
+            file_path.to_str().expect("test path should be utf-8"),
+            "file.bin",
+            Some(4),
+        )
+        .await
+        .expect_err("fileSize mismatch should be rejected");
+
+        assert!(err.contains("fileSize mismatch"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn validate_headless_register_metadata_accepts_valid_metadata() {
+        let dir = test_dir("valid");
+        let file_path = dir.join("file.bin");
+        std::fs::write(&file_path, b"abc").expect("test file should be written");
+        let padded_path = format!(
+            " {} ",
+            file_path.to_str().expect("test path should be utf-8")
+        );
+
+        let metadata = validate_headless_register_metadata(&padded_path, " file.bin ", Some(3))
+            .await
+            .expect("valid metadata should pass");
+
+        assert_eq!(metadata.0, file_path.to_string_lossy().as_ref());
+        assert_eq!(metadata.1, "file.bin");
+        assert_eq!(metadata.2, 3);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
 async fn dht_register_shared_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<RegisterSharedFileRequest>,
 ) -> Response {
+    let (file_path, file_name, file_size) =
+        match validate_headless_register_metadata(&req.file_path, &req.file_name, req.file_size)
+            .await
+        {
+            Ok(metadata) => metadata,
+            Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+        };
+
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
@@ -679,9 +858,9 @@ async fn dht_register_shared_file(
     // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
         req.file_hash.clone(),
-        req.file_path,
-        req.file_name.clone(),
-        req.file_size,
+        file_path,
+        file_name.clone(),
+        file_size,
         price_wei,
         req.wallet_address.clone(),
         req.private_key.clone(),
@@ -735,8 +914,8 @@ async fn dht_register_shared_file(
     let blob_key = format!("chiral_file_{}", req.file_hash);
     if let Some(metadata) = chiral_network::try_make_signed_file_metadata(
         &req.file_hash,
-        &req.file_name,
-        req.file_size,
+        &file_name,
+        file_size,
         "WebRTC",
         &req.wallet_address,
         Some(&req.private_key),
