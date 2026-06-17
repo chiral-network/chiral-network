@@ -4815,6 +4815,52 @@ struct CdnSitePublishResult {
     payment_tx: String,
 }
 
+#[derive(Debug)]
+struct ValidatedCdnSitePublishResponse {
+    file_count: u32,
+    expires_at: u64,
+}
+
+fn required_cdn_response_u64(
+    resp_body: &serde_json::Value,
+    field: &'static str,
+) -> Result<u64, String> {
+    let value = resp_body
+        .get(field)
+        .ok_or_else(|| format!("CDN response missing required field: {}", field))?;
+    value
+        .as_u64()
+        .ok_or_else(|| format!("CDN response field {} must be an unsigned integer", field))
+}
+
+fn validate_cdn_site_publish_response(
+    resp_body: &serde_json::Value,
+    expected_file_count: usize,
+) -> Result<ValidatedCdnSitePublishResponse, String> {
+    let expires_at = required_cdn_response_u64(resp_body, "expiresAt")?;
+    if expires_at == 0 {
+        return Err("CDN response field expiresAt must be greater than zero".to_string());
+    }
+
+    let raw_file_count = required_cdn_response_u64(resp_body, "fileCount")?;
+    if raw_file_count == 0 {
+        return Err("CDN response field fileCount must be greater than zero".to_string());
+    }
+    let file_count = u32::try_from(raw_file_count)
+        .map_err(|_| "CDN response field fileCount exceeds supported range".to_string())?;
+    if file_count as usize != expected_file_count {
+        return Err(format!(
+            "CDN response fileCount mismatch: expected {}, got {}",
+            expected_file_count, file_count
+        ));
+    }
+
+    Ok(ValidatedCdnSitePublishResponse {
+        file_count,
+        expires_at,
+    })
+}
+
 /// Stage progress event for CDN site upload. Emitted on the
 /// `cdn-upload-progress` Tauri channel so the upload modal can show what
 /// the long blocking call is actually doing instead of just spinning.
@@ -5150,14 +5196,15 @@ async fn publish_site_to_cdn(
             return Err(m);
         }
     };
-    let expires_at = resp_body
-        .get("expiresAt")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let file_count = resp_body
-        .get("fileCount")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(local_file_count as u64) as u32;
+    let upload_metadata = match validate_cdn_site_publish_response(&resp_body, local_file_count) {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            emit_error("uploading", &e);
+            return Err(e);
+        }
+    };
+    let expires_at = upload_metadata.expires_at;
+    let file_count = upload_metadata.file_count;
 
     let public_url = format!("{}/cdn/sites/{}/", cdn_base, site_id);
 
@@ -8299,6 +8346,79 @@ mod multi_seeder_tests {
             .expect_err("root path has no file name");
 
         assert!(err.contains("has no file name"));
+    }
+
+    #[test]
+    fn cdn_site_publish_response_accepts_valid_metadata() {
+        let response = serde_json::json!({
+            "status": "uploaded",
+            "fileCount": 2,
+            "expiresAt": 1_700_000_000u64,
+        });
+
+        let metadata = validate_cdn_site_publish_response(&response, 2)
+            .expect("valid CDN response metadata should parse");
+
+        assert_eq!(metadata.file_count, 2);
+        assert_eq!(metadata.expires_at, 1_700_000_000);
+    }
+
+    #[test]
+    fn cdn_site_publish_response_rejects_missing_required_fields() {
+        let missing_expires_at = serde_json::json!({
+            "status": "uploaded",
+            "fileCount": 1,
+        });
+        let err = validate_cdn_site_publish_response(&missing_expires_at, 1)
+            .expect_err("missing expiresAt should be rejected");
+        assert!(err.contains("expiresAt"));
+
+        let missing_file_count = serde_json::json!({
+            "status": "uploaded",
+            "expiresAt": 1_700_000_000u64,
+        });
+        let err = validate_cdn_site_publish_response(&missing_file_count, 1)
+            .expect_err("missing fileCount should be rejected");
+        assert!(err.contains("fileCount"));
+    }
+
+    #[test]
+    fn cdn_site_publish_response_rejects_malformed_required_fields() {
+        let cases = vec![
+            (
+                serde_json::json!({"expiresAt": "soon", "fileCount": 1}),
+                "expiresAt",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": "1"}),
+                "fileCount",
+            ),
+            (
+                serde_json::json!({"expiresAt": 0, "fileCount": 1}),
+                "greater than zero",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": 0}),
+                "greater than zero",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": u64::MAX}),
+                "supported range",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": 2}),
+                "mismatch",
+            ),
+        ];
+
+        for (response, expected) in cases {
+            let err = validate_cdn_site_publish_response(&response, 1)
+                .expect_err("malformed CDN response metadata should be rejected");
+            assert!(
+                err.contains(expected),
+                "expected {err:?} to contain {expected:?}"
+            );
+        }
     }
 
     #[test]
