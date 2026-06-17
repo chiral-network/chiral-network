@@ -299,6 +299,29 @@ impl Default for GethDownloader {
     fn default() -> Self { Self::new() }
 }
 
+fn open_geth_log_files(log_path: &Path) -> Result<(fs::File, fs::File), String> {
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("create Geth log directory {}: {e}", parent.display()))?;
+    }
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)
+        .map_err(|e| format!("open Geth log file {}: {e}", log_path.display()))?;
+    let log_clone = log_file
+        .try_clone()
+        .map_err(|e| format!("clone Geth log file {}: {e}", log_path.display()))?;
+    Ok((log_file, log_clone))
+}
+
+fn write_geth_pid_file(data_dir: &Path, pid: u32) -> Result<(), String> {
+    let pid_path = data_dir.join("geth.pid");
+    fs::write(&pid_path, pid.to_string())
+        .map_err(|e| format!("write Geth PID file {}: {e}", pid_path.display()))
+}
+
 // ============================================================================
 // Process
 // ============================================================================
@@ -404,10 +427,7 @@ impl GethProcess {
 
         let cfg = network::active();
         let log_path = self.data_dir.join("geth.log");
-        if let Some(parent) = log_path.parent() { let _ = fs::create_dir_all(parent); }
-        let log_file = OpenOptions::new().create(true).write(true).truncate(true)
-            .open(&log_path).map_err(|e| format!("open log file: {e}"))?;
-        let log_clone = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
+        let (log_file, log_clone) = open_geth_log_files(&log_path)?;
 
         // Bind address for the HTTP RPC. Default 127.0.0.1 (safe for desktop
         // users), overridable to 0.0.0.0 for server operators running the
@@ -450,7 +470,12 @@ impl GethProcess {
         }
 
         let child = cmd.spawn().map_err(|e| format!("spawn geth: {e}"))?;
-        let _ = fs::write(self.data_dir.join("geth.pid"), child.id().to_string());
+        let mut child = child;
+        if let Err(err) = write_geth_pid_file(&self.data_dir, child.id()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(err);
+        }
         self.child = Some(child);
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
 
@@ -779,5 +804,53 @@ mod tests {
         assert!(s.contains("\"hashRate\":42"));
         assert!(s.contains("\"minerAddress\""));
         assert!(s.contains("\"totalMinedWei\""));
+    }
+
+    #[test]
+    fn open_geth_log_files_creates_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("nested").join("logs").join("geth.log");
+
+        let (_log_file, _log_clone) = open_geth_log_files(&log_path).unwrap();
+
+        assert!(log_path.exists());
+        assert!(log_path.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn open_geth_log_files_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked_parent = dir.path().join("blocked");
+        std::fs::write(&blocked_parent, "not a directory").unwrap();
+        let log_path = blocked_parent.join("geth.log");
+
+        let err = open_geth_log_files(&log_path).expect_err("log setup should fail");
+
+        assert!(err.contains("create Geth log directory"));
+        assert!(err.contains("blocked"));
+    }
+
+    #[test]
+    fn write_geth_pid_file_persists_child_pid() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_geth_pid_file(dir.path(), 42).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("geth.pid")).unwrap(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn write_geth_pid_file_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("blocked-data-dir");
+        std::fs::write(&data_dir, "not a directory").unwrap();
+
+        let err = write_geth_pid_file(&data_dir, 42).expect_err("pid write should fail");
+
+        assert!(err.contains("write Geth PID file"));
+        assert!(err.contains("geth.pid"));
     }
 }
