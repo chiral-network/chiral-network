@@ -39,6 +39,10 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::dht::DhtService;
 use crate::network;
 
+const DEFAULT_CDN_DURATION_DAYS: u64 = 30;
+/// Keep CDN leases finite; longer hosting terms should be renewed explicitly.
+const MAX_CDN_DURATION_DAYS: u64 = 3650;
+
 /// One-line description of a transaction's `from` / `to` / `value`
 /// for use in upload-mismatch error messages. Best-effort: any RPC
 /// failure becomes "<unable to fetch>" so the user still gets the
@@ -456,7 +460,10 @@ async fn upload(
 ) -> Response {
     let payment_tx = hdr(&headers, "X-Payment-Tx");
     let owner_wallet = hdr(&headers, "X-Owner-Wallet");
-    let duration_days: u64 = hdr(&headers, "X-Duration-Days").parse().unwrap_or(30);
+    let duration_days = match duration_days_header(&headers, "X-Duration-Days") {
+        Ok(days) => days,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
     let (download_price_chi, download_price_wei) = {
         let raw = hdr(&headers, "X-Download-Price-Chi");
         match normalize_download_price_chi(&raw) {
@@ -1021,7 +1028,10 @@ async fn upload_site(
     };
     let owner_wallet = hdr(&headers, "X-Owner-Wallet");
     let payment_tx = hdr(&headers, "X-Payment-Tx");
-    let duration_days: u64 = hdr(&headers, "X-Duration-Days").parse().unwrap_or(30);
+    let duration_days = match duration_days_header(&headers, "X-Duration-Days") {
+        Ok(days) => days,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
 
     if owner_wallet.is_empty() || payment_tx.is_empty() {
         return err(
@@ -1439,6 +1449,32 @@ fn hdr(h: &HeaderMap, key: &str) -> String {
     h.get(key).and_then(|v| v.to_str().ok()).unwrap_or("").to_string()
 }
 
+fn parse_duration_days(raw: &str, field: &str) -> Result<u64, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field} must be a positive integer number of days"));
+    }
+    let days = trimmed
+        .parse::<u64>()
+        .map_err(|_| format!("{field} must be a positive integer number of days"))?;
+    if !(1..=MAX_CDN_DURATION_DAYS).contains(&days) {
+        return Err(format!(
+            "{field} must be between 1 and {MAX_CDN_DURATION_DAYS} days"
+        ));
+    }
+    Ok(days)
+}
+
+fn duration_days_header(headers: &HeaderMap, key: &str) -> Result<u64, String> {
+    let Some(value) = headers.get(key) else {
+        return Ok(DEFAULT_CDN_DURATION_DAYS);
+    };
+    let raw = value
+        .to_str()
+        .map_err(|_| format!("{key} must be a valid decimal day count"))?;
+    parse_duration_days(raw, key)
+}
+
 fn err(code: StatusCode, msg: &str) -> Response {
     (code, Json(json!({ "error": msg }))).into_response()
 }
@@ -1642,6 +1678,50 @@ mod tests {
         let err = price_env_value(Some("  ")).expect_err("empty price env should be rejected");
 
         assert!(err.contains("not empty"));
+    }
+
+    #[test]
+    fn duration_days_uses_default_when_absent() {
+        let headers = HeaderMap::new();
+
+        assert_eq!(
+            duration_days_header(&headers, "X-Duration-Days").unwrap(),
+            DEFAULT_CDN_DURATION_DAYS
+        );
+    }
+
+    #[test]
+    fn duration_days_accepts_valid_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Duration-Days", "45".parse().unwrap());
+
+        assert_eq!(
+            duration_days_header(&headers, "X-Duration-Days").unwrap(),
+            45
+        );
+    }
+
+    #[test]
+    fn duration_days_rejects_malformed_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Duration-Days", "thirty".parse().unwrap());
+
+        let err = duration_days_header(&headers, "X-Duration-Days")
+            .expect_err("malformed duration header should fail closed");
+
+        assert!(err.contains("positive integer"));
+    }
+
+    #[test]
+    fn duration_days_rejects_out_of_range_values() {
+        let zero_err = parse_duration_days("0", "X-Duration-Days")
+            .expect_err("zero-day duration should fail closed");
+        let too_large = (MAX_CDN_DURATION_DAYS + 1).to_string();
+        let large_err = parse_duration_days(&too_large, "X-Duration-Days")
+            .expect_err("oversized duration should fail closed");
+
+        assert!(zero_err.contains("between 1"));
+        assert!(large_err.contains(&MAX_CDN_DURATION_DAYS.to_string()));
     }
 
     /// Zero-input identities — the upload handler returns 0 immediately
