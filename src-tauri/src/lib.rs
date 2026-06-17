@@ -4420,6 +4420,72 @@ async fn get_hosting_server_status(
 // WebSocket tunnel to relay (NAT traversal for hosting/drive proxy)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+struct DesktopTunnelRequest {
+    id: String,
+    path: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DesktopTunnelRequestFrameError {
+    id: Option<String>,
+    message: String,
+}
+
+fn recover_desktop_tunnel_request_id(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn parse_desktop_tunnel_request_frame(
+    text: &str,
+) -> Result<DesktopTunnelRequest, DesktopTunnelRequestFrameError> {
+    let req = serde_json::from_str::<DesktopTunnelRequest>(text).map_err(|err| {
+        DesktopTunnelRequestFrameError {
+            id: recover_desktop_tunnel_request_id(text),
+            message: format!("failed to parse tunnel request frame: {}", err),
+        }
+    })?;
+
+    if req.id.trim().is_empty() {
+        return Err(DesktopTunnelRequestFrameError {
+            id: None,
+            message: "tunnel request frame missing id".to_string(),
+        });
+    }
+    if req.path.trim().is_empty() {
+        return Err(DesktopTunnelRequestFrameError {
+            id: Some(req.id.clone()),
+            message: "tunnel request frame missing path".to_string(),
+        });
+    }
+
+    Ok(req)
+}
+
+fn desktop_tunnel_error_response_text(id: &str, error: &str) -> String {
+    use base64::Engine;
+    serde_json::json!({
+        "id": id,
+        "status": 502,
+        "headers": {
+            "content-type": "text/plain; charset=utf-8",
+        },
+        "body": base64::engine::general_purpose::STANDARD.encode(
+            format!("Malformed tunnel request frame from relay: {}", error).as_bytes()
+        ),
+    })
+    .to_string()
+}
+
 /// Spawn a background task that maintains a WebSocket tunnel to the relay.
 /// The relay forwards incoming visitor HTTP requests through this tunnel.
 /// Returns the AbortHandle so the tunnel can be cancelled on unpublish.
@@ -4463,15 +4529,38 @@ fn spawn_relay_tunnel(
                     while let Some(Ok(msg)) = ws_rx.next().await {
                         match msg {
                             tokio_tungstenite::tungstenite::Message::Text(text) => {
-                                // Parse the tunnel request from the relay
-                                #[derive(serde::Deserialize)]
-                                struct TunnelReq {
-                                    id: String,
-                                    path: String,
-                                }
-                                let req: TunnelReq = match serde_json::from_str(&text) {
+                                let req = match parse_desktop_tunnel_request_frame(&text) {
                                     Ok(r) => r,
-                                    Err(_) => continue,
+                                    Err(err) => {
+                                        match err.id {
+                                            Some(id) => {
+                                                println!(
+                                                    "[TUNNEL] Malformed request frame for {}:{} id={}: {}",
+                                                    resource_type, resource_id, id, err.message
+                                                );
+                                                let msg =
+                                                    tokio_tungstenite::tungstenite::Message::Text(
+                                                        desktop_tunnel_error_response_text(
+                                                            &id,
+                                                            &err.message,
+                                                        ),
+                                                    );
+                                                if futures_util::SinkExt::send(&mut ws_tx, msg)
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                            None => {
+                                                println!(
+                                                    "[TUNNEL] Malformed request frame for {}:{} without recoverable id: {}",
+                                                    resource_type, resource_id, err.message
+                                                );
+                                            }
+                                        }
+                                        continue;
+                                    }
                                 };
 
                                 // Fetch from local server
@@ -8166,6 +8255,74 @@ mod multi_seeder_tests {
             signed_reseed_credentials(Some("0xwallet"), Some("private-key")),
             Some(("0xwallet", "private-key"))
         );
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_accepts_valid_request() {
+        let req = parse_desktop_tunnel_request_frame(r#"{"id":"req-1","path":"/index.html"}"#)
+            .expect("valid tunnel request frame should parse");
+
+        assert_eq!(
+            req,
+            DesktopTunnelRequest {
+                id: "req-1".to_string(),
+                path: "/index.html".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_reports_malformed_json_without_recoverable_id() {
+        let err = parse_desktop_tunnel_request_frame(r#"{"id":"req-1","path":"#)
+            .expect_err("malformed JSON should be rejected");
+
+        assert_eq!(err.id, None);
+        assert!(err.message.contains("failed to parse tunnel request frame"));
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_reports_missing_required_fields() {
+        let missing_path = parse_desktop_tunnel_request_frame(r#"{"id":"req-2"}"#)
+            .expect_err("missing path should be rejected");
+        assert_eq!(missing_path.id.as_deref(), Some("req-2"));
+        assert!(missing_path.message.contains("path"));
+
+        let missing_id = parse_desktop_tunnel_request_frame(r#"{"path":"/index.html"}"#)
+            .expect_err("missing id should be rejected");
+        assert_eq!(missing_id.id, None);
+        assert!(missing_id.message.contains("id"));
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_rejects_irrecoverable_request_ids() {
+        let blank_id = parse_desktop_tunnel_request_frame(r#"{"id":"  ","path":"/"}"#)
+            .expect_err("blank id should be rejected");
+
+        assert_eq!(blank_id.id, None);
+        assert!(blank_id.message.contains("id"));
+    }
+
+    #[test]
+    fn desktop_tunnel_error_response_encodes_recovered_request_id() {
+        use base64::Engine;
+
+        let frame = desktop_tunnel_error_response_text("req-3", "missing path");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).unwrap();
+
+        assert_eq!(parsed["id"], "req-3");
+        assert_eq!(parsed["status"], 502);
+        assert_eq!(
+            parsed["headers"]["content-type"],
+            "text/plain; charset=utf-8"
+        );
+
+        let body = parsed["body"].as_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .unwrap();
+        let text = String::from_utf8(decoded).unwrap();
+        assert!(text.contains("Malformed tunnel request frame from relay"));
+        assert!(text.contains("missing path"));
     }
 
     #[test]
