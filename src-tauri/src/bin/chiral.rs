@@ -2497,6 +2497,7 @@ async fn publish_drive_item(
             "filePath": full_path.to_string_lossy(),
             "fileName": item.name.clone(),
             "fileSize": file_size,
+            "protocol": protocol,
             "priceWei": price_wei,
             "walletAddress": credentials.wallet_address,
             "privateKey": credentials.private_key,
