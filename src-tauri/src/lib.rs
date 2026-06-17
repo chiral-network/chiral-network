@@ -1552,10 +1552,20 @@ pub fn try_make_signed_seeder(
         return None;
     }
     let payload = SeederInfo::sign_payload(peer_id, file_hash, wallet_address);
-    let signature = wallet::sign_message(key, &payload).unwrap_or_default();
-    if signature.is_empty() {
-        return None;
-    }
+    let signature = match wallet::sign_message(key, &payload) {
+        Ok(signature) if !signature.is_empty() => signature,
+        Ok(_) => {
+            println!(
+                "  ⚠️ Failed to sign SeederInfo for {} — empty signature",
+                file_hash
+            );
+            return None;
+        }
+        Err(e) => {
+            println!("  ⚠️ Failed to sign SeederInfo for {}: {}", file_hash, e);
+            return None;
+        }
+    };
     let entry = SeederInfo {
         peer_id: peer_id.to_string(),
         price_wei: price_wei.to_string(),
@@ -8230,6 +8240,51 @@ mod multi_seeder_tests {
         assert_eq!(deserialized.peer_id, "12D3KooWTest1");
         assert_eq!(deserialized.price_wei, "1000000000000000");
         assert_eq!(deserialized.wallet_address, "0xabc123");
+    }
+
+    fn wallet_address_from_private_key(private_key: &str) -> String {
+        let probe = b"seeder-test-wallet";
+        let signature = wallet::sign_message(private_key, probe).unwrap();
+        wallet::recover_signer(probe, &signature).unwrap()
+    }
+
+    #[test]
+    fn try_make_signed_seeder_signs_valid_entry() {
+        let private_key =
+            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+
+        let seeder = try_make_signed_seeder(
+            "12D3KooWTest1",
+            "abcdef0123456789",
+            "1000000000000000",
+            &wallet_address,
+            vec!["/ip4/127.0.0.1/tcp/9419".to_string()],
+            Some(private_key),
+        )
+        .expect("valid key and wallet should produce a signed seeder");
+
+        assert!(!seeder.signature.is_empty());
+        assert!(seeder.verify("abcdef0123456789"));
+        assert_eq!(seeder.wallet_address, wallet_address);
+    }
+
+    #[test]
+    fn try_make_signed_seeder_rejects_invalid_private_key() {
+        let private_key =
+            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+
+        let seeder = try_make_signed_seeder(
+            "12D3KooWTest1",
+            "abcdef0123456789",
+            "1000000000000000",
+            &wallet_address,
+            Vec::new(),
+            Some("not-a-private-key"),
+        );
+
+        assert!(seeder.is_none());
     }
 
     #[tokio::test]
