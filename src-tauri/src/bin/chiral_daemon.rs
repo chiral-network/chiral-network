@@ -177,6 +177,30 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+const DEFAULT_GETH_LOG_LINES: usize = 100;
+const MAX_GETH_LOG_LINES: usize = 1000;
+
+fn validate_geth_log_lines(lines: Option<usize>) -> Result<usize, String> {
+    let lines = lines.unwrap_or(DEFAULT_GETH_LOG_LINES);
+    if lines == 0 {
+        return Err("lines must be at least 1".to_string());
+    }
+    if lines > MAX_GETH_LOG_LINES {
+        return Err(format!("lines must be at most {}", MAX_GETH_LOG_LINES));
+    }
+    Ok(lines)
+}
+
+fn tail_log_lines(contents: &str, max_lines: usize) -> String {
+    let all_lines: Vec<&str> = contents.lines().collect();
+    let start = if all_lines.len() > max_lines {
+        all_lines.len() - max_lines
+    } else {
+        0
+    };
+    all_lines[start..].join("\n")
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -246,6 +270,7 @@ async fn auto_publish_wallet_advertisement(
 }
 
 fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
+    let max_lines = validate_geth_log_lines(lines)?;
     let data_dir = chiral_network::network::data_dir().join("geth");
     let log_path = data_dir.join("geth.log");
     if !log_path.exists() {
@@ -254,14 +279,7 @@ fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
 
     let contents = std::fs::read_to_string(&log_path)
         .map_err(|e| format!("Failed to read geth.log: {}", e))?;
-    let max_lines = lines.unwrap_or(100);
-    let all_lines: Vec<&str> = contents.lines().collect();
-    let start = if all_lines.len() > max_lines {
-        all_lines.len() - max_lines
-    } else {
-        0
-    };
-    Ok(all_lines[start..].join("\n"))
+    Ok(tail_log_lines(&contents, max_lines))
 }
 
 #[derive(Deserialize)]
@@ -2049,5 +2067,60 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    #[test]
+    fn geth_log_lines_validation_defaults_absent_to_100() {
+        assert_eq!(
+            validate_geth_log_lines(None).unwrap(),
+            DEFAULT_GETH_LOG_LINES
+        );
+    }
+
+    #[test]
+    fn geth_log_lines_validation_accepts_valid_count() {
+        assert_eq!(validate_geth_log_lines(Some(25)).unwrap(), 25);
+    }
+
+    #[test]
+    fn geth_log_lines_validation_rejects_zero() {
+        let err = validate_geth_log_lines(Some(0)).expect_err("zero lines should be rejected");
+
+        assert!(err.contains("at least 1"));
+    }
+
+    #[test]
+    fn geth_log_lines_validation_rejects_over_limit_count() {
+        let err = validate_geth_log_lines(Some(MAX_GETH_LOG_LINES + 1))
+            .expect_err("over-limit lines should be rejected");
+
+        assert!(err.contains(&MAX_GETH_LOG_LINES.to_string()));
+    }
+
+    #[test]
+    fn tail_log_lines_returns_requested_tail() {
+        assert_eq!(tail_log_lines("one\ntwo\nthree\nfour", 2), "three\nfour");
+    }
+
+    #[test]
+    fn tail_log_lines_returns_all_lines_when_under_limit() {
+        assert_eq!(tail_log_lines("one\ntwo", 100), "one\ntwo");
+    }
+
+    #[tokio::test]
+    async fn geth_logs_rejects_zero_lines_before_file_read() {
+        let response = geth_logs(Query(LogsQuery { lines: Some(0) })).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn geth_logs_rejects_over_limit_lines_before_file_read() {
+        let response = geth_logs(Query(LogsQuery {
+            lines: Some(MAX_GETH_LOG_LINES + 1),
+        }))
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
