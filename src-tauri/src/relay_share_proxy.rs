@@ -1012,9 +1012,16 @@ async fn proxy_via_tunnel_or_http(
 fn tunnel_response_to_axum(resp: TunnelResponse) -> Response {
     use base64::Engine;
     let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
-    let body_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&resp.body)
-        .unwrap_or_default();
+    let body_bytes = match base64::engine::general_purpose::STANDARD.decode(&resp.body) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Malformed tunnel response body: {}", e),
+            )
+                .into_response()
+        }
+    };
 
     let mut headers = axum::http::HeaderMap::new();
     for (k, v) in &resp.headers {
@@ -1687,6 +1694,68 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("normalized origin_url"));
         assert!(body.contains("private"));
+    }
+
+    #[tokio::test]
+    async fn tunnel_response_to_axum_decodes_valid_body() {
+        use base64::Engine;
+
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "text/plain".to_string());
+        let response = tunnel_response_to_axum(TunnelResponse {
+            id: "req-1".to_string(),
+            status: StatusCode::CREATED.as_u16(),
+            headers,
+            body: base64::engine::general_purpose::STANDARD.encode("hello tunnel"),
+        });
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "text/plain"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"hello tunnel");
+    }
+
+    #[tokio::test]
+    async fn tunnel_response_to_axum_rejects_malformed_body() {
+        let response = tunnel_response_to_axum(TunnelResponse {
+            id: "req-2".to_string(),
+            status: StatusCode::OK.as_u16(),
+            headers: HashMap::new(),
+            body: "not base64***".to_string(),
+        });
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("Malformed tunnel response body"));
+    }
+
+    #[tokio::test]
+    async fn tunnel_response_to_axum_preserves_empty_body() {
+        let response = tunnel_response_to_axum(TunnelResponse {
+            id: "req-3".to_string(),
+            status: StatusCode::NO_CONTENT.as_u16(),
+            headers: HashMap::new(),
+            body: String::new(),
+        });
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(body.is_empty());
     }
 
     // -----------------------------------------------------------------------
