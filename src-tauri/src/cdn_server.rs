@@ -381,7 +381,10 @@ async fn status(State(s): State<Arc<CdnState>>) -> Response {
         Some(d) => d.get_peer_id().await.unwrap_or_default(),
         None => String::new(),
     };
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let active: Vec<CdnEntry> = s.snapshot().await.into_iter().filter(|e| e.expires_at > now).collect();
     Json(json!({
         "status": "online",
@@ -473,7 +476,10 @@ async fn list(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let files: Vec<CdnEntry> = s
         .snapshot()
         .await
@@ -622,7 +628,13 @@ async fn upload(
     }
 
     // Register in DHT so clients searching by hash find the CDN as a seeder.
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&file_path).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+        }
+    };
     let expires = now + duration_days * 86400;
     if let Some(dht) = s.dht.lock().await.as_ref() {
         register_in_dht(
@@ -818,7 +830,13 @@ pub async fn reseed_on_startup(state: Arc<CdnState>) {
         println!("[CDN] Startup reseed skipped: DHT bootstrap did not complete within 180s");
         return;
     }
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            println!("[CDN] Startup reseed skipped: {e}");
+            return;
+        }
+    };
     let active: Vec<CdnEntry> = state.snapshot().await.into_iter().filter(|e| e.expires_at > now).collect();
     for entry in &active {
         let file_path = state.storage_dir.join(&entry.file_hash);
@@ -858,7 +876,13 @@ pub async fn expiration_loop(state: Arc<CdnState>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
     loop {
         interval.tick().await;
-        let now = now_secs();
+        let now = match now_secs() {
+            Ok(now) => now,
+            Err(e) => {
+                println!("[CDN] Expiration cleanup skipped: {e}");
+                continue;
+            }
+        };
         let expired = state
             .with_registry(|r| {
                 let expired: Vec<CdnEntry> = r.iter().filter(|e| e.expires_at <= now).cloned().collect();
@@ -1315,7 +1339,14 @@ async fn upload_site(
         let _ = tokio::fs::remove_dir_all(&staging_dir).await;
     }
 
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&site_root).await;
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+        }
+    };
     let expires = now + duration_days * 86400;
     let entry = CdnSiteEntry {
         site_id: site_id.clone(),
@@ -1359,7 +1390,10 @@ async fn list_sites(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let sites: Vec<CdnSiteEntry> = s
         .sites_snapshot()
         .await
@@ -1447,7 +1481,10 @@ async fn serve_site_path_inner(s: &CdnState, site_id: &str, requested_path: &str
         return err(StatusCode::BAD_REQUEST, e);
     }
     // Verify the site is in the registry and not expired.
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let known = s
         .sites_snapshot()
         .await
@@ -1500,11 +1537,14 @@ fn err(code: StatusCode, msg: &str) -> Response {
     (code, Json(json!({ "error": msg }))).into_response()
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn system_time_secs(now: SystemTime) -> Result<u64, String> {
+    now.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_err(|e| format!("System clock is before UNIX_EPOCH; CDN timestamps unavailable: {e}"))
+}
+
+fn now_secs() -> Result<u64, String> {
+    system_time_secs(SystemTime::now())
 }
 
 fn cdn_provider_peer_id(peer_id: Option<String>) -> Result<String, String> {
@@ -1849,6 +1889,23 @@ mod tests {
         let err = price_env_value(Some("  ")).expect_err("empty price env should be rejected");
 
         assert!(err.contains("not empty"));
+    }
+
+    #[test]
+    fn system_time_secs_accepts_normal_clock() {
+        let ts = system_time_secs(UNIX_EPOCH + std::time::Duration::from_secs(42))
+            .expect("normal post-epoch clocks should produce timestamps");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn system_time_secs_rejects_pre_epoch_clock() {
+        let err = system_time_secs(UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch clocks should fail closed");
+
+        assert!(err.contains("before UNIX_EPOCH"));
+        assert!(err.contains("CDN timestamps unavailable"));
     }
 
     #[test]
