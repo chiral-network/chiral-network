@@ -88,6 +88,17 @@ fn parse_hex_u128(hex: &str) -> Result<u128, String> {
     u128::from_str_radix(value, 16).map_err(|e| format!("Invalid hex value: {}", e))
 }
 
+fn validate_reputation_tx_hash(tx_hash: &str) -> Result<String, String> {
+    let tx_hash = tx_hash.trim();
+    if tx_hash.len() != 66
+        || !tx_hash.starts_with("0x")
+        || !tx_hash[2..].chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err("txHash must be a 0x-prefixed 32-byte hex string".to_string());
+    }
+    Ok(tx_hash.to_ascii_lowercase())
+}
+
 /// Validate paid transfer via on-chain transaction data.
 async fn verify_payment_tx(
     tx_hash: &str,
@@ -201,9 +212,15 @@ async fn submit_transfer(
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
+    let mut tx_hash = req
+        .tx_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
     if amount_wei > 0 {
-        let tx_hash = match req.tx_hash.as_deref() {
-            Some(v) if !v.trim().is_empty() => v.trim(),
+        let raw_tx_hash = match tx_hash.as_deref() {
+            Some(v) => v,
             _ => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -212,8 +229,17 @@ async fn submit_transfer(
                     .into_response()
             }
         };
-        if let Err(err) =
-            verify_payment_tx(tx_hash, &downloader_wallet, &req.seeder_wallet, amount_wei).await
+        let validated_tx_hash = match validate_reputation_tx_hash(raw_tx_hash) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        };
+        if let Err(err) = verify_payment_tx(
+            &validated_tx_hash,
+            &downloader_wallet,
+            &req.seeder_wallet,
+            amount_wei,
+        )
+        .await
         {
             return (
                 StatusCode::BAD_REQUEST,
@@ -221,6 +247,7 @@ async fn submit_transfer(
             )
                 .into_response();
         }
+        tx_hash = Some(validated_tx_hash);
     }
 
     let now = rating_storage::now_secs();
@@ -235,7 +262,7 @@ async fn submit_transfer(
     if let Some(existing) = m.events.iter_mut().find(|e| e.id == event_id) {
         existing.outcome = req.outcome;
         existing.amount_wei = amount_wei.to_string();
-        existing.tx_hash = req.tx_hash.filter(|v| !v.trim().is_empty());
+        existing.tx_hash = tx_hash.clone();
         existing.updated_at = now;
         let updated = existing.clone();
         drop(m);
@@ -251,7 +278,7 @@ async fn submit_transfer(
         file_hash: req.file_hash.trim().to_string(),
         amount_wei: amount_wei.to_string(),
         outcome: req.outcome,
-        tx_hash: req.tx_hash.filter(|v| !v.trim().is_empty()),
+        tx_hash,
         rating_score: None,
         rating_comment: None,
         created_at: now,
@@ -331,7 +358,9 @@ pub fn rating_routes(state: Arc<RatingState>) -> Router {
     // outcome against an arbitrary seeder and tank their Elo.
     let protected = Router::new()
         .route("/api/ratings/transfer", post(submit_transfer))
-        .layer(axum::middleware::from_fn(crate::auth::owner_proof_middleware));
+        .layer(axum::middleware::from_fn(
+            crate::auth::owner_proof_middleware,
+        ));
 
     // Read-only routes don't need authentication — Elo scores are
     // public anyway.
@@ -340,4 +369,103 @@ pub fn rating_routes(state: Arc<RatingState>) -> Router {
         .route("/api/ratings/:wallet", get(get_reputation));
 
     protected.merge(public).layer(Extension(state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    const DOWNLOADER: &str = "0x1111111111111111111111111111111111111111";
+    const SEEDER: &str = "0x2222222222222222222222222222222222222222";
+    const FILE_HASH: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+    fn request(amount_wei: &str, tx_hash: Option<&str>) -> SubmitTransferRequest {
+        SubmitTransferRequest {
+            transfer_id: "transfer-1".to_string(),
+            seeder_wallet: SEEDER.to_string(),
+            file_hash: FILE_HASH.to_string(),
+            outcome: TransferOutcome::Completed,
+            amount_wei: amount_wei.to_string(),
+            tx_hash: tx_hash.map(str::to_string),
+        }
+    }
+
+    fn headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-owner", HeaderValue::from_static(DOWNLOADER));
+        headers
+    }
+
+    fn state() -> (tempfile::TempDir, Arc<RatingState>) {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(RatingState::new(dir.path().to_path_buf()));
+        (dir, state)
+    }
+
+    #[test]
+    fn validate_reputation_tx_hash_requires_canonical_shape() {
+        let valid = format!("0x{}", "A".repeat(64));
+        assert_eq!(
+            validate_reputation_tx_hash(&valid).unwrap(),
+            format!("0x{}", "a".repeat(64))
+        );
+
+        let invalid = vec![
+            String::new(),
+            "0x1234".to_string(),
+            "a".repeat(64),
+            format!("0x{}", "g".repeat(64)),
+            format!("0x{}", "a".repeat(63)),
+            format!("0x{}", "a".repeat(65)),
+        ];
+        for tx_hash in invalid {
+            assert!(validate_reputation_tx_hash(&tx_hash).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_transfer_preserves_free_submission_without_tx_hash() {
+        let (_dir, state) = state();
+        let response = submit_transfer(
+            Extension(state.clone()),
+            headers(),
+            Json(request("0", None)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let manifest = state.manifest.read().await;
+        assert_eq!(manifest.events.len(), 1);
+        assert_eq!(manifest.events[0].amount_wei, "0");
+        assert!(manifest.events[0].tx_hash.is_none());
+    }
+
+    #[tokio::test]
+    async fn submit_transfer_rejects_paid_missing_tx_hash_before_persisting() {
+        let (_dir, state) = state();
+        let response = submit_transfer(
+            Extension(state.clone()),
+            headers(),
+            Json(request("1", None)),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state.manifest.read().await.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_transfer_rejects_paid_malformed_tx_hash_before_rpc() {
+        let (_dir, state) = state();
+        let response = submit_transfer(
+            Extension(state.clone()),
+            headers(),
+            Json(request("1", Some("0x1234"))),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state.manifest.read().await.events.is_empty());
+    }
 }
