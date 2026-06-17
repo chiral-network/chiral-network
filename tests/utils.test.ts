@@ -144,6 +144,12 @@ describe('parseChiPriceToWei', () => {
     expect(parseChiPriceToWei('1.000000000000000001')).toBe('1000000000000000001');
   });
 
+  it('accepts the maximum Rust u128 wei value', () => {
+    expect(parseChiPriceToWei('340282366920938463463.374607431768211455')).toBe(
+      '340282366920938463463374607431768211455'
+    );
+  });
+
   it('rejects malformed decimal prices', () => {
     expect(() => parseChiPriceToWei('abc')).toThrow('decimal CHI amount');
     expect(() => parseChiPriceToWei('1.2.3')).toThrow('decimal CHI amount');
@@ -154,6 +160,15 @@ describe('parseChiPriceToWei', () => {
   it('rejects prices beyond wei precision', () => {
     expect(() => parseChiPriceToWei('0.0000000000000000001')).toThrow(
       'at most 18 decimal places'
+    );
+  });
+
+  it('rejects prices above the Rust u128 wei limit', () => {
+    expect(() => parseChiPriceToWei('340282366920938463463.374607431768211456')).toThrow(
+      'maximum supported amount'
+    );
+    expect(() => parseChiPriceToWei('1000000000000000000000')).toThrow(
+      'maximum supported amount'
     );
   });
 });
