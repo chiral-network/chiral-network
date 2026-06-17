@@ -1438,9 +1438,16 @@ impl FileMetadata {
     }
 
     /// Sign this file metadata with the publisher's wallet key.
-    fn sign(&mut self, private_key: &str) {
+    fn sign(&mut self, private_key: &str) -> Result<(), String> {
+        self.publisher_signature.clear();
         let payload = Self::sign_payload(&self.hash, &self.file_name, self.file_size);
-        self.publisher_signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
+        let signature = wallet::sign_message(private_key, &payload)
+            .map_err(|e| format!("failed to sign file metadata: {}", e))?;
+        if signature.is_empty() {
+            return Err("failed to sign file metadata: empty signature".to_string());
+        }
+        self.publisher_signature = signature;
+        Ok(())
     }
 
     /// Verify that the publisher signature matches the claimed wallet_address.
@@ -1652,8 +1659,15 @@ pub fn try_make_signed_file_metadata(
         wallet_address: wallet_address.to_string(),
         publisher_signature: String::new(),
     };
-    metadata.sign(key);
+    if let Err(e) = metadata.sign(key) {
+        println!("[DHT] Failed to sign FileMetadata for {}: {}", hash, e);
+        return None;
+    }
     if !metadata.verify_publisher() {
+        println!(
+            "[DHT] Signed FileMetadata for {} failed publisher verification",
+            hash
+        );
         return None;
     }
     Some(metadata)
@@ -6243,9 +6257,16 @@ impl FolderManifest {
         out
     }
 
-    pub fn sign(&mut self, private_key: &str) {
+    pub fn sign(&mut self, private_key: &str) -> Result<(), String> {
+        self.publisher_signature.clear();
         let payload = self.sign_payload();
-        self.publisher_signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
+        let signature = wallet::sign_message(private_key, &payload)
+            .map_err(|e| format!("failed to sign folder manifest: {}", e))?;
+        if signature.is_empty() {
+            return Err("failed to sign folder manifest: empty signature".to_string());
+        }
+        self.publisher_signature = signature;
+        Ok(())
     }
 
     pub fn verify(&self) -> bool {
@@ -6652,10 +6673,16 @@ async fn publish_drive_folder(
             publisher_signature: String::new(),
         };
         let signed = match private_key.as_deref() {
-            Some(key) if !key.is_empty() => {
-                manifest.sign(key);
-                manifest.verify()
-            }
+            Some(key) if !key.is_empty() => match manifest.sign(key) {
+                Ok(()) => manifest.verify(),
+                Err(e) => {
+                    println!(
+                        "[DRIVE] Folder manifest publish for {} signing failed: {}",
+                        hash, e
+                    );
+                    false
+                }
+            },
             _ => false,
         };
         if !signed {
@@ -8454,6 +8481,9 @@ mod multi_seeder_tests {
     // provider records + `chiral_seeder_{hash}_{peerId}` entries, so these
     // tests cover only the header round-trip and the seeder-key schema.
 
+    const METADATA_TEST_PRIVATE_KEY: &str =
+        "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+
     #[test]
     fn file_metadata_immutable_header_roundtrip() {
         let metadata = FileMetadata {
@@ -8493,6 +8523,49 @@ mod multi_seeder_tests {
         let metadata: FileMetadata = serde_json::from_str(legacy_json).unwrap();
         assert_eq!(metadata.hash, "abc123");
         assert_eq!(metadata.wallet_address, "0xlegacy");
+    }
+
+    #[test]
+    fn file_metadata_signs_valid_entry() {
+        let wallet = wallet_address_from_private_key(METADATA_TEST_PRIVATE_KEY);
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            wallet_address: wallet,
+            publisher_signature: String::new(),
+        };
+
+        metadata
+            .sign(METADATA_TEST_PRIVATE_KEY)
+            .expect("valid private key should sign file metadata");
+
+        assert!(!metadata.publisher_signature.is_empty());
+        assert!(metadata.verify_publisher());
+    }
+
+    #[test]
+    fn file_metadata_sign_rejects_invalid_private_key() {
+        let wallet = wallet_address_from_private_key(METADATA_TEST_PRIVATE_KEY);
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            wallet_address: wallet,
+            publisher_signature: "stale-signature".to_string(),
+        };
+
+        let err = metadata
+            .sign("not-a-private-key")
+            .expect_err("invalid private key should fail closed");
+
+        assert!(err.contains("failed to sign file metadata"));
+        assert!(metadata.publisher_signature.is_empty());
+        assert!(!metadata.verify_publisher());
     }
 
     #[test]
@@ -8898,7 +8971,7 @@ mod multi_seeder_tests {
     /// exercising the new payload's tamper detection.
     #[test]
     fn folder_manifest_v2_pricing_is_signed() {
-        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let private_key = METADATA_TEST_PRIVATE_KEY;
         let probe_sig = wallet::sign_message(private_key, b"probe").unwrap();
         let wallet = wallet::recover_signer(b"probe", &probe_sig).unwrap();
 
@@ -8912,7 +8985,7 @@ mod multi_seeder_tests {
             wallet_address: wallet.clone(),
             publisher_signature: String::new(),
         };
-        m.sign(private_key);
+        m.sign(private_key).expect("valid private key should sign manifest");
         assert!(m.verify(), "freshly v2-signed manifest must verify");
 
         // Tamper price → reject.
@@ -8925,5 +8998,28 @@ mod multi_seeder_tests {
         // Tamper recipient → reject.
         m.wallet_address = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string();
         assert!(!m.verify(), "modified wallet_address must invalidate signature");
+    }
+
+    #[test]
+    fn folder_manifest_sign_rejects_invalid_private_key() {
+        let wallet = wallet_address_from_private_key(METADATA_TEST_PRIVATE_KEY);
+        let mut manifest = FolderManifest {
+            hash: "feedface".to_string(),
+            name: "priced folder".to_string(),
+            owner_wallet: wallet.clone(),
+            created_at: 1_700_000_000,
+            files: vec![mff("a.bin", "ff".repeat(32).as_str(), 4096)],
+            price_wei: "1000000000000000000".to_string(),
+            wallet_address: wallet,
+            publisher_signature: "stale-signature".to_string(),
+        };
+
+        let err = manifest
+            .sign("not-a-private-key")
+            .expect_err("invalid private key should fail closed");
+
+        assert!(err.contains("failed to sign folder manifest"));
+        assert!(manifest.publisher_signature.is_empty());
+        assert!(!manifest.verify());
     }
 }
