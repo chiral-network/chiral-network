@@ -874,7 +874,14 @@ async fn register_in_dht(
         cdn_private_key.to_string(),
     )
     .await;
-    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    let peer_id = match cdn_provider_peer_id(dht.get_peer_id().await) {
+        Ok(peer_id) => peer_id,
+        Err(e) => {
+            println!("[CDN] DHT publish for {} skipped — {}", file_hash, e);
+            let _ = created_at;
+            return;
+        }
+    };
     let our_addrs = dht.get_listening_addresses().await;
 
     // Without a signing key the CDN can populate its local shared_files
@@ -1450,6 +1457,16 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+fn cdn_provider_peer_id(peer_id: Option<String>) -> Result<String, String> {
+    let peer_id = peer_id.unwrap_or_default().trim().to_string();
+    if peer_id.is_empty() {
+        return Err(
+            "local peer ID unavailable; start DHT before CDN provider publication".to_string(),
+        );
+    }
+    Ok(peer_id)
+}
+
 /// Format wei as a CHI decimal string LOSSLESSLY. The frontend feeds
 /// the returned string back into `parse_chi_to_wei` when it builds
 /// the upload payment, so any precision loss here makes the buyer
@@ -1642,6 +1659,30 @@ mod tests {
         let err = price_env_value(Some("  ")).expect_err("empty price env should be rejected");
 
         assert!(err.contains("not empty"));
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_accepts_present_peer_id() {
+        let peer_id = cdn_provider_peer_id(Some("12D3KooWProviderPeer".to_string()))
+            .expect("present CDN peer id should be accepted");
+
+        assert_eq!(peer_id, "12D3KooWProviderPeer");
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_rejects_missing_peer_id() {
+        let err = cdn_provider_peer_id(None)
+            .expect_err("missing CDN peer id should fail provider publication");
+
+        assert!(err.contains("local peer ID unavailable"));
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_rejects_blank_peer_id() {
+        let err = cdn_provider_peer_id(Some("   ".to_string()))
+            .expect_err("blank CDN peer id should fail provider publication");
+
+        assert!(err.contains("start DHT"));
     }
 
     /// Zero-input identities — the upload handler returns 0 immediately
