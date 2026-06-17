@@ -726,31 +726,54 @@ fn signed_file_info_response(
     private_key: &str,
 ) -> ChunkResponse {
     let price_str = access.price_wei.to_string();
+    if private_key.is_empty() || access.wallet_address.is_empty() {
+        return file_info_error_response(
+            request_id,
+            file_hash,
+            "Seeder cannot sign FileInfo (wallet not unlocked)",
+            access.folder_hash,
+        );
+    }
+
+    let total_chunks = chunk_hashes.len() as u32;
     let payload = file_info_sign_payload(
         &file_hash,
         &file_name,
         file_size,
         CHUNK_SIZE as u32,
-        chunk_hashes.len() as u32,
+        total_chunks,
         &chunk_hashes,
         &price_str,
         &access.wallet_address,
         access.folder_hash.as_deref(),
     );
-    let signature = crate::wallet::sign_message(private_key, &payload).unwrap_or_default();
-    ChunkResponse::FileInfo {
-        request_id,
-        file_hash,
-        file_name,
-        file_size,
-        chunk_size: CHUNK_SIZE as u32,
-        total_chunks: chunk_hashes.len() as u32,
-        chunk_hashes,
-        price_wei: price_str,
-        wallet_address: access.wallet_address,
-        folder_hash: access.folder_hash,
-        signature,
-        error: None,
+    match crate::wallet::sign_message(private_key, &payload) {
+        Ok(signature) if !signature.is_empty() => ChunkResponse::FileInfo {
+            request_id,
+            file_hash,
+            file_name,
+            file_size,
+            chunk_size: CHUNK_SIZE as u32,
+            total_chunks,
+            chunk_hashes,
+            price_wei: price_str,
+            wallet_address: access.wallet_address,
+            folder_hash: access.folder_hash,
+            signature,
+            error: None,
+        },
+        Ok(_) => file_info_error_response(
+            request_id,
+            file_hash,
+            "Seeder cannot sign FileInfo: empty signature",
+            access.folder_hash,
+        ),
+        Err(err) => file_info_error_response(
+            request_id,
+            file_hash,
+            format!("Seeder cannot sign FileInfo: {}", err),
+            access.folder_hash,
+        ),
     }
 }
 
@@ -4437,38 +4460,41 @@ async fn handle_behaviour_event(
                                                             }
                                                         }
                                                         drop(shared);
-                                                        if private_key.is_empty()
-                                                            || access.wallet_address.is_empty()
-                                                        {
-                                                            file_info_error_response(
-                                                                request_id,
-                                                                file_hash_owned,
-                                                                "Seeder cannot sign FileInfo (wallet not unlocked)",
-                                                                access.folder_hash,
-                                                            )
+                                                        let free_scope = if access.price_wei == 0 {
+                                                            Some(payment_scope_for_access(
+                                                                &file_hash_owned,
+                                                                &access,
+                                                            ))
                                                         } else {
-                                                            if access.price_wei == 0 {
+                                                            None
+                                                        };
+                                                        let response = signed_file_info_response(
+                                                            request_id.clone(),
+                                                            file_hash_owned,
+                                                            file_name,
+                                                            file_size,
+                                                            hashes,
+                                                            access,
+                                                            &private_key,
+                                                        );
+                                                        if matches!(
+                                                            &response,
+                                                            ChunkResponse::FileInfo {
+                                                                error: None,
+                                                                ..
+                                                            }
+                                                        ) {
+                                                            if let Some(scope) = free_scope {
                                                                 remember_authorized_chunk_access(
                                                                     &authorized_chunks,
-                                                                    request_id.clone(),
+                                                                    request_id,
                                                                     peer_id_for_auth,
-                                                                    payment_scope_for_access(
-                                                                        &file_hash_owned,
-                                                                        &access,
-                                                                    ),
+                                                                    scope,
                                                                 )
                                                                 .await;
                                                             }
-                                                            signed_file_info_response(
-                                                                request_id,
-                                                                file_hash_owned,
-                                                                file_name,
-                                                                file_size,
-                                                                hashes,
-                                                                access,
-                                                                &private_key,
-                                                            )
                                                         }
+                                                        response
                                                     }
                                                     Err(msg) => {
                                                         println!(
@@ -4511,41 +4537,37 @@ async fn handle_behaviour_event(
                                                 println!("Serving FileInfo for {} ({} bytes, {} chunks, price={} wei) to peer {}",
                                                          file_name_owned, file_size_owned, chunk_hashes.len(), access.price_wei, peer);
 
-                                                // Sign the FileInfo envelope with the seeder's
-                                                // wallet key so the downloader can verify the
-                                                // wallet_address claim and, for folder downloads,
-                                                // the folder hash this child file is scoped to.
-                                                if private_key.is_empty()
-                                                    || access.wallet_address.is_empty()
-                                                {
-                                                    file_info_error_response(
-                                                        request_id,
-                                                        file_hash,
-                                                        "Seeder cannot sign FileInfo (wallet not unlocked)",
-                                                        access.folder_hash,
-                                                    )
+                                                let free_scope = if access.price_wei == 0 {
+                                                    Some(payment_scope_for_access(
+                                                        &file_hash, &access,
+                                                    ))
                                                 } else {
-                                                    if access.price_wei == 0 {
+                                                    None
+                                                };
+                                                let response = signed_file_info_response(
+                                                    request_id.clone(),
+                                                    file_hash,
+                                                    file_name_owned,
+                                                    file_size_owned,
+                                                    chunk_hashes.clone(),
+                                                    access,
+                                                    &private_key,
+                                                );
+                                                if matches!(
+                                                    &response,
+                                                    ChunkResponse::FileInfo { error: None, .. }
+                                                ) {
+                                                    if let Some(scope) = free_scope {
                                                         remember_authorized_chunk_access(
                                                             seeder_authorized_chunks,
-                                                            request_id.clone(),
+                                                            request_id,
                                                             peer,
-                                                            payment_scope_for_access(
-                                                                &file_hash, &access,
-                                                            ),
+                                                            scope,
                                                         )
                                                         .await;
                                                     }
-                                                    signed_file_info_response(
-                                                        request_id,
-                                                        file_hash,
-                                                        file_name_owned,
-                                                        file_size_owned,
-                                                        chunk_hashes.clone(),
-                                                        access,
-                                                        &private_key,
-                                                    )
                                                 }
+                                                response
                                             }
                                             Err(err) => file_info_error_response(
                                                 request_id,
@@ -6705,6 +6727,126 @@ mod tests {
             None,
         );
         assert_eq!(p1, p2);
+    }
+
+    fn test_wallet_for_private_key(private_key: &str) -> String {
+        let probe = b"derive-test-wallet";
+        let sig = crate::wallet::sign_message(private_key, probe).unwrap();
+        crate::wallet::recover_signer(probe, &sig).unwrap()
+    }
+
+    #[test]
+    fn signed_file_info_response_signs_free_and_paid_payloads() {
+        let private_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let wallet = test_wallet_for_private_key(private_key);
+
+        for price_wei in ["0", "1000000000000000000"] {
+            let chunk_hashes = vec!["chunk-a".to_string(), "chunk-b".to_string()];
+            let access = ResolvedFileAccess {
+                price_wei: price_wei.parse::<u128>().unwrap(),
+                wallet_address: wallet.clone(),
+                folder_hash: None,
+            };
+            let response = signed_file_info_response(
+                format!("req-{}", price_wei),
+                "file-hash".to_string(),
+                "document.pdf".to_string(),
+                1024,
+                chunk_hashes.clone(),
+                access,
+                private_key,
+            );
+
+            if let ChunkResponse::FileInfo {
+                file_hash,
+                file_name,
+                file_size,
+                total_chunks,
+                chunk_hashes: response_hashes,
+                price_wei: response_price,
+                wallet_address,
+                folder_hash,
+                signature,
+                error,
+                ..
+            } = response
+            {
+                assert_eq!(file_hash, "file-hash");
+                assert_eq!(file_name, "document.pdf");
+                assert_eq!(file_size, 1024);
+                assert_eq!(total_chunks, 2);
+                assert_eq!(response_hashes, chunk_hashes);
+                assert_eq!(response_price, price_wei);
+                assert_eq!(wallet_address, wallet);
+                assert!(folder_hash.is_none());
+                assert!(!signature.is_empty());
+                assert!(error.is_none());
+
+                let payload = file_info_sign_payload(
+                    &file_hash,
+                    &file_name,
+                    file_size,
+                    CHUNK_SIZE as u32,
+                    total_chunks,
+                    &response_hashes,
+                    &response_price,
+                    &wallet_address,
+                    folder_hash.as_deref(),
+                );
+                assert!(crate::wallet::verify_signature(
+                    &payload,
+                    &signature,
+                    &wallet_address
+                ));
+            } else {
+                panic!("Expected FileInfo variant");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_file_info_response_returns_error_for_invalid_private_key() {
+        let access = ResolvedFileAccess {
+            price_wei: 100,
+            wallet_address: "0x1111111111111111111111111111111111111111".to_string(),
+            folder_hash: Some("folder-hash".to_string()),
+        };
+        let response = signed_file_info_response(
+            "req-invalid".to_string(),
+            "file-hash".to_string(),
+            "document.pdf".to_string(),
+            1024,
+            vec!["chunk-a".to_string()],
+            access,
+            "not-a-private-key",
+        );
+
+        if let ChunkResponse::FileInfo {
+            file_size,
+            total_chunks,
+            chunk_hashes,
+            price_wei,
+            wallet_address,
+            folder_hash,
+            signature,
+            error,
+            ..
+        } = response
+        {
+            assert_eq!(file_size, 0);
+            assert_eq!(total_chunks, 0);
+            assert!(chunk_hashes.is_empty());
+            assert_eq!(price_wei, "0");
+            assert!(wallet_address.is_empty());
+            assert_eq!(folder_hash.as_deref(), Some("folder-hash"));
+            assert!(signature.is_empty());
+            assert!(error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Seeder cannot sign FileInfo"));
+        } else {
+            panic!("Expected FileInfo variant");
+        }
     }
 
     #[test]
