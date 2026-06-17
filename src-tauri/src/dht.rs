@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -1554,14 +1554,15 @@ async fn verify_payment_proof(
             // Atomically claim this tx so concurrent replays can't slip
             // through between the peek above and this point.
             match claim_payment_tx(payment_tx, &scope, payer_address, &peer_id).await {
-                PaymentClaimStatus::Available => {}
-                PaymentClaimStatus::ClaimedSameFolder => {
+                Ok(PaymentClaimStatus::Available) => {}
+                Ok(PaymentClaimStatus::ClaimedSameFolder) => {
                     println!(
                         "✅ Concurrent folder payment tx {} already claimed for this folder",
                         payment_tx
                     );
                 }
-                PaymentClaimStatus::ClaimedDirectFile | PaymentClaimStatus::ClaimedOtherScope => {
+                Ok(PaymentClaimStatus::ClaimedDirectFile)
+                | Ok(PaymentClaimStatus::ClaimedOtherScope) => {
                     println!(
                         "❌ Race: tx {} redeemed by a concurrent request",
                         payment_tx
@@ -1572,6 +1573,20 @@ async fn verify_payment_proof(
                         accepted: false,
                         error: Some(
                             "Payment tx already redeemed by a concurrent request".to_string(),
+                        ),
+                    };
+                }
+                Err(e) => {
+                    println!(
+                        "❌ Payment tx {} verified but replay-protection ledger could not be persisted: {}",
+                        payment_tx, e
+                    );
+                    return ChunkResponse::PaymentAck {
+                        request_id,
+                        file_hash: file_hash.to_string(),
+                        accepted: false,
+                        error: Some(
+                            "Payment verified but replay-protection could not be persisted; please retry later".to_string(),
                         ),
                     };
                 }
@@ -1706,16 +1721,26 @@ async fn spent_tx_store() -> &'static Mutex<HashSet<String>> {
         .await
 }
 
-async fn persist_spent_tx_set(set: &HashSet<String>) {
-    let path = spent_tx_path();
+async fn persist_spent_tx_set(set: &HashSet<String>) -> Result<(), String> {
+    persist_spent_tx_set_to_path(&spent_tx_path(), set).await
+}
+
+async fn persist_spent_tx_set_to_path(path: &Path, set: &HashSet<String>) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            format!(
+                "create seeder spent-tx ledger directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    let list: Vec<&String> = set.iter().collect();
+    let mut list: Vec<&String> = set.iter().collect();
+    list.sort();
     let json = serde_json::json!({ "spent": list }).to_string();
-    // Best-effort write. A crash mid-write could truncate the file, falling
-    // back to an empty set on next load — acceptable given the tradeoff above.
-    let _ = tokio::fs::write(&path, json).await;
+    tokio::fs::write(path, json)
+        .await
+        .map_err(|e| format!("write seeder spent-tx ledger {}: {}", path.display(), e))
 }
 
 fn payment_scope_key(
@@ -1814,19 +1839,38 @@ async fn claim_payment_tx(
     scope: &PaymentScope,
     payer_address: &str,
     peer_id: &PeerId,
-) -> PaymentClaimStatus {
+) -> Result<PaymentClaimStatus, String> {
     let store = spent_tx_store().await;
+    claim_payment_tx_in_store(
+        store,
+        &spent_tx_path(),
+        tx_hash,
+        scope,
+        payer_address,
+        peer_id,
+    )
+    .await
+}
+
+async fn claim_payment_tx_in_store(
+    store: &Mutex<HashSet<String>>,
+    path: &Path,
+    tx_hash: &str,
+    scope: &PaymentScope,
+    payer_address: &str,
+    peer_id: &PeerId,
+) -> Result<PaymentClaimStatus, String> {
     let mut guard = store.lock().await;
     let status = classify_payment_claim(&guard, tx_hash, scope, payer_address, peer_id);
     if status != PaymentClaimStatus::Available {
-        return status;
+        return Ok(status);
     }
     let key = payment_scope_key(tx_hash, scope, payer_address, peer_id);
-    guard.insert(key);
-    let snapshot = guard.clone();
-    drop(guard);
-    persist_spent_tx_set(&snapshot).await;
-    PaymentClaimStatus::Available
+    let mut snapshot = guard.clone();
+    snapshot.insert(key);
+    persist_spent_tx_set_to_path(path, &snapshot).await?;
+    *guard = snapshot;
+    Ok(PaymentClaimStatus::Available)
 }
 
 // Legacy verify function kept for reference but replaced by wallet::verify_payment above
@@ -6775,6 +6819,86 @@ mod tests {
             classify_payment_claim(&spent, tx, &file, payer, &peer),
             PaymentClaimStatus::ClaimedOtherScope
         );
+    }
+
+    #[tokio::test]
+    async fn persist_spent_tx_set_to_path_persists_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("seeder_spent_tx.json");
+        let mut spent = HashSet::new();
+        spent.insert("file:0xabc:file-a".to_string());
+
+        persist_spent_tx_set_to_path(&path, &spent)
+            .await
+            .expect("spent-tx ledger should persist");
+
+        let data = tokio::fs::read_to_string(&path).await.unwrap();
+        let value: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let persisted: Vec<String> =
+            serde_json::from_value(value.get("spent").cloned().unwrap()).unwrap();
+        assert_eq!(persisted, vec!["file:0xabc:file-a"]);
+    }
+
+    #[tokio::test]
+    async fn claim_payment_tx_persists_first_use_and_rejects_reused_direct_tx() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("seeder_spent_tx.json");
+        let store = Mutex::new(HashSet::new());
+        let peer = PeerId::random();
+        let scope = PaymentScope::DirectFile {
+            file_hash: "file-a".to_string(),
+        };
+
+        let first = claim_payment_tx_in_store(
+            &store,
+            &path,
+            "0xabc",
+            &scope,
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &peer,
+        )
+        .await
+        .expect("first claim should persist");
+        let reused = claim_payment_tx_in_store(
+            &store,
+            &path,
+            "0xabc",
+            &scope,
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &peer,
+        )
+        .await
+        .expect("reused claim should classify without rewriting");
+
+        assert_eq!(first, PaymentClaimStatus::Available);
+        assert_eq!(reused, PaymentClaimStatus::ClaimedDirectFile);
+        assert_eq!(store.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn claim_payment_tx_fails_closed_when_persistence_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("seeder_spent_tx.json");
+        tokio::fs::create_dir(&path).await.unwrap();
+        let store = Mutex::new(HashSet::new());
+        let peer = PeerId::random();
+        let scope = PaymentScope::DirectFile {
+            file_hash: "file-a".to_string(),
+        };
+
+        let err = claim_payment_tx_in_store(
+            &store,
+            &path,
+            "0xabc",
+            &scope,
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &peer,
+        )
+        .await
+        .expect_err("write failure should fail closed");
+
+        assert!(err.contains("write seeder spent-tx ledger"));
+        assert!(store.lock().await.is_empty());
     }
 
     #[test]
