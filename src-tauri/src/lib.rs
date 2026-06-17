@@ -8454,11 +8454,6 @@ mod multi_seeder_tests {
     const METADATA_TEST_PRIVATE_KEY: &str =
         "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
 
-    fn wallet_address_from_private_key(private_key: &str) -> String {
-        let signature = wallet::sign_message(private_key, b"metadata-test-wallet").unwrap();
-        wallet::recover_signer(b"metadata-test-wallet", &signature).unwrap()
-    }
-
     #[test]
     fn file_metadata_immutable_header_roundtrip() {
         let metadata = FileMetadata {
