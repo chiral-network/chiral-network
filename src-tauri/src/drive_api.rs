@@ -122,14 +122,37 @@ fn validate_share_payment_timing(
     Ok(())
 }
 
+const PAYMENT_REQUIRED_FOR_SHARE_MSG: &str = "Payment is required to unlock this shared content.";
+const INVALID_SHARE_ACCESS_TX_HASH_MSG: &str =
+    "Invalid payment transaction hash. Use a 0x-prefixed 32-byte hex transaction hash.";
+const SHARE_PAYMENT_REUSED_FOR_DIFFERENT_SHARE_MSG: &str =
+    "This payment was already used to unlock a different share. Please pay again.";
+
+fn is_canonical_tx_hash(tx_hash: &str) -> bool {
+    tx_hash.len() == 66
+        && tx_hash.starts_with("0x")
+        && tx_hash[2..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_share_access_tx_hash(access: &str) -> Result<&str, String> {
+    let tx_hash = access.trim();
+    if tx_hash.is_empty() {
+        return Err(PAYMENT_REQUIRED_FOR_SHARE_MSG.to_string());
+    }
+    if !is_canonical_tx_hash(tx_hash) {
+        return Err(INVALID_SHARE_ACCESS_TX_HASH_MSG.to_string());
+    }
+    Ok(tx_hash)
+}
+
 async fn verify_payment_tx(
     tx_hash: &str,
     expected_to: &str,
     min_value_wei: u128,
     share_created_at: u64,
 ) -> Result<(), String> {
-    if !tx_hash.starts_with("0x") || tx_hash.len() != 66 {
-        return Err("Invalid transaction hash".to_string());
+    if !is_canonical_tx_hash(tx_hash) {
+        return Err(INVALID_SHARE_ACCESS_TX_HASH_MSG.to_string());
     }
 
     let rpc = crate::geth::rpc_endpoint();
@@ -272,10 +295,7 @@ async fn verify_share_access(share: &ShareLink, access: Option<&str>) -> Result<
     if !is_valid_wallet(&share.recipient_wallet) {
         return Err("Share recipient wallet is invalid.".to_string());
     }
-    let tx_hash = access.unwrap_or("").trim();
-    if tx_hash.is_empty() {
-        return Err("Payment is required to unlock this shared content.".to_string());
-    }
+    let tx_hash = validate_share_access_tx_hash(access.unwrap_or(""))?;
 
     // Bind the tx hash to the first share it unlocks. A tx redeemed for
     // share A cannot later unlock share B — even if B's `recipient_wallet`
@@ -304,15 +324,34 @@ async fn verify_share_access(share: &ShareLink, access: Option<&str>) -> Result<
             }
         }
         ShareTxClaim::SameShare => Ok(()),
-        ShareTxClaim::DifferentShare => Err(
-            "This payment was already used to unlock a different share. Please pay again."
-                .to_string(),
-        ),
+        ShareTxClaim::DifferentShare => {
+            Err(SHARE_PAYMENT_REUSED_FOR_DIFFERENT_SHARE_MSG.to_string())
+        }
         ShareTxClaim::LedgerUnavailable(reason) => Err(format!(
             "Payment ledger is unavailable; cannot safely verify share access: {}",
             reason
         )),
     }
+}
+
+fn share_access_error_status(reason: &str) -> Option<StatusCode> {
+    match reason {
+        INVALID_SHARE_ACCESS_TX_HASH_MSG => Some(StatusCode::BAD_REQUEST),
+        SHARE_PAYMENT_REUSED_FOR_DIFFERENT_SHARE_MSG => Some(StatusCode::FORBIDDEN),
+        _ => None,
+    }
+}
+
+fn share_access_error_response(
+    item: &DriveItem,
+    token: &str,
+    share: &ShareLink,
+    reason: &str,
+) -> Response {
+    if let Some(status) = share_access_error_status(reason) {
+        return (status, reason.to_string()).into_response();
+    }
+    Html(payment_page(item, token, share, reason)).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -1201,7 +1240,7 @@ async fn public_browse(
     }
 
     if let Err(reason) = verify_share_access(&share, q.access.as_deref()).await {
-        return Html(payment_page(&item, &token, &share, &reason)).into_response();
+        return share_access_error_response(&item, &token, &share, &reason);
     }
 
     let access = q.access.as_deref().unwrap_or("");
@@ -1255,7 +1294,7 @@ async fn public_download(
     };
 
     if let Err(reason) = verify_share_access(&share, q.access.as_deref()).await {
-        return Html(payment_page(&root_item, &token, &share, &reason)).into_response();
+        return share_access_error_response(&root_item, &token, &share, &reason);
     }
 
     let Some(sp) = target_item.storage_path.clone() else {
@@ -1366,7 +1405,7 @@ async fn public_browse_path(
     };
 
     if let Err(reason) = verify_share_access(&share, q.access.as_deref()).await {
-        return Html(payment_page(&root_item, &token, &share, &reason)).into_response();
+        return share_access_error_response(&root_item, &token, &share, &reason);
     }
 
     let access = q.access.as_deref().unwrap_or("");
@@ -1765,6 +1804,11 @@ mod tests {
         root.join("drive_share_spent_tx.json")
     }
 
+    fn valid_tx_hash(fill: char) -> String {
+        let body: String = std::iter::repeat(fill).take(64).collect();
+        format!("0x{}", body)
+    }
+
     #[tokio::test]
     async fn load_share_tx_map_missing_file_starts_empty() {
         let dir = tempfile::tempdir().unwrap();
@@ -1901,19 +1945,79 @@ mod tests {
     }
 
     #[test]
+    fn validate_share_access_tx_hash_rejects_missing_access() {
+        let err = validate_share_access_tx_hash(" \t ")
+            .expect_err("missing access hash should be rejected");
+
+        assert_eq!(err, PAYMENT_REQUIRED_FOR_SHARE_MSG);
+    }
+
+    #[test]
+    fn validate_share_access_tx_hash_rejects_malformed_hash_shape() {
+        let bad_values = vec![
+            "tx".to_string(),
+            "0X".to_string() + &"a".repeat(64),
+            "0x".to_string() + &"a".repeat(63),
+            "0x".to_string() + &"a".repeat(65),
+            "0x".to_string() + &"a".repeat(63) + "g",
+        ];
+
+        for value in bad_values {
+            let err = validate_share_access_tx_hash(&value)
+                .expect_err("malformed access hash should be rejected");
+
+            assert_eq!(err, INVALID_SHARE_ACCESS_TX_HASH_MSG);
+        }
+    }
+
+    #[test]
+    fn validate_share_access_tx_hash_accepts_valid_hash_shape() {
+        let lower = valid_tx_hash('a');
+        let padded = format!(" {} ", lower);
+        assert_eq!(
+            validate_share_access_tx_hash(&padded).expect("valid hash should be accepted"),
+            lower.as_str()
+        );
+
+        let upper = valid_tx_hash('A');
+        assert_eq!(
+            validate_share_access_tx_hash(&upper).expect("uppercase hex should be accepted"),
+            upper.as_str()
+        );
+    }
+
+    #[test]
+    fn share_access_error_status_maps_malformed_and_reused_access() {
+        assert_eq!(
+            share_access_error_status(INVALID_SHARE_ACCESS_TX_HASH_MSG),
+            Some(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            share_access_error_status(SHARE_PAYMENT_REUSED_FOR_DIFFERENT_SHARE_MSG),
+            Some(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            share_access_error_status(PAYMENT_REQUIRED_FOR_SHARE_MSG),
+            None
+        );
+    }
+
+    #[test]
     fn claim_share_tx_in_map_rejects_reused_transaction_for_different_share() {
         let mut map = HashMap::new();
+        let upper = valid_tx_hash('A');
+        let lower = upper.to_lowercase();
 
         assert_eq!(
-            claim_share_tx_in_map(&mut map, "0xABC", "share-a"),
+            claim_share_tx_in_map(&mut map, &upper, "share-a"),
             ShareTxClaim::FirstUse
         );
         assert_eq!(
-            claim_share_tx_in_map(&mut map, "0xabc", "share-a"),
+            claim_share_tx_in_map(&mut map, &lower, "share-a"),
             ShareTxClaim::SameShare
         );
         assert_eq!(
-            claim_share_tx_in_map(&mut map, "0xabc", "share-b"),
+            claim_share_tx_in_map(&mut map, &lower, "share-b"),
             ShareTxClaim::DifferentShare
         );
     }
