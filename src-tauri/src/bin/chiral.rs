@@ -386,6 +386,8 @@ enum DriveCommand {
         price_chi: Option<String>,
         #[arg(long)]
         wallet_address: Option<String>,
+        #[arg(long)]
+        private_key: Option<String>,
     },
     Unpublish {
         #[arg(long)]
@@ -793,6 +795,25 @@ struct FileMetadata {
     wallet_address: String,
     #[serde(default)]
     seeders: Vec<SeederInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DrivePublishCredentials {
+    wallet_address: String,
+    private_key: String,
+}
+
+impl DrivePublishCredentials {
+    fn local_only() -> Self {
+        Self {
+            wallet_address: String::new(),
+            private_key: String::new(),
+        }
+    }
+
+    fn is_signed(&self) -> bool {
+        !self.wallet_address.is_empty() && !self.private_key.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2425,6 +2446,61 @@ async fn drive_create_share(
     parse_json_or_error(resp).await
 }
 
+fn drive_publish_credentials(
+    price_wei: &str,
+    wallet_address: Option<String>,
+    private_key: Option<String>,
+) -> Result<DrivePublishCredentials, String> {
+    let wallet_address = wallet_address.unwrap_or_default().trim().to_string();
+    let private_key = private_key.unwrap_or_default();
+    let wants_signed_publish = !wallet_address.is_empty() || !private_key.trim().is_empty();
+    let paid_publish = price_wei.trim() != "0";
+
+    if !wants_signed_publish && !paid_publish {
+        return Ok(DrivePublishCredentials::local_only());
+    }
+
+    if private_key.trim().is_empty() {
+        return Err(
+            "Drive publish with a price or wallet address requires --private-key for signed DHT metadata"
+                .to_string(),
+        );
+    }
+
+    let private_key = normalize_private_key(&private_key)?;
+    let derived_wallet = address_from_private_key(&private_key)?;
+    let wallet_address = if wallet_address.is_empty() {
+        derived_wallet
+    } else {
+        if !wallet_address.eq_ignore_ascii_case(&derived_wallet) {
+            return Err(
+                "Drive publish wallet address does not match --private-key signer".to_string(),
+            );
+        }
+        wallet_address
+    };
+
+    Ok(DrivePublishCredentials {
+        wallet_address,
+        private_key,
+    })
+}
+
+fn validate_existing_drive_metadata_for_publish(
+    dht_key: &str,
+    raw_metadata: Option<&str>,
+) -> Result<(), String> {
+    if let Some(raw) = raw_metadata {
+        serde_json::from_str::<FileMetadata>(raw).map_err(|e| {
+            format!(
+                "Malformed existing Drive metadata for {}: {}; refusing signed publish because remote metadata cannot be safely replaced",
+                dht_key, e
+            )
+        })?;
+    }
+    Ok(())
+}
+
 async fn publish_drive_item(
     owner: &str,
     item_id: &str,
@@ -2432,6 +2508,7 @@ async fn publish_drive_item(
     protocol: &str,
     price_chi: Option<String>,
     wallet_address: Option<String>,
+    private_key: Option<String>,
 ) -> Result<String, String> {
     let mut manifest = drive_storage::load_manifest();
     let Some(item) = manifest
@@ -2469,72 +2546,42 @@ async fn publish_drive_item(
         "0".to_string()
     };
 
-    daemon_post_json(
+    let credentials = drive_publish_credentials(&price_wei, wallet_address, private_key)?;
+    let dht_key = format!("chiral_file_{}", file_hash);
+    let signed_publish = credentials.is_signed();
+    if signed_publish {
+        let existing = dht_get_value(port, &dht_key).await?;
+        validate_existing_drive_metadata_for_publish(&dht_key, existing.as_deref())?;
+    }
+
+    let register_response = daemon_post_json(
         port,
         "/api/headless/dht/register-shared-file",
         &serde_json::json!({
             "fileHash": file_hash,
             "filePath": full_path.to_string_lossy(),
-            "fileName": item.name,
+            "fileName": item.name.clone(),
             "fileSize": file_size,
+            "protocol": protocol,
             "priceWei": price_wei,
-            "walletAddress": wallet_address.clone().unwrap_or_default(),
+            "walletAddress": credentials.wallet_address,
+            "privateKey": credentials.private_key,
         }),
     )
     .await?;
 
-    let peer_id = dht_peer_id(port).await?;
-    let addresses = dht_listening_addresses(port).await?;
-
-    let dht_key = format!("chiral_file_{}", file_hash);
-    let existing = dht_get_value(port, &dht_key).await?;
-    let mut metadata = if let Some(json) = existing {
-        serde_json::from_str::<FileMetadata>(&json).unwrap_or(FileMetadata {
-            hash: file_hash.clone(),
-            file_name: item.name.clone(),
-            file_size,
-            protocol: protocol.to_string(),
-            created_at: now_secs(),
-            peer_id: String::new(),
-            price_wei: String::new(),
-            wallet_address: String::new(),
-            seeders: Vec::new(),
-        })
-    } else {
-        FileMetadata {
-            hash: file_hash.clone(),
-            file_name: item.name.clone(),
-            file_size,
-            protocol: protocol.to_string(),
-            created_at: now_secs(),
-            peer_id: String::new(),
-            price_wei: String::new(),
-            wallet_address: String::new(),
-            seeders: Vec::new(),
-        }
-    };
-
-    let seeder = SeederInfo {
-        peer_id: peer_id.clone(),
-        price_wei: price_wei.clone(),
-        wallet_address: wallet_address.clone().unwrap_or_default(),
-        multiaddrs: addresses,
-    };
-
-    if let Some(existing) = metadata.seeders.iter_mut().find(|s| s.peer_id == peer_id) {
-        *existing = seeder;
-    } else {
-        metadata.seeders.push(seeder);
+    if signed_publish
+        && !register_response
+            .get("dhtPublished")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    {
+        let warning = register_response
+            .get("warning")
+            .and_then(|value| value.as_str())
+            .unwrap_or("signed DHT publication was not confirmed");
+        return Err(format!("Signed Drive publish failed: {}", warning));
     }
-
-    metadata.peer_id = peer_id;
-    metadata.price_wei = price_wei;
-    metadata.wallet_address = wallet_address.unwrap_or_default();
-    metadata.protocol = protocol.to_string();
-
-    let metadata_json = serde_json::to_string(&metadata)
-        .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-    dht_put_value(port, &dht_key, &metadata_json).await?;
 
     item.merkle_root = Some(file_hash.clone());
     item.protocol = Some(protocol.to_string());
@@ -3422,10 +3469,18 @@ async fn handle_drive(cmd: DriveCommand) -> Result<(), String> {
             protocol,
             price_chi,
             wallet_address,
+            private_key,
         } => {
-            let hash =
-                publish_drive_item(&owner, &item_id, port, &protocol, price_chi, wallet_address)
-                    .await?;
+            let hash = publish_drive_item(
+                &owner,
+                &item_id,
+                port,
+                &protocol,
+                price_chi,
+                wallet_address,
+                private_key,
+            )
+            .await?;
             println!("published hash={}", hash);
             Ok(())
         }
@@ -4034,6 +4089,49 @@ mod tests {
 
         assert!(err.contains("Malformed remote file metadata for chiral_file_hash-1"));
         assert!(err.contains("refusing to continue unpublish"));
+    }
+
+    #[test]
+    fn drive_publish_credentials_preserve_free_local_only_publish() {
+        let credentials = drive_publish_credentials("0", None, None)
+            .expect("free publish without credentials should stay local-only");
+
+        assert_eq!(credentials, DrivePublishCredentials::local_only());
+        assert!(!credentials.is_signed());
+    }
+
+    #[test]
+    fn drive_publish_credentials_derive_wallet_from_private_key() {
+        let private_key = "4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let expected_wallet =
+            address_from_private_key(private_key).expect("test private key should derive wallet");
+
+        let credentials =
+            drive_publish_credentials("0", None, Some(format!("  0x{}  ", private_key)))
+                .expect("private key should enable signed publish");
+
+        assert!(credentials.is_signed());
+        assert_eq!(credentials.wallet_address, expected_wallet);
+        assert_eq!(credentials.private_key, format!("0x{}", private_key));
+    }
+
+    #[test]
+    fn drive_publish_credentials_reject_paid_publish_without_private_key() {
+        let err = drive_publish_credentials("1000", Some("0xabc".to_string()), None)
+            .expect_err("paid publish without private key must fail");
+
+        assert!(err.contains("--private-key"));
+        assert!(err.contains("signed DHT metadata"));
+    }
+
+    #[test]
+    fn drive_publish_rejects_malformed_existing_metadata() {
+        let err =
+            validate_existing_drive_metadata_for_publish("chiral_file_bad", Some("{not json"))
+                .expect_err("malformed existing metadata must fail closed");
+
+        assert!(err.contains("Malformed existing Drive metadata for chiral_file_bad"));
+        assert!(err.contains("refusing signed publish"));
     }
 }
 

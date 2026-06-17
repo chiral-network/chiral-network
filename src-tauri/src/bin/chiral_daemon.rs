@@ -326,6 +326,8 @@ struct RegisterSharedFileRequest {
     file_name: String,
     file_size: u64,
     #[serde(default)]
+    protocol: Option<String>,
+    #[serde(default)]
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
@@ -333,6 +335,40 @@ struct RegisterSharedFileRequest {
     /// (downloaders will reject; use for free-only or proxy seeding).
     #[serde(default)]
     private_key: String,
+}
+
+fn register_shared_file_protocol(protocol: Option<&str>) -> String {
+    let protocol = protocol.unwrap_or("WebRTC").trim();
+    if protocol.is_empty() {
+        "WebRTC".to_string()
+    } else {
+        protocol.to_string()
+    }
+}
+
+fn signed_file_metadata_json_for_register(
+    req: &RegisterSharedFileRequest,
+    protocol: &str,
+) -> Result<String, String> {
+    let metadata = chiral_network::try_make_signed_file_metadata(
+        &req.file_hash,
+        &req.file_name,
+        req.file_size,
+        protocol,
+        &req.wallet_address,
+        Some(&req.private_key),
+    )
+    .ok_or_else(|| "Failed to sign file metadata".to_string())?;
+    serde_json::to_string(&metadata)
+        .map_err(|e| format!("Failed to serialize file metadata: {}", e))
+}
+
+fn register_shared_file_unpublished_payload(warning: impl Into<String>) -> serde_json::Value {
+    json!({
+        "status": "ok",
+        "dhtPublished": false,
+        "warning": warning.into(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -679,7 +715,7 @@ async fn dht_register_shared_file(
     // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
         req.file_hash.clone(),
-        req.file_path,
+        req.file_path.clone(),
         req.file_name.clone(),
         req.file_size,
         price_wei,
@@ -692,21 +728,17 @@ async fn dht_register_shared_file(
     // step the file is only locally seeded and `file/search` from any
     // remote node returns "not found".
     if req.private_key.is_empty() || req.wallet_address.is_empty() {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": "No wallet/private key provided — file registered locally only; remote peers cannot discover it",
-        }))
+        return Json(register_shared_file_unpublished_payload(
+            "No wallet/private key provided — file registered locally only; remote peers cannot discover it",
+        ))
         .into_response();
     }
 
     let peer_id = svc.get_peer_id().await.unwrap_or_default();
     if peer_id.is_empty() {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": "DHT peer ID unavailable",
-        }))
+        return Json(register_shared_file_unpublished_payload(
+            "DHT peer ID unavailable",
+        ))
         .into_response();
     }
 
@@ -719,11 +751,9 @@ async fn dht_register_shared_file(
         multiaddrs,
         Some(&req.private_key),
     ) else {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": "Failed to sign seeder entry",
-        }))
+        return Json(register_shared_file_unpublished_payload(
+            "Failed to sign seeder entry",
+        ))
         .into_response();
     };
 
@@ -733,27 +763,26 @@ async fn dht_register_shared_file(
     // signed blobs at the same chiral_file_<hash> key are harmless —
     // verify_publisher accepts whichever the reader sees.
     let blob_key = format!("chiral_file_{}", req.file_hash);
-    if let Some(metadata) = chiral_network::try_make_signed_file_metadata(
-        &req.file_hash,
-        &req.file_name,
-        req.file_size,
-        "WebRTC",
-        &req.wallet_address,
-        Some(&req.private_key),
-    ) {
-        if let Ok(blob) = serde_json::to_string(&metadata) {
-            if let Err(e) = svc.put_dht_value(blob_key, blob).await {
-                eprintln!("[DAEMON] file metadata blob put failed: {}", e);
-            }
+    let protocol = register_shared_file_protocol(req.protocol.as_deref());
+    let blob = match signed_file_metadata_json_for_register(&req, &protocol) {
+        Ok(blob) => blob,
+        Err(e) => {
+            return Json(register_shared_file_unpublished_payload(e)).into_response();
         }
+    };
+    if let Err(e) = svc.put_dht_value(blob_key, blob).await {
+        return Json(register_shared_file_unpublished_payload(format!(
+            "File metadata publish failed: {}",
+            e
+        )))
+        .into_response();
     }
 
     if let Err(e) = chiral_network::publish_seeder_entry(&svc, &req.file_hash, &seeder).await {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": format!("Seeder entry publish failed: {}", e),
-        }))
+        return Json(register_shared_file_unpublished_payload(format!(
+            "Seeder entry publish failed: {}",
+            e
+        )))
         .into_response();
     }
 
@@ -1879,6 +1908,28 @@ mod tests {
         }
     }
 
+    fn wallet_address_from_private_key(private_key: &str) -> String {
+        let probe = b"daemon-register-shared-file";
+        let signature = chiral_network::wallet::sign_message(private_key, probe).unwrap();
+        chiral_network::wallet::recover_signer(probe, &signature).unwrap()
+    }
+
+    fn register_shared_file_request(
+        protocol: Option<String>,
+        private_key: &str,
+    ) -> RegisterSharedFileRequest {
+        RegisterSharedFileRequest {
+            file_hash: "abcdef0123456789".to_string(),
+            file_path: "/tmp/example.txt".to_string(),
+            file_name: "example.txt".to_string(),
+            file_size: 123,
+            protocol,
+            price_wei: "1000".to_string(),
+            wallet_address: wallet_address_from_private_key(private_key),
+            private_key: private_key.to_string(),
+        }
+    }
+
     #[test]
     fn headless_host_registry_missing_value_starts_empty() {
         let registry =
@@ -1930,6 +1981,52 @@ mod tests {
             .expect("peer-a should be replaced");
         assert_eq!(updated.wallet_address, "0xnew");
         assert_eq!(updated.updated_at, 30);
+    }
+
+    #[test]
+    fn register_shared_file_protocol_defaults_to_webrtc() {
+        assert_eq!(register_shared_file_protocol(None), "WebRTC");
+        assert_eq!(register_shared_file_protocol(Some("   ")), "WebRTC");
+        assert_eq!(register_shared_file_protocol(Some("iroh")), "iroh");
+    }
+
+    #[test]
+    fn register_shared_file_unpublished_payload_reports_false() {
+        let payload = register_shared_file_unpublished_payload("metadata publish failed");
+
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["dhtPublished"], false);
+        assert_eq!(payload["warning"], "metadata publish failed");
+    }
+
+    #[test]
+    fn register_shared_file_metadata_preserves_protocol() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let req = register_shared_file_request(Some("iroh".to_string()), private_key);
+        let protocol = register_shared_file_protocol(req.protocol.as_deref());
+
+        let metadata_json = signed_file_metadata_json_for_register(&req, &protocol)
+            .expect("valid signed metadata should serialize");
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap();
+
+        assert_eq!(metadata["protocol"], "iroh");
+        assert_eq!(metadata["walletAddress"], req.wallet_address);
+        assert!(metadata["publisherSignature"]
+            .as_str()
+            .map(|signature| !signature.is_empty())
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn register_shared_file_metadata_rejects_signing_failure() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let mut req = register_shared_file_request(Some("WebRTC".to_string()), private_key);
+        req.private_key = "not-a-private-key".to_string();
+
+        let err = signed_file_metadata_json_for_register(&req, "WebRTC")
+            .expect_err("invalid private key should not produce metadata");
+
+        assert_eq!(err, "Failed to sign file metadata");
     }
 
     #[cfg(unix)]
