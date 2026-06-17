@@ -337,12 +337,17 @@ fn validate_upload_site_manifest(files: &[UploadFile]) -> Result<(), UploadSiteE
 
     let mut seen_paths = HashSet::with_capacity(files.len());
     for upload_file in files {
+        let has_invalid_segment = upload_file
+            .path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == ".");
         if upload_file.path.is_empty()
             || upload_file.path.len() > MAX_SITE_FILE_PATH_BYTES
             || upload_file.path.contains('\0')
             || upload_file.path.starts_with('/')
             || upload_file.path.starts_with('\\')
             || upload_file.path.contains("..")
+            || has_invalid_segment
         {
             return Err(UploadSiteError::bad_request("Invalid file path"));
         }
@@ -824,6 +829,32 @@ mod tests {
             validate_upload_site_manifest(&files).expect_err("duplicate paths should be rejected");
 
         assert_eq!(err, UploadSiteError::bad_request("Duplicate file path"));
+    }
+
+    #[test]
+    fn upload_site_manifest_rejects_dot_segment_duplicate_bypass() {
+        let files = vec![
+            upload_file("index.html", b"first"),
+            upload_file("./index.html", b"second"),
+        ];
+
+        let err =
+            validate_upload_site_manifest(&files).expect_err("dot segment path should be rejected");
+
+        assert_eq!(err, UploadSiteError::bad_request("Invalid file path"));
+    }
+
+    #[test]
+    fn upload_site_manifest_rejects_repeated_separator_duplicate_bypass() {
+        let files = vec![
+            upload_file("assets/app.js", b"first"),
+            upload_file("assets//app.js", b"second"),
+        ];
+
+        let err = validate_upload_site_manifest(&files)
+            .expect_err("repeated separator path should be rejected");
+
+        assert_eq!(err, UploadSiteError::bad_request("Invalid file path"));
     }
 
     #[test]
