@@ -803,6 +803,39 @@ struct HostRegistryEntry {
     updated_at: u64,
 }
 
+fn host_registry_from_dht_value(
+    registry_json: Option<String>,
+) -> Result<Vec<HostRegistryEntry>, String> {
+    match registry_json {
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|e| format!("Malformed chiral_host_registry JSON: {}", e)),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn host_registry_after_publish(
+    mut registry: Vec<HostRegistryEntry>,
+    peer_id: String,
+    wallet_address: String,
+    updated_at: u64,
+) -> Vec<HostRegistryEntry> {
+    registry.retain(|e| e.peer_id != peer_id);
+    registry.push(HostRegistryEntry {
+        peer_id,
+        wallet_address,
+        updated_at,
+    });
+    registry
+}
+
+fn host_registry_after_unpublish(
+    mut registry: Vec<HostRegistryEntry>,
+    peer_id: &str,
+) -> Vec<HostRegistryEntry> {
+    registry.retain(|e| e.peer_id != peer_id);
+    registry
+}
+
 fn default_data_dir() -> PathBuf {
     chiral_network::network::data_dir()
 }
@@ -1955,6 +1988,86 @@ mod tests {
             chiral_network::validate_host_ad_wallet_address(Some(" 0xwallet ")).unwrap(),
             "0xwallet"
         );
+    }
+
+    fn host_registry_entry(
+        peer_id: &str,
+        wallet_address: &str,
+        updated_at: u64,
+    ) -> HostRegistryEntry {
+        HostRegistryEntry {
+            peer_id: peer_id.to_string(),
+            wallet_address: wallet_address.to_string(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn market_host_registry_missing_value_starts_empty() {
+        let registry =
+            host_registry_from_dht_value(None).expect("missing registry should be empty");
+
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn market_host_registry_reads_valid_json() {
+        let json = serde_json::to_string(&vec![host_registry_entry("peer-a", "0xwallet", 10)])
+            .expect("test registry should serialize");
+        let registry =
+            host_registry_from_dht_value(Some(json)).expect("valid registry should parse");
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry[0].peer_id, "peer-a");
+        assert_eq!(registry[0].wallet_address, "0xwallet");
+        assert_eq!(registry[0].updated_at, 10);
+    }
+
+    #[test]
+    fn market_host_registry_rejects_malformed_json() {
+        let err = host_registry_from_dht_value(Some("{not json".to_string()))
+            .expect_err("malformed registry must not be reset to empty");
+
+        assert!(err.contains("Malformed chiral_host_registry JSON"));
+    }
+
+    #[test]
+    fn market_host_registry_publish_replaces_existing_peer() {
+        let registry = host_registry_after_publish(
+            vec![
+                host_registry_entry("peer-a", "0xold", 10),
+                host_registry_entry("peer-b", "0xother", 20),
+            ],
+            "peer-a".to_string(),
+            "0xnew".to_string(),
+            30,
+        );
+
+        assert_eq!(registry.len(), 2);
+        assert!(registry
+            .iter()
+            .any(|entry| entry.peer_id == "peer-b" && entry.wallet_address == "0xother"));
+        let updated = registry
+            .iter()
+            .find(|entry| entry.peer_id == "peer-a")
+            .expect("peer-a should be replaced");
+        assert_eq!(updated.wallet_address, "0xnew");
+        assert_eq!(updated.updated_at, 30);
+    }
+
+    #[test]
+    fn market_host_registry_unpublish_preserves_other_peers() {
+        let registry = host_registry_after_unpublish(
+            vec![
+                host_registry_entry("peer-a", "0xold", 10),
+                host_registry_entry("peer-b", "0xother", 20),
+            ],
+            "peer-a",
+        );
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry[0].peer_id, "peer-b");
+        assert_eq!(registry[0].wallet_address, "0xother");
     }
 }
 
@@ -3559,24 +3672,14 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
             let ad_json = serde_json::to_string(&ad)
                 .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
 
-            dht_put_value(port, &format!("chiral_host_{}", peer_id), &ad_json).await?;
-
             let registry_key = "chiral_host_registry";
-            let mut registry: Vec<HostRegistryEntry> =
-                if let Some(raw) = dht_get_value(port, registry_key).await? {
-                    serde_json::from_str(&raw).unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-            registry.retain(|e| e.peer_id != peer_id);
-            registry.push(HostRegistryEntry {
-                peer_id,
-                wallet_address: wallet,
-                updated_at: now_secs(),
-            });
+            let registry = host_registry_from_dht_value(dht_get_value(port, registry_key).await?)?;
+            let registry =
+                host_registry_after_publish(registry, peer_id.clone(), wallet, now_secs());
 
             let reg_json = serde_json::to_string(&registry)
                 .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+            dht_put_value(port, &format!("chiral_host_{}", peer_id), &ad_json).await?;
             dht_put_value(port, registry_key, &reg_json).await?;
             println!("advertised=true");
             Ok(())
@@ -3584,13 +3687,8 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
         MarketCommand::Unadvertise { port } => {
             let peer_id = dht_peer_id(port).await?;
             let registry_key = "chiral_host_registry";
-            let mut registry: Vec<HostRegistryEntry> =
-                if let Some(raw) = dht_get_value(port, registry_key).await? {
-                    serde_json::from_str(&raw).unwrap_or_default()
-                } else {
-                    Vec::new()
-                };
-            registry.retain(|e| e.peer_id != peer_id);
+            let registry = host_registry_from_dht_value(dht_get_value(port, registry_key).await?)?;
+            let registry = host_registry_after_unpublish(registry, &peer_id);
             let json = serde_json::to_string(&registry)
                 .map_err(|e| format!("Failed to serialize registry: {}", e))?;
             dht_put_value(port, registry_key, &json).await?;
@@ -3603,7 +3701,7 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
                 println!("[]");
                 return Ok(());
             };
-            let registry: Vec<HostRegistryEntry> = serde_json::from_str(&raw).unwrap_or_default();
+            let registry = host_registry_from_dht_value(Some(raw))?;
             for entry in registry {
                 let key = format!("chiral_host_{}", entry.peer_id);
                 let ad = dht_get_value(port, &key).await?;
