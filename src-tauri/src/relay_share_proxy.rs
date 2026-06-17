@@ -717,22 +717,79 @@ fn now_secs() -> u64 {
 // Registration API handlers
 // ---------------------------------------------------------------------------
 
-/// Replace 0.0.0.0 or 127.0.0.1 in origin URL with the client's real IP.
-/// e.g. "http://0.0.0.0:9419" + client_ip 1.2.3.4 → "http://1.2.3.4:9419"
-fn fix_origin_url(origin_url: &str, client_ip: std::net::IpAddr) -> String {
-    for placeholder in &["0.0.0.0", "127.0.0.1", "localhost"] {
-        if origin_url.contains(placeholder) {
-            return origin_url.replace(placeholder, &client_ip.to_string());
-        }
+fn is_placeholder_origin_host(host: &str) -> bool {
+    matches!(host, "0.0.0.0" | "127.0.0.1" | "localhost")
+}
+
+fn origin_host_range(origin_url: &str) -> Result<std::ops::Range<usize>, String> {
+    let scheme_end = origin_url
+        .find("://")
+        .ok_or_else(|| "origin_url has no scheme separator for host normalization".to_string())?;
+    let authority_start = scheme_end + 3;
+    let after_authority_start = &origin_url[authority_start..];
+    let authority_len = after_authority_start
+        .find(['/', '?', '#'])
+        .unwrap_or(after_authority_start.len());
+    let authority = &after_authority_start[..authority_len];
+    if authority.is_empty() {
+        return Err("origin_url has no authority for host normalization".to_string());
     }
-    origin_url.to_string()
+
+    let host_port_start = authority.rfind('@').map(|idx| idx + 1).unwrap_or(0);
+    let host_port = &authority[host_port_start..];
+    if host_port.is_empty() {
+        return Err("origin_url has no host for normalization".to_string());
+    }
+
+    let host_len = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.find(']')
+            .map(|idx| idx + 2)
+            .ok_or_else(|| "origin_url has an unterminated IPv6 host".to_string())?
+    } else {
+        host_port.find(':').unwrap_or(host_port.len())
+    };
+    if host_len == 0 {
+        return Err("origin_url has no host for normalization".to_string());
+    }
+
+    let start = authority_start + host_port_start;
+    Ok(start..start + host_len)
+}
+
+/// Replace only a placeholder origin host with the client's real IP.
+/// e.g. "http://0.0.0.0:9419" + client_ip 1.2.3.4 -> "http://1.2.3.4:9419"
+fn fix_origin_url(origin_url: &str, client_ip: std::net::IpAddr) -> Result<String, String> {
+    let trimmed = origin_url.trim();
+    let parsed = reqwest::Url::parse(trimmed)
+        .map_err(|e| format!("origin_url could not be parsed for host normalization: {e}"))?;
+    let Some(host) = parsed.host_str() else {
+        return Err("origin_url has no host for normalization".to_string());
+    };
+
+    if is_placeholder_origin_host(&host.to_ascii_lowercase()) {
+        let range = origin_host_range(trimmed)?;
+        let replacement = match client_ip {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => format!("[{}]", v6),
+        };
+        let rewritten = format!(
+            "{}{}{}",
+            &trimmed[..range.start],
+            replacement,
+            &trimmed[range.end..]
+        );
+        reqwest::Url::parse(&rewritten)
+            .map_err(|e| format!("origin_url host rewrite produced an invalid URL: {e}"))?;
+        return Ok(rewritten);
+    }
+    Ok(trimmed.to_string())
 }
 
 fn normalize_origin_for_preflight(
     origin_url: &str,
     client_ip: std::net::IpAddr,
 ) -> Result<String, String> {
-    let origin = fix_origin_url(origin_url, client_ip);
+    let origin = fix_origin_url(origin_url, client_ip)?;
     is_safe_normalized_origin_url(&origin)?;
     Ok(origin)
 }
@@ -1490,7 +1547,7 @@ mod tests {
     fn test_fix_origin_url_replaces_quad_zero() {
         let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
         assert_eq!(
-            fix_origin_url("http://0.0.0.0:9419", ip),
+            fix_origin_url("http://0.0.0.0:9419", ip).unwrap(),
             "http://203.0.113.5:9419"
         );
     }
@@ -1499,7 +1556,7 @@ mod tests {
     fn test_fix_origin_url_replaces_localhost() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         assert_eq!(
-            fix_origin_url("http://localhost:9419", ip),
+            fix_origin_url("http://localhost:9419", ip).unwrap(),
             "http://10.0.0.1:9419"
         );
     }
@@ -1508,7 +1565,7 @@ mod tests {
     fn test_fix_origin_url_replaces_loopback() {
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42));
         assert_eq!(
-            fix_origin_url("http://127.0.0.1:9419/path", ip),
+            fix_origin_url("http://127.0.0.1:9419/path", ip).unwrap(),
             "http://192.168.1.42:9419/path"
         );
     }
@@ -1517,9 +1574,32 @@ mod tests {
     fn test_fix_origin_url_noop_when_no_placeholder() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         assert_eq!(
-            fix_origin_url("http://203.0.113.5:9419", ip),
+            fix_origin_url("http://203.0.113.5:9419", ip).unwrap(),
             "http://203.0.113.5:9419"
         );
+    }
+
+    #[test]
+    fn test_fix_origin_url_preserves_placeholder_text_outside_host() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+        assert_eq!(
+            fix_origin_url("http://127.0.0.1:9419/localhost?next=localhost", ip).unwrap(),
+            "http://203.0.113.5:9419/localhost?next=localhost"
+        );
+        assert_eq!(
+            fix_origin_url("http://localhost:9419?next=localhost", ip).unwrap(),
+            "http://203.0.113.5:9419?next=localhost"
+        );
+        assert_eq!(
+            fix_origin_url("http://example.com/localhost?next=127.0.0.1", ip).unwrap(),
+            "http://example.com/localhost?next=127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn test_fix_origin_url_returns_parse_errors() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+        assert!(fix_origin_url("not-a-url", ip).is_err());
     }
 
     #[test]
