@@ -2118,6 +2118,25 @@ fn current_peer_timestamp_secs(context: &str) -> i64 {
     }
 }
 
+fn kademlia_peer_sync_timestamp_secs_at(
+    now: SystemTime,
+) -> Result<i64, std::time::SystemTimeError> {
+    peer_timestamp_secs_at(now)
+}
+
+fn current_kademlia_peer_sync_timestamp_secs(context: &str) -> Option<i64> {
+    match kademlia_peer_sync_timestamp_secs_at(SystemTime::now()) {
+        Ok(timestamp) => Some(timestamp),
+        Err(err) => {
+            println!(
+                "System clock is before UNIX_EPOCH while {}; skipping visible Kademlia peer sync: {}",
+                context, err
+            );
+            None
+        }
+    }
+}
+
 fn current_peer_timestamp_millis(context: &str) -> i64 {
     match peer_timestamp_millis_at(SystemTime::now()) {
         Ok(timestamp) => timestamp,
@@ -2769,10 +2788,11 @@ async fn event_loop(
                 // Active discovery: random walk to find new peers on the network
                 let _ = swarm.behaviour_mut().kad.bootstrap();
 
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64;
+                let Some(now) = current_kademlia_peer_sync_timestamp_secs(
+                    "syncing Kademlia routing table into visible peer list",
+                ) else {
+                    continue;
+                };
                 let mut changed = false;
                 let mut kad_entries: Vec<(String, Vec<String>)> = Vec::new();
                 for bucket in swarm.behaviour_mut().kad.kbuckets() {
@@ -4045,36 +4065,36 @@ async fn handle_behaviour_event(
 
                         // Populate peers list with all Kademlia routing table entries
                         // so the Network page and ChiralDrop can see discovered peers.
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
-                        let mut kad_discovered: Vec<(String, Vec<String>)> = Vec::new();
-                        for bucket in swarm.behaviour_mut().kad.kbuckets() {
-                            for entry in bucket.iter() {
-                                let pid = entry.node.key.preimage().to_string();
-                                let addrs: Vec<String> =
-                                    entry.node.value.iter().map(|a| a.to_string()).collect();
-                                kad_discovered.push((pid, addrs));
-                            }
-                        }
-                        if !kad_discovered.is_empty() {
-                            let mut peers_guard = peers.lock().await;
-                            for (pid, addrs) in &kad_discovered {
-                                if !peers_guard.iter().any(|p| &p.id == pid) {
-                                    peers_guard.push(PeerInfo {
-                                        id: pid.clone(),
-                                        address: pid.clone(),
-                                        multiaddrs: addrs.clone(),
-                                        last_seen: now,
-                                    });
+                        if let Some(now) = current_kademlia_peer_sync_timestamp_secs(
+                            "populating visible peers after Kademlia bootstrap",
+                        ) {
+                            let mut kad_discovered: Vec<(String, Vec<String>)> = Vec::new();
+                            for bucket in swarm.behaviour_mut().kad.kbuckets() {
+                                for entry in bucket.iter() {
+                                    let pid = entry.node.key.preimage().to_string();
+                                    let addrs: Vec<String> =
+                                        entry.node.value.iter().map(|a| a.to_string()).collect();
+                                    kad_discovered.push((pid, addrs));
                                 }
                             }
-                            println!(
-                                "📡 Added {} Kademlia peers to visible peer list",
-                                kad_discovered.len()
-                            );
-                            let _ = events.emit("peer-discovered", peers_guard.clone());
+                            if !kad_discovered.is_empty() {
+                                let mut peers_guard = peers.lock().await;
+                                for (pid, addrs) in &kad_discovered {
+                                    if !peers_guard.iter().any(|p| &p.id == pid) {
+                                        peers_guard.push(PeerInfo {
+                                            id: pid.clone(),
+                                            address: pid.clone(),
+                                            multiaddrs: addrs.clone(),
+                                            last_seen: now,
+                                        });
+                                    }
+                                }
+                                println!(
+                                    "📡 Added {} Kademlia peers to visible peer list",
+                                    kad_discovered.len()
+                                );
+                                let _ = events.emit("peer-discovered", peers_guard.clone());
+                            }
                         }
 
                         bootstrap_gate.mark_ready();
@@ -5987,6 +6007,21 @@ mod tests {
             .expect("post-epoch timestamp should be valid");
 
         assert_eq!(timestamp, 1234);
+    }
+
+    #[test]
+    fn kademlia_peer_sync_timestamp_secs_at_returns_epoch_seconds() {
+        let timestamp = kademlia_peer_sync_timestamp_secs_at(UNIX_EPOCH + Duration::from_secs(99))
+            .expect("post-epoch Kademlia peer-sync timestamp should be valid");
+
+        assert_eq!(timestamp, 99);
+    }
+
+    #[test]
+    fn kademlia_peer_sync_timestamp_secs_at_rejects_pre_epoch_clock() {
+        let pre_epoch = UNIX_EPOCH - Duration::from_secs(1);
+
+        assert!(kademlia_peer_sync_timestamp_secs_at(pre_epoch).is_err());
     }
 
     #[test]
