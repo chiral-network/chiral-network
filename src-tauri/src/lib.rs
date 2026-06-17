@@ -1532,6 +1532,19 @@ async fn fetch_seeders(
     Ok(seeders)
 }
 
+fn desktop_publish_peer_id(peer_id: Result<String, String>) -> Result<String, String> {
+    match peer_id {
+        Ok(peer_id) if !peer_id.trim().is_empty() => Ok(peer_id),
+        Ok(_) => Err(
+            "DHT peer ID unavailable. Reconnect to the network before publishing signed file records."
+                .to_string(),
+        ),
+        Err(e) => Err(format!(
+            "DHT peer ID unavailable: {e}. Reconnect to the network before publishing signed file records."
+        )),
+    }
+}
+
 /// Build a signed SeederInfo entry. Returns `None` if the wallet
 /// address or private key are missing — readers reject unsigned
 /// SeederInfo entries, so publishing one would just poison the DHT
@@ -1640,7 +1653,7 @@ async fn publish_file(
     // Get DHT service and peer ID
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        let peer_id = desktop_publish_peer_id(dht.get_peer_id().await)?;
 
         // Parse price from CHI to wei
         let price_wei_val = if let Some(ref price) = price_chi {
@@ -1754,7 +1767,7 @@ async fn publish_file_data(
     // Get DHT service and peer ID
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        let peer_id = desktop_publish_peer_id(dht.get_peer_id().await)?;
 
         // Parse price from CHI to wei
         let price_wei_val = if let Some(ref price) = price_chi {
@@ -8329,6 +8342,32 @@ mod multi_seeder_tests {
         assert_ne!(key_a, key_b);
         assert_ne!(key_a, key_c);
         assert!(key_a.starts_with("chiral_seeder_"));
+    }
+
+    #[test]
+    fn desktop_publish_peer_id_accepts_present_peer_id() {
+        assert_eq!(
+            desktop_publish_peer_id(Ok("12D3KooWDesktopPeer".to_string())).unwrap(),
+            "12D3KooWDesktopPeer"
+        );
+    }
+
+    #[test]
+    fn desktop_publish_peer_id_rejects_blank_peer_id() {
+        let err = desktop_publish_peer_id(Ok("  ".to_string()))
+            .expect_err("blank peer ID should fail closed");
+
+        assert!(err.contains("DHT peer ID unavailable"));
+        assert!(err.contains("Reconnect"));
+    }
+
+    #[test]
+    fn desktop_publish_peer_id_surfaces_lookup_error() {
+        let err = desktop_publish_peer_id(Err("identity service offline".to_string()))
+            .expect_err("peer ID lookup errors should fail closed");
+
+        assert!(err.contains("identity service offline"));
+        assert!(err.contains("Reconnect"));
     }
 
     #[test]
