@@ -840,11 +840,19 @@ fn agreement_dir_path() -> PathBuf {
     default_data_dir().join("agreements")
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn now_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| {
+            format!(
+                "Cannot stamp headless CLI metadata because the system clock is before UNIX_EPOCH: {}",
+                e
+            )
+        })
+}
+
+fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -1684,7 +1692,7 @@ fn generate_wallet() -> Result<WalletProfile, String> {
     Ok(WalletProfile {
         address,
         private_key,
-        created_at: now_secs(),
+        created_at: now_secs()?,
     })
 }
 
@@ -2003,7 +2011,7 @@ fn build_torrent_file(
     let created_by_entry = format!("10:created by{}:{}", created_by.len(), created_by);
     torrent_content.extend_from_slice(created_by_entry.as_bytes());
 
-    let creation_date = now_secs();
+    let creation_date = now_secs()?;
     let creation_date_entry = format!("13:creation datei{}e", creation_date);
     torrent_content.extend_from_slice(creation_date_entry.as_bytes());
 
@@ -2311,24 +2319,27 @@ async fn publish_drive_item(
     let dht_key = format!("chiral_file_{}", file_hash);
     let existing = dht_get_value(port, &dht_key).await?;
     let mut metadata = if let Some(json) = existing {
-        serde_json::from_str::<FileMetadata>(&json).unwrap_or(FileMetadata {
-            hash: file_hash.clone(),
-            file_name: item.name.clone(),
-            file_size,
-            protocol: protocol.to_string(),
-            created_at: now_secs(),
-            peer_id: String::new(),
-            price_wei: String::new(),
-            wallet_address: String::new(),
-            seeders: Vec::new(),
-        })
+        match serde_json::from_str::<FileMetadata>(&json) {
+            Ok(metadata) => metadata,
+            Err(_) => FileMetadata {
+                hash: file_hash.clone(),
+                file_name: item.name.clone(),
+                file_size,
+                protocol: protocol.to_string(),
+                created_at: now_secs()?,
+                peer_id: String::new(),
+                price_wei: String::new(),
+                wallet_address: String::new(),
+                seeders: Vec::new(),
+            },
+        }
     } else {
         FileMetadata {
             hash: file_hash.clone(),
             file_name: item.name.clone(),
             file_size,
             protocol: protocol.to_string(),
-            created_at: now_secs(),
+            created_at: now_secs()?,
             peer_id: String::new(),
             price_wei: String::new(),
             wallet_address: String::new(),
@@ -2792,7 +2803,7 @@ async fn handle_wallet(cmd: WalletCommand) -> Result<(), String> {
             let wallet = WalletProfile {
                 address,
                 private_key: normalized,
-                created_at: now_secs(),
+                created_at: now_secs()?,
             };
             let mut store = load_wallet_store()?;
             store.active = Some(wallet.clone());
@@ -2807,7 +2818,7 @@ async fn handle_wallet(cmd: WalletCommand) -> Result<(), String> {
                 let wallet = WalletProfile {
                     address,
                     private_key: normalized,
-                    created_at: now_secs(),
+                    created_at: now_secs()?,
                 };
                 let mut store = load_wallet_store()?;
                 store.active = Some(wallet.clone());
@@ -3009,13 +3020,9 @@ async fn handle_download(cmd: DownloadCommand) -> Result<(), String> {
             multiaddr,
             port,
         } => {
-            let rid = request_id.unwrap_or_else(|| {
-                format!(
-                    "dl-{}-{}",
-                    &hash[..std::cmp::min(8, hash.len())],
-                    now_secs()
-                )
-            });
+            let now = now_secs()?;
+            let rid = request_id
+                .unwrap_or_else(|| format!("dl-{}-{}", &hash[..std::cmp::min(8, hash.len())], now));
 
             let _ = daemon_post_json(
                 port,
@@ -3036,7 +3043,7 @@ async fn handle_download(cmd: DownloadCommand) -> Result<(), String> {
                 file_name,
                 peer_id,
                 status: "requested".to_string(),
-                created_at: now_secs(),
+                created_at: now,
             });
             save_download_history(&history)?;
 
@@ -3221,7 +3228,7 @@ async fn handle_drive(cmd: DriveCommand) -> Result<(), String> {
                 return Err("Drive item not found".to_string());
             };
             item.is_public = public;
-            item.modified_at = now_secs();
+            item.modified_at = now_secs()?;
             drive_storage::save_manifest(&manifest);
             println!("visibility id={} public={}", item_id, public);
             Ok(())
@@ -3288,7 +3295,8 @@ async fn handle_drop(cmd: DropCommand) -> Result<(), String> {
                 .and_then(|n| n.to_str())
                 .ok_or("Invalid file path")?
                 .to_string();
-            let transfer_id = format!("drop-{}", now_secs());
+            let now = now_secs()?;
+            let transfer_id = format!("drop-{}", now);
             let value = daemon_post_json(
                 port,
                 "/api/headless/dht/send-file",
@@ -3313,7 +3321,7 @@ async fn handle_drop(cmd: DropCommand) -> Result<(), String> {
                 file_path,
                 status: "sent".to_string(),
                 paid: false,
-                created_at: now_secs(),
+                created_at: now,
             });
             save_drop_history(&history)?;
             Ok(())
@@ -3331,7 +3339,8 @@ async fn handle_drop(cmd: DropCommand) -> Result<(), String> {
                 .and_then(|n| n.to_str())
                 .ok_or("Invalid file path")?
                 .to_string();
-            let transfer_id = format!("drop-paid-{}", now_secs());
+            let now = now_secs()?;
+            let transfer_id = format!("drop-paid-{}", now);
             let hash = if let Some(h) = file_hash {
                 h
             } else {
@@ -3362,7 +3371,7 @@ async fn handle_drop(cmd: DropCommand) -> Result<(), String> {
                 file_path,
                 status: "sent".to_string(),
                 paid: true,
-                created_at: now_secs(),
+                created_at: now,
             });
             save_drop_history(&history)?;
             Ok(())
@@ -3548,13 +3557,14 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
         } => {
             let wallet = chiral_network::validate_host_ad_wallet_address(Some(&wallet))?;
             let peer_id = dht_peer_id(port).await?;
+            let now = now_secs()?;
             let ad = serde_json::json!({
                 "peerId": peer_id,
                 "walletAddress": wallet,
                 "maxStorageBytes": max_storage_bytes,
                 "pricePerMbPerDayWei": price_per_mb_per_day_wei,
                 "minDepositWei": min_deposit_wei,
-                "updatedAt": now_secs(),
+                "updatedAt": now,
             });
             let ad_json = serde_json::to_string(&ad)
                 .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
@@ -3572,7 +3582,7 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
             registry.push(HostRegistryEntry {
                 peer_id,
                 wallet_address: wallet,
-                updated_at: now_secs(),
+                updated_at: now,
             });
 
             let reg_json = serde_json::to_string(&registry)
@@ -3815,6 +3825,22 @@ async fn handle_hosting_daemon_passthrough(cmd: DaemonCommand) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_cli_now_secs_at_returns_unix_seconds() {
+        let ts = now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(42))
+            .expect("post-epoch timestamp should be accepted");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn headless_cli_now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
 
     fn file_metadata(seeders: Vec<SeederInfo>) -> FileMetadata {
         FileMetadata {
