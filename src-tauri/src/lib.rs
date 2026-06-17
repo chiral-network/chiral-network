@@ -1156,24 +1156,49 @@ async fn store_hosting_agreement(
     Ok(())
 }
 
-/// Enforce agreement expiration: if active and past expiresAt, mark as expired.
-fn enforce_agreement_expiration(json: &str, path: &std::path::Path) -> String {
-    if let Ok(mut agreement) = serde_json::from_str::<serde_json::Value>(json) {
-        let status = agreement.get("status").and_then(|s| s.as_str()).unwrap_or("");
-        let expires_at = agreement.get("expiresAt").and_then(|e| e.as_u64()).unwrap_or(0);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+fn hosting_agreement_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|e| {
+            format!(
+                "Cannot enforce hosting agreement expiration because the system clock is before UNIX_EPOCH: {}. Correct the system clock before reading active hosting agreements.",
+                e
+            )
+        })
+}
 
-        if status == "active" && expires_at > 0 && now > expires_at {
-            agreement["status"] = serde_json::Value::String("expired".to_string());
-            let updated = serde_json::to_string(&agreement).unwrap_or_else(|_| json.to_string());
-            let _ = std::fs::write(path, &updated);
-            return updated;
+/// Enforce agreement expiration: if active and past expiresAt, mark as expired.
+fn enforce_agreement_expiration_at(
+    json: &str,
+    path: &std::path::Path,
+    now: std::time::SystemTime,
+) -> Result<String, String> {
+    if let Ok(mut agreement) = serde_json::from_str::<serde_json::Value>(json) {
+        let status = agreement
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let expires_at = agreement
+            .get("expiresAt")
+            .and_then(|e| e.as_u64())
+            .unwrap_or(0);
+
+        if status == "active" && expires_at > 0 {
+            let now = hosting_agreement_timestamp_secs_at(now)?;
+            if now > expires_at {
+                agreement["status"] = serde_json::Value::String("expired".to_string());
+                let updated =
+                    serde_json::to_string(&agreement).unwrap_or_else(|_| json.to_string());
+                let _ = std::fs::write(path, &updated);
+                return Ok(updated);
+            }
         }
     }
-    json.to_string()
+    Ok(json.to_string())
+}
+
+fn enforce_agreement_expiration(json: &str, path: &std::path::Path) -> Result<String, String> {
+    enforce_agreement_expiration_at(json, path, std::time::SystemTime::now())
 }
 
 #[tauri::command]
@@ -1185,7 +1210,7 @@ async fn get_hosting_agreement(
     if path.exists() {
         let json =
             std::fs::read_to_string(&path).map_err(|e| format!("Failed to read agreement: {e}"))?;
-        return Ok(Some(enforce_agreement_expiration(&json, &path)));
+        return Ok(Some(enforce_agreement_expiration(&json, &path)?));
     }
 
     // Fall back to DHT
@@ -1194,8 +1219,11 @@ async fn get_hosting_agreement(
         let key = format!("chiral_agreement_{}", agreement_id);
         let result = dht.get_dht_value(key).await?;
         if let Some(ref json) = result {
-            let _ = std::fs::write(&path, json);
-            return Ok(Some(enforce_agreement_expiration(json, &path)));
+            let enforced = enforce_agreement_expiration(json, &path)?;
+            if enforced == *json {
+                let _ = std::fs::write(&path, json);
+            }
+            return Ok(Some(enforced));
         }
         Ok(result)
     } else {
@@ -8101,6 +8129,64 @@ mod multi_seeder_tests {
         .expect_err("pre-epoch timestamp should be rejected");
 
         assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn enforce_agreement_expiration_preserves_unexpired_active_agreement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement.json");
+        let json = r#"{"agreementId":"a1","status":"active","expiresAt":20}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let updated = enforce_agreement_expiration_at(
+            json,
+            &path,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(10),
+        )
+        .expect("post-epoch clock should be accepted");
+        let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
+
+        assert_eq!(parsed["status"], "active");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
+    }
+
+    #[test]
+    fn enforce_agreement_expiration_marks_expired_active_agreement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement.json");
+        let json = r#"{"agreementId":"a1","status":"active","expiresAt":10}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let updated = enforce_agreement_expiration_at(
+            json,
+            &path,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(11),
+        )
+        .expect("post-epoch clock should be accepted");
+        let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        assert_eq!(parsed["status"], "expired");
+        assert_eq!(stored["status"], "expired");
+    }
+
+    #[test]
+    fn enforce_agreement_expiration_rejects_pre_epoch_clock_for_active_agreement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement.json");
+        let json = r#"{"agreementId":"a1","status":"active","expiresAt":10}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let err = enforce_agreement_expiration_at(
+            json,
+            &path,
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
     }
 
     #[test]
