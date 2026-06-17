@@ -937,6 +937,7 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
     });
 
     // Task: forward requests from proxy handlers to the WebSocket client
+    let write_key = key.clone();
     let write_task = tokio::spawn(async move {
         // Periodic pings to keep the connection alive + cleanup stale pending entries
         let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -948,7 +949,21 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
                             let id = tunnel_req.id.clone();
                             pending.write().await.insert(id, responder);
                             let json = serde_json::to_string(&tunnel_req).unwrap_or_default();
-                            if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            let send_result = ws_tx
+                                .send(Message::Text(json.into()))
+                                .await
+                                .map_err(|err| err.to_string());
+                            let send_result = {
+                                let mut map = pending.write().await;
+                                relay_tunnel_request_send_result(
+                                    &mut map,
+                                    &write_key,
+                                    &tunnel_req.id,
+                                    send_result,
+                                )
+                            };
+                            if let Err(message) = send_result {
+                                eprintln!("{}", message);
                                 break;
                             }
                         }
@@ -990,6 +1005,44 @@ fn build_query_string(params: &HashMap<String, String>) -> String {
     }
     let qs: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     format!("?{}", qs.join("&"))
+}
+
+fn tunnel_request_send_error_response(id: String, error: &str) -> TunnelResponse {
+    use base64::Engine;
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    );
+    TunnelResponse {
+        id,
+        status: StatusCode::BAD_GATEWAY.as_u16(),
+        headers,
+        body: base64::engine::general_purpose::STANDARD
+            .encode(format!("Failed to send tunnel request to owner: {error}")),
+    }
+}
+
+fn relay_tunnel_request_send_result(
+    pending: &mut HashMap<String, TunnelResponder>,
+    key: &str,
+    id: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    match send_result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!(
+                "[TUNNEL] Failed to send request frame for key={} id={}: {}",
+                key, id, err
+            );
+            if let Some(tx) = pending.remove(id) {
+                let _ = tx.send(tunnel_request_send_error_response(id.to_string(), &message));
+            }
+            Err(message)
+        }
+    }
 }
 
 /// Try the WebSocket tunnel first; if unavailable fall back to direct HTTP proxy.
@@ -1866,6 +1919,51 @@ mod tests {
         let sites = registry.sites.read().await;
         assert!(shares.is_empty());
         assert!(sites.is_empty());
+    }
+
+    #[test]
+    fn relay_tunnel_request_send_result_keeps_pending_on_success() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-ok");
+
+        let result = relay_tunnel_request_send_result(&mut pending, "share:abc", "req-ok", Ok(()));
+
+        assert_eq!(result, Ok(()));
+        assert!(pending.contains_key("req-ok"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn relay_tunnel_request_send_result_fails_pending_on_error() {
+        use base64::Engine;
+
+        let (mut pending, mut rx) = pending_tunnel_response("req-fail");
+
+        let message = relay_tunnel_request_send_result(
+            &mut pending,
+            "site:abc",
+            "req-fail",
+            Err("connection reset".to_string()),
+        )
+        .unwrap_err();
+
+        assert!(message.contains("key=site:abc"));
+        assert!(message.contains("id=req-fail"));
+        assert!(message.contains("connection reset"));
+        assert!(pending.is_empty());
+
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-fail");
+        assert_eq!(resp.status, StatusCode::BAD_GATEWAY.as_u16());
+        assert_eq!(
+            resp.headers.get("content-type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(resp.body)
+            .unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains("Failed to send tunnel request to owner"));
+        assert!(body.contains("connection reset"));
     }
 
     #[tokio::test]
