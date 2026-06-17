@@ -231,7 +231,11 @@ fn save_manifest_to_path(manifest: &RatingManifest, path: &Path) -> Result<(), S
                 ));
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
         Err(_) if path.is_dir() => {}
         Err(e) => {
             return Err(format!(
