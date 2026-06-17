@@ -351,8 +351,11 @@ struct EchoRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RequestFileRequest {
+    #[serde(default)]
     peer_id: String,
+    #[serde(default)]
     file_hash: String,
+    #[serde(default)]
     request_id: String,
     #[serde(default)]
     folder_hash: Option<String>,
@@ -363,7 +366,9 @@ struct RequestFileRequest {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SendFileRequest {
+    #[serde(default)]
     peer_id: String,
+    #[serde(default)]
     transfer_id: String,
     file_name: String,
     file_path: String,
@@ -2050,6 +2055,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dht_request_file_rejects_missing_peer_after_deserialize() {
+        let req: RequestFileRequest = serde_json::from_value(json!({
+            "fileHash": VALID_CONTENT_HASH,
+            "requestId": "download-abc-1"
+        }))
+        .expect("missing peerId should deserialize to handler validation");
+
+        let response =
+            dht_request_file(State(Arc::new(HeadlessRuntimeState::new())), Json(req)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("peerId"));
+    }
+
+    #[tokio::test]
     async fn dht_request_file_rejects_malformed_hash_before_dht_access() {
         let response = dht_request_file(
             State(Arc::new(HeadlessRuntimeState::new())),
@@ -2068,6 +2088,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dht_request_file_rejects_missing_hash_after_deserialize() {
+        let req: RequestFileRequest = serde_json::from_value(json!({
+            "peerId": valid_peer_id(),
+            "requestId": "download-abc-1"
+        }))
+        .expect("missing fileHash should deserialize to handler validation");
+
+        let response =
+            dht_request_file(State(Arc::new(HeadlessRuntimeState::new())), Json(req)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("fileHash"));
+    }
+
+    #[tokio::test]
     async fn dht_request_file_rejects_malformed_request_id_before_dht_access() {
         let response = dht_request_file(
             State(Arc::new(HeadlessRuntimeState::new())),
@@ -2080,6 +2115,21 @@ mod tests {
             }),
         )
         .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("requestId"));
+    }
+
+    #[tokio::test]
+    async fn dht_request_file_rejects_missing_request_id_after_deserialize() {
+        let req: RequestFileRequest = serde_json::from_value(json!({
+            "peerId": valid_peer_id(),
+            "fileHash": VALID_CONTENT_HASH
+        }))
+        .expect("missing requestId should deserialize to handler validation");
+
+        let response =
+            dht_request_file(State(Arc::new(HeadlessRuntimeState::new())), Json(req)).await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(response_error(response).await.contains("requestId"));
@@ -2144,6 +2194,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dht_send_file_rejects_missing_peer_after_deserialize() {
+        let req: SendFileRequest = serde_json::from_value(json!({
+            "transferId": "drop-abc-1",
+            "fileName": "payload.txt",
+            "filePath": "/path/that/does/not/exist"
+        }))
+        .expect("missing peerId should deserialize to handler validation");
+
+        let response = dht_send_file(State(Arc::new(HeadlessRuntimeState::new())), Json(req)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("peerId"));
+    }
+
+    #[tokio::test]
+    async fn dht_send_file_rejects_missing_transfer_id_after_deserialize() {
+        let req: SendFileRequest = serde_json::from_value(json!({
+            "peerId": valid_peer_id(),
+            "fileName": "payload.txt",
+            "filePath": "/path/that/does/not/exist"
+        }))
+        .expect("missing transferId should deserialize to handler validation");
+
+        let response = dht_send_file(State(Arc::new(HeadlessRuntimeState::new())), Json(req)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_error(response).await.contains("transferId"));
+    }
+
+    #[tokio::test]
     async fn dht_send_file_rejects_malformed_optional_hash_before_file_read() {
         let response = dht_send_file(
             State(Arc::new(HeadlessRuntimeState::new())),
@@ -2162,6 +2242,24 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(response_error(response).await.contains("fileHash"));
+    }
+
+    #[tokio::test]
+    async fn dht_send_file_allows_missing_optional_hash_after_deserialize() {
+        let temp_file = tempfile::NamedTempFile::new().expect("temp file should be created");
+        std::fs::write(temp_file.path(), b"payload").expect("temp file should be writable");
+        let req: SendFileRequest = serde_json::from_value(json!({
+            "peerId": valid_peer_id(),
+            "transferId": "drop-abc-1",
+            "fileName": "payload.txt",
+            "filePath": temp_file.path().to_string_lossy()
+        }))
+        .expect("missing optional fileHash should deserialize");
+
+        let response = dht_send_file(State(Arc::new(HeadlessRuntimeState::new())), Json(req)).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response_error(response).await, "DHT not running");
     }
 
     #[tokio::test]
