@@ -794,6 +794,43 @@ async fn ping_peer(
     }
 }
 
+fn chiraldrop_send_metadata(
+    price_wei: Option<String>,
+    sender_wallet: Option<String>,
+    file_hash: Option<String>,
+) -> Result<(String, String, String), String> {
+    let normalized_price = match price_wei {
+        None => "0".to_string(),
+        Some(raw) if raw.is_empty() => "0".to_string(),
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || !trimmed.chars().all(|c| c.is_ascii_digit()) {
+                return Err("priceWei must be empty, 0, or a valid u128 wei amount".to_string());
+            }
+            trimmed
+                .parse::<u128>()
+                .map_err(|_| "priceWei must be empty, 0, or a valid u128 wei amount".to_string())?
+                .to_string()
+        }
+    };
+    let price = normalized_price
+        .parse::<u128>()
+        .map_err(|_| "priceWei must be empty, 0, or a valid u128 wei amount".to_string())?;
+    let sender_wallet = sender_wallet.unwrap_or_default().trim().to_string();
+    let file_hash = file_hash.unwrap_or_default().trim().to_string();
+
+    if price > 0 {
+        if sender_wallet.is_empty() {
+            return Err("senderWallet is required for paid ChiralDrop sends".to_string());
+        }
+        if file_hash.is_empty() {
+            return Err("fileHash is required for paid ChiralDrop sends".to_string());
+        }
+    }
+
+    Ok((normalized_price, sender_wallet, file_hash))
+}
+
 #[tauri::command]
 async fn send_file(
     state: tauri::State<'_, AppState>,
@@ -806,6 +843,8 @@ async fn send_file(
     file_hash: Option<String>,
     file_size: Option<u64>,
 ) -> Result<(), String> {
+    let (price_wei, sender_wallet, file_hash) =
+        chiraldrop_send_metadata(price_wei, sender_wallet, file_hash)?;
     let actual_size = file_size.unwrap_or(file_data.len() as u64);
     let dht_guard = state.dht.lock().await;
 
@@ -815,9 +854,9 @@ async fn send_file(
             transfer_id,
             file_name,
             file_data,
-            price_wei.unwrap_or_default(),
-            sender_wallet.unwrap_or_default(),
-            file_hash.unwrap_or_default(),
+            price_wei,
+            sender_wallet,
+            file_hash,
             actual_size,
         )
         .await
@@ -837,6 +876,8 @@ async fn send_file_by_path(
     sender_wallet: Option<String>,
     file_hash: Option<String>,
 ) -> Result<(), String> {
+    let (price_wei, sender_wallet, file_hash) =
+        chiraldrop_send_metadata(price_wei, sender_wallet, file_hash)?;
     let path = std::path::Path::new(&file_path);
     let file_name = path
         .file_name()
@@ -852,9 +893,9 @@ async fn send_file_by_path(
             transfer_id,
             file_name,
             file_data,
-            price_wei.unwrap_or_default(),
-            sender_wallet.unwrap_or_default(),
-            file_hash.unwrap_or_default(),
+            price_wei,
+            sender_wallet,
+            file_hash,
             file_size,
         )
         .await
@@ -8437,6 +8478,72 @@ mod multi_seeder_tests {
             .expect_err("paid republish should require a private key");
 
         assert!(err.contains("Private key is required"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_allows_free_send_without_paid_fields() {
+        assert_eq!(
+            chiraldrop_send_metadata(None, None, None).unwrap(),
+            ("0".to_string(), String::new(), String::new())
+        );
+        assert_eq!(
+            chiraldrop_send_metadata(Some(String::new()), None, None).unwrap(),
+            ("0".to_string(), String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_accepts_complete_paid_fields() {
+        assert_eq!(
+            chiraldrop_send_metadata(
+                Some(" 1000000000000000000 ".to_string()),
+                Some(" 0xwallet ".to_string()),
+                Some(" file-hash ".to_string()),
+            )
+            .unwrap(),
+            (
+                "1000000000000000000".to_string(),
+                "0xwallet".to_string(),
+                "file-hash".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_malformed_price() {
+        let err = chiraldrop_send_metadata(
+            Some("1.5".to_string()),
+            Some("0xwallet".to_string()),
+            Some("file-hash".to_string()),
+        )
+        .expect_err("Tauri boundary must receive wei, not CHI decimals");
+
+        assert!(err.contains("priceWei"));
+        assert!(err.contains("valid u128 wei amount"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_paid_send_without_wallet() {
+        let err = chiraldrop_send_metadata(
+            Some("1".to_string()),
+            None,
+            Some("file-hash".to_string()),
+        )
+        .expect_err("paid ChiralDrop sends require sender wallet metadata");
+
+        assert!(err.contains("senderWallet"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_paid_send_without_hash() {
+        let err = chiraldrop_send_metadata(
+            Some("1".to_string()),
+            Some("0xwallet".to_string()),
+            None,
+        )
+        .expect_err("paid ChiralDrop sends require file hash metadata");
+
+        assert!(err.contains("fileHash"));
     }
 
     /// Manifests signed before folder-level pricing existed must still

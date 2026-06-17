@@ -5,6 +5,27 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const WEI_PER_CHI = 1_000_000_000_000_000_000n;
+const CHI_DECIMAL_RE = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
+
+/** Parse a user-entered CHI decimal price into a wei string. Empty means free. */
+export function parseChiPriceToWei(price: string | null | undefined): string {
+  const trimmed = String(price ?? '').trim();
+  if (!trimmed) return '0';
+  if (!CHI_DECIMAL_RE.test(trimmed)) {
+    throw new Error('Price must be a decimal CHI amount');
+  }
+
+  const [wholePart, fracPart = ''] = trimmed.split('.');
+  if (fracPart.length > 18) {
+    throw new Error('Price supports at most 18 decimal places');
+  }
+
+  const wholeWei = BigInt(wholePart || '0') * WEI_PER_CHI;
+  const fracWei = fracPart ? BigInt(fracPart.padEnd(18, '0')) : 0n;
+  return (wholeWei + fracWei).toString();
+}
+
 /** Format byte count as human-readable string (B, KB, MB, GB, TB) */
 export function formatBytes(bytes: number | undefined | null): string {
   if (!bytes || bytes === 0) return '0 B';
