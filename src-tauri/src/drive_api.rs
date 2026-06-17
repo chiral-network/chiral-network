@@ -618,6 +618,10 @@ async fn create_folder(
     if req.name.is_empty() || req.name.len() > 255 {
         return (StatusCode::BAD_REQUEST, "Invalid folder name").into_response();
     }
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let item = DriveItem {
         id: generate_id(),
         name: req.name,
@@ -625,8 +629,8 @@ async fn create_folder(
         parent_id: req.parent_id,
         size: None,
         mime_type: None,
-        created_at: now_secs(),
-        modified_at: now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: None,
         owner,
@@ -699,6 +703,10 @@ async fn upload_file(
         return (StatusCode::PAYLOAD_TOO_LARGE, "File exceeds 500 MB limit").into_response();
     }
 
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let item_id = generate_id();
     let storage_name = format!("{}_{}", item_id, name);
     let mime = drive_storage::mime_from_name(&name);
@@ -738,8 +746,8 @@ async fn upload_file(
         parent_id,
         size: Some(data.len() as u64),
         mime_type: Some(mime),
-        created_at: now_secs(),
-        modified_at: now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: Some(storage_name),
         owner,
@@ -785,6 +793,10 @@ async fn update_item(
     else {
         return (StatusCode::NOT_FOUND, "Item not found").into_response();
     };
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
 
     if let Some(name) = req.name {
         if name.is_empty() || name.len() > 255 {
@@ -801,7 +813,7 @@ async fn update_item(
     if let Some(p) = req.price_chi {
         item.price_chi = if p.is_empty() { None } else { Some(p) };
     }
-    item.modified_at = now_secs();
+    item.modified_at = now;
 
     let updated = item.clone();
     drop(m);
@@ -1070,11 +1082,15 @@ async fn create_share(
             .into_response();
     }
 
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let token = generate_share_token();
     let share = ShareLink {
         id: token.clone(),
         item_id: req.item_id,
-        created_at: now_secs(),
+        created_at: now,
         expires_at: None,
         price_chi: normalized_price,
         recipient_wallet: item.owner,

@@ -157,7 +157,7 @@ fn load_manifest_from_path(path: &Path) -> DriveManifest {
 }
 
 fn quarantine_malformed_manifest(path: &Path) -> Result<PathBuf, String> {
-    let quarantine = malformed_manifest_quarantine_path(path);
+    let quarantine = malformed_manifest_quarantine_path(path)?;
     std::fs::rename(path, &quarantine).map_err(|e| {
         format!(
             "rename {} to {}: {}",
@@ -169,11 +169,15 @@ fn quarantine_malformed_manifest(path: &Path) -> Result<PathBuf, String> {
     Ok(quarantine)
 }
 
-fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+fn malformed_manifest_quarantine_path(path: &Path) -> Result<PathBuf, String> {
+    malformed_manifest_quarantine_path_at(path, std::time::SystemTime::now())
+}
+
+fn malformed_manifest_quarantine_path_at(
+    path: &Path,
+    now: std::time::SystemTime,
+) -> Result<PathBuf, String> {
+    let timestamp = now_secs_at(now)?;
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -186,10 +190,10 @@ fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
         };
         let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
         if !candidate.exists() {
-            return candidate;
+            return Ok(candidate);
         }
     }
-    path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow"))
+    Ok(path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow")))
 }
 
 pub fn save_manifest(manifest: &DriveManifest) {
@@ -237,11 +241,19 @@ pub fn generate_share_token() -> String {
 }
 
 /// Current Unix timestamp in seconds.
-pub fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+pub fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
+}
+
+pub fn now_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            format!(
+                "Cannot generate Drive timestamp because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
 }
 
 /// Guess MIME type from file extension.
@@ -372,6 +384,53 @@ mod tests {
             std::fs::read_to_string(quarantines[0].path()).unwrap(),
             malformed
         );
+    }
+
+    #[test]
+    fn now_secs_at_preserves_seconds() {
+        let ts = now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(42))
+            .expect("post-epoch Drive timestamp should be valid");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch Drive timestamp should be rejected");
+
+        assert!(err.contains("Drive timestamp"));
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn malformed_manifest_quarantine_path_at_uses_timestamp_suffix() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+
+        let quarantine = malformed_manifest_quarantine_path_at(
+            &path,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(42),
+        )
+        .expect("post-epoch quarantine timestamp should be valid");
+
+        assert_eq!(
+            quarantine.file_name().and_then(|s| s.to_str()),
+            Some("manifest.json.malformed-42")
+        );
+    }
+
+    #[test]
+    fn malformed_manifest_quarantine_path_at_rejects_pre_epoch_clock() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let err = malformed_manifest_quarantine_path_at(
+            &path,
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch quarantine timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
 
     #[test]
