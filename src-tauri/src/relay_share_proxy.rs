@@ -617,11 +617,19 @@ struct TunnelQuery {
     id: String,
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn now_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| {
+            format!(
+                "Cannot register relay share or site because the system clock is before UNIX_EPOCH: {}",
+                e
+            )
+        })
+}
+
+fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +726,10 @@ async fn register_share(
     if let Err(e) = preflight_origin_reachable(&origin).await {
         return (StatusCode::BAD_GATEWAY, e).into_response();
     }
+    let registered_at = match now_secs() {
+        Ok(ts) => ts,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
     println!(
         "[RELAY-SHARE] Registering share token={} origin={} (raw={}) owner={}",
         req.token, origin, req.origin_url, owner
@@ -727,7 +739,7 @@ async fn register_share(
             token: req.token,
             origin_url: origin,
             owner_wallet: owner,
-            registered_at: now_secs(),
+            registered_at,
         })
         .await;
     (StatusCode::OK, "Registered").into_response()
@@ -1088,6 +1100,10 @@ async fn register_site(
     if let Err(e) = preflight_origin_reachable(&origin).await {
         return (StatusCode::BAD_GATEWAY, e).into_response();
     }
+    let registered_at = match now_secs() {
+        Ok(ts) => ts,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
     println!(
         "[RELAY-SITE] Registering site={} origin={} (raw={}) owner={}",
         req.site_id, origin, req.origin_url, owner
@@ -1097,7 +1113,7 @@ async fn register_site(
             site_id: req.site_id,
             origin_url: origin,
             owner_wallet: owner,
-            registered_at: now_secs(),
+            registered_at,
         })
         .await;
     (StatusCode::OK, "Registered").into_response()
@@ -1608,7 +1624,7 @@ mod tests {
 
     #[test]
     fn test_now_secs_reasonable_timestamp() {
-        let ts = now_secs();
+        let ts = now_secs().expect("current system clock should be valid");
         // Should be after 2024-01-01 (1704067200) and before 2100-01-01 (4102444800)
         assert!(
             ts > 1_704_067_200,
@@ -1620,6 +1636,22 @@ mod tests {
             "timestamp {} is too far in the future",
             ts
         );
+    }
+
+    #[test]
+    fn test_now_secs_at_accepts_normal_clock() {
+        let ts = now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(42))
+            .expect("post-epoch timestamp should be accepted");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn test_now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
 
     // -----------------------------------------------------------------------
@@ -1645,7 +1677,7 @@ mod tests {
             token: "abc123".to_string(),
             origin_url: "http://10.0.0.1:9419".to_string(),
             owner_wallet: "0xWALLET".to_string(),
-            registered_at: now_secs(),
+            registered_at: 1_700_000_000,
         };
         registry.register(reg).await;
 
@@ -1673,7 +1705,7 @@ mod tests {
             token: "tok1".to_string(),
             origin_url: "http://10.0.0.1:9419".to_string(),
             owner_wallet: "0xWALLET".to_string(),
-            registered_at: now_secs(),
+            registered_at: 1_700_000_001,
         };
         registry.register(reg).await;
 
@@ -1692,7 +1724,7 @@ mod tests {
             site_id: "my-site".to_string(),
             origin_url: "http://10.0.0.1:9419".to_string(),
             owner_wallet: "0xSITEOWNER".to_string(),
-            registered_at: now_secs(),
+            registered_at: 1_700_000_002,
         };
         registry.register_site(reg).await;
 
@@ -1720,7 +1752,7 @@ mod tests {
             site_id: "site-1".to_string(),
             origin_url: "http://10.0.0.1:9419".to_string(),
             owner_wallet: "0xOWNER".to_string(),
-            registered_at: now_secs(),
+            registered_at: 1_700_000_003,
         };
         registry.register_site(reg).await;
 
