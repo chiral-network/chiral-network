@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -2009,6 +2009,59 @@ fn identity_key_path() -> Option<PathBuf> {
     Some(crate::network::data_dir().join("peer_identity.key"))
 }
 
+fn hosting_agreement_path(agreement_id: &str) -> PathBuf {
+    crate::network::data_dir()
+        .join("agreements")
+        .join(format!("{}.json", agreement_id))
+}
+
+fn save_hosting_agreement_to_path(
+    path: &Path,
+    agreement: &serde_json::Value,
+    action: &str,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "{action}: create hosting agreement directory {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+    let json = serde_json::to_string(agreement)
+        .map_err(|e| format!("{action}: serialize hosting agreement JSON: {e}"))?;
+    std::fs::write(path, json)
+        .map_err(|e| format!("{action}: write hosting agreement {}: {e}", path.display()))
+}
+
+fn save_hosting_agreement(
+    agreement_id: &str,
+    agreement: &serde_json::Value,
+    action: &str,
+) -> Result<(), String> {
+    save_hosting_agreement_to_path(&hosting_agreement_path(agreement_id), agreement, action)
+}
+
+fn emit_hosting_agreement_persistence_error(
+    events: &EventSink,
+    agreement_id: &str,
+    action: &str,
+    err: String,
+) {
+    println!(
+        "⚠️ Failed to persist hosting agreement {} while {}: {}",
+        agreement_id, action, err
+    );
+    let _ = events.emit(
+        "hosting_agreement_persistence_error",
+        serde_json::json!({
+            "agreementId": agreement_id,
+            "action": action,
+            "error": err,
+        }),
+    );
+}
+
 /// Load or generate the libp2p Ed25519 keypair.
 /// If a keypair file exists on disk, it is loaded so the PeerId stays
 /// consistent across app restarts.  Otherwise a fresh keypair is generated
@@ -3623,13 +3676,16 @@ async fn handle_behaviour_event(
                                                     .get("agreementId")
                                                     .and_then(|v| v.as_str())
                                                 {
-                                                    {
-                                                        let dir = crate::network::data_dir()
-                                                            .join("agreements");
-                                                        let _ = std::fs::create_dir_all(&dir);
-                                                        let _ = std::fs::write(
-                                                            dir.join(format!("{}.json", id)),
-                                                            agreement.to_string(),
+                                                    if let Err(err) = save_hosting_agreement(
+                                                        id,
+                                                        agreement,
+                                                        "saving received hosting proposal",
+                                                    ) {
+                                                        emit_hosting_agreement_persistence_error(
+                                                            events,
+                                                            id,
+                                                            "saving received hosting proposal",
+                                                            err,
                                                         );
                                                     }
                                                 }
@@ -3659,10 +3715,7 @@ async fn handle_behaviour_event(
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 {
-                                                    let dir = crate::network::data_dir()
-                                                        .join("agreements");
-                                                    let path =
-                                                        dir.join(format!("{}.json", agreement_id));
+                                                    let path = hosting_agreement_path(agreement_id);
                                                     if let Ok(contents) =
                                                         std::fs::read_to_string(&path)
                                                     {
@@ -3678,11 +3731,20 @@ async fn handle_behaviour_event(
                                                                         status.to_string(),
                                                                     ),
                                                                 );
-                                                                let _ = std::fs::write(
-                                                                    &path,
-                                                                    serde_json::to_string(&ag)
-                                                                        .unwrap_or_default(),
-                                                                );
+                                                                if let Err(err) =
+                                                                    save_hosting_agreement_to_path(
+                                                                        &path,
+                                                                        &ag,
+                                                                        "saving hosting response status",
+                                                                    )
+                                                                {
+                                                                    emit_hosting_agreement_persistence_error(
+                                                                        events,
+                                                                        agreement_id,
+                                                                        "saving hosting response status",
+                                                                        err,
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -3706,10 +3768,7 @@ async fn handle_behaviour_event(
 
                                             if !agreement_id.is_empty() {
                                                 {
-                                                    let dir = crate::network::data_dir()
-                                                        .join("agreements");
-                                                    let path =
-                                                        dir.join(format!("{}.json", agreement_id));
+                                                    let path = hosting_agreement_path(agreement_id);
                                                     if let Ok(contents) =
                                                         std::fs::read_to_string(&path)
                                                     {
@@ -3732,11 +3791,20 @@ async fn handle_behaviour_event(
                                                                             "cancelled".to_string(),
                                                                         ),
                                                                     );
-                                                                    let _ = std::fs::write(
-                                                                        &path,
-                                                                        serde_json::to_string(&ag)
-                                                                            .unwrap_or_default(),
-                                                                    );
+                                                                    if let Err(err) =
+                                                                        save_hosting_agreement_to_path(
+                                                                            &path,
+                                                                            &ag,
+                                                                            "saving proposed hosting cancellation",
+                                                                        )
+                                                                    {
+                                                                        emit_hosting_agreement_persistence_error(
+                                                                            events,
+                                                                            agreement_id,
+                                                                            "saving proposed hosting cancellation",
+                                                                            err,
+                                                                        );
+                                                                    }
                                                                     let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                         "agreementId": agreement_id,
                                                                         "fromPeer": peer.to_string(),
@@ -3756,13 +3824,20 @@ async fn handle_behaviour_event(
                                                                         obj.remove(
                                                                             "cancelRequestedBy",
                                                                         );
-                                                                        let _ = std::fs::write(
-                                                                            &path,
-                                                                            serde_json::to_string(
+                                                                        if let Err(err) =
+                                                                            save_hosting_agreement_to_path(
+                                                                                &path,
                                                                                 &ag,
+                                                                                "saving mutual hosting cancellation",
                                                                             )
-                                                                            .unwrap_or_default(),
-                                                                        );
+                                                                        {
+                                                                            emit_hosting_agreement_persistence_error(
+                                                                                events,
+                                                                                agreement_id,
+                                                                                "saving mutual hosting cancellation",
+                                                                                err,
+                                                                            );
+                                                                        }
                                                                         let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                             "agreementId": agreement_id,
                                                                             "fromPeer": peer.to_string(),
@@ -3771,13 +3846,20 @@ async fn handle_behaviour_event(
                                                                     } else {
                                                                         // Only other party wants to cancel — needs our consent
                                                                         obj.insert("cancelRequestedBy".to_string(), serde_json::Value::String(peer.to_string()));
-                                                                        let _ = std::fs::write(
-                                                                            &path,
-                                                                            serde_json::to_string(
+                                                                        if let Err(err) =
+                                                                            save_hosting_agreement_to_path(
+                                                                                &path,
                                                                                 &ag,
+                                                                                "saving hosting cancellation request",
                                                                             )
-                                                                            .unwrap_or_default(),
-                                                                        );
+                                                                        {
+                                                                            emit_hosting_agreement_persistence_error(
+                                                                                events,
+                                                                                agreement_id,
+                                                                                "saving hosting cancellation request",
+                                                                                err,
+                                                                            );
+                                                                        }
                                                                         let _ = events.emit("hosting_cancel_request_received", serde_json::json!({
                                                                             "agreementId": agreement_id,
                                                                             "fromPeer": peer.to_string(),
@@ -3805,10 +3887,7 @@ async fn handle_behaviour_event(
                                             // Update agreement on disk
                                             if !agreement_id.is_empty() {
                                                 {
-                                                    let dir = crate::network::data_dir()
-                                                        .join("agreements");
-                                                    let path =
-                                                        dir.join(format!("{}.json", agreement_id));
+                                                    let path = hosting_agreement_path(agreement_id);
                                                     if let Ok(contents) =
                                                         std::fs::read_to_string(&path)
                                                     {
@@ -3827,11 +3906,20 @@ async fn handle_behaviour_event(
                                                                     );
                                                                 }
                                                                 obj.remove("cancelRequestedBy");
-                                                                let _ = std::fs::write(
-                                                                    &path,
-                                                                    serde_json::to_string(&ag)
-                                                                        .unwrap_or_default(),
-                                                                );
+                                                                if let Err(err) =
+                                                                    save_hosting_agreement_to_path(
+                                                                        &path,
+                                                                        &ag,
+                                                                        "saving hosting cancellation response",
+                                                                    )
+                                                                {
+                                                                    emit_hosting_agreement_persistence_error(
+                                                                        events,
+                                                                        agreement_id,
+                                                                        "saving hosting cancellation response",
+                                                                        err,
+                                                                    );
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -5995,6 +6083,53 @@ mod tests {
 
         assert!(peer_timestamp_secs_at(pre_epoch).is_err());
         assert!(peer_timestamp_millis_at(pre_epoch).is_err());
+    }
+
+    #[test]
+    fn save_hosting_agreement_to_path_persists_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreements").join("agreement-1.json");
+        let agreement = serde_json::json!({
+            "agreementId": "agreement-1",
+            "status": "accepted",
+        });
+
+        save_hosting_agreement_to_path(&path, &agreement, "test save").unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, agreement);
+    }
+
+    #[test]
+    fn save_hosting_agreement_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked_parent = dir.path().join("blocked");
+        std::fs::write(&blocked_parent, "not a directory").unwrap();
+        let path = blocked_parent.join("agreement-1.json");
+        let agreement = serde_json::json!({"agreementId": "agreement-1"});
+
+        let err = save_hosting_agreement_to_path(&path, &agreement, "test save")
+            .expect_err("directory creation should fail");
+
+        assert!(err.contains("test save"));
+        assert!(err.contains("create hosting agreement directory"));
+        assert!(err.contains("blocked"));
+    }
+
+    #[test]
+    fn save_hosting_agreement_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement-1.json");
+        std::fs::create_dir(&path).unwrap();
+        let agreement = serde_json::json!({"agreementId": "agreement-1"});
+
+        let err = save_hosting_agreement_to_path(&path, &agreement, "test save")
+            .expect_err("writing over a directory should fail");
+
+        assert!(err.contains("test save"));
+        assert!(err.contains("write hosting agreement"));
+        assert!(err.contains("agreement-1.json"));
     }
 
     #[test]
