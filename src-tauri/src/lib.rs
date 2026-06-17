@@ -122,14 +122,29 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
 
     // 2. Remove our host advertisement from the registry
     let registry_key = "chiral_host_registry".to_string();
-    if let Ok(Some(json)) = dht.get_dht_value(registry_key.clone()).await {
-        let mut registry: Vec<HostRegistryEntry> = serde_json::from_str(&json).unwrap_or_default();
-        registry.retain(|e| e.peer_id != peer_id);
-        if let Ok(registry_json) = serde_json::to_string(&registry) {
-            let _ = dht.put_dht_value(registry_key, registry_json).await;
+    match dht.get_dht_value(registry_key.clone()).await {
+        Ok(registry_json) => match host_registry_shutdown_update(registry_json, &peer_id) {
+            Ok(Some(registry_json)) => {
+                if let Err(e) = dht.put_dht_value(registry_key, registry_json).await {
+                    println!("Failed to update host registry during shutdown: {}", e);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                println!(
+                    "Skipping host registry shutdown cleanup: {}; leaving existing registry unchanged",
+                    e
+                );
+            }
+        },
+        Err(e) => {
+            println!(
+                "Skipping host registry shutdown cleanup: failed to read registry: {}; leaving existing registry unchanged",
+                e
+            );
         }
     }
-    println!("✅ Unpublished host advertisement from DHT");
+    println!("✅ Host advertisement shutdown cleanup complete");
 }
 
 #[cfg(unix)]
@@ -1034,6 +1049,20 @@ fn host_registry_after_unpublish(
 ) -> Vec<HostRegistryEntry> {
     registry.retain(|e| e.peer_id != peer_id);
     registry
+}
+
+fn host_registry_shutdown_update(
+    registry_json: Option<String>,
+    peer_id: &str,
+) -> Result<Option<String>, String> {
+    let Some(registry_json) = registry_json else {
+        return Ok(None);
+    };
+    let registry = host_registry_from_dht_value(Some(registry_json))?;
+    let registry = host_registry_after_unpublish(registry, peer_id);
+    serde_json::to_string(&registry)
+        .map(Some)
+        .map_err(|e| format!("Failed to serialize registry: {}", e))
 }
 
 #[tauri::command]
@@ -8309,6 +8338,40 @@ mod multi_seeder_tests {
         assert_eq!(registry.len(), 1);
         assert_eq!(registry[0].peer_id, "peer-b");
         assert_eq!(registry[0].wallet_address, "0xwallet-b");
+    }
+
+    #[test]
+    fn host_registry_shutdown_update_preserves_missing_registry() {
+        let update = host_registry_shutdown_update(None, "peer-a")
+            .expect("missing registry should not fail shutdown cleanup");
+
+        assert!(update.is_none());
+    }
+
+    #[test]
+    fn host_registry_shutdown_update_removes_only_local_peer() {
+        let registry = vec![
+            host_registry_entry("peer-a", "0xwallet-a", 10),
+            host_registry_entry("peer-b", "0xwallet-b", 20),
+        ];
+        let json = serde_json::to_string(&registry).unwrap();
+
+        let update = host_registry_shutdown_update(Some(json), "peer-a")
+            .expect("valid registry should update")
+            .expect("existing registry should produce a replacement value");
+        let registry: Vec<HostRegistryEntry> = serde_json::from_str(&update).unwrap();
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry[0].peer_id, "peer-b");
+        assert_eq!(registry[0].wallet_address, "0xwallet-b");
+    }
+
+    #[test]
+    fn host_registry_shutdown_update_rejects_malformed_registry() {
+        let err = host_registry_shutdown_update(Some("{not valid json".to_string()), "peer-a")
+            .expect_err("malformed registry must not be replaced during shutdown");
+
+        assert!(err.contains("Malformed chiral_host_registry JSON"));
     }
 
     #[test]
