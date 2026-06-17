@@ -4497,8 +4497,9 @@ fn spawn_relay_tunnel(
 
                                 // Send response back through the tunnel
                                 use base64::Engine;
+                                let request_id = req.id.clone();
                                 let resp_json = serde_json::json!({
-                                    "id": req.id,
+                                    "id": &request_id,
                                     "status": status,
                                     "headers": headers,
                                     "body": base64::engine::general_purpose::STANDARD.encode(&body_bytes),
@@ -4506,7 +4507,17 @@ fn spawn_relay_tunnel(
                                 let msg = tokio_tungstenite::tungstenite::Message::Text(
                                     resp_json.to_string(),
                                 );
-                                if futures_util::SinkExt::send(&mut ws_tx, msg).await.is_err() {
+                                let send_result =
+                                    futures_util::SinkExt::send(&mut ws_tx, msg)
+                                        .await
+                                        .map_err(|err| err.to_string());
+                                if let Err(message) = relay_tunnel_response_send_result(
+                                    &resource_type,
+                                    &resource_id,
+                                    &request_id,
+                                    send_result,
+                                ) {
+                                    println!("{}", message);
                                     break;
                                 }
                             }
@@ -4539,6 +4550,20 @@ fn spawn_relay_tunnel(
         }
     });
     handle.abort_handle()
+}
+
+fn relay_tunnel_response_send_result(
+    resource_type: &str,
+    resource_id: &str,
+    request_id: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    send_result.map_err(|err| {
+        format!(
+            "[TUNNEL] Failed to send local response for {}:{} id={}: {}",
+            resource_type, resource_id, request_id, err
+        )
+    })
 }
 
 #[tauri::command]
@@ -8269,6 +8294,30 @@ mod multi_seeder_tests {
 
         assert!(err.contains("Failed to read chiral_host_registry"));
         assert!(err.contains("dht unavailable"));
+    }
+
+    #[test]
+    fn relay_tunnel_response_send_result_accepts_success() {
+        let result =
+            relay_tunnel_response_send_result("site", "site-1", "req-1", Ok(()));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn relay_tunnel_response_send_result_reports_failure_with_request_id() {
+        let err = relay_tunnel_response_send_result(
+            "drive",
+            "share-1",
+            "req-2",
+            Err("websocket closed".to_string()),
+        )
+        .expect_err("failed sends should produce a controlled log message");
+
+        assert!(err.contains("Failed to send local response"));
+        assert!(err.contains("drive:share-1"));
+        assert!(err.contains("id=req-2"));
+        assert!(err.contains("websocket closed"));
     }
 
     #[test]
