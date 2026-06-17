@@ -392,6 +392,7 @@ fn register_shared_file_unpublished_payload(warning: impl Into<String>) -> serde
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UnregisterSharedFileRequest {
+    #[serde(default)]
     file_hash: String,
 }
 
@@ -807,10 +808,26 @@ async fn dht_register_shared_file(
     Json(json!({ "status": "ok", "dhtPublished": true })).into_response()
 }
 
+fn validate_headless_file_hash(file_hash: &str) -> Result<String, String> {
+    let trimmed = file_hash.trim();
+    if trimmed.is_empty() {
+        return Err("fileHash required".to_string());
+    }
+    if trimmed.len() != 64 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("fileHash must be a 64-character hex content hash".to_string());
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
 async fn dht_unregister_shared_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<UnregisterSharedFileRequest>,
 ) -> Response {
+    let file_hash = match validate_headless_file_hash(&req.file_hash) {
+        Ok(file_hash) => file_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
@@ -822,14 +839,52 @@ async fn dht_unregister_shared_file(
     // stays in everyone else's seeder lists until the records age out
     // naturally (~3 min republish + remote TTL), and provider lookups
     // keep returning a peer that no longer serves the file.
-    svc.unregister_shared_file(&req.file_hash).await;
-    if let Err(e) = chiral_network::remove_seeder_entry(&svc, &req.file_hash).await {
+    svc.unregister_shared_file(&file_hash).await;
+    if let Err(e) = chiral_network::remove_seeder_entry(&svc, &file_hash).await {
         eprintln!(
             "[DAEMON] remove_seeder_entry failed for {}: {} (local seeding stopped, but DHT cleanup incomplete)",
-            req.file_hash, e
+            file_hash, e
         );
     }
     Json(json!({ "status": "ok" })).into_response()
+}
+
+#[cfg(test)]
+mod unregister_hash_tests {
+    use super::*;
+
+    #[test]
+    fn validate_headless_file_hash_rejects_missing_hash() {
+        let err =
+            validate_headless_file_hash("  ").expect_err("missing file hash should be rejected");
+
+        assert!(err.contains("fileHash"));
+        assert!(err.contains("required"));
+    }
+
+    #[test]
+    fn validate_headless_file_hash_rejects_malformed_hash() {
+        let err = validate_headless_file_hash("not-a-hash")
+            .expect_err("malformed file hash should be rejected");
+
+        assert!(err.contains("64-character hex"));
+    }
+
+    #[test]
+    fn validate_headless_file_hash_rejects_non_hex_hash() {
+        let err = validate_headless_file_hash(&"g".repeat(64))
+            .expect_err("non-hex file hash should be rejected");
+
+        assert!(err.contains("64-character hex"));
+    }
+
+    #[test]
+    fn validate_headless_file_hash_accepts_and_normalizes_hash() {
+        let hash = validate_headless_file_hash(&"A".repeat(64))
+            .expect("valid file hash should be accepted");
+
+        assert_eq!(hash, "a".repeat(64));
+    }
 }
 
 async fn drop_inbox(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
