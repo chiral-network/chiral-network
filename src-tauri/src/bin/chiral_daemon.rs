@@ -1332,6 +1332,97 @@ async fn wallet_chain_id() -> Response {
 
 // ---- File search endpoint ----
 
+fn parse_headless_seeder_record(
+    peer_id: &str,
+    key: &str,
+    json_str: &str,
+) -> Result<serde_json::Value, serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(json_str).map_err(|e| {
+        json!({
+            "type": "malformedSeederRecord",
+            "peerId": peer_id,
+            "key": key,
+            "error": format!("Malformed seeder record JSON: {}", e),
+        })
+    })
+}
+
+fn append_file_search_warnings(response: &mut serde_json::Value, warnings: Vec<serde_json::Value>) {
+    if !warnings.is_empty() {
+        response["warnings"] = serde_json::Value::Array(warnings);
+    }
+}
+
+#[cfg(test)]
+mod file_search_seeder_tests {
+    use super::*;
+
+    #[test]
+    fn parse_headless_seeder_record_accepts_valid_json() {
+        let entry = parse_headless_seeder_record(
+            "peer-a",
+            "chiral_seeder_hash_peer-a",
+            r#"{"peerId":"peer-a","multiaddrs":["/ip4/127.0.0.1/tcp/1"]}"#,
+        )
+        .expect("valid seeder JSON should parse");
+
+        assert_eq!(entry["peerId"], "peer-a");
+        assert_eq!(entry["multiaddrs"][0], "/ip4/127.0.0.1/tcp/1");
+    }
+
+    #[test]
+    fn parse_headless_seeder_record_returns_warning_for_malformed_json() {
+        let warning =
+            parse_headless_seeder_record("peer-a", "chiral_seeder_hash_peer-a", "{not json")
+                .expect_err("malformed seeder JSON should return a warning");
+
+        assert_eq!(warning["type"], "malformedSeederRecord");
+        assert_eq!(warning["peerId"], "peer-a");
+        assert_eq!(warning["key"], "chiral_seeder_hash_peer-a");
+        assert!(warning["error"]
+            .as_str()
+            .expect("warning should include an error")
+            .contains("Malformed seeder record JSON"));
+    }
+
+    #[test]
+    fn mixed_headless_seeder_records_preserve_valid_entries_and_warn() {
+        let records = [
+            (
+                "peer-a",
+                "chiral_seeder_hash_peer-a",
+                r#"{"peerId":"peer-a"}"#,
+            ),
+            ("peer-b", "chiral_seeder_hash_peer-b", "{not json"),
+        ];
+        let mut seeders = Vec::new();
+        let mut warnings = Vec::new();
+
+        for (peer_id, key, json_str) in records {
+            match parse_headless_seeder_record(peer_id, key, json_str) {
+                Ok(entry) => seeders.push(entry),
+                Err(warning) => warnings.push(warning),
+            }
+        }
+
+        assert_eq!(seeders.len(), 1);
+        assert_eq!(seeders[0]["peerId"], "peer-a");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["peerId"], "peer-b");
+
+        let mut response = json!({
+            "found": true,
+            "metadata": null,
+            "providers": ["peer-a", "peer-b"],
+            "seeders": seeders,
+        });
+        append_file_search_warnings(&mut response, warnings);
+
+        assert_eq!(response["warnings"][0]["type"], "malformedSeederRecord");
+        assert_eq!(response["warnings"][0]["peerId"], "peer-b");
+    }
+}
+
 async fn file_search(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(body): Json<serde_json::Value>,
@@ -1369,23 +1460,36 @@ async fn file_search(
     };
     // Per-seeder records: parallel fetch with a short shared deadline so
     // one slow provider doesn't extend the search budget.
-    let fetches = providers.iter().map(|peer_id| {
+    let fetches = providers.iter().cloned().map(|peer_id| {
         let key = format!("chiral_seeder_{}_{}", file_hash, peer_id);
         let dht = dht.clone();
         async move {
-            tokio::time::timeout(
+            let result = tokio::time::timeout(
                 std::time::Duration::from_millis(3000),
-                dht.get_dht_value(key),
+                dht.get_dht_value(key.clone()),
             )
-            .await
+            .await;
+            (peer_id, key, result)
         }
     });
     let fetched = futures::future::join_all(fetches).await;
     let mut seeders: Vec<serde_json::Value> = Vec::new();
-    for r in fetched {
+    let mut seeder_warnings: Vec<serde_json::Value> = Vec::new();
+    for (peer_id, key, r) in fetched {
         if let Ok(Ok(Some(json_str))) = r {
-            if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                seeders.push(entry);
+            match parse_headless_seeder_record(&peer_id, &key, &json_str) {
+                Ok(entry) => seeders.push(entry),
+                Err(warning) => {
+                    let error = warning
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Malformed seeder record JSON");
+                    eprintln!(
+                        "[DAEMON] malformed seeder record for file {} peer {} key {}: {}",
+                        file_hash, peer_id, key, error
+                    );
+                    seeder_warnings.push(warning);
+                }
             }
         }
     }
@@ -1393,22 +1497,30 @@ async fn file_search(
         Ok(Some(json_str)) => {
             let metadata = serde_json::from_str::<serde_json::Value>(&json_str)
                 .unwrap_or_else(|_| json!({"raw": json_str}));
-            Json(json!({
+            let mut response = json!({
                 "found": true,
                 "metadata": metadata,
                 "providers": providers,
                 "seeders": seeders,
-            }))
-            .into_response()
+            });
+            append_file_search_warnings(&mut response, seeder_warnings);
+            Json(response).into_response()
         }
-        Ok(None) if !seeders.is_empty() => Json(json!({
-            "found": true,
-            "metadata": null,
-            "providers": providers,
-            "seeders": seeders,
-        }))
-        .into_response(),
-        Ok(None) => Json(json!({"found": false, "providers": providers})).into_response(),
+        Ok(None) if !seeders.is_empty() => {
+            let mut response = json!({
+                "found": true,
+                "metadata": null,
+                "providers": providers,
+                "seeders": seeders,
+            });
+            append_file_search_warnings(&mut response, seeder_warnings);
+            Json(response).into_response()
+        }
+        Ok(None) => {
+            let mut response = json!({"found": false, "providers": providers});
+            append_file_search_warnings(&mut response, seeder_warnings);
+            Json(response).into_response()
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
