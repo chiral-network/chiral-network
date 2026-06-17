@@ -194,25 +194,52 @@ fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
 
 pub fn save_manifest(manifest: &DriveManifest) {
     let Some(path) = manifest_path() else { return };
-    save_manifest_to_path(manifest, &path);
+    if let Err(e) = save_manifest_to_path(manifest, &path) {
+        eprintln!(
+            "[Drive] Failed to save Drive manifest {}: {}",
+            path.display(),
+            e
+        );
+    }
 }
 
-fn save_manifest_to_path(manifest: &DriveManifest, path: &Path) {
-    if let Ok(data) = std::fs::read_to_string(path) {
-        if serde_json::from_str::<DriveManifest>(&data).is_err() {
-            eprintln!(
-                "[Drive] Refusing to overwrite malformed Drive manifest at {}; fix or remove it manually",
-                path.display()
-            );
-            return;
+fn save_manifest_to_path(manifest: &DriveManifest, path: &Path) -> Result<(), String> {
+    match std::fs::read_to_string(path) {
+        Ok(data) => {
+            if serde_json::from_str::<DriveManifest>(&data).is_err() {
+                return Err(format!(
+                    "refusing to overwrite malformed Drive manifest at {}; fix or remove it manually",
+                    path.display()
+                ));
+            }
+        }
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
+        Err(_) if path.is_dir() => {}
+        Err(e) => {
+            return Err(format!(
+                "failed to inspect existing Drive manifest {}: {}",
+                path.display(),
+                e
+            ));
         }
     }
+    let json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("serialize Drive manifest: {}", e))?;
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create Drive manifest directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(manifest) {
-        let _ = std::fs::write(path, json);
-    }
+    std::fs::write(path, json)
+        .map_err(|e| format!("write Drive manifest {}: {}", path.display(), e))
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +362,7 @@ mod tests {
             items: vec![test_drive_item("item-1")],
             shares: Vec::new(),
         };
-        save_manifest_to_path(&manifest, &path);
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
 
         let loaded = load_manifest_from_path(&path);
 
@@ -385,9 +412,60 @@ mod tests {
             shares: Vec::new(),
         };
 
-        save_manifest_to_path(&manifest, &path);
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("malformed manifest should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed Drive manifest"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
+    }
+
+    #[test]
+    fn save_manifest_to_path_persists_valid_manifest() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("manifest.json");
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("saved")],
+            shares: Vec::new(),
+        };
+
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
+
+        let loaded = load_manifest_from_path(&path);
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.items[0].id, "saved");
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_directory_creation_failure() {
+        let dir = tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("manifest.json");
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("item-1")],
+            shares: Vec::new(),
+        };
+
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create Drive manifest directory"));
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_write_failure() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        std::fs::create_dir(&path).unwrap();
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("item-1")],
+            shares: Vec::new(),
+        };
+
+        let err =
+            save_manifest_to_path(&manifest, &path).expect_err("write failure should surface");
+
+        assert!(err.contains("write Drive manifest"));
     }
 
     #[test]
