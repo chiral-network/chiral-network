@@ -409,7 +409,7 @@ The trust model and its rationale are in [Part I](#part-i-white-paper) (Sections
 - Platform fee on all transactions — default 0.5%, adjustable down to a 0.1% floor (remainder to the seller); `split_payment` is the single source of truth and `seller + fee == total` exactly, with exact integer arithmetic (no rounding tolerance).
 - Wallet RPC reads use an ordered fallback list (`rpc_client::call_with_fallbacks`): direct canonical Geth → relay's `/api/chain/rpc` proxy. Either path can be down without taking the wallet UI offline.
 - RPC failures surface as a yellow "canonical RPC unreachable" banner in the wallet UI rather than a misleading `0.00`. Mining page renders an inline divergence warning when local-Geth balance disagrees with canonical-RPC balance for the miner address (private-fork diagnostic).
-- Geth's `--http.api` deliberately omits `admin` so `admin_stopRPC` cannot be called over the public RPC port (admin remains available over the IPC socket).
+- Embedded Geth binds its HTTP RPC to loopback only, exposes only `eth,net,web3,miner`, and does not enable wildcard browser CORS. Public read-only RPC access goes through the `/api/chain/rpc` proxy allowlist.
 
 ---
 

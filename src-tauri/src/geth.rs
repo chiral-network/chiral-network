@@ -13,6 +13,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Cursor;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +25,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// True iff our local geth child is currently running. Read by RPC callers
 /// so they route to the local node when it's up.
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
+
+const GETH_HTTP_DEFAULT_ADDR: &str = "127.0.0.1";
+const GETH_HTTP_PORT: &str = "8545";
+// Keep miner for local CPU/GPU mining controls. Exclude admin, personal,
+// debug, and txpool from the embedded HTTP surface.
+const GETH_HTTP_API_MODULES: &str = "eth,net,web3,miner";
 
 pub fn chain_id() -> u64 {
     network::active().chain_id
@@ -98,6 +105,97 @@ fn derive_proxy_url(primary: &str) -> Option<String> {
     let scheme = &stripped[..scheme_end];
     let host = &stripped[scheme_end..host_end];
     Some(format!("{}{}:8080/api/chain/rpc", scheme, host))
+}
+
+fn geth_http_addr_from_env() -> Result<String, String> {
+    let raw = std::env::var("CHIRAL_GETH_HTTP_ADDR")
+        .unwrap_or_else(|_| GETH_HTTP_DEFAULT_ADDR.to_string());
+    validate_geth_http_addr(&raw)
+}
+
+fn validate_geth_http_addr(raw: &str) -> Result<String, String> {
+    let addr = raw.trim();
+    if addr.is_empty() {
+        return Err("CHIRAL_GETH_HTTP_ADDR cannot be empty".to_string());
+    }
+    if is_loopback_http_addr(addr) {
+        return Ok(addr.to_string());
+    }
+    Err(format!(
+        "CHIRAL_GETH_HTTP_ADDR must be loopback-only (for example {} or ::1); expose read-only public RPC through /api/chain/rpc instead",
+        GETH_HTTP_DEFAULT_ADDR
+    ))
+}
+
+fn is_loopback_http_addr(addr: &str) -> bool {
+    if addr.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let addr = addr
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(addr);
+    addr.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+fn geth_start_args(
+    data_dir: &Path,
+    network_id: u64,
+    http_addr: &str,
+    bootstrap_enode: &str,
+    miner_address: Option<&str>,
+) -> Vec<String> {
+    // Full sync + archive GC is the key to not regressing block height
+    // on restart. Snap/fast sync can roll back unfinalized state; that
+    // was the root cause of the bug we're rebuilding to fix.
+    let mut args = vec![
+        "--datadir".to_string(),
+        data_dir.display().to_string(),
+        "--networkid".to_string(),
+        network_id.to_string(),
+        "--http".to_string(),
+        "--http.addr".to_string(),
+        http_addr.to_string(),
+        "--http.port".to_string(),
+        GETH_HTTP_PORT.to_string(),
+        "--http.api".to_string(),
+        GETH_HTTP_API_MODULES.to_string(),
+        "--syncmode".to_string(),
+        "full".to_string(),
+        "--gcmode".to_string(),
+        "archive".to_string(),
+        "--cache".to_string(),
+        "256".to_string(),
+        "--port".to_string(),
+        "30303".to_string(),
+        "--maxpeers".to_string(),
+        "25".to_string(),
+        "--miner.gasprice".to_string(),
+        "0".to_string(),
+        "--txpool.pricelimit".to_string(),
+        "0".to_string(),
+    ];
+
+    if bootstrap_enode.is_empty() {
+        args.push("--nodiscover".to_string());
+    } else {
+        args.push("--bootnodes".to_string());
+        args.push(bootstrap_enode.to_string());
+    }
+
+    if let Some(addr) = miner_address {
+        args.extend([
+            "--miner.etherbase".to_string(),
+            addr.to_string(),
+            "--mine".to_string(),
+            "--miner.threads".to_string(),
+            "1".to_string(),
+        ]);
+    }
+
+    args
 }
 
 #[cfg(test)]
@@ -409,45 +507,20 @@ impl GethProcess {
             .open(&log_path).map_err(|e| format!("open log file: {e}"))?;
         let log_clone = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
-        // Bind address for the HTTP RPC. Default 127.0.0.1 (safe for desktop
-        // users), overridable to 0.0.0.0 for server operators running the
-        // chain's public RPC endpoint.
-        let http_addr = std::env::var("CHIRAL_GETH_HTTP_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        // Bind address for the HTTP RPC. Keep this loopback-only: the
+        // embedded node still needs miner_* for local mining controls, so
+        // public read-only access belongs behind /api/chain/rpc.
+        let http_addr = geth_http_addr_from_env()?;
         let mut cmd = Command::new(self.geth_path());
-        cmd.args(["--datadir"]).arg(&self.data_dir)
-            .args(["--networkid", &network_id().to_string()])
-            .args(["--http", "--http.addr", &http_addr, "--http.port", "8545"])
-            // `admin` is intentionally absent here. It exposes
-            // `admin_stopRPC` (deprecated alias of `admin_stopHTTP`)
-            // which any unauthenticated HTTP caller could use to
-            // shut down the RPC server itself — observed in the wild
-            // on the canonical relay 2026-04-28: a remote IP issued
-            // admin_stopRPC and the HTTP server stayed down for two
-            // days, breaking every client's wallet balance. Admin
-            // calls remain available over the IPC socket for
-            // operators who need them.
-            .args(["--http.api", "eth,net,web3,personal,debug,miner,txpool"])
-            .args(["--http.corsdomain", "*"])
-            // Full sync + archive GC is the key to not regressing block height
-            // on restart. Snap/fast sync can roll back unfinalized state; that
-            // was the root cause of the bug we're rebuilding to fix.
-            .args(["--syncmode", "full", "--gcmode", "archive"])
-            .args(["--cache", "256"])
-            .args(["--port", "30303", "--maxpeers", "25"])
-            .args(["--miner.gasprice", "0", "--txpool.pricelimit", "0"])
+        cmd.args(geth_start_args(
+            &self.data_dir,
+            network_id(),
+            &http_addr,
+            cfg.geth_bootstrap_enode,
+            miner_address,
+        ))
             .stdout(Stdio::from(log_clone))
             .stderr(Stdio::from(log_file));
-
-        if cfg.geth_bootstrap_enode.is_empty() {
-            cmd.arg("--nodiscover"); // solo mining, no peer discovery
-        } else {
-            cmd.args(["--bootnodes", cfg.geth_bootstrap_enode]);
-        }
-
-        if let Some(addr) = miner_address {
-            cmd.args(["--miner.etherbase", addr, "--mine", "--miner.threads", "1"]);
-        }
 
         let child = cmd.spawn().map_err(|e| format!("spawn geth: {e}"))?;
         let _ = fs::write(self.data_dir.join("geth.pid"), child.id().to_string());
@@ -700,6 +773,12 @@ fn parse_syncing(r: Option<&Result<serde_json::Value, String>>, current_block: u
 mod tests {
     use super::*;
 
+    fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        args.windows(2)
+            .find(|pair| pair[0] == flag)
+            .map(|pair| pair[1].as_str())
+    }
+
     #[test]
     fn freshnet_is_first_preset_and_has_unique_chain_id() {
         assert_eq!(crate::network::FRESHNET.chain_id, 98763);
@@ -730,6 +809,62 @@ mod tests {
         assert_eq!(parse_syncing(Some(&true_), 100),  (true,  100));
         assert_eq!(parse_syncing(Some(&obj_behind), 5),     (true,  10));
         assert_eq!(parse_syncing(Some(&obj_caught_up), 10), (false, 10));
+    }
+
+    #[test]
+    fn geth_http_addr_validation_is_loopback_only() {
+        for addr in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+            assert_eq!(validate_geth_http_addr(addr).unwrap(), addr);
+        }
+
+        for addr in ["", "0.0.0.0", "192.168.1.5", "example.com"] {
+            let err = validate_geth_http_addr(addr).unwrap_err();
+            assert!(err.contains("CHIRAL_GETH_HTTP_ADDR"));
+        }
+    }
+
+    #[test]
+    fn geth_start_args_constrain_http_surface_and_preserve_mining() {
+        let args = geth_start_args(
+            Path::new("/tmp/chiral-geth"),
+            98763,
+            GETH_HTTP_DEFAULT_ADDR,
+            "",
+            Some("0xabc"),
+        );
+
+        assert_eq!(arg_value(&args, "--http.addr"), Some(GETH_HTTP_DEFAULT_ADDR));
+        assert_eq!(arg_value(&args, "--http.port"), Some(GETH_HTTP_PORT));
+        assert_eq!(arg_value(&args, "--http.api"), Some(GETH_HTTP_API_MODULES));
+        assert!(args.iter().any(|arg| arg == "--nodiscover"));
+        assert_eq!(arg_value(&args, "--miner.etherbase"), Some("0xabc"));
+        assert_eq!(arg_value(&args, "--miner.threads"), Some("1"));
+
+        let modules: Vec<_> = GETH_HTTP_API_MODULES.split(',').collect();
+        assert!(modules.contains(&"miner"));
+        for forbidden in ["admin", "personal", "debug", "txpool"] {
+            assert!(!modules.contains(&forbidden));
+        }
+        assert!(!args.iter().any(|arg| arg == "--http.corsdomain"));
+    }
+
+    #[test]
+    fn geth_start_args_use_bootnodes_when_present() {
+        let args = geth_start_args(
+            Path::new("/tmp/chiral-geth"),
+            98763,
+            GETH_HTTP_DEFAULT_ADDR,
+            "enode://peer@127.0.0.1:30303",
+            None,
+        );
+
+        assert_eq!(
+            arg_value(&args, "--bootnodes"),
+            Some("enode://peer@127.0.0.1:30303")
+        );
+        assert!(!args.iter().any(|arg| arg == "--nodiscover"));
+        assert!(arg_value(&args, "--miner.etherbase").is_none());
+        assert!(!args.iter().any(|arg| arg == "--mine"));
     }
 
     #[test]
