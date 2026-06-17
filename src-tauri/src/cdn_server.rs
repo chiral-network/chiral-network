@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
@@ -225,12 +225,34 @@ async fn load_registry(path: &PathBuf) -> Vec<CdnEntry> {
 }
 
 async fn save_registry(path: &PathBuf, entries: &[CdnEntry]) {
+    if let Err(e) = save_registry_to_path(path, entries).await {
+        eprintln!(
+            "[CDN] Failed to save CDN file registry {}: {}",
+            path.display(),
+            e
+        );
+    }
+}
+
+async fn save_registry_to_path(path: &Path, entries: &[CdnEntry]) -> Result<(), String> {
+    save_json_registry_to_path(path, entries, "CDN file registry").await
+}
+
+async fn save_json_registry_to_path<T: Serialize>(
+    path: &Path,
+    entries: &[T],
+    label: &str,
+) -> Result<(), String> {
+    let json =
+        serde_json::to_string_pretty(entries).map_err(|e| format!("serialize {}: {}", label, e))?;
     if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create {} directory {}: {}", label, parent.display(), e))?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(path, json).await;
-    }
+    tokio::fs::write(path, json)
+        .await
+        .map_err(|e| format!("write {} {}: {}", label, path.display(), e))
 }
 
 async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
@@ -241,12 +263,17 @@ async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
 }
 
 async fn save_sites_registry(path: &PathBuf, entries: &[CdnSiteEntry]) {
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+    if let Err(e) = save_sites_registry_to_path(path, entries).await {
+        eprintln!(
+            "[CDN] Failed to save CDN sites registry {}: {}",
+            path.display(),
+            e
+        );
     }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(path, json).await;
-    }
+}
+
+async fn save_sites_registry_to_path(path: &Path, entries: &[CdnSiteEntry]) -> Result<(), String> {
+    save_json_registry_to_path(path, entries, "CDN sites registry").await
 }
 
 /// Price per MB per month, in wei. Operator sets `CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH`
@@ -1554,6 +1581,89 @@ fn download_price_from_update_body(body: &serde_json::Value) -> Result<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cdn_entry_fixture() -> CdnEntry {
+        CdnEntry {
+            file_hash: "hash-1".to_string(),
+            file_name: "example.txt".to_string(),
+            file_size: 42,
+            owner_wallet: "0xowner".to_string(),
+            price_chi_per_month: "0.001".to_string(),
+            download_price_chi: "0".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1_700_000_000,
+            expires_at: 1_700_086_400,
+        }
+    }
+
+    fn cdn_site_entry_fixture() -> CdnSiteEntry {
+        CdnSiteEntry {
+            site_id: "site-1".to_string(),
+            name: "Example Site".to_string(),
+            owner_wallet: "0xowner".to_string(),
+            total_size_bytes: 2048,
+            file_count: 3,
+            price_chi_per_month: "0.001".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1_700_000_000,
+            expires_at: 1_700_086_400,
+        }
+    }
+
+    #[tokio::test]
+    async fn save_registry_to_path_persists_file_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("cdn_registry.json");
+
+        save_registry_to_path(&path, &[cdn_entry_fixture()])
+            .await
+            .expect("file registry should save");
+
+        let loaded = load_registry(&path).await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].file_hash, "hash-1");
+    }
+
+    #[tokio::test]
+    async fn save_sites_registry_to_path_persists_site_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("cdn_sites_registry.json");
+
+        save_sites_registry_to_path(&path, &[cdn_site_entry_fixture()])
+            .await
+            .expect("sites registry should save");
+
+        let loaded = load_sites_registry(&path).await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].site_id, "site-1");
+    }
+
+    #[tokio::test]
+    async fn save_registry_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("cdn_registry.json");
+
+        let err = save_registry_to_path(&path, &[cdn_entry_fixture()])
+            .await
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create CDN file registry directory"));
+    }
+
+    #[tokio::test]
+    async fn save_sites_registry_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cdn_sites_registry.json");
+        std::fs::create_dir(&path).unwrap();
+
+        let err = save_sites_registry_to_path(&path, &[cdn_site_entry_fixture()])
+            .await
+            .expect_err("write failure should surface");
+
+        assert!(err.contains("write CDN sites registry"));
+    }
 
     #[test]
     fn pricing_arithmetic_one_mb_one_month() {
