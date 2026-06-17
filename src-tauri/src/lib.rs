@@ -4416,6 +4416,39 @@ async fn get_hosting_server_status(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RelayTunnelResponse {
+    status: u16,
+    headers: HashMap<String, String>,
+    body_bytes: Vec<u8>,
+}
+
+fn relay_tunnel_response_from_local_body(
+    status: u16,
+    headers: HashMap<String, String>,
+    body_result: Result<Vec<u8>, String>,
+) -> RelayTunnelResponse {
+    match body_result {
+        Ok(body_bytes) => RelayTunnelResponse {
+            status,
+            headers,
+            body_bytes,
+        },
+        Err(err) => {
+            let mut headers = HashMap::new();
+            headers.insert(
+                "content-type".to_string(),
+                "text/plain; charset=utf-8".to_string(),
+            );
+            RelayTunnelResponse {
+                status: 502,
+                headers,
+                body_bytes: format!("Local response body read failed: {}", err).into_bytes(),
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket tunnel to relay (NAT traversal for hosting/drive proxy)
 // ---------------------------------------------------------------------------
@@ -4489,8 +4522,27 @@ fn spawn_relay_tunnel(
                                                 hdr.insert(k.to_string(), vs.to_string());
                                             }
                                         }
-                                        let bytes = resp.bytes().await.unwrap_or_default().to_vec();
-                                        (st, hdr, bytes)
+                                        let body_result = resp
+                                            .bytes()
+                                            .await
+                                            .map(|bytes| bytes.to_vec())
+                                            .map_err(|err| err.to_string());
+                                        if let Err(err) = body_result.as_ref() {
+                                            println!(
+                                                "[TUNNEL] Failed to read local response body for {}:{} id={}: {}",
+                                                resource_type, resource_id, req.id, err
+                                            );
+                                        }
+                                        let tunnel_response = relay_tunnel_response_from_local_body(
+                                            st,
+                                            hdr,
+                                            body_result,
+                                        );
+                                        (
+                                            tunnel_response.status,
+                                            tunnel_response.headers,
+                                            tunnel_response.body_bytes,
+                                        )
                                     }
                                     Err(_) => (502, HashMap::new(), b"Local server error".to_vec()),
                                 };
@@ -8216,6 +8268,54 @@ mod multi_seeder_tests {
             ad.get("walletAddress").and_then(|v| v.as_str()),
             Some("0xwallet")
         );
+    }
+
+    #[test]
+    fn relay_tunnel_response_preserves_valid_local_body() {
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "text/html".to_string());
+
+        let response =
+            relay_tunnel_response_from_local_body(200, headers.clone(), Ok(b"hello".to_vec()));
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.headers, headers);
+        assert_eq!(response.body_bytes, b"hello".to_vec());
+    }
+
+    #[test]
+    fn relay_tunnel_response_preserves_empty_local_body() {
+        let mut headers = HashMap::new();
+        headers.insert("x-empty".to_string(), "true".to_string());
+
+        let response = relay_tunnel_response_from_local_body(204, headers.clone(), Ok(Vec::new()));
+
+        assert_eq!(response.status, 204);
+        assert_eq!(response.headers, headers);
+        assert!(response.body_bytes.is_empty());
+    }
+
+    #[test]
+    fn relay_tunnel_response_body_read_error_returns_controlled_502() {
+        let mut headers = HashMap::new();
+        headers.insert("x-upstream".to_string(), "preserved only on success".to_string());
+
+        let response = relay_tunnel_response_from_local_body(
+            200,
+            headers,
+            Err("connection reset".to_string()),
+        );
+
+        assert_eq!(response.status, 502);
+        assert_eq!(
+            response.headers.get("content-type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
+        assert!(!response.headers.contains_key("x-upstream"));
+
+        let body = String::from_utf8(response.body_bytes).unwrap();
+        assert!(body.contains("Local response body read failed"));
+        assert!(body.contains("connection reset"));
     }
 
     fn host_registry_entry(
