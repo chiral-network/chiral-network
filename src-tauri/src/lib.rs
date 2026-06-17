@@ -3887,22 +3887,48 @@ fn set_active_network(name: String) -> Result<(), String> {
 // Wallet Backup Email Command
 // ============================================================================
 
+const DEFAULT_WALLET_BACKUP_RELAY_URL: &str = "https://130.245.173.73:8080/api/wallet/backup-email";
+
+fn is_allowed_wallet_backup_relay_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+
+    match parsed.scheme() {
+        "https" => true,
+        "http" => matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")),
+        _ => false,
+    }
+}
+
+fn wallet_backup_relay_url() -> Result<String, String> {
+    let url = std::env::var("CHIRAL_WALLET_BACKUP_RELAY_URL")
+        .unwrap_or_else(|_| DEFAULT_WALLET_BACKUP_RELAY_URL.to_string());
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("Wallet backup relay URL is not configured".to_string());
+    }
+    if !is_allowed_wallet_backup_relay_url(trimmed) {
+        return Err("Wallet backup relay URL must use HTTPS".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Send wallet backup email via the relay server.
-/// The relay has SMTP configured server-side — no user configuration needed.
+/// The relay has SMTP configured server-side; wallet secrets are encrypted
+/// before this command is invoked, so the relay only receives ciphertext.
 #[tauri::command]
 async fn send_wallet_backup_email(
     email: String,
-    recovery_phrase: String,
     wallet_address: String,
-    private_key: String,
+    encrypted_backup: serde_json::Value,
 ) -> Result<(), String> {
-    const RELAY_URL: &str = "http://130.245.173.73:8080/api/wallet/backup-email";
+    let relay_url = wallet_backup_relay_url()?;
 
     let payload = serde_json::json!({
         "email": email.trim(),
-        "recoveryPhrase": recovery_phrase,
         "walletAddress": wallet_address,
-        "privateKey": private_key,
+        "encryptedBackup": encrypted_backup,
     });
 
     let client = reqwest::Client::builder()
@@ -3911,7 +3937,7 @@ async fn send_wallet_backup_email(
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let response = client
-        .post(RELAY_URL)
+        .post(relay_url)
         .json(&payload)
         .send()
         .await
@@ -7913,6 +7939,28 @@ mod multi_seeder_tests {
     use tokio::sync::Mutex;
 
     // --- Serialization / Deserialization ---
+
+    #[test]
+    fn wallet_backup_relay_url_requires_secure_transport() {
+        assert!(is_allowed_wallet_backup_relay_url(
+            "https://relay.example.com/api/wallet/backup-email"
+        ));
+        assert!(is_allowed_wallet_backup_relay_url(
+            "http://127.0.0.1:9419/api/wallet/backup-email"
+        ));
+        assert!(is_allowed_wallet_backup_relay_url(
+            "http://localhost:9419/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://relay.example.com/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://localhost.example.com/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://127.0.0.1.example.com/api/wallet/backup-email"
+        ));
+    }
 
     #[test]
     fn download_request_id_at_preserves_existing_id_shape() {
