@@ -149,7 +149,11 @@ fn save_sites_to_path(sites: &[HostedSite], path: &Path) -> Result<(), String> {
                 ));
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
         Err(_) if path.is_dir() => {}
         Err(e) => {
             return Err(format!(
