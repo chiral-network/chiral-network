@@ -4733,6 +4733,7 @@ struct CdnSitePublishResult {
     payment_tx: String,
 }
 
+#[derive(Debug)]
 struct ValidatedCdnSitePublishResponse {
     file_count: u32,
     expires_at: u64,
