@@ -179,11 +179,18 @@ async fn publish_issuer_key(
         None => return (StatusCode::BAD_REQUEST, "X-Owner header required").into_response(),
     };
 
+    let updated_at = match req.updated_at {
+        Some(value) => value,
+        None => match rating_storage::now_secs() {
+            Ok(value) => value,
+            Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+        },
+    };
     let record = ReputationIssuerKeyRecord {
         issuer_wallet,
         verifying_key: req.verifying_key,
         owner_signature: req.owner_signature,
-        updated_at: req.updated_at.unwrap_or_else(rating_storage::now_secs),
+        updated_at,
     };
 
     if let Err(err) = reputation::validate_issuer_key_record(&record) {
@@ -374,7 +381,10 @@ async fn submit_transfer(
         .filter(|v| !v.is_empty())
         .map(str::to_string);
 
-    let now = rating_storage::now_secs();
+    let now = match rating_storage::now_secs() {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let event_id = rating_storage::generate_event_id(
         &req.transfer_id,
         &req.seeder_wallet,
@@ -424,7 +434,10 @@ async fn get_reputation(
     Extension(state): Extension<Arc<RatingState>>,
     Path(wallet): Path<String>,
 ) -> Response {
-    let now = rating_storage::now_secs();
+    let now = match rating_storage::now_secs() {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let m = state.manifest.read().await;
     let snapshot = compute_reputation_for_wallet(&m.events, &wallet, now);
 
@@ -458,7 +471,10 @@ async fn batch_reputation(
     Extension(state): Extension<Arc<RatingState>>,
     Json(req): Json<BatchRequest>,
 ) -> Response {
-    let now = rating_storage::now_secs();
+    let now = match rating_storage::now_secs() {
+        Ok(value) => value,
+        Err(err) => return (StatusCode::INTERNAL_SERVER_ERROR, err).into_response(),
+    };
     let m = state.manifest.read().await;
     let mut out = HashMap::new();
 
