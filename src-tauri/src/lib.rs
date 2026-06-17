@@ -1135,12 +1135,41 @@ fn agreements_dir() -> Result<std::path::PathBuf, String> {
     Ok(dir)
 }
 
+fn validate_hosting_agreement_json(json: &str, source: &str) -> Result<(), String> {
+    let agreement: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| format!("Invalid {source} hosting agreement JSON: {e}"))?;
+    if !agreement.is_object() {
+        return Err(format!(
+            "Invalid {source} hosting agreement JSON: expected a JSON object"
+        ));
+    }
+    Ok(())
+}
+
+fn read_validated_hosting_agreement_file(path: &std::path::Path) -> Result<String, String> {
+    let json =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read agreement: {e}"))?;
+    validate_hosting_agreement_json(&json, "local file")?;
+    Ok(json)
+}
+
+fn validate_dht_hosting_agreement_lookup(
+    result: Option<String>,
+) -> Result<Option<String>, String> {
+    if let Some(ref json) = result {
+        validate_hosting_agreement_json(json, "DHT")?;
+    }
+    Ok(result)
+}
+
 #[tauri::command]
 async fn store_hosting_agreement(
     state: tauri::State<'_, AppState>,
     agreement_id: String,
     agreement_json: String,
 ) -> Result<(), String> {
+    validate_hosting_agreement_json(&agreement_json, "request")?;
+
     // Save locally on disk
     let path = agreements_dir()?.join(format!("{}.json", agreement_id));
     std::fs::write(&path, &agreement_json)
@@ -1183,8 +1212,7 @@ async fn get_hosting_agreement(
 ) -> Result<Option<String>, String> {
     let path = agreements_dir()?.join(format!("{}.json", agreement_id));
     if path.exists() {
-        let json =
-            std::fs::read_to_string(&path).map_err(|e| format!("Failed to read agreement: {e}"))?;
+        let json = read_validated_hosting_agreement_file(&path)?;
         return Ok(Some(enforce_agreement_expiration(&json, &path)));
     }
 
@@ -1192,7 +1220,7 @@ async fn get_hosting_agreement(
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
         let key = format!("chiral_agreement_{}", agreement_id);
-        let result = dht.get_dht_value(key).await?;
+        let result = validate_dht_hosting_agreement_lookup(dht.get_dht_value(key).await?)?;
         if let Some(ref json) = result {
             let _ = std::fs::write(&path, json);
             return Ok(Some(enforce_agreement_expiration(json, &path)));
@@ -8044,6 +8072,34 @@ mod multi_seeder_tests {
         .expect_err("pre-epoch timestamp should be rejected");
 
         assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn hosting_agreement_json_accepts_valid_object() {
+        let json = r#"{"agreementId":"a1","status":"active","expiresAt":20}"#;
+
+        validate_hosting_agreement_json(json, "request")
+            .expect("valid agreement object should be accepted");
+    }
+
+    #[test]
+    fn hosting_agreement_json_rejects_malformed_local_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement.json");
+        std::fs::write(&path, "{").unwrap();
+
+        let err = read_validated_hosting_agreement_file(&path)
+            .expect_err("malformed local agreement JSON should be rejected");
+
+        assert!(err.contains("Invalid local file hosting agreement JSON"));
+    }
+
+    #[test]
+    fn hosting_agreement_json_rejects_malformed_dht_value() {
+        let err = validate_dht_hosting_agreement_lookup(Some("{".to_string()))
+            .expect_err("malformed DHT agreement JSON should be rejected");
+
+        assert!(err.contains("Invalid DHT hosting agreement JSON"));
     }
 
     #[test]
