@@ -1838,6 +1838,32 @@ fn load_agreement(agreement_id: &str) -> Result<Option<String>, String> {
     Ok(Some(data))
 }
 
+fn prepare_agreement_response_status_update(
+    existing: Option<String>,
+    agreement_id: &str,
+    status: &str,
+) -> Result<Option<String>, String> {
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+
+    let mut json: Value = serde_json::from_str(&existing).map_err(|e| {
+        format!(
+            "Malformed existing agreement {agreement_id}: {e}. Refusing to send hosting response until the local agreement file is repaired."
+        )
+    })?;
+    let obj = json.as_object_mut().ok_or_else(|| {
+        format!(
+            "Malformed existing agreement {agreement_id}: expected JSON object. Refusing to send hosting response until the local agreement file is repaired."
+        )
+    })?;
+    obj.insert("status".to_string(), Value::String(status.to_string()));
+
+    serde_json::to_string_pretty(&json)
+        .map(Some)
+        .map_err(|e| format!("Failed to serialize agreement: {}", e))
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct AgreementCleanupReport {
     removed: usize,
@@ -1972,6 +1998,45 @@ mod tests {
         assert_eq!(report.warnings.len(), 1);
         assert!(report.warnings[0].contains("Failed to read agreement"));
         assert!(path.exists());
+    }
+
+    #[test]
+    fn response_status_update_updates_valid_existing_agreement() {
+        let existing = serde_json::json!({
+            "agreementId": "agreement-1",
+            "status": "proposed",
+        })
+        .to_string();
+
+        let updated =
+            prepare_agreement_response_status_update(Some(existing), "agreement-1", "accepted")
+                .expect("valid agreement should update")
+                .expect("existing agreement should produce updated JSON");
+        let parsed: Value = serde_json::from_str(&updated).unwrap();
+
+        assert_eq!(parsed["agreementId"], "agreement-1");
+        assert_eq!(parsed["status"], "accepted");
+    }
+
+    #[test]
+    fn response_status_update_preserves_missing_agreement() {
+        let updated = prepare_agreement_response_status_update(None, "missing", "accepted")
+            .expect("missing agreement should not block response");
+
+        assert!(updated.is_none());
+    }
+
+    #[test]
+    fn response_status_update_rejects_malformed_existing_agreement() {
+        let err = prepare_agreement_response_status_update(
+            Some("{not json".to_string()),
+            "broken",
+            "accepted",
+        )
+        .expect_err("malformed local agreement should block response");
+
+        assert!(err.contains("Malformed existing agreement broken"));
+        assert!(err.contains("Refusing to send hosting response"));
     }
 
     #[test]
@@ -3757,15 +3822,12 @@ async fn handle_market(cmd: MarketCommand) -> Result<(), String> {
             status,
             port,
         } => {
-            if let Some(existing) = load_agreement(&agreement_id)? {
-                if let Ok(mut json) = serde_json::from_str::<Value>(&existing) {
-                    if let Some(obj) = json.as_object_mut() {
-                        obj.insert("status".to_string(), Value::String(status.clone()));
-                        let updated = serde_json::to_string_pretty(&json)
-                            .map_err(|e| format!("Failed to serialize agreement: {}", e))?;
-                        store_agreement(&agreement_id, &updated)?;
-                    }
-                }
+            if let Some(updated) = prepare_agreement_response_status_update(
+                load_agreement(&agreement_id)?,
+                &agreement_id,
+                &status,
+            )? {
+                store_agreement(&agreement_id, &updated)?;
             }
 
             let payload = serde_json::json!({
