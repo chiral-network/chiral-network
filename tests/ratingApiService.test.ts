@@ -263,6 +263,22 @@ describe('ratingApiService', () => {
       await ratingApi.getReputation('0xABC');
       expect(mockFetch.mock.calls[0][0]).toContain('/api/ratings/0xABC');
     });
+
+    it('should use configured rating endpoint base', async () => {
+      const { setNetworkEndpointConfig } = await import('$lib/services/networkEndpointConfig');
+      setNetworkEndpointConfig({ ratingBaseUrl: 'https://ratings.example/' });
+      const { ratingApi } = await import('$lib/services/ratingApiService');
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ wallet: '0xABC', events: [] }),
+      });
+
+      await ratingApi.getReputation('0xABC');
+
+      expect(mockFetch.mock.calls[0][0]).toBe('https://ratings.example/api/ratings/0xABC');
+    });
   });
 
   describe('getBatchReputation', () => {
