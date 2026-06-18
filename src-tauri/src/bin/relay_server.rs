@@ -222,8 +222,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("chiral-network");
     let relay_share_state = Arc::new(RelayShareRegistry::new(relay_share_data_dir));
-    relay_share_state.load_from_disk().await;
-    println!("Relay share registry loaded from disk");
+    match relay_share_state.load_from_disk().await {
+        Ok(()) => println!("Relay share registry loaded from disk"),
+        Err(err) => eprintln!("[RELAY-SHARE] {}", err),
+    }
 
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
 
