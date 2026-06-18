@@ -30,15 +30,144 @@ struct RelayServerBehaviour {
     identify: identify::Behaviour,
 }
 
-fn keypair_from_secret(secret: &str) -> libp2p::identity::Keypair {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RelayServerArgs {
+    port: u16,
+    http_port: u16,
+    secret: String,
+}
+
+impl Default for RelayServerArgs {
+    fn default() -> Self {
+        Self {
+            port: 4001,
+            http_port: 8080,
+            secret: String::from("chiral-relay-server-default"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn relay_server_args_use_default_ports() {
+        let parsed =
+            parse_relay_server_args(&args(&["relay_server"])).expect("default args should parse");
+
+        assert_eq!(parsed.port, 4001);
+        assert_eq!(parsed.http_port, 8080);
+        assert_eq!(parsed.secret, "chiral-relay-server-default");
+    }
+
+    #[test]
+    fn relay_server_args_accept_port_overrides() {
+        let parsed = parse_relay_server_args(&args(&[
+            "relay_server",
+            "--port",
+            "4100",
+            "--http-port",
+            "8181",
+            "--secret",
+            "custom-secret",
+        ]))
+        .expect("valid args should parse");
+
+        assert_eq!(parsed.port, 4100);
+        assert_eq!(parsed.http_port, 8181);
+        assert_eq!(parsed.secret, "custom-secret");
+    }
+
+    #[test]
+    fn relay_server_args_reject_invalid_port() {
+        let err = parse_relay_server_args(&args(&["relay_server", "--port", "not-a-port"]))
+            .expect_err("invalid port should be rejected");
+
+        assert!(err.contains("--port"));
+        assert!(err.contains("not-a-port"));
+    }
+
+    #[test]
+    fn relay_server_args_reject_invalid_http_port() {
+        let err = parse_relay_server_args(&args(&["relay_server", "--http-port", "70000"]))
+            .expect_err("out-of-range HTTP port should be rejected");
+
+        assert!(err.contains("--http-port"));
+        assert!(err.contains("70000"));
+    }
+}
+
+fn parse_port_arg(flag: &str, value: &str) -> Result<u16, String> {
+    value.parse::<u16>().map_err(|_| {
+        format!(
+            "{} requires a valid port number from 0 to 65535, got '{}'",
+            flag, value
+        )
+    })
+}
+
+fn parse_relay_server_args(args: &[String]) -> Result<RelayServerArgs, String> {
+    let mut parsed = RelayServerArgs::default();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--port" => {
+                if i + 1 < args.len() {
+                    parsed.port = parse_port_arg("--port", &args[i + 1])?;
+                    i += 2;
+                } else {
+                    return Err("--port requires a value".to_string());
+                }
+            }
+            "--http-port" => {
+                if i + 1 < args.len() {
+                    parsed.http_port = parse_port_arg("--http-port", &args[i + 1])?;
+                    i += 2;
+                } else {
+                    return Err("--http-port requires a value".to_string());
+                }
+            }
+            "--secret" => {
+                if i + 1 < args.len() {
+                    parsed.secret = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    return Err("--secret requires a value".to_string());
+                }
+            }
+            _ => {
+                return Err(format!("Unknown argument: {}", args[i]));
+            }
+        }
+    }
+
+    Ok(parsed)
+}
+
+fn relay_secret_key_from_bytes(
+    bytes: Vec<u8>,
+) -> Result<libp2p::identity::ed25519::SecretKey, String> {
+    libp2p::identity::ed25519::SecretKey::try_from_bytes(bytes).map_err(|err| {
+        format!(
+            "Relay secret did not derive a valid 32-byte Ed25519 key: {:?}",
+            err
+        )
+    })
+}
+
+fn keypair_from_secret(secret: &str) -> Result<libp2p::identity::Keypair, String> {
     let mut hasher = Sha256::new();
     hasher.update(secret.as_bytes());
     let hash = hasher.finalize();
     // ed25519 needs exactly 32 bytes for the secret key
-    let secret_key = libp2p::identity::ed25519::SecretKey::try_from_bytes(hash.to_vec())
-        .expect("SHA-256 produces valid 32-byte ed25519 secret key");
+    let secret_key = relay_secret_key_from_bytes(hash.to_vec())?;
     let ed25519_keypair = libp2p::identity::ed25519::Keypair::from(secret_key);
-    libp2p::identity::Keypair::from(ed25519_keypair)
+    Ok(libp2p::identity::Keypair::from(ed25519_keypair))
 }
 
 #[tokio::main]
@@ -46,49 +175,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().collect();
 
     chiral_network::version::log_policy_key_status();
-    let mut port: u16 = 4001;
-    let mut http_port: u16 = 8080;
-    let mut secret = String::from("chiral-relay-server-default");
-
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--port" => {
-                if i + 1 < args.len() {
-                    port = args[i + 1].parse().expect("Invalid port number");
-                    i += 2;
-                } else {
-                    eprintln!("--port requires a value");
-                    std::process::exit(1);
-                }
-            }
-            "--http-port" => {
-                if i + 1 < args.len() {
-                    http_port = args[i + 1].parse().expect("Invalid HTTP port number");
-                    i += 2;
-                } else {
-                    eprintln!("--http-port requires a value");
-                    std::process::exit(1);
-                }
-            }
-            "--secret" => {
-                if i + 1 < args.len() {
-                    secret = args[i + 1].clone();
-                    i += 2;
-                } else {
-                    eprintln!("--secret requires a value");
-                    std::process::exit(1);
-                }
-            }
-            _ => {
-                eprintln!("Unknown argument: {}", args[i]);
-                std::process::exit(1);
-            }
+    let parsed_args = match parse_relay_server_args(&args) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
         }
-    }
+    };
+    let RelayServerArgs {
+        port,
+        http_port,
+        secret,
+    } = parsed_args;
 
     // Generate deterministic keypair from secret
-    let local_key = keypair_from_secret(&secret);
+    let local_key = match keypair_from_secret(&secret) {
+        Ok(keypair) => keypair,
+        Err(err) => {
+            eprintln!("ERROR: {}", err);
+            std::process::exit(1);
+        }
+    };
     let local_peer_id = PeerId::from(local_key.public());
 
     println!("=== Chiral Network v2 Relay Server ===");
@@ -115,8 +222,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("chiral-network");
     let relay_share_state = Arc::new(RelayShareRegistry::new(relay_share_data_dir));
-    relay_share_state.load_from_disk().await;
-    println!("Relay share registry loaded from disk");
+    match relay_share_state.load_from_disk().await {
+        Ok(()) => println!("Relay share registry loaded from disk"),
+        Err(err) => eprintln!("[RELAY-SHARE] {}", err),
+    }
 
     let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
 
@@ -296,13 +405,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 .agent_version
                                 .trim_start_matches("chiral/")
                                 .trim_start_matches('v');
-                            if chiral_network::version::version_is_below(agent_v, &policy.min_required) {
-                                println!(
-                                    "🚫 [IDENTIFY] Disconnecting {} — agent_version='{}' < min_required={}",
-                                    peer_id, info.agent_version, policy.min_required
-                                );
-                                let _ = swarm.disconnect_peer_id(peer_id);
-                                continue;
+                            match chiral_network::version::version_is_below_named(
+                                agent_v,
+                                "peer agent_version",
+                                &policy.min_required,
+                                "policy min_required",
+                            ) {
+                                Ok(true) => {
+                                    println!(
+                                        "🚫 [IDENTIFY] Disconnecting {} — agent_version='{}' < min_required={}",
+                                        peer_id, info.agent_version, policy.min_required
+                                    );
+                                    let _ = swarm.disconnect_peer_id(peer_id);
+                                    continue;
+                                }
+                                Ok(false) => {}
+                                Err(e) => {
+                                    println!(
+                                        "🚫 [IDENTIFY] Disconnecting {} due to malformed version policy comparison: {}",
+                                        peer_id, e
+                                    );
+                                    let _ = swarm.disconnect_peer_id(peer_id);
+                                    continue;
+                                }
                             }
                         }
 
@@ -366,5 +491,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keypair_from_secret_is_deterministic() {
+        let first = keypair_from_secret("stable relay secret")
+            .expect("secret hash should produce a keypair")
+            .public()
+            .to_peer_id();
+        let second = keypair_from_secret("stable relay secret")
+            .expect("secret hash should produce a keypair")
+            .public()
+            .to_peer_id();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn relay_secret_key_reports_invalid_key_material() {
+        let err = match relay_secret_key_from_bytes(vec![0; 31]) {
+            Ok(_) => panic!("short key material should fail"),
+            Err(err) => err,
+        };
+
+        assert!(err.contains("Relay secret"));
+        assert!(err.contains("32-byte Ed25519 key"));
     }
 }

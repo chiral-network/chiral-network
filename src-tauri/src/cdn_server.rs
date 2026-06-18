@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
@@ -57,9 +57,14 @@ async fn describe_tx(tx_hash: &str) -> String {
     };
     let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("?");
     let to = v.get("to").and_then(|x| x.as_str()).unwrap_or("?");
-    let value_hex = v.get("value").and_then(|x| x.as_str()).unwrap_or("0x0");
-    let value_wei = crate::rpc_client::hex_to_u128(value_hex);
-    format!("from={from} to={to} amount={value_wei}")
+    let amount = match v.get("value").and_then(|x| x.as_str()) {
+        Some(value_hex) => match crate::rpc_client::hex_to_u128(value_hex) {
+            Ok(value_wei) => value_wei.to_string(),
+            Err(e) => format!("<invalid tx value: {e}>"),
+        },
+        None => "?".to_string(),
+    };
+    format!("from={from} to={to} amount={amount}")
 }
 
 /// Cost of an upload in wei: `ceil(price_wei_per_mb_month * bytes * days
@@ -79,6 +84,10 @@ fn required_upload_wei(price_wei_per_mb_month: u128, bytes: u128, days: u128) ->
     // ceil division: (numer + denom - 1) / denom.
     numer.saturating_add(denom - 1) / denom
 }
+
+const DEFAULT_CDN_PRICING_DURATION_DAYS: u64 = 30;
+/// Keep pricing quotes aligned with the finite CDN lease window.
+const MAX_CDN_PRICING_DURATION_DAYS: u64 = 3650;
 
 // ============================================================================
 // Types + state
@@ -216,12 +225,34 @@ async fn load_registry(path: &PathBuf) -> Vec<CdnEntry> {
 }
 
 async fn save_registry(path: &PathBuf, entries: &[CdnEntry]) {
+    if let Err(e) = save_registry_to_path(path, entries).await {
+        eprintln!(
+            "[CDN] Failed to save CDN file registry {}: {}",
+            path.display(),
+            e
+        );
+    }
+}
+
+async fn save_registry_to_path(path: &Path, entries: &[CdnEntry]) -> Result<(), String> {
+    save_json_registry_to_path(path, entries, "CDN file registry").await
+}
+
+async fn save_json_registry_to_path<T: Serialize>(
+    path: &Path,
+    entries: &[T],
+    label: &str,
+) -> Result<(), String> {
+    let json =
+        serde_json::to_string_pretty(entries).map_err(|e| format!("serialize {}: {}", label, e))?;
     if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| format!("create {} directory {}: {}", label, parent.display(), e))?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(path, json).await;
-    }
+    tokio::fs::write(path, json)
+        .await
+        .map_err(|e| format!("write {} {}: {}", label, path.display(), e))
 }
 
 async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
@@ -232,21 +263,64 @@ async fn load_sites_registry(path: &PathBuf) -> Vec<CdnSiteEntry> {
 }
 
 async fn save_sites_registry(path: &PathBuf, entries: &[CdnSiteEntry]) {
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
+    if let Err(e) = save_sites_registry_to_path(path, entries).await {
+        eprintln!(
+            "[CDN] Failed to save CDN sites registry {}: {}",
+            path.display(),
+            e
+        );
     }
-    if let Ok(json) = serde_json::to_string_pretty(entries) {
-        let _ = tokio::fs::write(path, json).await;
-    }
+}
+
+async fn save_sites_registry_to_path(path: &Path, entries: &[CdnSiteEntry]) -> Result<(), String> {
+    save_json_registry_to_path(path, entries, "CDN sites registry").await
 }
 
 /// Price per MB per month, in wei. Operator sets `CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH`
 /// as a CHI decimal (e.g. `0.001`); default 0.001 CHI = 1e15 wei.
+const CDN_PRICE_ENV: &str = "CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH";
+const DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH: u128 = 1_000_000_000_000_000; // 0.001 CHI
+
+fn parse_price_env_value(value: &str) -> Result<u128, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("value must be a CHI decimal, not empty".to_string());
+    }
+    crate::wallet::parse_chi_to_wei(trimmed)
+        .map_err(|err| format!("value must be a valid CHI decimal: {}", err))
+}
+
+fn price_env_value(value: Option<&str>) -> Result<u128, String> {
+    match value {
+        Some(value) => parse_price_env_value(value),
+        None => Ok(DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH),
+    }
+}
+
 fn read_price_env() -> u128 {
-    const DEFAULT_WEI: u128 = 1_000_000_000_000_000; // 0.001 CHI
-    match std::env::var("CHIRAL_CDN_PRICE_CHI_PER_MB_MONTH") {
-        Ok(v) => crate::wallet::parse_chi_to_wei(&v).unwrap_or(DEFAULT_WEI),
-        Err(_) => DEFAULT_WEI,
+    match std::env::var(CDN_PRICE_ENV) {
+        Ok(value) => match price_env_value(Some(&value)) {
+            Ok(price) => price,
+            Err(err) => {
+                eprintln!(
+                    "[CDN] Invalid {}={:?}: {}; using default {} CHI per MB-month",
+                    CDN_PRICE_ENV,
+                    value,
+                    err,
+                    wei_to_chi(DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH)
+                );
+                DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH
+            }
+        },
+        Err(std::env::VarError::NotPresent) => DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!(
+                "[CDN] Invalid {}: value is not valid Unicode; using default {} CHI per MB-month",
+                CDN_PRICE_ENV,
+                wei_to_chi(DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH)
+            );
+            DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH
+        }
     }
 }
 
@@ -307,7 +381,10 @@ async fn status(State(s): State<Arc<CdnState>>) -> Response {
         Some(d) => d.get_peer_id().await.unwrap_or_default(),
         None => String::new(),
     };
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let active: Vec<CdnEntry> = s.snapshot().await.into_iter().filter(|e| e.expires_at > now).collect();
     Json(json!({
         "status": "online",
@@ -345,10 +422,10 @@ async fn pricing(
     State(s): State<Arc<CdnState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let duration_days: u64 = params
-        .get("durationDays")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30);
+    let duration_days = match pricing_duration_days_param(&params) {
+        Ok(days) => days,
+        Err(e) => return err(StatusCode::BAD_REQUEST, &e),
+    };
     let bytes: u128 = if let Some(b) = params.get("bytes").and_then(|s| s.parse().ok()) {
         b
     } else {
@@ -373,6 +450,25 @@ async fn pricing(
     .into_response()
 }
 
+fn pricing_duration_days_param(params: &HashMap<String, String>) -> Result<u64, String> {
+    let Some(raw) = params.get("durationDays") else {
+        return Ok(DEFAULT_CDN_PRICING_DURATION_DAYS);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("durationDays must be a positive integer number of days".to_string());
+    }
+    let days = trimmed
+        .parse::<u64>()
+        .map_err(|_| "durationDays must be a positive integer number of days".to_string())?;
+    if !(1..=MAX_CDN_PRICING_DURATION_DAYS).contains(&days) {
+        return Err(format!(
+            "durationDays must be between 1 and {MAX_CDN_PRICING_DURATION_DAYS} days"
+        ));
+    }
+    Ok(days)
+}
+
 /// GET /api/cdn/files?owner=0xABC — list this CDN's hosted files,
 /// optionally scoped to one owner.
 async fn list(
@@ -380,7 +476,10 @@ async fn list(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let files: Vec<CdnEntry> = s
         .snapshot()
         .await
@@ -414,9 +513,17 @@ async fn upload(
     let payment_tx = hdr(&headers, "X-Payment-Tx");
     let owner_wallet = hdr(&headers, "X-Owner-Wallet");
     let duration_days: u64 = hdr(&headers, "X-Duration-Days").parse().unwrap_or(30);
-    let download_price_chi = {
-        let v = hdr(&headers, "X-Download-Price-Chi");
-        if v.is_empty() { "0".to_string() } else { v }
+    let (download_price_chi, download_price_wei) = {
+        let raw = hdr(&headers, "X-Download-Price-Chi");
+        match normalize_download_price_chi(&raw) {
+            Ok(price) => price,
+            Err(e) => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("Invalid X-Download-Price-Chi: {e}"),
+                )
+            }
+        }
     };
 
     if payment_tx.is_empty() || owner_wallet.is_empty() {
@@ -521,9 +628,14 @@ async fn upload(
     }
 
     // Register in DHT so clients searching by hash find the CDN as a seeder.
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&file_path).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+        }
+    };
     let expires = now + duration_days * 86400;
-    let download_price_wei = parse_chi_or_zero(&download_price_chi);
     if let Some(dht) = s.dht.lock().await.as_ref() {
         register_in_dht(
             dht,
@@ -630,10 +742,14 @@ async fn update_price(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_lowercase();
-    let new_price = match &body["downloadPriceChi"] {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
-        _ => "0".to_string(),
+    let (new_price, new_price_wei) = match download_price_from_update_body(&body) {
+        Ok(price) => price,
+        Err(e) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                &format!("Invalid downloadPriceChi: {e}"),
+            )
+        }
     };
     if owner.is_empty() {
         return err(StatusCode::BAD_REQUEST, "X-Owner header required");
@@ -655,7 +771,6 @@ async fn update_price(
     };
 
     // Re-register in DHT with the new price so searches pick it up.
-    let new_price_wei = parse_chi_or_zero(&new_price);
     if let Some(dht) = s.dht.lock().await.as_ref() {
         let file_path = s.storage_dir.join(&file_hash);
         if file_path.exists() {
@@ -680,23 +795,64 @@ async fn update_price(
 // Background tasks
 // ============================================================================
 
+const CDN_STARTUP_RESEED_DHT_TIMEOUT_SECS: u64 = 180;
+
+async fn wait_for_startup_dht(state: &CdnState) -> Option<Arc<DhtService>> {
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(CDN_STARTUP_RESEED_DHT_TIMEOUT_SECS);
+    loop {
+        if let Some(dht) = {
+            let guard = state.dht.lock().await;
+            guard.as_ref().cloned()
+        } {
+            return Some(dht);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 /// Re-register every non-expired CDN file in the DHT on startup. Run once
 /// after the DHT service is ready.
 pub async fn reseed_on_startup(state: Arc<CdnState>) {
-    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-    let dht = {
-        let guard = state.dht.lock().await;
-        guard.as_ref().cloned()
+    let Some(dht) = wait_for_startup_dht(&state).await else {
+        println!("[CDN] Startup reseed skipped: DHT did not start within 180s");
+        return;
     };
-    let Some(dht) = dht else { return };
-    let now = now_secs();
+    if !dht
+        .wait_for_bootstrap_ready(std::time::Duration::from_secs(
+            CDN_STARTUP_RESEED_DHT_TIMEOUT_SECS,
+        ))
+        .await
+    {
+        println!("[CDN] Startup reseed skipped: DHT bootstrap did not complete within 180s");
+        return;
+    }
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            println!("[CDN] Startup reseed skipped: {e}");
+            return;
+        }
+    };
     let active: Vec<CdnEntry> = state.snapshot().await.into_iter().filter(|e| e.expires_at > now).collect();
     for entry in &active {
         let file_path = state.storage_dir.join(&entry.file_hash);
         if !file_path.exists() {
             continue;
         }
-        let download_price_wei = parse_chi_or_zero(&entry.download_price_chi);
+        let download_price_wei = match parse_download_price_chi(&entry.download_price_chi) {
+            Ok(price_wei) => price_wei,
+            Err(e) => {
+                println!(
+                    "[CDN] Startup reseed skipped for {}: invalid download price {:?}: {}",
+                    entry.file_hash, entry.download_price_chi, e
+                );
+                continue;
+            }
+        };
         register_in_dht(
             &dht,
             &entry.file_hash,
@@ -720,7 +876,13 @@ pub async fn expiration_loop(state: Arc<CdnState>) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
     loop {
         interval.tick().await;
-        let now = now_secs();
+        let now = match now_secs() {
+            Ok(now) => now,
+            Err(e) => {
+                println!("[CDN] Expiration cleanup skipped: {e}");
+                continue;
+            }
+        };
         let expired = state
             .with_registry(|r| {
                 let expired: Vec<CdnEntry> = r.iter().filter(|e| e.expires_at <= now).cloned().collect();
@@ -786,7 +948,14 @@ async fn register_in_dht(
         cdn_private_key.to_string(),
     )
     .await;
-    let peer_id = dht.get_peer_id().await.unwrap_or_default();
+    let peer_id = match cdn_provider_peer_id(dht.get_peer_id().await) {
+        Ok(peer_id) => peer_id,
+        Err(e) => {
+            println!("[CDN] DHT publish for {} skipped — {}", file_hash, e);
+            let _ = created_at;
+            return;
+        }
+    };
     let our_addrs = dht.get_listening_addresses().await;
 
     // Without a signing key the CDN can populate its local shared_files
@@ -1170,7 +1339,14 @@ async fn upload_site(
         let _ = tokio::fs::remove_dir_all(&staging_dir).await;
     }
 
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&site_root).await;
+            let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+            return err(StatusCode::INTERNAL_SERVER_ERROR, &e);
+        }
+    };
     let expires = now + duration_days * 86400;
     let entry = CdnSiteEntry {
         site_id: site_id.clone(),
@@ -1214,7 +1390,10 @@ async fn list_sites(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let owner_filter = params.get("owner").cloned().unwrap_or_default().to_lowercase();
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let sites: Vec<CdnSiteEntry> = s
         .sites_snapshot()
         .await
@@ -1302,7 +1481,10 @@ async fn serve_site_path_inner(s: &CdnState, site_id: &str, requested_path: &str
         return err(StatusCode::BAD_REQUEST, e);
     }
     // Verify the site is in the registry and not expired.
-    let now = now_secs();
+    let now = match now_secs() {
+        Ok(now) => now,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    };
     let known = s
         .sites_snapshot()
         .await
@@ -1355,11 +1537,24 @@ fn err(code: StatusCode, msg: &str) -> Response {
     (code, Json(json!({ "error": msg }))).into_response()
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn system_time_secs(now: SystemTime) -> Result<u64, String> {
+    now.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_err(|e| format!("System clock is before UNIX_EPOCH; CDN timestamps unavailable: {e}"))
+}
+
+fn now_secs() -> Result<u64, String> {
+    system_time_secs(SystemTime::now())
+}
+
+fn cdn_provider_peer_id(peer_id: Option<String>) -> Result<String, String> {
+    let peer_id = peer_id.unwrap_or_default().trim().to_string();
+    if peer_id.is_empty() {
+        return Err(
+            "local peer ID unavailable; start DHT before CDN provider publication".to_string(),
+        );
+    }
+    Ok(peer_id)
 }
 
 /// Format wei as a CHI decimal string LOSSLESSLY. The frontend feeds
@@ -1386,17 +1581,129 @@ fn wei_to_chi(wei: u128) -> String {
     format!("{}.{}", whole, trimmed)
 }
 
-fn parse_chi_or_zero(s: &str) -> u128 {
-    if s.is_empty() || s == "0" {
-        0
+fn parse_download_price_chi(price_chi: &str) -> Result<u128, String> {
+    if price_chi.is_empty() {
+        return Ok(0);
+    }
+    let trimmed = price_chi.trim();
+    if trimmed.is_empty() {
+        return Err("download price must be 0 or a valid CHI decimal".to_string());
+    }
+    if trimmed == "0" {
+        return Ok(0);
+    }
+    crate::wallet::parse_chi_to_wei(trimmed)
+        .map_err(|err| format!("download price must be 0 or a valid CHI decimal: {err}"))
+}
+
+fn normalize_download_price_chi(price_chi: &str) -> Result<(String, u128), String> {
+    let price_wei = parse_download_price_chi(price_chi)?;
+    let normalized = if price_chi.is_empty() {
+        "0".to_string()
     } else {
-        crate::wallet::parse_chi_to_wei(s).unwrap_or(0)
+        price_chi.trim().to_string()
+    };
+    Ok((normalized, price_wei))
+}
+
+fn download_price_from_update_body(body: &serde_json::Value) -> Result<(String, u128), String> {
+    match body
+        .get("downloadPriceChi")
+        .unwrap_or(&serde_json::Value::Null)
+    {
+        serde_json::Value::Null => Ok(("0".to_string(), 0)),
+        serde_json::Value::String(price) => normalize_download_price_chi(price),
+        serde_json::Value::Number(price) => normalize_download_price_chi(&price.to_string()),
+        _ => Err("downloadPriceChi must be a string or number".to_string()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cdn_entry_fixture() -> CdnEntry {
+        CdnEntry {
+            file_hash: "hash-1".to_string(),
+            file_name: "example.txt".to_string(),
+            file_size: 42,
+            owner_wallet: "0xowner".to_string(),
+            price_chi_per_month: "0.001".to_string(),
+            download_price_chi: "0".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1_700_000_000,
+            expires_at: 1_700_086_400,
+        }
+    }
+
+    fn cdn_site_entry_fixture() -> CdnSiteEntry {
+        CdnSiteEntry {
+            site_id: "site-1".to_string(),
+            name: "Example Site".to_string(),
+            owner_wallet: "0xowner".to_string(),
+            total_size_bytes: 2048,
+            file_count: 3,
+            price_chi_per_month: "0.001".to_string(),
+            payment_tx: "0xtx".to_string(),
+            uploaded_at: 1_700_000_000,
+            expires_at: 1_700_086_400,
+        }
+    }
+
+    #[tokio::test]
+    async fn save_registry_to_path_persists_file_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("cdn_registry.json");
+
+        save_registry_to_path(&path, &[cdn_entry_fixture()])
+            .await
+            .expect("file registry should save");
+
+        let loaded = load_registry(&path).await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].file_hash, "hash-1");
+    }
+
+    #[tokio::test]
+    async fn save_sites_registry_to_path_persists_site_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("cdn_sites_registry.json");
+
+        save_sites_registry_to_path(&path, &[cdn_site_entry_fixture()])
+            .await
+            .expect("sites registry should save");
+
+        let loaded = load_sites_registry(&path).await;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].site_id, "site-1");
+    }
+
+    #[tokio::test]
+    async fn save_registry_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("cdn_registry.json");
+
+        let err = save_registry_to_path(&path, &[cdn_entry_fixture()])
+            .await
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create CDN file registry directory"));
+    }
+
+    #[tokio::test]
+    async fn save_sites_registry_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cdn_sites_registry.json");
+        std::fs::create_dir(&path).unwrap();
+
+        let err = save_sites_registry_to_path(&path, &[cdn_site_entry_fixture()])
+            .await
+            .expect_err("write failure should surface");
+
+        assert!(err.contains("write CDN sites registry"));
+    }
 
     #[test]
     fn pricing_arithmetic_one_mb_one_month() {
@@ -1412,6 +1719,63 @@ mod tests {
         let price_per_mb_month: u128 = 1_000_000_000_000_000;
         let total = (price_per_mb_month as f64 * 100.0 * (30.0 / 30.0)) as u128;
         assert_eq!(total, 100_000_000_000_000_000);
+    }
+
+    #[test]
+    fn pricing_duration_days_uses_default_when_absent() {
+        let params = HashMap::new();
+
+        assert_eq!(
+            pricing_duration_days_param(&params).unwrap(),
+            DEFAULT_CDN_PRICING_DURATION_DAYS
+        );
+    }
+
+    #[test]
+    fn pricing_duration_days_accepts_valid_values() {
+        let mut params = HashMap::new();
+        params.insert("durationDays".to_string(), " 60 ".to_string());
+
+        assert_eq!(pricing_duration_days_param(&params).unwrap(), 60);
+    }
+
+    #[test]
+    fn pricing_duration_days_rejects_malformed_values() {
+        let mut params = HashMap::new();
+        params.insert("durationDays".to_string(), "thirty".to_string());
+
+        let err = pricing_duration_days_param(&params)
+            .expect_err("malformed durationDays should fail closed");
+
+        assert!(err.contains("positive integer"));
+    }
+
+    #[test]
+    fn pricing_duration_days_rejects_empty_values() {
+        let mut params = HashMap::new();
+        params.insert("durationDays".to_string(), "  ".to_string());
+
+        let err = pricing_duration_days_param(&params)
+            .expect_err("empty durationDays should fail closed");
+
+        assert!(err.contains("positive integer"));
+    }
+
+    #[test]
+    fn pricing_duration_days_rejects_out_of_range_values() {
+        let mut zero_params = HashMap::new();
+        zero_params.insert("durationDays".to_string(), "0".to_string());
+        let too_large = (MAX_CDN_PRICING_DURATION_DAYS + 1).to_string();
+        let mut large_params = HashMap::new();
+        large_params.insert("durationDays".to_string(), too_large);
+
+        let zero_err = pricing_duration_days_param(&zero_params)
+            .expect_err("zero durationDays should fail closed");
+        let large_err = pricing_duration_days_param(&large_params)
+            .expect_err("oversized durationDays should fail closed");
+
+        assert!(zero_err.contains("between 1"));
+        assert!(large_err.contains(&MAX_CDN_PRICING_DURATION_DAYS.to_string()));
     }
 
     #[test]
@@ -1448,14 +1812,124 @@ mod tests {
     }
 
     #[test]
-    fn parse_chi_or_zero_handles_zero_and_empty() {
-        assert_eq!(parse_chi_or_zero(""), 0);
-        assert_eq!(parse_chi_or_zero("0"), 0);
+    fn download_price_chi_handles_zero_and_empty() {
+        assert_eq!(parse_download_price_chi("").unwrap(), 0);
+        assert_eq!(parse_download_price_chi("0").unwrap(), 0);
+        assert_eq!(
+            normalize_download_price_chi("")
+                .expect("empty download price should normalize to free"),
+            ("0".to_string(), 0)
+        );
     }
 
     #[test]
-    fn parse_chi_or_zero_handles_valid_chi() {
-        assert_eq!(parse_chi_or_zero("0.001"), 1_000_000_000_000_000);
+    fn download_price_chi_handles_valid_chi() {
+        assert_eq!(
+            parse_download_price_chi("0.001").unwrap(),
+            1_000_000_000_000_000
+        );
+        assert_eq!(
+            normalize_download_price_chi(" 0.001 ").expect("valid download price should normalize"),
+            ("0.001".to_string(), 1_000_000_000_000_000)
+        );
+    }
+
+    #[test]
+    fn download_price_chi_rejects_malformed_values() {
+        let err = parse_download_price_chi("not-a-price")
+            .expect_err("malformed download price should fail closed");
+
+        assert!(err.contains("valid CHI decimal"));
+    }
+
+    #[test]
+    fn download_price_chi_rejects_whitespace_only_values() {
+        let err = parse_download_price_chi("  ")
+            .expect_err("whitespace-only persisted price should not become free");
+
+        assert!(err.contains("valid CHI decimal"));
+    }
+
+    #[test]
+    fn update_body_rejects_invalid_download_price_payload_type() {
+        let err = download_price_from_update_body(&serde_json::json!({
+            "downloadPriceChi": true
+        }))
+        .expect_err("invalid update payload type should be rejected");
+
+        assert!(err.contains("string or number"));
+    }
+
+    #[test]
+    fn price_env_value_uses_default_when_unset() {
+        assert_eq!(
+            price_env_value(None).expect("unset price env should use default"),
+            DEFAULT_CDN_PRICE_WEI_PER_MB_MONTH
+        );
+    }
+
+    #[test]
+    fn price_env_value_accepts_valid_chi_decimal() {
+        assert_eq!(
+            price_env_value(Some("0.0025")).expect("valid price env should parse"),
+            2_500_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn price_env_value_rejects_invalid_chi_decimal() {
+        let err = price_env_value(Some("not-a-price"))
+            .expect_err("malformed price env should be rejected");
+
+        assert!(err.contains("valid CHI decimal"));
+    }
+
+    #[test]
+    fn price_env_value_rejects_empty_value() {
+        let err = price_env_value(Some("  ")).expect_err("empty price env should be rejected");
+
+        assert!(err.contains("not empty"));
+    }
+
+    #[test]
+    fn system_time_secs_accepts_normal_clock() {
+        let ts = system_time_secs(UNIX_EPOCH + std::time::Duration::from_secs(42))
+            .expect("normal post-epoch clocks should produce timestamps");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn system_time_secs_rejects_pre_epoch_clock() {
+        let err = system_time_secs(UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch clocks should fail closed");
+
+        assert!(err.contains("before UNIX_EPOCH"));
+        assert!(err.contains("CDN timestamps unavailable"));
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_accepts_present_peer_id() {
+        let peer_id = cdn_provider_peer_id(Some("12D3KooWProviderPeer".to_string()))
+            .expect("present CDN peer id should be accepted");
+
+        assert_eq!(peer_id, "12D3KooWProviderPeer");
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_rejects_missing_peer_id() {
+        let err = cdn_provider_peer_id(None)
+            .expect_err("missing CDN peer id should fail provider publication");
+
+        assert!(err.contains("local peer ID unavailable"));
+    }
+
+    #[test]
+    fn cdn_provider_peer_id_rejects_blank_peer_id() {
+        let err = cdn_provider_peer_id(Some("   ".to_string()))
+            .expect_err("blank CDN peer id should fail provider publication");
+
+        assert!(err.contains("start DHT"));
     }
 
     /// Zero-input identities — the upload handler returns 0 immediately

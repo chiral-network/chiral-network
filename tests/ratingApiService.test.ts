@@ -1,13 +1,43 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+const mockInvoke = vi.mocked(invoke);
+
+function enableTauri() {
+  (window as any).__TAURI_INTERNALS__ = {};
+}
+
+function mockReputationProof() {
+  mockInvoke.mockImplementation(async (cmd: string) => {
+    if (cmd === 'compute_reputation_verdict_proof') {
+      return {
+        issuerWallet: '0xowner',
+        verifyingKey: 'issuer-key',
+        ownerSignature: 'owner-signature',
+        updatedAt: 1700000000,
+        verdictSignature: 'verdict-signature',
+      };
+    }
+    if (cmd === 'compute_owner_proof') {
+      return {
+        timestamp: 1700000000,
+        signature: 'owner-proof',
+        header: '1700000000:owner-proof',
+      };
+    }
+    throw new Error(`unexpected invoke: ${cmd}`);
+  });
+}
 
 describe('ratingApiService', () => {
   beforeEach(() => {
     vi.resetModules();
     mockFetch.mockReset();
+    mockInvoke.mockReset();
+    delete (window as any).__TAURI_INTERNALS__;
   });
 
   afterEach(() => {
@@ -51,8 +81,15 @@ describe('ratingApiService', () => {
   describe('recordTransferOutcome', () => {
     it('should POST to /api/ratings/transfer', async () => {
       const { ratingApi, setRatingOwner } = await import('$lib/services/ratingApiService');
-      setRatingOwner('0xowner');
+      enableTauri();
+      mockReputationProof();
+      setRatingOwner('0xowner', '0xprivate');
 
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ issuerWallet: '0xowner' }),
+      });
       mockFetch.mockResolvedValueOnce({
         ok: true,
         headers: new Headers({ 'content-type': 'application/json' }),
@@ -73,7 +110,27 @@ describe('ratingApiService', () => {
         't-1', '0xseeder', 'abc123', 'completed', '1000', '0xtxhash'
       );
 
-      const [url, init] = mockFetch.mock.calls[0];
+      expect(mockInvoke).toHaveBeenCalledWith('compute_reputation_verdict_proof', {
+        transferId: 't-1',
+        seederWallet: '0xseeder',
+        downloaderWallet: '0xowner',
+        fileHash: 'abc123',
+        amountWei: '1000',
+        outcome: 'completed',
+        txHash: '0xtxhash',
+        walletAddress: '0xowner',
+        privateKey: '0xprivate',
+      });
+      const [issuerUrl, issuerInit] = mockFetch.mock.calls[0];
+      expect(issuerUrl).toContain('/api/ratings/issuer-key');
+      expect(issuerInit.method).toBe('POST');
+      expect(JSON.parse(issuerInit.body)).toEqual({
+        verifyingKey: 'issuer-key',
+        ownerSignature: 'owner-signature',
+        updatedAt: 1700000000,
+      });
+
+      const [url, init] = mockFetch.mock.calls[1];
       expect(url).toContain('/api/ratings/transfer');
       expect(init.method).toBe('POST');
       const body = JSON.parse(init.body);
@@ -81,12 +138,21 @@ describe('ratingApiService', () => {
       expect(body.seederWallet).toBe('0xseeder');
       expect(body.outcome).toBe('completed');
       expect(body.txHash).toBe('0xtxhash');
+      expect(body.issuerWallet).toBe('0xowner');
+      expect(body.verdictSignature).toBe('verdict-signature');
     });
 
     it('should send null txHash when not provided', async () => {
       const { ratingApi, setRatingOwner } = await import('$lib/services/ratingApiService');
-      setRatingOwner('0xowner');
+      enableTauri();
+      mockReputationProof();
+      setRatingOwner('0xowner', '0xprivate');
 
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ issuerWallet: '0xowner' }),
+      });
       mockFetch.mockResolvedValueOnce({
         ok: true,
         headers: new Headers({ 'content-type': 'application/json' }),
@@ -94,14 +160,24 @@ describe('ratingApiService', () => {
       });
 
       await ratingApi.recordTransferOutcome('t-1', '0xseeder', 'abc', 'failed');
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const body = JSON.parse(mockFetch.mock.calls[1][1].body);
       expect(body.txHash).toBeNull();
       expect(body.amountWei).toBe('0');
+      expect(body.issuerWallet).toBe('0xowner');
+      expect(body.verdictSignature).toBe('verdict-signature');
     });
 
     it('should throw on HTTP error', async () => {
-      const { ratingApi } = await import('$lib/services/ratingApiService');
+      const { ratingApi, setRatingOwner } = await import('$lib/services/ratingApiService');
+      enableTauri();
+      mockReputationProof();
+      setRatingOwner('0xowner', '0xprivate');
 
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ issuerWallet: '0xowner' }),
+      });
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 400,
@@ -186,6 +262,22 @@ describe('ratingApiService', () => {
 
       await ratingApi.getReputation('0xABC');
       expect(mockFetch.mock.calls[0][0]).toContain('/api/ratings/0xABC');
+    });
+
+    it('should use configured rating endpoint base', async () => {
+      const { setNetworkEndpointConfig } = await import('$lib/services/networkEndpointConfig');
+      setNetworkEndpointConfig({ ratingBaseUrl: 'https://ratings.example/' });
+      const { ratingApi } = await import('$lib/services/ratingApiService');
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ wallet: '0xABC', events: [] }),
+      });
+
+      await ratingApi.getReputation('0xABC');
+
+      expect(mockFetch.mock.calls[0][0]).toBe('https://ratings.example/api/ratings/0xABC');
     });
   });
 

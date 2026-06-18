@@ -22,7 +22,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{oneshot, RwLock};
@@ -71,32 +71,48 @@ impl RelayShareRegistry {
         }
     }
 
-    pub async fn load_from_disk(&self) {
-        if let Ok(data) = std::fs::read_to_string(&self.persist_path) {
-            if let Ok(reg) = serde_json::from_str::<PersistedRegistry>(&data) {
-                let mut share_map = self.shares.write().await;
-                for s in reg.shares {
-                    share_map.insert(s.token.clone(), s);
-                }
-                let share_count = share_map.len();
-                drop(share_map);
-
-                let mut site_map = self.sites.write().await;
-                for s in reg.sites {
-                    site_map.insert(s.site_id.clone(), s);
-                }
-                let site_count = site_map.len();
-                drop(site_map);
-
-                println!(
-                    "[RELAY-SHARE] Loaded {} share + {} site registrations from disk",
-                    share_count, site_count
-                );
+    pub async fn load_from_disk(&self) -> Result<(), String> {
+        let data = match std::fs::read_to_string(&self.persist_path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(format!(
+                    "Failed to read relay share registry {}: {}",
+                    self.persist_path.display(),
+                    err
+                ));
             }
+        };
+        let reg = serde_json::from_str::<PersistedRegistry>(&data).map_err(|err| {
+            format!(
+                "Malformed relay share registry JSON at {}: {}",
+                self.persist_path.display(),
+                err
+            )
+        })?;
+
+        let mut share_map = self.shares.write().await;
+        for s in reg.shares {
+            share_map.insert(s.token.clone(), s);
         }
+        let share_count = share_map.len();
+        drop(share_map);
+
+        let mut site_map = self.sites.write().await;
+        for s in reg.sites {
+            site_map.insert(s.site_id.clone(), s);
+        }
+        let site_count = site_map.len();
+        drop(site_map);
+
+        println!(
+            "[RELAY-SHARE] Loaded {} share + {} site registrations from disk",
+            share_count, site_count
+        );
+        Ok(())
     }
 
-    async fn persist(&self) {
+    async fn persist(&self) -> Result<(), String> {
         let share_map = self.shares.read().await;
         let site_map = self.sites.read().await;
         let reg = PersistedRegistry {
@@ -106,10 +122,34 @@ impl RelayShareRegistry {
         drop(share_map);
         drop(site_map);
         if let Some(parent) = self.persist_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "Failed to create relay share registry directory {}: {}",
+                    parent.display(),
+                    err
+                )
+            })?;
         }
-        if let Ok(json) = serde_json::to_string_pretty(&reg) {
-            let _ = std::fs::write(&self.persist_path, json);
+        let json = serde_json::to_string_pretty(&reg).map_err(|err| {
+            format!(
+                "Failed to serialize relay share registry {}: {}",
+                self.persist_path.display(),
+                err
+            )
+        })?;
+        std::fs::write(&self.persist_path, json).map_err(|err| {
+            format!(
+                "Failed to write relay share registry {}: {}",
+                self.persist_path.display(),
+                err
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn persist_or_log(&self) {
+        if let Err(err) = self.persist().await {
+            eprintln!("[RELAY-SHARE] {}", err);
         }
     }
 
@@ -119,7 +159,7 @@ impl RelayShareRegistry {
         let mut map = self.shares.write().await;
         map.insert(reg.token.clone(), reg);
         drop(map);
-        self.persist().await;
+        self.persist_or_log().await;
     }
 
     pub async fn unregister(&self, token: &str) -> bool {
@@ -127,7 +167,7 @@ impl RelayShareRegistry {
         let removed = map.remove(token).is_some();
         drop(map);
         if removed {
-            self.persist().await;
+            self.persist_or_log().await;
         }
         removed
     }
@@ -143,7 +183,7 @@ impl RelayShareRegistry {
         let mut map = self.sites.write().await;
         map.insert(reg.site_id.clone(), reg);
         drop(map);
-        self.persist().await;
+        self.persist_or_log().await;
     }
 
     pub async fn unregister_site(&self, site_id: &str) -> bool {
@@ -151,7 +191,7 @@ impl RelayShareRegistry {
         let removed = map.remove(site_id).is_some();
         drop(map);
         if removed {
-            self.persist().await;
+            self.persist_or_log().await;
         }
         removed
     }
@@ -178,7 +218,7 @@ struct TunnelRequest {
 }
 
 /// Messages sent client → relay over the WebSocket.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct TunnelResponse {
     id: String,
     status: u16,
@@ -186,6 +226,21 @@ struct TunnelResponse {
     headers: HashMap<String, String>,
     /// Base64-encoded body
     body: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TunnelResponseFrameOutcome {
+    Delivered { id: String },
+    UnknownId { id: String },
+    MalformedDelivered { id: String, error: String },
+    MalformedUnknownId { id: String, error: String },
+    MalformedUnrecoverable { error: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TunnelResponseFrameError {
+    id: Option<String>,
+    message: String,
 }
 
 /// Active tunnel: a sender half of an mpsc channel to push requests into the
@@ -249,6 +304,80 @@ impl TunnelRegistry {
     }
 }
 
+fn parse_tunnel_response_frame(text: &str) -> Result<TunnelResponse, TunnelResponseFrameError> {
+    serde_json::from_str::<TunnelResponse>(text).map_err(|err| TunnelResponseFrameError {
+        id: recover_tunnel_response_id(text),
+        message: err.to_string(),
+    })
+}
+
+fn recover_tunnel_response_id(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(|id| id.to_string())
+        })
+}
+
+fn tunnel_frame_error_response(id: String, error: &str) -> TunnelResponse {
+    use base64::Engine;
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    );
+    TunnelResponse {
+        id,
+        status: StatusCode::BAD_GATEWAY.as_u16(),
+        headers,
+        body: base64::engine::general_purpose::STANDARD.encode(format!(
+            "Malformed tunnel response frame from owner: {error}"
+        )),
+    }
+}
+
+fn route_tunnel_response_frame(
+    pending: &mut HashMap<String, TunnelResponder>,
+    text: &str,
+) -> TunnelResponseFrameOutcome {
+    route_parsed_tunnel_response_frame(pending, parse_tunnel_response_frame(text))
+}
+
+fn route_parsed_tunnel_response_frame(
+    pending: &mut HashMap<String, TunnelResponder>,
+    parsed: Result<TunnelResponse, TunnelResponseFrameError>,
+) -> TunnelResponseFrameOutcome {
+    match parsed {
+        Ok(resp) => {
+            let id = resp.id.clone();
+            if let Some(tx) = pending.remove(&id) {
+                let _ = tx.send(resp);
+                TunnelResponseFrameOutcome::Delivered { id }
+            } else {
+                TunnelResponseFrameOutcome::UnknownId { id }
+            }
+        }
+        Err(err) => {
+            let error = err.message;
+            match err.id {
+                Some(id) => {
+                    if let Some(tx) = pending.remove(&id) {
+                        let _ = tx.send(tunnel_frame_error_response(id.clone(), &error));
+                        TunnelResponseFrameOutcome::MalformedDelivered { id, error }
+                    } else {
+                        TunnelResponseFrameOutcome::MalformedUnknownId { id, error }
+                    }
+                }
+                None => TunnelResponseFrameOutcome::MalformedUnrecoverable { error },
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Request/response types
 // ---------------------------------------------------------------------------
@@ -278,6 +407,50 @@ struct SiteRegisterRequest {
 }
 
 const REGISTER_TAG: &[u8] = b"chiral-relay-register-v1";
+const RELAY_IDENTIFIER_MAX_BYTES: usize = 128;
+
+fn validate_relay_identifier(kind: &str, id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err(format!("{kind} is required"));
+    }
+    if id.len() > RELAY_IDENTIFIER_MAX_BYTES {
+        return Err(format!(
+            "{kind} must be at most {} bytes",
+            RELAY_IDENTIFIER_MAX_BYTES
+        ));
+    }
+    if id.bytes().any(|b| b == b'/' || b == b'\\') {
+        return Err(format!("{kind} must not contain path separators"));
+    }
+    if id.chars().any(char::is_control) {
+        return Err(format!("{kind} must not contain control characters"));
+    }
+    if !id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(format!(
+            "{kind} may only contain ASCII letters, digits, '.', '_', or '-'"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_share_token(token: &str) -> Result<(), String> {
+    validate_relay_identifier("token", token)
+}
+
+fn validate_site_id(site_id: &str) -> Result<(), String> {
+    validate_relay_identifier("site_id", site_id)
+}
+
+fn validate_tunnel_query(q: &TunnelQuery) -> Result<(), String> {
+    match q.resource_type.as_str() {
+        "share" => validate_share_token(&q.id),
+        "site" => validate_site_id(&q.id),
+        _ => Err("type must be 'share' or 'site'".to_string()),
+    }
+}
 
 /// Length-prefixed canonical bytes that the registrant must sign.
 /// Binds operation kind, the resource id, the owner wallet, and the
@@ -307,11 +480,121 @@ fn is_valid_wallet(s: &str) -> bool {
     s.len() == 42 && s.starts_with("0x") && s[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Reject origin URLs that point at private/link-local infrastructure.
-/// Loopback is permitted at registration time because `fix_origin_url`
-/// substitutes the registrant's public IP at request handling.
-fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
-    use std::net::{IpAddr, Ipv4Addr};
+const PRIVATE_ORIGIN_ALLOWLIST_ENV: &str = "CHIRAL_RELAY_SHARE_PRIVATE_ORIGIN_ALLOWLIST";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PrivateOriginAllowEntry {
+    V4 { network: u32, prefix: u8 },
+    V6 { network: u128, prefix: u8 },
+}
+
+impl PrivateOriginAllowEntry {
+    fn contains(&self, ip: IpAddr) -> bool {
+        match (self, ip) {
+            (Self::V4 { network, prefix }, IpAddr::V4(v4)) => {
+                let mask = prefix_mask_v4(*prefix);
+                (u32::from(v4) & mask) == *network
+            }
+            (Self::V6 { network, prefix }, IpAddr::V6(v6)) => {
+                let mask = prefix_mask_v6(*prefix);
+                (u128::from(v6) & mask) == *network
+            }
+            _ => false,
+        }
+    }
+}
+
+fn prefix_mask_v4(prefix: u8) -> u32 {
+    if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    }
+}
+
+fn prefix_mask_v6(prefix: u8) -> u128 {
+    if prefix == 0 {
+        0
+    } else {
+        u128::MAX << (128 - prefix)
+    }
+}
+
+fn parse_private_origin_allow_entry(raw: &str) -> Result<PrivateOriginAllowEntry, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("empty allowlist entry".to_string());
+    }
+
+    let (ip_raw, prefix_raw) = trimmed.split_once('/').unwrap_or((trimmed, ""));
+    let ip: IpAddr = ip_raw
+        .parse()
+        .map_err(|_| format!("invalid IP allowlist entry `{}`", trimmed))?;
+
+    match ip {
+        IpAddr::V4(v4) => {
+            let prefix = if prefix_raw.is_empty() {
+                32
+            } else {
+                prefix_raw
+                    .parse::<u8>()
+                    .map_err(|_| format!("invalid IPv4 prefix in `{}`", trimmed))?
+            };
+            if prefix > 32 {
+                return Err(format!("IPv4 prefix out of range in `{}`", trimmed));
+            }
+            let mask = prefix_mask_v4(prefix);
+            Ok(PrivateOriginAllowEntry::V4 {
+                network: u32::from(v4) & mask,
+                prefix,
+            })
+        }
+        IpAddr::V6(v6) => {
+            let prefix = if prefix_raw.is_empty() {
+                128
+            } else {
+                prefix_raw
+                    .parse::<u8>()
+                    .map_err(|_| format!("invalid IPv6 prefix in `{}`", trimmed))?
+            };
+            if prefix > 128 {
+                return Err(format!("IPv6 prefix out of range in `{}`", trimmed));
+            }
+            let mask = prefix_mask_v6(prefix);
+            Ok(PrivateOriginAllowEntry::V6 {
+                network: u128::from(v6) & mask,
+                prefix,
+            })
+        }
+    }
+}
+
+fn parse_private_origin_allowlist(raw: &str) -> Vec<PrivateOriginAllowEntry> {
+    raw.split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                return None;
+            }
+            match parse_private_origin_allow_entry(entry) {
+                Ok(parsed) => Some(parsed),
+                Err(e) => {
+                    eprintln!("[RELAY-SHARE] Ignoring invalid private-origin allowlist entry: {e}");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+fn private_origin_allowlist_from_env() -> Vec<PrivateOriginAllowEntry> {
+    std::env::var(PRIVATE_ORIGIN_ALLOWLIST_ENV)
+        .ok()
+        .map(|raw| parse_private_origin_allowlist(&raw))
+        .unwrap_or_default()
+}
+
+fn origin_host(origin_url: &str) -> Result<String, String> {
     let lower = origin_url.trim().to_lowercase();
     let rest = if let Some(r) = lower.strip_prefix("http://") {
         r
@@ -344,60 +627,150 @@ fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
     if host.is_empty() {
         return Err("origin_url has no host".to_string());
     }
+    Ok(host.to_string())
+}
+
+fn allowlist_contains(allowlist: &[PrivateOriginAllowEntry], ip: IpAddr) -> bool {
+    allowlist.iter().any(|entry| entry.contains(ip))
+}
+
+fn is_cgnat_v4(v4: Ipv4Addr) -> bool {
+    let oct = v4.octets();
+    oct[0] == 100 && (oct[1] & 0xC0) == 64
+}
+
+fn validate_ipv4_origin(v4: Ipv4Addr, allowlist: &[PrivateOriginAllowEntry]) -> Result<(), String> {
+    if v4 == Ipv4Addr::UNSPECIFIED {
+        return Err("origin_url 0.0.0.0 is not routable".to_string());
+    }
+    if v4.is_loopback() {
+        // Allowed — fix_origin_url substitutes at request time.
+        return Ok(());
+    }
+    if v4.is_link_local() {
+        return Err(format!("origin_url IP {} is link-local — not allowed", v4));
+    }
+    if v4.is_broadcast() || v4.is_multicast() {
+        return Err(format!(
+            "origin_url IP {} is broadcast / multicast — not allowed",
+            v4
+        ));
+    }
+    if v4.is_private() || is_cgnat_v4(v4) {
+        if allowlist_contains(allowlist, IpAddr::V4(v4)) {
+            return Ok(());
+        }
+        return Err(format!(
+            "origin_url IP {} is private / CGNAT — not allowed without {}",
+            v4, PRIVATE_ORIGIN_ALLOWLIST_ENV
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ipv6_origin(v6: Ipv6Addr, allowlist: &[PrivateOriginAllowEntry]) -> Result<(), String> {
+    if v6.is_loopback() {
+        return Ok(());
+    }
+    if v6.is_unspecified() || v6.is_multicast() {
+        return Err(format!("origin_url IPv6 {} is not routable", v6));
+    }
+    if v6 == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254) {
+        return Err(format!("origin_url IPv6 {} is a metadata service", v6));
+    }
+    let seg0 = v6.segments()[0];
+    // Link-local fe80::/10 is never allowlisted: it includes local
+    // infrastructure and metadata-service style targets.
+    if (seg0 & 0xffc0) == 0xfe80 {
+        return Err(format!("origin_url IPv6 {} is link-local", v6));
+    }
+    // Detect IPv4-mapped (::ffff:0:0/96) and walk into v4 rules.
+    if let Some(mapped) = v6.to_ipv4() {
+        return validate_ipv4_origin(mapped, allowlist);
+    }
+    // Unique-local fc00::/7 may be reachable through VPN/corporate
+    // networks, but only when the relay operator explicitly allows it.
+    if (seg0 & 0xfe00) == 0xfc00 {
+        if allowlist_contains(allowlist, IpAddr::V6(v6)) {
+            return Ok(());
+        }
+        return Err(format!(
+            "origin_url IPv6 {} is unique-local — not allowed without {}",
+            v6, PRIVATE_ORIGIN_ALLOWLIST_ENV
+        ));
+    }
+    Ok(())
+}
+
+/// Reject origin URLs that point at private/link-local infrastructure.
+/// Loopback is permitted at registration time because `fix_origin_url`
+/// substitutes the registrant's public IP at request handling.
+fn is_safe_origin_url(origin_url: &str) -> Result<(), String> {
+    let allowlist = private_origin_allowlist_from_env();
+    is_safe_origin_url_with_allowlist(origin_url, &allowlist)
+}
+
+/// Validate a relay-share origin URL against the public registration policy.
+pub fn validate_relay_share_origin_url(origin_url: &str) -> Result<(), String> {
+    is_safe_origin_url(origin_url)
+}
+
+fn is_safe_origin_url_with_allowlist(
+    origin_url: &str,
+    allowlist: &[PrivateOriginAllowEntry],
+) -> Result<(), String> {
+    let host = origin_host(origin_url)?;
     // If the host is an IP literal, block private / link-local ranges.
     // DNS names pass — DNS rebinding is a separate attack we don't
     // address here (would need proxy-time IP re-validation).
     if let Ok(ip) = host.parse::<IpAddr>() {
         match ip {
-            IpAddr::V4(v4) => {
-                if v4 == Ipv4Addr::UNSPECIFIED {
-                    return Err("origin_url 0.0.0.0 is not routable".to_string());
-                }
-                if v4.is_loopback() {
-                    // Allowed — fix_origin_url substitutes at request time.
-                    return Ok(());
-                }
-                if v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_broadcast()
-                    || v4.is_multicast()
-                {
-                    return Err(format!(
-                        "origin_url IP {} is private / link-local / broadcast / multicast — not allowed",
-                        v4
-                    ));
-                }
-                // Block CGNAT 100.64.0.0/10 (carrier-grade NAT, rfc6598).
-                let oct = v4.octets();
-                if oct[0] == 100 && (oct[1] & 0xC0) == 64 {
-                    return Err(format!("origin_url IP {} is CGNAT — not allowed", v4));
-                }
-            }
-            IpAddr::V6(v6) => {
-                if v6.is_loopback() {
-                    return Ok(());
-                }
-                if v6.is_unspecified() || v6.is_multicast() {
-                    return Err(format!("origin_url IPv6 {} is not routable", v6));
-                }
-                let seg0 = v6.segments()[0];
-                // Unique-local fc00::/7
-                if (seg0 & 0xfe00) == 0xfc00 {
-                    return Err(format!("origin_url IPv6 {} is unique-local", v6));
-                }
-                // Link-local fe80::/10
-                if (seg0 & 0xffc0) == 0xfe80 {
-                    return Err(format!("origin_url IPv6 {} is link-local", v6));
-                }
-                // Detect IPv4-mapped (::ffff:0:0/96) and walk into v4 rules.
-                if let Some(mapped) = v6.to_ipv4() {
-                    return is_safe_origin_url(&origin_url.replace(
-                        host_with_port,
-                        &mapped.to_string(),
-                    ));
-                }
-            }
+            IpAddr::V4(v4) => validate_ipv4_origin(v4, allowlist)?,
+            IpAddr::V6(v6) => validate_ipv6_origin(v6, allowlist)?,
         }
+    }
+    Ok(())
+}
+
+fn validate_normalized_origin_ip(
+    ip: IpAddr,
+    allowlist: &[PrivateOriginAllowEntry],
+) -> Result<(), String> {
+    match ip {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback() {
+                return Err(format!(
+                    "origin_url IP {} is loopback after normalization — not allowed",
+                    v4
+                ));
+            }
+            validate_ipv4_origin(v4, allowlist)
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() {
+                return Err(format!(
+                    "origin_url IPv6 {} is loopback after normalization — not allowed",
+                    v6
+                ));
+            }
+            if let Some(mapped) = v6.to_ipv4() {
+                if mapped.is_loopback() {
+                    return Err(format!(
+                        "origin_url IP {} is loopback after normalization — not allowed",
+                        mapped
+                    ));
+                }
+            }
+            validate_ipv6_origin(v6, allowlist)
+        }
+    }
+}
+
+fn is_safe_normalized_origin_url(origin_url: &str) -> Result<(), String> {
+    let allowlist = private_origin_allowlist_from_env();
+    let host = origin_host(origin_url).map_err(|e| format!("normalized {e}"))?;
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        validate_normalized_origin_ip(ip, &allowlist).map_err(|e| format!("normalized {e}"))?;
     }
     Ok(())
 }
@@ -428,15 +801,102 @@ fn now_secs() -> u64 {
 // Registration API handlers
 // ---------------------------------------------------------------------------
 
-/// Replace 0.0.0.0 or 127.0.0.1 in origin URL with the client's real IP.
-/// e.g. "http://0.0.0.0:9419" + client_ip 1.2.3.4 → "http://1.2.3.4:9419"
-fn fix_origin_url(origin_url: &str, client_ip: std::net::IpAddr) -> String {
-    for placeholder in &["0.0.0.0", "127.0.0.1", "localhost"] {
-        if origin_url.contains(placeholder) {
-            return origin_url.replace(placeholder, &client_ip.to_string());
-        }
+fn is_placeholder_origin_host(host: &str) -> bool {
+    matches!(host, "0.0.0.0" | "127.0.0.1" | "localhost")
+}
+
+fn origin_host_range(origin_url: &str) -> Result<std::ops::Range<usize>, String> {
+    let scheme_end = origin_url
+        .find("://")
+        .ok_or_else(|| "origin_url has no scheme separator for host normalization".to_string())?;
+    let authority_start = scheme_end + 3;
+    let after_authority_start = &origin_url[authority_start..];
+    let authority_len = after_authority_start
+        .find(['/', '?', '#'])
+        .unwrap_or(after_authority_start.len());
+    let authority = &after_authority_start[..authority_len];
+    if authority.is_empty() {
+        return Err("origin_url has no authority for host normalization".to_string());
     }
-    origin_url.to_string()
+
+    let host_port_start = authority.rfind('@').map(|idx| idx + 1).unwrap_or(0);
+    let host_port = &authority[host_port_start..];
+    if host_port.is_empty() {
+        return Err("origin_url has no host for normalization".to_string());
+    }
+
+    let host_len = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.find(']')
+            .map(|idx| idx + 2)
+            .ok_or_else(|| "origin_url has an unterminated IPv6 host".to_string())?
+    } else {
+        host_port.find(':').unwrap_or(host_port.len())
+    };
+    if host_len == 0 {
+        return Err("origin_url has no host for normalization".to_string());
+    }
+
+    let start = authority_start + host_port_start;
+    Ok(start..start + host_len)
+}
+
+/// Replace only a placeholder origin host with the client's real IP.
+/// e.g. "http://0.0.0.0:9419" + client_ip 1.2.3.4 -> "http://1.2.3.4:9419"
+fn fix_origin_url(origin_url: &str, client_ip: std::net::IpAddr) -> Result<String, String> {
+    let trimmed = origin_url.trim();
+    let parsed = reqwest::Url::parse(trimmed)
+        .map_err(|e| format!("origin_url could not be parsed for host normalization: {e}"))?;
+    let Some(host) = parsed.host_str() else {
+        return Err("origin_url has no host for normalization".to_string());
+    };
+
+    if is_placeholder_origin_host(&host.to_ascii_lowercase()) {
+        let range = origin_host_range(trimmed)?;
+        let replacement = match client_ip {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => format!("[{}]", v6),
+        };
+        let rewritten = format!(
+            "{}{}{}",
+            &trimmed[..range.start],
+            replacement,
+            &trimmed[range.end..]
+        );
+        reqwest::Url::parse(&rewritten)
+            .map_err(|e| format!("origin_url host rewrite produced an invalid URL: {e}"))?;
+        return Ok(rewritten);
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_origin_for_preflight(
+    origin_url: &str,
+    client_ip: std::net::IpAddr,
+) -> Result<String, String> {
+    let origin = fix_origin_url(origin_url, client_ip)?;
+    is_safe_normalized_origin_url(&origin)?;
+    Ok(origin)
+}
+
+async fn preflight_origin_reachable(origin_url: &str) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        // The origin host has already passed `is_safe_origin_url`; do not
+        // follow attacker-controlled redirects to a different network target.
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("origin_url preflight client could not be initialized: {e}"))?;
+
+    client
+        .get(origin_url.trim_end_matches('/'))
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            format!(
+                "origin_url is not reachable from this relay: {e}. Ensure the owner server is running, the host/port is reachable from the relay, and firewall/NAT rules allow inbound HTTP."
+            )
+        })
 }
 
 /// POST /api/drive/relay-register — register a share origin
@@ -445,12 +905,19 @@ async fn register_share(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<RegisterRequest>,
 ) -> Response {
-    if req.token.is_empty() || req.origin_url.is_empty() {
-        return (StatusCode::BAD_REQUEST, "token and origin_url required").into_response();
+    if let Err(e) = validate_share_token(&req.token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    if req.origin_url.is_empty() {
+        return (StatusCode::BAD_REQUEST, "origin_url required").into_response();
     }
     let owner = req.owner_wallet.trim().to_lowercase();
     if !is_valid_wallet(&owner) {
-        return (StatusCode::BAD_REQUEST, "owner_wallet must be 0x-hex (42 chars)").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "owner_wallet must be 0x-hex (42 chars)",
+        )
+            .into_response();
     }
     if let Err(e) = is_safe_origin_url(&req.origin_url) {
         return (StatusCode::BAD_REQUEST, e).into_response();
@@ -477,7 +944,13 @@ async fn register_share(
                 .into_response();
         }
     }
-    let origin = fix_origin_url(&req.origin_url, addr.ip());
+    let origin = match normalize_origin_for_preflight(&req.origin_url, addr.ip()) {
+        Ok(origin) => origin,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if let Err(e) = preflight_origin_reachable(&origin).await {
+        return (StatusCode::BAD_GATEWAY, e).into_response();
+    }
     println!(
         "[RELAY-SHARE] Registering share token={} origin={} (raw={}) owner={}",
         req.token, origin, req.origin_url, owner
@@ -503,6 +976,9 @@ async fn unregister_share(
     Path(token): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    if let Err(e) = validate_share_token(&token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let path_for_proof = format!("/api/drive/relay-register/{}", token);
     let claimant = match crate::auth::verify_owner_proof(
         &headers,
@@ -540,6 +1016,9 @@ async fn tunnel_ws_handler(
     Query(q): Query<TunnelQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
+    if let Err(e) = validate_tunnel_query(&q) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let key = format!("{}:{}", q.resource_type, q.id);
     println!("[TUNNEL] WebSocket upgrade for key={}", key);
     ws.on_upgrade(move |socket| handle_tunnel_ws(socket, key, tunnel_reg))
@@ -562,13 +1041,50 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
     // Task: read responses from the WebSocket client
     let read_key = key.clone();
     let read_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_rx.next().await {
+        while let Some(msg) = ws_rx.next().await {
+            let msg = match msg {
+                Ok(msg) => msg,
+                Err(err) => {
+                    let message = {
+                        let mut map = pending_for_read.write().await;
+                        relay_tunnel_read_error_result(&mut map, &read_key, err.to_string())
+                    };
+                    eprintln!("{}", message);
+                    break;
+                }
+            };
             match msg {
                 Message::Text(text) => {
-                    if let Ok(resp) = serde_json::from_str::<TunnelResponse>(&text) {
+                    let parsed = parse_tunnel_response_frame(&text);
+                    let outcome = {
                         let mut map = pending_for_read.write().await;
-                        if let Some(tx) = map.remove(&resp.id) {
-                            let _ = tx.send(resp);
+                        route_parsed_tunnel_response_frame(&mut map, parsed)
+                    };
+                    match outcome {
+                        TunnelResponseFrameOutcome::Delivered { .. } => {}
+                        TunnelResponseFrameOutcome::UnknownId { id } => {
+                            eprintln!(
+                                "[TUNNEL] Ignoring response for unknown request id={} key={}",
+                                id, read_key
+                            );
+                        }
+                        TunnelResponseFrameOutcome::MalformedDelivered { id, error } => {
+                            eprintln!(
+                                "[TUNNEL] Malformed response frame for key={} id={}: {}",
+                                read_key, id, error
+                            );
+                        }
+                        TunnelResponseFrameOutcome::MalformedUnknownId { id, error } => {
+                            eprintln!(
+                                "[TUNNEL] Malformed response frame for unknown request id={} key={}: {}",
+                                id, read_key, error
+                            );
+                        }
+                        TunnelResponseFrameOutcome::MalformedUnrecoverable { error } => {
+                            eprintln!(
+                                "[TUNNEL] Malformed response frame for key={} without recoverable id: {}",
+                                read_key, error
+                            );
                         }
                     }
                 }
@@ -582,6 +1098,7 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
     });
 
     // Task: forward requests from proxy handlers to the WebSocket client
+    let write_key = key.clone();
     let write_task = tokio::spawn(async move {
         // Periodic pings to keep the connection alive + cleanup stale pending entries
         let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -593,7 +1110,21 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
                             let id = tunnel_req.id.clone();
                             pending.write().await.insert(id, responder);
                             let json = serde_json::to_string(&tunnel_req).unwrap_or_default();
-                            if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            let send_result = ws_tx
+                                .send(Message::Text(json.into()))
+                                .await
+                                .map_err(|err| err.to_string());
+                            let send_result = {
+                                let mut map = pending.write().await;
+                                relay_tunnel_request_send_result(
+                                    &mut map,
+                                    &write_key,
+                                    &tunnel_req.id,
+                                    send_result,
+                                )
+                            };
+                            if let Err(message) = send_result {
+                                eprintln!("{}", message);
                                 break;
                             }
                         }
@@ -606,7 +1137,14 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
                         let mut map = pending.write().await;
                         map.retain(|_, tx| !tx.is_closed());
                     }
-                    if ws_tx.send(Message::Ping(vec![].into())).await.is_err() {
+                    let send_result = ws_tx
+                        .send(Message::Ping(vec![].into()))
+                        .await
+                        .map_err(|err| err.to_string());
+                    if let Err(message) =
+                        relay_tunnel_keepalive_ping_result(&write_key, send_result)
+                    {
+                        eprintln!("{}", message);
                         break;
                     }
                 }
@@ -624,6 +1162,18 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
     println!("[TUNNEL] Disconnected: {}", key);
 }
 
+fn relay_tunnel_keepalive_ping_result(
+    key: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    send_result.map_err(|err| {
+        format!(
+            "[TUNNEL] Failed to send keepalive ping for key={}: {}",
+            key, err
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Reverse proxy helpers
 // ---------------------------------------------------------------------------
@@ -635,6 +1185,44 @@ fn build_query_string(params: &HashMap<String, String>) -> String {
     }
     let qs: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     format!("?{}", qs.join("&"))
+}
+
+fn tunnel_request_send_error_response(id: String, error: &str) -> TunnelResponse {
+    use base64::Engine;
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    );
+    TunnelResponse {
+        id,
+        status: StatusCode::BAD_GATEWAY.as_u16(),
+        headers,
+        body: base64::engine::general_purpose::STANDARD
+            .encode(format!("Failed to send tunnel request to owner: {error}")),
+    }
+}
+
+fn relay_tunnel_request_send_result(
+    pending: &mut HashMap<String, TunnelResponder>,
+    key: &str,
+    id: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    match send_result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!(
+                "[TUNNEL] Failed to send request frame for key={} id={}: {}",
+                key, id, err
+            );
+            if let Some(tx) = pending.remove(id) {
+                let _ = tx.send(tunnel_request_send_error_response(id.to_string(), &message));
+            }
+            Err(message)
+        }
+    }
 }
 
 /// Try the WebSocket tunnel first; if unavailable fall back to direct HTTP proxy.
@@ -657,9 +1245,16 @@ async fn proxy_via_tunnel_or_http(
 fn tunnel_response_to_axum(resp: TunnelResponse) -> Response {
     use base64::Engine;
     let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
-    let body_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&resp.body)
-        .unwrap_or_default();
+    let body_bytes = match base64::engine::general_purpose::STANDARD.decode(&resp.body) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("Malformed tunnel response body: {}", e),
+            )
+                .into_response()
+        }
+    };
 
     let mut headers = axum::http::HeaderMap::new();
     for (k, v) in &resp.headers {
@@ -673,9 +1268,68 @@ fn tunnel_response_to_axum(resp: TunnelResponse) -> Response {
     (status, headers, body_bytes).into_response()
 }
 
+fn tunnel_read_error_response(id: String, error: &str) -> TunnelResponse {
+    use base64::Engine;
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    );
+    TunnelResponse {
+        id,
+        status: StatusCode::BAD_GATEWAY.as_u16(),
+        headers,
+        body: base64::engine::general_purpose::STANDARD
+            .encode(format!("Tunnel owner WebSocket read failed: {error}")),
+    }
+}
+
+fn relay_tunnel_read_error_result(
+    pending: &mut HashMap<String, TunnelResponder>,
+    key: &str,
+    read_error: String,
+) -> String {
+    let message = format!(
+        "[TUNNEL] Owner WebSocket read error for key={}: {}",
+        key, read_error
+    );
+    let pending_ids: Vec<String> = pending.keys().cloned().collect();
+    for id in pending_ids {
+        if let Some(tx) = pending.remove(&id) {
+            let _ = tx.send(tunnel_read_error_response(id, &message));
+        }
+    }
+    message
+}
+
 /// Forward a GET request to the target URL directly and stream the response back.
 async fn proxy_request_direct(target: &str) -> Response {
-    let upstream = match crate::rpc_client::client().get(target).send().await {
+    if let Err(e) = is_safe_origin_url(target) {
+        eprintln!("[RELAY-SHARE] Blocking direct proxy to disallowed origin: {e}");
+        return (
+            StatusCode::FORBIDDEN,
+            Html(offline_page(
+                "The registered origin is blocked by relay policy.",
+            )),
+        )
+            .into_response();
+    }
+
+    let client = match crate::rpc_client::client() {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("[RELAY-SHARE] Shared HTTP client unavailable: {e}");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(offline_page(
+                    "The owner is currently offline. Please try again later.",
+                )),
+            )
+                .into_response();
+        }
+    };
+    let upstream = match client.get(target).send().await {
         Ok(r) => r,
         Err(_) => {
             return (
@@ -727,6 +1381,9 @@ async fn proxy_share_root(
     Path(token): Path<String>,
     Query(q): Query<ProxyQuery>,
 ) -> Response {
+    if let Err(e) = validate_share_token(&token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup(&token).await {
         Some(r) => r,
         None => {
@@ -752,6 +1409,9 @@ async fn proxy_share_path(
     Path((token, subpath)): Path<(String, String)>,
     Query(q): Query<ProxyQuery>,
 ) -> Response {
+    if let Err(e) = validate_share_token(&token) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup(&token).await {
         Some(r) => r,
         None => {
@@ -780,12 +1440,19 @@ async fn register_site(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<SiteRegisterRequest>,
 ) -> Response {
-    if req.site_id.is_empty() || req.origin_url.is_empty() {
-        return (StatusCode::BAD_REQUEST, "site_id and origin_url required").into_response();
+    if let Err(e) = validate_site_id(&req.site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    if req.origin_url.is_empty() {
+        return (StatusCode::BAD_REQUEST, "origin_url required").into_response();
     }
     let owner = req.owner_wallet.trim().to_lowercase();
     if !is_valid_wallet(&owner) {
-        return (StatusCode::BAD_REQUEST, "owner_wallet must be 0x-hex (42 chars)").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "owner_wallet must be 0x-hex (42 chars)",
+        )
+            .into_response();
     }
     if let Err(e) = is_safe_origin_url(&req.origin_url) {
         return (StatusCode::BAD_REQUEST, e).into_response();
@@ -813,7 +1480,13 @@ async fn register_site(
                 .into_response();
         }
     }
-    let origin = fix_origin_url(&req.origin_url, addr.ip());
+    let origin = match normalize_origin_for_preflight(&req.origin_url, addr.ip()) {
+        Ok(origin) => origin,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if let Err(e) = preflight_origin_reachable(&origin).await {
+        return (StatusCode::BAD_GATEWAY, e).into_response();
+    }
     println!(
         "[RELAY-SITE] Registering site={} origin={} (raw={}) owner={}",
         req.site_id, origin, req.origin_url, owner
@@ -836,6 +1509,9 @@ async fn unregister_site(
     Path(site_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let path_for_proof = format!("/api/sites/relay-register/{}", site_id);
     let claimant = match crate::auth::verify_owner_proof(
         &headers,
@@ -873,6 +1549,9 @@ async fn proxy_site_redirect(
     Extension(state): Extension<Arc<RelayShareRegistry>>,
     Path(site_id): Path<String>,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     if state.lookup_site(&site_id).await.is_none() {
         return (StatusCode::NOT_FOUND, Html(offline_page("Site not found"))).into_response();
     }
@@ -890,6 +1569,9 @@ async fn proxy_site_root(
     Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
     Path(site_id): Path<String>,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup_site(&site_id).await {
         Some(r) => r,
         None => {
@@ -908,6 +1590,9 @@ async fn proxy_site_path(
     Extension(tunnel_reg): Extension<Arc<TunnelRegistry>>,
     Path((site_id, subpath)): Path<(String, String)>,
 ) -> Response {
+    if let Err(e) = validate_site_id(&site_id) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
     let reg = match state.lookup_site(&site_id).await {
         Some(r) => r,
         None => {
@@ -979,6 +1664,13 @@ pub fn relay_share_routes(
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    const TEST_PRIVATE_KEY: &str =
+        "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     // -----------------------------------------------------------------------
     // is_safe_origin_url — FM-A04
@@ -995,21 +1687,57 @@ mod tests {
 
     #[test]
     fn safe_origin_rejects_private_link_local_and_metadata() {
+        let allowlist = [];
         // RFC1918
-        assert!(is_safe_origin_url("http://10.0.0.1:8500").is_err());
-        assert!(is_safe_origin_url("http://192.168.1.1:8080").is_err());
-        assert!(is_safe_origin_url("http://172.16.1.1:8080").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://10.0.0.1:8500", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.1:8080", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://172.16.1.1:8080", &allowlist).is_err());
         // Link-local (AWS / cloud metadata, etc.)
-        assert!(is_safe_origin_url("http://169.254.169.254/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://169.254.169.254/", &allowlist).is_err());
         // CGNAT
-        assert!(is_safe_origin_url("http://100.64.0.1/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://100.64.0.1/", &allowlist).is_err());
         // 0.0.0.0
-        assert!(is_safe_origin_url("http://0.0.0.0:8080/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://0.0.0.0:8080/", &allowlist).is_err());
         // Multicast
-        assert!(is_safe_origin_url("http://224.0.0.1/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://224.0.0.1/", &allowlist).is_err());
         // IPv6 unique-local + link-local
-        assert!(is_safe_origin_url("http://[fc00::1]:8080/").is_err());
-        assert!(is_safe_origin_url("http://[fe80::1]:8080/").is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fc00::1]:8080/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fe80::1]:8080/", &allowlist).is_err());
+    }
+
+    #[test]
+    fn safe_origin_accepts_explicitly_allowed_private_networks() {
+        let allowlist = parse_private_origin_allowlist("10.0.0.0/8,100.64.0.0/10,fc00::/7");
+
+        assert!(is_safe_origin_url_with_allowlist("http://10.2.3.4:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://100.64.12.34:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://[fc00::1234]:9419", &allowlist).is_ok());
+
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.10:9419", &allowlist).is_err());
+    }
+
+    #[test]
+    fn safe_origin_accepts_explicit_private_ip_allowlist_entries() {
+        let allowlist = parse_private_origin_allowlist("192.168.1.42,fd00::42");
+
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.42:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://192.168.1.43:9419", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fd00::42]:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://[fd00::43]:9419", &allowlist).is_err());
+    }
+
+    #[test]
+    fn safe_origin_never_allows_link_local_metadata_or_non_routable_targets() {
+        let allowlist = parse_private_origin_allowlist("0.0.0.0/0,::/0");
+
+        assert!(is_safe_origin_url_with_allowlist("http://10.0.0.1:9419", &allowlist).is_ok());
+        assert!(is_safe_origin_url_with_allowlist("http://169.254.169.254/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://169.254.1.10/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://0.0.0.0:9419/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://224.0.0.1/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fd00:ec2::254]/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[fe80::1]:9419/", &allowlist).is_err());
+        assert!(is_safe_origin_url_with_allowlist("http://[::]/", &allowlist).is_err());
     }
 
     #[test]
@@ -1021,11 +1749,16 @@ mod tests {
 
     #[test]
     fn safe_origin_handles_userinfo_and_brackets() {
+        let allowlist = [];
         // Userinfo is stripped before host check.
-        assert!(is_safe_origin_url("http://user:pass@10.0.0.1/").is_err());
+        assert!(
+            is_safe_origin_url_with_allowlist("http://user:pass@10.0.0.1/", &allowlist).is_err()
+        );
         assert!(is_safe_origin_url("http://user:pass@example.com/").is_ok());
         // IPv4-mapped IPv6 walks into v4 rules.
-        assert!(is_safe_origin_url("http://[::ffff:10.0.0.1]/").is_err());
+        assert!(
+            is_safe_origin_url_with_allowlist("http://[::ffff:10.0.0.1]/", &allowlist).is_err()
+        );
         assert!(is_safe_origin_url("http://[::ffff:203.0.113.5]/").is_ok());
     }
 
@@ -1045,6 +1778,66 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    #[test]
+    fn relay_identifier_validation_accepts_current_id_shapes() {
+        for id in ["abc123", "share-token_1", "site.id-2", "550e8400-e29b"] {
+            validate_share_token(id).expect("valid share token should pass");
+            validate_site_id(id).expect("valid site id should pass");
+        }
+
+        validate_tunnel_query(&TunnelQuery {
+            resource_type: "share".to_string(),
+            id: "share-token_1".to_string(),
+        })
+        .expect("valid share tunnel query should pass");
+        validate_tunnel_query(&TunnelQuery {
+            resource_type: "site".to_string(),
+            id: "site.id-2".to_string(),
+        })
+        .expect("valid site tunnel query should pass");
+    }
+
+    #[test]
+    fn relay_identifier_validation_rejects_bad_shapes() {
+        let overlong = "a".repeat(RELAY_IDENTIFIER_MAX_BYTES + 1);
+        for (id, expected) in [
+            ("", "required"),
+            (overlong.as_str(), "at most"),
+            ("nested/path", "path separators"),
+            ("nested\\path", "path separators"),
+            ("line\nbreak", "control characters"),
+            ("has space", "may only contain"),
+        ] {
+            let token_err = validate_share_token(id).expect_err("token should be rejected");
+            assert!(
+                token_err.contains(expected),
+                "expected {token_err:?} to contain {expected:?}"
+            );
+            let site_err = validate_site_id(id).expect_err("site id should be rejected");
+            assert!(
+                site_err.contains(expected),
+                "expected {site_err:?} to contain {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tunnel_query_validation_rejects_invalid_type_and_id() {
+        let type_err = validate_tunnel_query(&TunnelQuery {
+            resource_type: "drive".to_string(),
+            id: "valid-id".to_string(),
+        })
+        .expect_err("unknown tunnel resource type should fail");
+        assert!(type_err.contains("type must be"));
+
+        let id_err = validate_tunnel_query(&TunnelQuery {
+            resource_type: "share".to_string(),
+            id: "bad/token".to_string(),
+        })
+        .expect_err("malformed tunnel id should fail");
+        assert!(id_err.contains("path separators"));
+    }
+
     // -----------------------------------------------------------------------
     // fix_origin_url
     // -----------------------------------------------------------------------
@@ -1053,7 +1846,7 @@ mod tests {
     fn test_fix_origin_url_replaces_quad_zero() {
         let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
         assert_eq!(
-            fix_origin_url("http://0.0.0.0:9419", ip),
+            fix_origin_url("http://0.0.0.0:9419", ip).unwrap(),
             "http://203.0.113.5:9419"
         );
     }
@@ -1062,7 +1855,7 @@ mod tests {
     fn test_fix_origin_url_replaces_localhost() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         assert_eq!(
-            fix_origin_url("http://localhost:9419", ip),
+            fix_origin_url("http://localhost:9419", ip).unwrap(),
             "http://10.0.0.1:9419"
         );
     }
@@ -1071,7 +1864,7 @@ mod tests {
     fn test_fix_origin_url_replaces_loopback() {
         let ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42));
         assert_eq!(
-            fix_origin_url("http://127.0.0.1:9419/path", ip),
+            fix_origin_url("http://127.0.0.1:9419/path", ip).unwrap(),
             "http://192.168.1.42:9419/path"
         );
     }
@@ -1080,9 +1873,261 @@ mod tests {
     fn test_fix_origin_url_noop_when_no_placeholder() {
         let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
         assert_eq!(
-            fix_origin_url("http://203.0.113.5:9419", ip),
+            fix_origin_url("http://203.0.113.5:9419", ip).unwrap(),
             "http://203.0.113.5:9419"
         );
+    }
+
+    #[test]
+    fn test_fix_origin_url_preserves_placeholder_text_outside_host() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+        assert_eq!(
+            fix_origin_url("http://127.0.0.1:9419/localhost?next=localhost", ip).unwrap(),
+            "http://203.0.113.5:9419/localhost?next=localhost"
+        );
+        assert_eq!(
+            fix_origin_url("http://localhost:9419?next=localhost", ip).unwrap(),
+            "http://203.0.113.5:9419?next=localhost"
+        );
+        assert_eq!(
+            fix_origin_url("http://example.com/localhost?next=127.0.0.1", ip).unwrap(),
+            "http://example.com/localhost?next=127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn test_fix_origin_url_returns_parse_errors() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+        assert!(fix_origin_url("not-a-url", ip).is_err());
+    }
+
+    #[test]
+    fn test_normalize_origin_for_preflight_allows_public_substitution() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5));
+
+        assert_eq!(
+            normalize_origin_for_preflight("http://localhost:9419", ip).unwrap(),
+            "http://203.0.113.5:9419"
+        );
+    }
+
+    #[test]
+    fn test_normalize_origin_for_preflight_rejects_unsafe_substitution() {
+        let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let private = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 7));
+
+        let loopback_err = normalize_origin_for_preflight("http://localhost:9419", loopback)
+            .expect_err("loopback normalized target should fail closed");
+        assert!(loopback_err.contains("normalized origin_url"));
+        assert!(loopback_err.contains("loopback"));
+
+        let private_err = normalize_origin_for_preflight("http://localhost:9419", private)
+            .expect_err("private normalized target should fail closed");
+        assert!(private_err.contains("normalized origin_url"));
+        assert!(private_err.contains("private"));
+    }
+
+    async fn one_shot_http_response(response: Vec<u8>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream.write_all(&response).await;
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    async fn one_shot_http_origin() -> String {
+        one_shot_http_response(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec())
+            .await
+    }
+
+    async fn one_shot_redirect_origin(location: &str) -> String {
+        one_shot_http_response(
+            format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n")
+                .into_bytes(),
+        )
+        .await
+    }
+
+    async fn closed_loopback_origin() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{}", addr)
+    }
+
+    fn test_owner_wallet() -> String {
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, b"owner").unwrap();
+        crate::wallet::recover_signer(b"owner", &signature).unwrap()
+    }
+
+    fn signed_register_request(token: &str, origin_url: &str) -> RegisterRequest {
+        let owner_wallet = test_owner_wallet();
+        let payload = register_payload("share", token, &owner_wallet, origin_url);
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, &payload).unwrap();
+        RegisterRequest {
+            token: token.to_string(),
+            origin_url: origin_url.to_string(),
+            owner_wallet,
+            signature,
+        }
+    }
+
+    fn signed_site_register_request(site_id: &str, origin_url: &str) -> SiteRegisterRequest {
+        let owner_wallet = test_owner_wallet();
+        let payload = register_payload("site", site_id, &owner_wallet, origin_url);
+        let signature = crate::wallet::sign_message(TEST_PRIVATE_KEY, &payload).unwrap();
+        SiteRegisterRequest {
+            site_id: site_id.to_string(),
+            origin_url: origin_url.to_string(),
+            owner_wallet,
+            signature,
+        }
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_accepts_reachable_http_origin() {
+        let origin = one_shot_http_origin().await;
+
+        preflight_origin_reachable(&origin)
+            .await
+            .expect("reachable origin should pass preflight");
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_reports_unreachable_origin() {
+        let origin = closed_loopback_origin().await;
+
+        let err = preflight_origin_reachable(&origin)
+            .await
+            .expect_err("closed origin should fail preflight");
+
+        assert!(err.contains("not reachable"));
+        assert!(err.contains("firewall/NAT"));
+    }
+
+    #[tokio::test]
+    async fn preflight_origin_does_not_follow_redirects() {
+        let closed_target = closed_loopback_origin().await;
+        let origin = one_shot_redirect_origin(&closed_target).await;
+
+        preflight_origin_reachable(&origin)
+            .await
+            .expect("redirect response should count as origin reachability without following it");
+    }
+
+    #[tokio::test]
+    async fn register_share_rejects_loopback_normalized_origin_before_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(RelayShareRegistry::new(dir.path().to_path_buf()));
+        let req = signed_register_request("unsafe-token", "http://localhost:9");
+
+        let response = register_share(
+            Extension(registry.clone()),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 51111))),
+            Json(req),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(registry.lookup("unsafe-token").await.is_none());
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("normalized origin_url"));
+        assert!(body.contains("loopback"));
+    }
+
+    #[tokio::test]
+    async fn register_site_rejects_private_normalized_origin_before_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(RelayShareRegistry::new(dir.path().to_path_buf()));
+        let req = signed_site_register_request("unsafe-site", "http://localhost:9");
+
+        let response = register_site(
+            Extension(registry.clone()),
+            ConnectInfo(SocketAddr::from(([10, 0, 0, 7], 51111))),
+            Json(req),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(registry.lookup_site("unsafe-site").await.is_none());
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("normalized origin_url"));
+        assert!(body.contains("private"));
+    }
+
+    #[tokio::test]
+    async fn tunnel_response_to_axum_decodes_valid_body() {
+        use base64::Engine;
+
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "text/plain".to_string());
+        let response = tunnel_response_to_axum(TunnelResponse {
+            id: "req-1".to_string(),
+            status: StatusCode::CREATED.as_u16(),
+            headers,
+            body: base64::engine::general_purpose::STANDARD.encode("hello tunnel"),
+        });
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "text/plain"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), b"hello tunnel");
+    }
+
+    #[tokio::test]
+    async fn tunnel_response_to_axum_rejects_malformed_body() {
+        let response = tunnel_response_to_axum(TunnelResponse {
+            id: "req-2".to_string(),
+            status: StatusCode::OK.as_u16(),
+            headers: HashMap::new(),
+            body: "not base64***".to_string(),
+        });
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("Malformed tunnel response body"));
+    }
+
+    #[tokio::test]
+    async fn tunnel_response_to_axum_preserves_empty_body() {
+        let response = tunnel_response_to_axum(TunnelResponse {
+            id: "req-3".to_string(),
+            status: StatusCode::NO_CONTENT.as_u16(),
+            headers: HashMap::new(),
+            body: String::new(),
+        });
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(body.is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -1114,6 +2159,123 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // WebSocket tunnel response frames
+    // -----------------------------------------------------------------------
+
+    fn pending_tunnel_response(
+        id: &str,
+    ) -> (
+        HashMap<String, TunnelResponder>,
+        tokio::sync::oneshot::Receiver<TunnelResponse>,
+    ) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut pending = HashMap::new();
+        pending.insert(id.to_string(), tx);
+        (pending, rx)
+    }
+
+    #[test]
+    fn tunnel_response_frame_routes_valid_response() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-1");
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "text/plain".to_string());
+        let frame = serde_json::to_string(&TunnelResponse {
+            id: "req-1".to_string(),
+            status: 204,
+            headers,
+            body: "".to_string(),
+        })
+        .unwrap();
+
+        let outcome = route_tunnel_response_frame(&mut pending, &frame);
+
+        assert_eq!(
+            outcome,
+            TunnelResponseFrameOutcome::Delivered {
+                id: "req-1".to_string()
+            }
+        );
+        assert!(pending.is_empty());
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-1");
+        assert_eq!(resp.status, 204);
+        assert_eq!(
+            resp.headers.get("content-type").map(String::as_str),
+            Some("text/plain")
+        );
+    }
+
+    #[test]
+    fn tunnel_response_frame_reports_unknown_response_ids() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-pending");
+        let frame = serde_json::to_string(&TunnelResponse {
+            id: "req-unknown".to_string(),
+            status: 200,
+            headers: HashMap::new(),
+            body: "".to_string(),
+        })
+        .unwrap();
+
+        let outcome = route_tunnel_response_frame(&mut pending, &frame);
+
+        assert_eq!(
+            outcome,
+            TunnelResponseFrameOutcome::UnknownId {
+                id: "req-unknown".to_string()
+            }
+        );
+        assert!(pending.contains_key("req-pending"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn malformed_tunnel_response_frame_fails_recovered_pending_request() {
+        use base64::Engine;
+
+        let (mut pending, mut rx) = pending_tunnel_response("req-2");
+        let frame = r#"{"id":"req-2","status":"not-a-number","body":""}"#;
+
+        let outcome = route_tunnel_response_frame(&mut pending, frame);
+
+        match outcome {
+            TunnelResponseFrameOutcome::MalformedDelivered { id, error } => {
+                assert_eq!(id, "req-2");
+                assert!(error.contains("invalid type"));
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+        assert!(pending.is_empty());
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-2");
+        assert_eq!(resp.status, StatusCode::BAD_GATEWAY.as_u16());
+        assert_eq!(
+            resp.headers.get("content-type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(resp.body)
+            .unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains("Malformed tunnel response frame from owner"));
+    }
+
+    #[test]
+    fn malformed_tunnel_response_frame_without_recoverable_id_keeps_pending_request() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-3");
+
+        let outcome = route_tunnel_response_frame(&mut pending, r#"{"id":"req-3","status":"#);
+
+        match outcome {
+            TunnelResponseFrameOutcome::MalformedUnrecoverable { error } => {
+                assert!(error.contains("EOF"));
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+        assert!(pending.contains_key("req-3"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    // -----------------------------------------------------------------------
     // now_secs
     // -----------------------------------------------------------------------
 
@@ -1121,12 +2283,36 @@ mod tests {
     fn test_now_secs_reasonable_timestamp() {
         let ts = now_secs();
         // Should be after 2024-01-01 (1704067200) and before 2100-01-01 (4102444800)
-        assert!(ts > 1_704_067_200, "timestamp {} is too far in the past", ts);
+        assert!(
+            ts > 1_704_067_200,
+            "timestamp {} is too far in the past",
+            ts
+        );
         assert!(
             ts < 4_102_444_800,
             "timestamp {} is too far in the future",
             ts
         );
+    }
+
+    #[test]
+    fn relay_tunnel_keepalive_ping_result_accepts_success() {
+        let result = relay_tunnel_keepalive_ping_result("site:site-1", Ok(()));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn relay_tunnel_keepalive_ping_result_reports_failure_with_key() {
+        let err = relay_tunnel_keepalive_ping_result(
+            "share:token-1",
+            Err("websocket closed".to_string()),
+        )
+        .expect_err("failed keepalive pings should produce a controlled log message");
+
+        assert!(err.contains("Failed to send keepalive ping"));
+        assert!(err.contains("key=share:token-1"));
+        assert!(err.contains("websocket closed"));
     }
 
     // -----------------------------------------------------------------------
@@ -1141,6 +2327,51 @@ mod tests {
         let sites = registry.sites.read().await;
         assert!(shares.is_empty());
         assert!(sites.is_empty());
+    }
+
+    #[test]
+    fn relay_tunnel_request_send_result_keeps_pending_on_success() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-ok");
+
+        let result = relay_tunnel_request_send_result(&mut pending, "share:abc", "req-ok", Ok(()));
+
+        assert_eq!(result, Ok(()));
+        assert!(pending.contains_key("req-ok"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn relay_tunnel_request_send_result_fails_pending_on_error() {
+        use base64::Engine;
+
+        let (mut pending, mut rx) = pending_tunnel_response("req-fail");
+
+        let message = relay_tunnel_request_send_result(
+            &mut pending,
+            "site:abc",
+            "req-fail",
+            Err("connection reset".to_string()),
+        )
+        .unwrap_err();
+
+        assert!(message.contains("key=site:abc"));
+        assert!(message.contains("id=req-fail"));
+        assert!(message.contains("connection reset"));
+        assert!(pending.is_empty());
+
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-fail");
+        assert_eq!(resp.status, StatusCode::BAD_GATEWAY.as_u16());
+        assert_eq!(
+            resp.headers.get("content-type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(resp.body)
+            .unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains("Failed to send tunnel request to owner"));
+        assert!(body.contains("connection reset"));
     }
 
     #[tokio::test]
@@ -1162,6 +2393,66 @@ mod tests {
         assert_eq!(found.token, "abc123");
         assert_eq!(found.origin_url, "http://10.0.0.1:9419");
         assert_eq!(found.owner_wallet, "0xWALLET");
+    }
+
+    #[test]
+    fn relay_tunnel_read_valid_response_routes_pending_request() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-read-ok");
+        let frame = serde_json::to_string(&TunnelResponse {
+            id: "req-read-ok".to_string(),
+            status: 200,
+            headers: HashMap::new(),
+            body: "".to_string(),
+        })
+        .unwrap();
+
+        let outcome = route_tunnel_response_frame(&mut pending, &frame);
+
+        assert_eq!(
+            outcome,
+            TunnelResponseFrameOutcome::Delivered {
+                id: "req-read-ok".to_string()
+            }
+        );
+        assert!(pending.is_empty());
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-read-ok");
+        assert_eq!(resp.status, 200);
+    }
+
+    #[test]
+    fn relay_tunnel_read_error_result_fails_pending_requests() {
+        use base64::Engine;
+
+        let (mut pending, mut rx_one) = pending_tunnel_response("req-read-1");
+        let (tx_two, mut rx_two) = tokio::sync::oneshot::channel();
+        pending.insert("req-read-2".to_string(), tx_two);
+
+        let message = relay_tunnel_read_error_result(
+            &mut pending,
+            "share:token",
+            "protocol error".to_string(),
+        );
+
+        assert!(message.contains("key=share:token"));
+        assert!(message.contains("protocol error"));
+        assert!(pending.is_empty());
+
+        for (mut rx, id) in [(rx_one, "req-read-1"), (rx_two, "req-read-2")] {
+            let resp = rx.try_recv().unwrap();
+            assert_eq!(resp.id, id);
+            assert_eq!(resp.status, StatusCode::BAD_GATEWAY.as_u16());
+            assert_eq!(
+                resp.headers.get("content-type").map(String::as_str),
+                Some("text/plain; charset=utf-8")
+            );
+            let body = base64::engine::general_purpose::STANDARD
+                .decode(resp.body)
+                .unwrap();
+            let body = String::from_utf8(body).unwrap();
+            assert!(body.contains("Tunnel owner WebSocket read failed"));
+            assert!(body.contains("protocol error"));
+        }
     }
 
     #[tokio::test]
@@ -1263,7 +2554,7 @@ mod tests {
 
         // Create a fresh registry and load from disk
         let registry = RelayShareRegistry::new(dir.path().to_path_buf());
-        registry.load_from_disk().await;
+        registry.load_from_disk().await.unwrap();
 
         let share = registry.lookup("persist-tok").await;
         assert!(share.is_some());
@@ -1272,5 +2563,46 @@ mod tests {
         let site = registry.lookup_site("persist-site").await;
         assert!(site.is_some());
         assert_eq!(site.unwrap().owner_wallet, "0xS");
+    }
+
+    #[tokio::test]
+    async fn test_registry_persist_reports_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("chiral-relay-shares"), b"not a directory").unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+
+        let err = registry.persist().await.unwrap_err();
+
+        assert!(err.contains("Failed to create relay share registry directory"));
+        assert!(err.contains("chiral-relay-shares"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_persist_reports_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry {
+            shares: Arc::new(RwLock::new(HashMap::new())),
+            sites: Arc::new(RwLock::new(HashMap::new())),
+            persist_path: dir.path().to_path_buf(),
+        };
+
+        let err = registry.persist().await.unwrap_err();
+
+        assert!(err.contains("Failed to write relay share registry"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_load_reports_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+        let parent = registry.persist_path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(&registry.persist_path, b"{not valid json").unwrap();
+
+        let err = registry.load_from_disk().await.unwrap_err();
+
+        assert!(err.contains("Malformed relay share registry JSON"));
+        assert!(registry.lookup("persist-tok").await.is_none());
+        assert!(registry.lookup_site("persist-site").await.is_none());
     }
 }

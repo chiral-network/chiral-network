@@ -388,7 +388,7 @@ The trust model and its rationale are in [Part I](#part-i-white-paper) (Sections
 
 - `register_share` / `register_site` POST bodies carry an ECDSA signature by `owner_wallet` over `(operation, id, owner_wallet, origin_url)`. Captured proofs can't be reused with a substituted origin URL.
 - First-claim-wins is enforced: an existing record can only be overwritten by the wallet that originally signed it.
-- Origin-URL allowlist rejects RFC1918, CGNAT, link-local (incl. AWS / GCP cloud metadata at `169.254.169.254`), unique-local IPv6, multicast, broadcast, IPv4-mapped IPv6 variants of any of those, and anything outside `http(s)://`. Loopback stays accepted because `fix_origin_url` substitutes the registrant's public IP at request time.
+- Origin-URL validation rejects link-local (incl. AWS / GCP cloud metadata at `169.254.169.254`), multicast, broadcast, unspecified addresses, and anything outside `http(s)://`. Loopback stays accepted because `fix_origin_url` substitutes the registrant's public IP at request time. Private RFC1918, CGNAT, and unique-local IPv6 origins are accepted only when the relay operator explicitly includes the target IP/CIDR in `CHIRAL_RELAY_SHARE_PRIVATE_ORIGIN_ALLOWLIST`.
 
 **Payment verification:**
 
@@ -409,7 +409,7 @@ The trust model and its rationale are in [Part I](#part-i-white-paper) (Sections
 - Platform fee on all transactions — default 0.5%, adjustable down to a 0.1% floor (remainder to the seller); `split_payment` is the single source of truth and `seller + fee == total` exactly, with exact integer arithmetic (no rounding tolerance).
 - Wallet RPC reads use an ordered fallback list (`rpc_client::call_with_fallbacks`): direct canonical Geth → relay's `/api/chain/rpc` proxy. Either path can be down without taking the wallet UI offline.
 - RPC failures surface as a yellow "canonical RPC unreachable" banner in the wallet UI rather than a misleading `0.00`. Mining page renders an inline divergence warning when local-Geth balance disagrees with canonical-RPC balance for the miner address (private-fork diagnostic).
-- Geth's `--http.api` deliberately omits `admin` so `admin_stopRPC` cannot be called over the public RPC port (admin remains available over the IPC socket).
+- Embedded Geth binds its HTTP RPC to loopback only, exposes only `eth,net,web3,miner`, and does not enable wildcard browser CORS. Public read-only RPC access goes through the `/api/chain/rpc` proxy allowlist.
 
 ---
 
@@ -990,6 +990,7 @@ chiral-network/
 | `CHIRAL_WALLET_EMAIL_FROM` | none | Sender address for email backup |
 | `CHIRAL_POLICY_PUBLIC_KEY` | placeholder zeros | 32-byte hex (with or without `0x` prefix) of the project's Ed25519 policy-signing public key. Setting this activates signed `VersionPolicy` updates without recompiling. Generate the matching keypair with `chiral-policy-sign keygen`. |
 | `CHIRAL_WALLET_KEY_FILE` | none | Path to a file containing a single hex secp256k1 private key (with or without `0x` prefix; mode 0600 expected). At startup the daemon loads the key, derives the address, and populates `state.wallet` so the CDN module can sign `chiral_seeder_*` / `chiral_file_*` records and `ChunkResponse::FileInfo` envelopes. Without it, the CDN runs with empty signatures and clients reject every record it publishes. Used in production at `/etc/chiral-cdn-wallet.key` on the canonical relay. |
+| `CHIRAL_RELAY_SHARE_PRIVATE_ORIGIN_ALLOWLIST` | none | Comma-separated IP/CIDR allowlist for private relay-share origins, e.g. `10.0.0.0/8,100.64.0.0/10,fd00::/8`. Applies only to private RFC1918, CGNAT, and unique-local IPv6 origin literals; link-local, cloud metadata, unspecified, multicast, and broadcast targets remain blocked. |
 
 ### Local Storage Keys
 

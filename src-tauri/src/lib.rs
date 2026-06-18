@@ -14,6 +14,7 @@ pub mod hosting_server;
 pub mod network;
 pub mod rating_api;
 pub mod rating_storage;
+pub mod reputation;
 pub mod relay_share_proxy;
 pub mod rpc_client;
 mod speed_tiers;
@@ -31,7 +32,7 @@ use geth::{
 // Bootstrap health is reported via inline placeholder structs in this file
 // — the legacy geth_bootstrap module was deleted with the geth rewrite.
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
@@ -61,6 +62,25 @@ pub struct AppState {
     // including the sync libp2p Identify event handler — a non-blocking
     // read path. The Tauri commands and the fetch task all go through
     // `version::effective_policy()` / `version::update_effective_policy()`.
+}
+
+const DHT_RESEED_BOOTSTRAP_TIMEOUT_SECS: u64 = 180;
+
+async fn wait_for_dht_bootstrap_for_reseed(dht: &Arc<DhtService>, label: &str) -> bool {
+    if dht
+        .wait_for_bootstrap_ready(std::time::Duration::from_secs(
+            DHT_RESEED_BOOTSTRAP_TIMEOUT_SECS,
+        ))
+        .await
+    {
+        return true;
+    }
+
+    println!(
+        "[DHT] {} skipped: bootstrap did not complete within {}s",
+        label, DHT_RESEED_BOOTSTRAP_TIMEOUT_SECS
+    );
+    false
 }
 
 /// Cleanup DHT seeder entries and host advertisement on shutdown.
@@ -112,6 +132,39 @@ async fn cleanup_dht_on_shutdown(dht_arc: &Arc<Mutex<Option<Arc<DhtService>>>>) 
     println!("✅ Unpublished host advertisement from DHT");
 }
 
+#[cfg(unix)]
+fn shutdown_signal_pair_from_results<T>(
+    sigint: std::io::Result<T>,
+    sigterm: std::io::Result<T>,
+) -> Result<(T, T), String> {
+    let sigint = sigint.map_err(|e| format!("failed to install SIGINT handler: {}", e))?;
+    let sigterm = sigterm.map_err(|e| format!("failed to install SIGTERM handler: {}", e))?;
+    Ok((sigint, sigterm))
+}
+
+#[cfg(unix)]
+fn install_shutdown_signal_handlers() -> Result<
+    (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
+    String,
+> {
+    use tokio::signal::unix::{signal, SignalKind};
+    shutdown_signal_pair_from_results(
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::terminate()),
+    )
+}
+
+fn shutdown_cleanup_runtime_error(error: std::io::Error) -> String {
+    format!("failed to build shutdown cleanup runtime: {}", error)
+}
+
+fn build_shutdown_cleanup_runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(shutdown_cleanup_runtime_error)
+}
+
 async fn start_dht_internal(
     app: tauri::AppHandle,
     state: &AppState,
@@ -136,7 +189,8 @@ async fn start_dht_internal(
         state.download_directory.clone(),
         state.download_credentials.clone(),
     ));
-    let app_for_delayed_reseed = app.clone();
+    let app_for_bootstrap_reseed = app.clone();
+    let dht_for_bootstrap_reseed = dht.clone();
     let result = dht.start(app).await?;
     *dht_guard = Some(dht);
     drop(dht_guard);
@@ -152,27 +206,14 @@ async fn start_dht_internal(
     // publish the signed DHT records.
     auto_reseed_drive_files(state, None, None).await;
 
-    // Run follow-up reseed passes after startup to absorb timing races between
-    // bootstrap, relay reservation, and Drive manifest load/refresh.
+    // Run one follow-up reseed pass once Kademlia bootstrap has actually
+    // completed, instead of guessing with fixed startup sleeps.
     tauri::async_runtime::spawn(async move {
-        // Use staggered retries over an extended startup window so reseed
-        // converges even when relay/bootstrap connectivity is delayed.
-        let retry_delays_secs = [2u64, 5, 10, 20, 30, 45, 60, 90, 120, 180, 240, 300];
-        for delay_secs in retry_delays_secs {
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-
-            let app_state = app_for_delayed_reseed.state::<AppState>();
-            let dht_running = {
-                let dht_guard = app_state.dht.lock().await;
-                dht_guard.is_some()
-            };
-            if !dht_running {
-                break;
-            }
-
+        if wait_for_dht_bootstrap_for_reseed(&dht_for_bootstrap_reseed, "Drive startup reseed")
+            .await
+        {
+            let app_state = app_for_bootstrap_reseed.state::<AppState>();
             app_state.drive_state.load_from_disk_async().await;
-            // Delayed retries also run without wallet creds — same caveat
-            // as the initial pass above.
             auto_reseed_drive_files(app_state.inner(), None, None).await;
         }
     });
@@ -217,6 +258,18 @@ fn compute_sha256_file(path: &std::path::Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+fn signed_reseed_credentials<'a>(
+    wallet_address: Option<&'a str>,
+    private_key: Option<&'a str>,
+) -> Option<(&'a str, &'a str)> {
+    let wallet_address = wallet_address?;
+    let private_key = private_key?;
+    if wallet_address.trim().is_empty() || private_key.trim().is_empty() {
+        return None;
+    }
+    Some((wallet_address, private_key))
+}
+
 /// Re-register Drive files that should be seeding.
 ///
 /// Always runs the local-side re-registration (so this node can serve
@@ -239,10 +292,7 @@ async fn auto_reseed_drive_files(
     let Some(dht) = dht else {
         return;
     };
-    let can_publish_signed = wallet_address
-        .map(|w| !w.trim().is_empty())
-        .unwrap_or(false)
-        && private_key.map(|k| !k.trim().is_empty()).unwrap_or(false);
+    let signed_credentials = signed_reseed_credentials(wallet_address, private_key);
 
     let files_dir = match ds::drive_files_dir() {
         Some(dir) => dir,
@@ -260,6 +310,7 @@ async fn auto_reseed_drive_files(
             .filter(|item| item.item_type == "file" && (item.seed_enabled || item.seeding))
             .filter_map(|item| {
                 let storage_path = item.storage_path.clone()?;
+                let folder_access = paid_folder_policies_for_drive_item(&manifest, item);
                 Some((
                     item.id.clone(),
                     item.owner.clone(),
@@ -269,6 +320,7 @@ async fn auto_reseed_drive_files(
                     item.merkle_root.clone(),
                     item.protocol.clone(),
                     item.price_chi.clone(),
+                    folder_access,
                 ))
             })
             .collect::<Vec<_>>()
@@ -309,6 +361,7 @@ async fn auto_reseed_drive_files(
         existing_merkle_root,
         _protocol,
         price_chi,
+        folder_access,
     ) in candidates
     {
         attempted_ids.insert(item_id.clone());
@@ -397,7 +450,7 @@ async fn auto_reseed_drive_files(
         // we have no wallet (DHT auto-started before login), pass empty
         // string and the responder will refuse to serve until the next
         // reseed pass populates it.
-        dht.register_shared_file(
+        dht.register_shared_file_with_folder_access(
             file_hash.clone(),
             full_path.to_string_lossy().to_string(),
             file_name.clone(),
@@ -405,6 +458,7 @@ async fn auto_reseed_drive_files(
             price_wei,
             wallet_addr.clone(),
             private_key.map(|k| k.to_string()).unwrap_or_default(),
+            folder_access,
         )
         .await;
 
@@ -424,11 +478,9 @@ async fn auto_reseed_drive_files(
         // `reseed_drive_files` with the wallet creds) re-runs this loop
         // and publishes the signed records — that's what restores
         // search-by-hash discoverability after a fresh login.
-        if !can_publish_signed {
+        let Some((owner_wallet, pk)) = signed_credentials else {
             continue;
-        }
-        let owner_wallet = wallet_address.unwrap();
-        let pk = private_key.unwrap();
+        };
         let seeder_price_str = price_wei.to_string();
         // Sign + publish chiral_file_<hash> metadata blob.
         let Some(metadata) = try_make_signed_file_metadata(
@@ -494,7 +546,13 @@ async fn auto_reseed_drive_files(
     let mut manifest_changed = false;
     if !hash_updates.is_empty() || !attempted_ids.is_empty() {
         let mut manifest = state.drive_state.manifest.write().await;
-        let now = ds::now_secs();
+        let now = match ds::now_secs() {
+            Ok(now) => now,
+            Err(err) => {
+                eprintln!("[DRIVE] Auto-reseed manifest update skipped: {}", err);
+                return;
+            }
+        };
         for item in manifest
             .items
             .iter_mut()
@@ -560,6 +618,24 @@ async fn reseed_drive_files(
     wallet_address: Option<String>,
     private_key: Option<String>,
 ) -> Result<(), String> {
+    let will_publish_signed = wallet_address
+        .as_deref()
+        .map(|w| !w.trim().is_empty())
+        .unwrap_or(false)
+        && private_key
+            .as_deref()
+            .map(|k| !k.trim().is_empty())
+            .unwrap_or(false);
+    if will_publish_signed {
+        let dht = {
+            let guard = state.dht.lock().await;
+            guard.as_ref().cloned().ok_or("DHT not running")?
+        };
+        if !wait_for_dht_bootstrap_for_reseed(&dht, "Drive signed reseed").await {
+            return Err("DHT bootstrap did not complete; reseed deferred".to_string());
+        }
+    }
+
     // Reload disk state first to avoid stale in-memory manifests after app restart.
     state.drive_state.load_from_disk_async().await;
     auto_reseed_drive_files(
@@ -609,7 +685,7 @@ async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
     // DHT is offline: clear active-seeding runtime state in Drive manifest.
     if was_running {
         let mut changed = false;
-        let now = ds::now_secs();
+        let now = ds::now_secs()?;
         {
             let mut manifest = state.drive_state.manifest.write().await;
             for item in manifest
@@ -724,6 +800,43 @@ async fn ping_peer(
     }
 }
 
+fn chiraldrop_send_metadata(
+    price_wei: Option<String>,
+    sender_wallet: Option<String>,
+    file_hash: Option<String>,
+) -> Result<(String, String, String), String> {
+    let normalized_price = match price_wei {
+        None => "0".to_string(),
+        Some(raw) if raw.is_empty() => "0".to_string(),
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || !trimmed.chars().all(|c| c.is_ascii_digit()) {
+                return Err("priceWei must be empty, 0, or a valid u128 wei amount".to_string());
+            }
+            trimmed
+                .parse::<u128>()
+                .map_err(|_| "priceWei must be empty, 0, or a valid u128 wei amount".to_string())?
+                .to_string()
+        }
+    };
+    let price = normalized_price
+        .parse::<u128>()
+        .map_err(|_| "priceWei must be empty, 0, or a valid u128 wei amount".to_string())?;
+    let sender_wallet = sender_wallet.unwrap_or_default().trim().to_string();
+    let file_hash = file_hash.unwrap_or_default().trim().to_string();
+
+    if price > 0 {
+        if sender_wallet.is_empty() {
+            return Err("senderWallet is required for paid ChiralDrop sends".to_string());
+        }
+        if file_hash.is_empty() {
+            return Err("fileHash is required for paid ChiralDrop sends".to_string());
+        }
+    }
+
+    Ok((normalized_price, sender_wallet, file_hash))
+}
+
 #[tauri::command]
 async fn send_file(
     state: tauri::State<'_, AppState>,
@@ -736,6 +849,8 @@ async fn send_file(
     file_hash: Option<String>,
     file_size: Option<u64>,
 ) -> Result<(), String> {
+    let (price_wei, sender_wallet, file_hash) =
+        chiraldrop_send_metadata(price_wei, sender_wallet, file_hash)?;
     let actual_size = file_size.unwrap_or(file_data.len() as u64);
     let dht_guard = state.dht.lock().await;
 
@@ -745,9 +860,9 @@ async fn send_file(
             transfer_id,
             file_name,
             file_data,
-            price_wei.unwrap_or_default(),
-            sender_wallet.unwrap_or_default(),
-            file_hash.unwrap_or_default(),
+            price_wei,
+            sender_wallet,
+            file_hash,
             actual_size,
         )
         .await
@@ -767,6 +882,8 @@ async fn send_file_by_path(
     sender_wallet: Option<String>,
     file_hash: Option<String>,
 ) -> Result<(), String> {
+    let (price_wei, sender_wallet, file_hash) =
+        chiraldrop_send_metadata(price_wei, sender_wallet, file_hash)?;
     let path = std::path::Path::new(&file_path);
     let file_name = path
         .file_name()
@@ -782,9 +899,9 @@ async fn send_file_by_path(
             transfer_id,
             file_name,
             file_data,
-            price_wei.unwrap_or_default(),
-            sender_wallet.unwrap_or_default(),
-            file_hash.unwrap_or_default(),
+            price_wei,
+            sender_wallet,
+            file_hash,
             file_size,
         )
         .await
@@ -862,6 +979,69 @@ struct HostRegistryEntry {
     updated_at: u64,
 }
 
+pub fn validate_host_ad_wallet_address(wallet_address: Option<&str>) -> Result<String, String> {
+    let wallet_address = wallet_address.unwrap_or_default().trim();
+    if wallet_address.is_empty() {
+        return Err("Host advertisement walletAddress is required".to_string());
+    }
+    Ok(wallet_address.to_string())
+}
+
+fn host_advertisement_payload(
+    advertisement_json: &str,
+    peer_id: &str,
+) -> Result<(String, String), String> {
+    let mut ad: serde_json::Value = serde_json::from_str(advertisement_json)
+        .map_err(|e| format!("Invalid advertisement JSON: {}", e))?;
+    let wallet_address =
+        validate_host_ad_wallet_address(ad.get("walletAddress").and_then(|v| v.as_str()))?;
+    ad["peerId"] = serde_json::Value::String(peer_id.to_string());
+    ad["walletAddress"] = serde_json::Value::String(wallet_address.clone());
+    let ad_json = serde_json::to_string(&ad)
+        .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
+    Ok((ad_json, wallet_address))
+}
+
+fn host_registry_from_dht_value(
+    registry_json: Option<String>,
+) -> Result<Vec<HostRegistryEntry>, String> {
+    match registry_json {
+        Some(json) => serde_json::from_str(&json)
+            .map_err(|e| format!("Malformed chiral_host_registry JSON: {}", e)),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn host_registry_from_dht_lookup(
+    lookup: Result<Option<String>, String>,
+) -> Result<Vec<HostRegistryEntry>, String> {
+    let registry_json = lookup.map_err(|e| format!("Failed to read chiral_host_registry: {}", e))?;
+    host_registry_from_dht_value(registry_json)
+}
+
+fn host_registry_after_publish(
+    mut registry: Vec<HostRegistryEntry>,
+    peer_id: String,
+    wallet_address: String,
+    updated_at: u64,
+) -> Vec<HostRegistryEntry> {
+    registry.retain(|e| e.peer_id != peer_id);
+    registry.push(HostRegistryEntry {
+        peer_id,
+        wallet_address,
+        updated_at,
+    });
+    registry
+}
+
+fn host_registry_after_unpublish(
+    mut registry: Vec<HostRegistryEntry>,
+    peer_id: &str,
+) -> Vec<HostRegistryEntry> {
+    registry.retain(|e| e.peer_id != peer_id);
+    registry
+}
+
 #[tauri::command]
 async fn publish_host_advertisement(
     state: tauri::State<'_, AppState>,
@@ -872,41 +1052,28 @@ async fn publish_host_advertisement(
     if let Some(dht) = dht_guard.as_ref() {
         let peer_id = dht.get_peer_id().await.ok_or("Peer ID not available")?;
 
-        // Parse advertisement to extract wallet address, inject peer_id
-        let mut ad: serde_json::Value = serde_json::from_str(&advertisement_json)
-            .map_err(|e| format!("Invalid advertisement JSON: {}", e))?;
-        ad["peerId"] = serde_json::Value::String(peer_id.clone());
-        let ad_json = serde_json::to_string(&ad)
-            .map_err(|e| format!("Failed to serialize advertisement: {}", e))?;
+        let (ad_json, wallet_address) = host_advertisement_payload(&advertisement_json, &peer_id)?;
 
-        let wallet_address = ad["walletAddress"].as_str().unwrap_or("").to_string();
-
-        // Store individual advertisement
-        let host_key = format!("chiral_host_{}", peer_id);
-        dht.put_dht_value(host_key, ad_json).await?;
-
-        // Update registry (read-modify-write)
+        // Update registry (read-modify-write). Refuse to publish when
+        // the shared registry is malformed so we do not replace it with
+        // a truncated single-entry registry.
         let registry_key = "chiral_host_registry".to_string();
-        let mut registry: Vec<HostRegistryEntry> =
-            match dht.get_dht_value(registry_key.clone()).await {
-                Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-                _ => Vec::new(),
-            };
+        let registry =
+            host_registry_from_dht_lookup(dht.get_dht_value(registry_key.clone()).await)?;
 
         // Remove existing entry for this peer, add fresh one
-        registry.retain(|e| e.peer_id != peer_id);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        registry.push(HostRegistryEntry {
-            peer_id,
-            wallet_address,
-            updated_at: now,
-        });
+        let registry = host_registry_after_publish(registry, peer_id.clone(), wallet_address, now);
 
         let registry_json = serde_json::to_string(&registry)
             .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+        // Store individual advertisement only after the existing shared
+        // registry has been proven trustworthy.
+        let host_key = format!("chiral_host_{}", peer_id);
+        dht.put_dht_value(host_key, ad_json).await?;
         dht.put_dht_value(registry_key, registry_json).await
     } else {
         Err("DHT not running".to_string())
@@ -922,13 +1089,9 @@ async fn unpublish_host_advertisement(state: tauri::State<'_, AppState>) -> Resu
 
         // Remove from registry
         let registry_key = "chiral_host_registry".to_string();
-        let mut registry: Vec<HostRegistryEntry> =
-            match dht.get_dht_value(registry_key.clone()).await {
-                Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-                _ => Vec::new(),
-            };
-
-        registry.retain(|e| e.peer_id != peer_id);
+        let registry =
+            host_registry_from_dht_lookup(dht.get_dht_value(registry_key.clone()).await)?;
+        let registry = host_registry_after_unpublish(registry, &peer_id);
 
         let registry_json = serde_json::to_string(&registry)
             .map_err(|e| format!("Failed to serialize registry: {}", e))?;
@@ -999,24 +1162,49 @@ async fn store_hosting_agreement(
     Ok(())
 }
 
-/// Enforce agreement expiration: if active and past expiresAt, mark as expired.
-fn enforce_agreement_expiration(json: &str, path: &std::path::Path) -> String {
-    if let Ok(mut agreement) = serde_json::from_str::<serde_json::Value>(json) {
-        let status = agreement.get("status").and_then(|s| s.as_str()).unwrap_or("");
-        let expires_at = agreement.get("expiresAt").and_then(|e| e.as_u64()).unwrap_or(0);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+fn hosting_agreement_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|e| {
+            format!(
+                "Cannot enforce hosting agreement expiration because the system clock is before UNIX_EPOCH: {}. Correct the system clock before reading active hosting agreements.",
+                e
+            )
+        })
+}
 
-        if status == "active" && expires_at > 0 && now > expires_at {
-            agreement["status"] = serde_json::Value::String("expired".to_string());
-            let updated = serde_json::to_string(&agreement).unwrap_or_else(|_| json.to_string());
-            let _ = std::fs::write(path, &updated);
-            return updated;
+/// Enforce agreement expiration: if active and past expiresAt, mark as expired.
+fn enforce_agreement_expiration_at(
+    json: &str,
+    path: &std::path::Path,
+    now: std::time::SystemTime,
+) -> Result<String, String> {
+    if let Ok(mut agreement) = serde_json::from_str::<serde_json::Value>(json) {
+        let status = agreement
+            .get("status")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let expires_at = agreement
+            .get("expiresAt")
+            .and_then(|e| e.as_u64())
+            .unwrap_or(0);
+
+        if status == "active" && expires_at > 0 {
+            let now = hosting_agreement_timestamp_secs_at(now)?;
+            if now > expires_at {
+                agreement["status"] = serde_json::Value::String("expired".to_string());
+                let updated =
+                    serde_json::to_string(&agreement).unwrap_or_else(|_| json.to_string());
+                let _ = std::fs::write(path, &updated);
+                return Ok(updated);
+            }
         }
     }
-    json.to_string()
+    Ok(json.to_string())
+}
+
+fn enforce_agreement_expiration(json: &str, path: &std::path::Path) -> Result<String, String> {
+    enforce_agreement_expiration_at(json, path, std::time::SystemTime::now())
 }
 
 #[tauri::command]
@@ -1028,7 +1216,7 @@ async fn get_hosting_agreement(
     if path.exists() {
         let json =
             std::fs::read_to_string(&path).map_err(|e| format!("Failed to read agreement: {e}"))?;
-        return Ok(Some(enforce_agreement_expiration(&json, &path)));
+        return Ok(Some(enforce_agreement_expiration(&json, &path)?));
     }
 
     // Fall back to DHT
@@ -1037,8 +1225,11 @@ async fn get_hosting_agreement(
         let key = format!("chiral_agreement_{}", agreement_id);
         let result = dht.get_dht_value(key).await?;
         if let Some(ref json) = result {
-            let _ = std::fs::write(&path, json);
-            return Ok(Some(enforce_agreement_expiration(json, &path)));
+            let enforced = enforce_agreement_expiration(json, &path)?;
+            if enforced == *json {
+                let _ = std::fs::write(&path, json);
+            }
+            return Ok(Some(enforced));
         }
         Ok(result)
     } else {
@@ -1200,7 +1391,7 @@ struct PublishResult {
 
 /// Per-seeder info stored in DHT file metadata.
 /// Each seeder signs their entry so downloaders can verify the wallet address is legitimate.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SeederInfo {
     pub(crate) peer_id: String,
@@ -1281,9 +1472,16 @@ impl FileMetadata {
     }
 
     /// Sign this file metadata with the publisher's wallet key.
-    fn sign(&mut self, private_key: &str) {
+    fn sign(&mut self, private_key: &str) -> Result<(), String> {
+        self.publisher_signature.clear();
         let payload = Self::sign_payload(&self.hash, &self.file_name, self.file_size);
-        self.publisher_signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
+        let signature = wallet::sign_message(private_key, &payload)
+            .map_err(|e| format!("failed to sign file metadata: {}", e))?;
+        if signature.is_empty() {
+            return Err("failed to sign file metadata: empty signature".to_string());
+        }
+        self.publisher_signature = signature;
+        Ok(())
     }
 
     /// Verify that the publisher signature matches the claimed wallet_address.
@@ -1351,50 +1549,129 @@ pub async fn remove_seeder_entry(
     dht.stop_providing_file(file_hash.to_string()).await
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SearchWarning {
+    #[serde(rename = "type")]
+    warning_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    message: String,
+}
+
+#[derive(Default)]
+struct SeederFetchResult {
+    seeders: Vec<SeederInfo>,
+    warnings: Vec<SearchWarning>,
+}
+
+enum FetchedSeederRecord {
+    Entry(SeederInfo),
+    Missing,
+    Malformed(SearchWarning),
+}
+
+fn malformed_seeder_record_warning(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    err: serde_json::Error,
+) -> SearchWarning {
+    SearchWarning {
+        warning_type: "malformedSeederRecord".to_string(),
+        peer_id: Some(peer_id.to_string()),
+        key: Some(key.to_string()),
+        message: format!(
+            "Malformed seeder record for file {} from provider {} at {}: {}",
+            file_hash, peer_id, key, err
+        ),
+    }
+}
+
+fn parse_desktop_seeder_record(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    json: &str,
+) -> Result<SeederInfo, SearchWarning> {
+    serde_json::from_str::<SeederInfo>(json)
+        .map_err(|err| malformed_seeder_record_warning(file_hash, peer_id, key, err))
+}
+
+fn classify_fetched_desktop_seeder_record(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    json: Option<&str>,
+) -> FetchedSeederRecord {
+    match json {
+        Some(json) => match parse_desktop_seeder_record(file_hash, peer_id, key, json) {
+            Ok(entry) => FetchedSeederRecord::Entry(entry),
+            Err(warning) => FetchedSeederRecord::Malformed(warning),
+        },
+        None => FetchedSeederRecord::Missing,
+    }
+}
+
 /// Discover all currently-online seeders for a file. Queries Kademlia for
 /// the provider set, then fetches each provider's per-seeder record in
 /// parallel. Signature-verified entries are returned; unsigned or
-/// signature-invalid entries are logged and dropped.
-async fn fetch_seeders(
+/// signature-invalid entries are logged and dropped. Missing records still
+/// produce replication-lag stubs, while malformed records are surfaced as
+/// warnings and never become stubs.
+async fn fetch_seeders_with_warnings(
     dht: &dht::DhtService,
     file_hash: &str,
-) -> Result<Vec<SeederInfo>, String> {
+) -> Result<SeederFetchResult, String> {
     let providers = dht.get_file_providers(file_hash.to_string()).await?;
     if providers.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SeederFetchResult::default());
     }
     let fetches = providers.into_iter().map(|peer_id| {
         let key = seeder_entry_key(file_hash, &peer_id);
         async move {
-            let fetched = match dht.get_dht_value(key).await {
-                Ok(Some(json)) => serde_json::from_str::<SeederInfo>(&json).ok(),
-                _ => None,
+            let fetched = match dht.get_dht_value(key.clone()).await {
+                Ok(Some(json)) => {
+                    classify_fetched_desktop_seeder_record(file_hash, &peer_id, &key, Some(&json))
+                }
+                _ => classify_fetched_desktop_seeder_record(file_hash, &peer_id, &key, None),
             };
             (peer_id, fetched)
         }
     });
     let results = futures::future::join_all(fetches).await;
     let mut seeders = Vec::new();
+    let mut warnings = Vec::new();
     for (peer_id, entry) in results {
         match entry {
-            Some(entry) if entry.verify(file_hash) => {
+            FetchedSeederRecord::Entry(entry) if entry.verify(file_hash) => {
                 // Signed + valid.
                 seeders.push(entry);
             }
-            Some(entry) => {
+            FetchedSeederRecord::Entry(entry) => {
                 // Unsigned or invalid signature. CLAUDE.md's trust contract
                 // ("ECDSA-signed seeder entries prevent payment redirection")
                 // requires us to drop these — accepting them would let any
                 // peer redirect downloads to an attacker wallet. Empty-sig
                 // entries fall in here too.
-                let reason = if entry.signature.is_empty() { "unsigned" } else { "INVALID signature" };
+                let reason = if entry.signature.is_empty() {
+                    "unsigned"
+                } else {
+                    "INVALID signature"
+                };
                 println!(
                     "  ⚠️ Seeder entry for {} {} — dropping",
                     &peer_id[..20.min(peer_id.len())],
                     reason
                 );
             }
-            None => {
+            FetchedSeederRecord::Malformed(warning) => {
+                println!("  ⚠️ {}", warning.message);
+                warnings.push(warning);
+            }
+            FetchedSeederRecord::Missing => {
                 // Provider advertises the hash but their per-seeder record
                 // isn't retrievable yet (put replication lagging, or peer
                 // never got a chance to persist it). Emit a stub with empty
@@ -1413,7 +1690,23 @@ async fn fetch_seeders(
             }
         }
     }
-    Ok(seeders)
+    Ok(SeederFetchResult { seeders, warnings })
+}
+
+async fn fetch_seeders(dht: &dht::DhtService, file_hash: &str) -> Result<Vec<SeederInfo>, String> {
+    fetch_seeders_with_warnings(dht, file_hash)
+        .await
+        .map(|result| result.seeders)
+}
+
+fn desktop_publish_peer_id(peer_id: Option<String>) -> Result<String, String> {
+    match peer_id {
+        Some(peer_id) if !peer_id.trim().is_empty() => Ok(peer_id),
+        _ => Err(
+            "DHT peer ID unavailable. Reconnect to the network before publishing signed file records."
+                .to_string(),
+        ),
+    }
 }
 
 /// Build a signed SeederInfo entry. Returns `None` if the wallet
@@ -1436,10 +1729,20 @@ pub fn try_make_signed_seeder(
         return None;
     }
     let payload = SeederInfo::sign_payload(peer_id, file_hash, wallet_address);
-    let signature = wallet::sign_message(key, &payload).unwrap_or_default();
-    if signature.is_empty() {
-        return None;
-    }
+    let signature = match wallet::sign_message(key, &payload) {
+        Ok(signature) if !signature.is_empty() => signature,
+        Ok(_) => {
+            println!(
+                "  ⚠️ Failed to sign SeederInfo for {} — empty signature",
+                file_hash
+            );
+            return None;
+        }
+        Err(e) => {
+            println!("  ⚠️ Failed to sign SeederInfo for {}: {}", file_hash, e);
+            return None;
+        }
+    };
     let entry = SeederInfo {
         peer_id: peer_id.to_string(),
         price_wei: price_wei.to_string(),
@@ -1485,8 +1788,15 @@ pub fn try_make_signed_file_metadata(
         wallet_address: wallet_address.to_string(),
         publisher_signature: String::new(),
     };
-    metadata.sign(key);
+    if let Err(e) = metadata.sign(key) {
+        println!("[DHT] Failed to sign FileMetadata for {}: {}", hash, e);
+        return None;
+    }
     if !metadata.verify_publisher() {
+        println!(
+            "[DHT] Signed FileMetadata for {} failed publisher verification",
+            hash
+        );
         return None;
     }
     Some(metadata)
@@ -1524,7 +1834,7 @@ async fn publish_file(
     // Get DHT service and peer ID
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        let peer_id = desktop_publish_peer_id(dht.get_peer_id().await)?;
 
         // Parse price from CHI to wei
         let price_wei_val = if let Some(ref price) = price_chi {
@@ -1638,7 +1948,7 @@ async fn publish_file_data(
     // Get DHT service and peer ID
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
-        let peer_id = dht.get_peer_id().await.unwrap_or_default();
+        let peer_id = desktop_publish_peer_id(dht.get_peer_id().await)?;
 
         // Parse price from CHI to wei
         let price_wei_val = if let Some(ref price) = price_chi {
@@ -1725,6 +2035,16 @@ struct SearchResult {
     created_at: u64,
     price_wei: String,
     wallet_address: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<SearchWarning>,
+}
+
+fn search_result_with_warnings(
+    mut result: SearchResult,
+    warnings: Vec<SearchWarning>,
+) -> SearchResult {
+    result.warnings.extend(warnings);
+    result
 }
 
 async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Option<SearchResult> {
@@ -1761,6 +2081,7 @@ async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Op
             .as_secs(),
         price_wei: local_info.price_wei.to_string(),
         wallet_address: local_info.wallet_address,
+        warnings: Vec::new(),
     })
 }
 
@@ -1773,6 +2094,23 @@ struct LocalDriveSeedCandidate {
     file_size_hint: Option<u64>,
     protocol: Option<String>,
     price_chi: Option<String>,
+    folder_access: Vec<dht::FolderAccessPolicy>,
+}
+
+fn drive_reseed_price_wei(price_chi: Option<&str>) -> Result<u128, String> {
+    let Some(price) = price_chi else {
+        return Ok(0);
+    };
+    let trimmed = price.trim();
+    if trimmed.is_empty() || trimmed == "0" {
+        return Ok(0);
+    }
+    wallet::parse_chi_to_wei(trimmed).map_err(|err| {
+        format!(
+            "invalid Drive item price {:?}; refusing to auto-reseed as free: {}",
+            trimmed, err
+        )
+    })
 }
 
 async fn try_repair_local_drive_seed(
@@ -1795,9 +2133,9 @@ async fn try_repair_local_drive_seed(
                     && (item.seed_enabled || item.seeding)
             })
             .and_then(|item| {
-                item.storage_path
-                    .as_ref()
-                    .map(|sp| LocalDriveSeedCandidate {
+                item.storage_path.as_ref().map(|sp| {
+                    let folder_access = paid_folder_policies_for_drive_item(&manifest, item);
+                    LocalDriveSeedCandidate {
                         item_id: item.id.clone(),
                         owner: item.owner.clone(),
                         file_name: item.name.clone(),
@@ -1805,7 +2143,9 @@ async fn try_repair_local_drive_seed(
                         file_size_hint: item.size,
                         protocol: item.protocol.clone(),
                         price_chi: item.price_chi.clone(),
-                    })
+                        folder_access,
+                    }
+                })
             })
     }?;
 
@@ -1820,18 +2160,22 @@ async fn try_repair_local_drive_seed(
         _ => std::fs::metadata(&full_path).ok()?.len(),
     };
 
-    let price_wei = match candidate.price_chi.as_deref() {
-        Some(price) if !price.trim().is_empty() && price.trim() != "0" => {
-            wallet::parse_chi_to_wei(price).unwrap_or(0)
+    let price_wei = match drive_reseed_price_wei(candidate.price_chi.as_deref()) {
+        Ok(price_wei) => price_wei,
+        Err(err) => {
+            eprintln!(
+                "[DRIVE] Skipping auto-reseed repair for item {}: {}",
+                candidate.item_id, err
+            );
+            return None;
         }
-        _ => 0u128,
     };
     let wallet_addr = candidate.owner.trim().to_string();
     if price_wei > 0 && wallet_addr.is_empty() {
         return None;
     }
 
-    dht.register_shared_file(
+    dht.register_shared_file_with_folder_access(
         file_hash.to_string(),
         full_path.to_string_lossy().to_string(),
         candidate.file_name.clone(),
@@ -1843,6 +2187,7 @@ async fn try_repair_local_drive_seed(
         // fail this seeder and try another. User can re-seed
         // explicitly via the signed publishers.
         String::new(),
+        candidate.folder_access.clone(),
     )
     .await;
 
@@ -1890,6 +2235,13 @@ async fn try_repair_local_drive_seed(
 
     // Keep runtime Drive state consistent with repaired registration.
     {
+        let now = match ds::now_secs() {
+            Ok(now) => now,
+            Err(err) => {
+                eprintln!("[DRIVE] Skipping repaired seed manifest timestamp: {}", err);
+                return None;
+            }
+        };
         let mut manifest = state.drive_state.manifest.write().await;
         if let Some(item) = manifest
             .items
@@ -1898,11 +2250,11 @@ async fn try_repair_local_drive_seed(
         {
             if !item.seeding {
                 item.seeding = true;
-                item.modified_at = ds::now_secs();
+                item.modified_at = now;
             }
             if !item.seed_enabled {
                 item.seed_enabled = true;
-                item.modified_at = ds::now_secs();
+                item.modified_at = now;
             }
         }
     }
@@ -1955,13 +2307,15 @@ async fn search_file(
         );
         let providers_fut = tokio::time::timeout(
             tokio::time::Duration::from_millis(5000),
-            fetch_seeders(dht, &file_hash),
+            fetch_seeders_with_warnings(dht, &file_hash),
         );
         let (dht_lookup, provider_seeders_res) = tokio::join!(blob_fut, providers_fut);
-        let provider_seeders: Vec<SeederInfo> = match provider_seeders_res {
-            Ok(Ok(list)) => list,
-            _ => Vec::new(),
+        let provider_fetch = match provider_seeders_res {
+            Ok(Ok(result)) => result,
+            _ => SeederFetchResult::default(),
         };
+        let provider_seeders = provider_fetch.seeders;
+        let provider_warnings = provider_fetch.warnings;
 
         match dht_lookup {
             Err(_) => {
@@ -1988,19 +2342,24 @@ async fn search_file(
                             .as_ref()
                             .map(|s| s.price_wei.clone())
                             .unwrap_or_default(),
-                        wallet_address: first
-                            .map(|s| s.wallet_address)
-                            .unwrap_or_default(),
+                        wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                        warnings: provider_warnings,
                     }));
                 }
                 // Return local result if we're seeding, otherwise not found
                 if let Some(local) = local_result {
-                    println!("Returning local seeding result after DHT timeout for {}", file_hash);
-                    Ok(Some(local))
+                    println!(
+                        "Returning local seeding result after DHT timeout for {}",
+                        file_hash
+                    );
+                    Ok(Some(search_result_with_warnings(local, provider_warnings)))
                 } else if let Some(repaired) =
                     try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
                 {
-                    Ok(Some(repaired))
+                    Ok(Some(search_result_with_warnings(
+                        repaired,
+                        provider_warnings,
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -2056,18 +2415,20 @@ async fn search_file(
                                     .as_ref()
                                     .map(|s| s.price_wei.clone())
                                     .unwrap_or_default(),
-                                wallet_address: first
-                                    .map(|s| s.wallet_address)
-                                    .unwrap_or_default(),
+                                wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                                warnings: provider_warnings,
                             }));
                         }
                         return if let Some(local) = local_result {
-                            Ok(Some(local))
+                            Ok(Some(search_result_with_warnings(local, provider_warnings)))
                         } else {
                             Ok(None)
                         };
                     }
-                    println!("✅ File metadata signature valid (publisher: {})", metadata.wallet_address);
+                    println!(
+                        "✅ File metadata signature valid (publisher: {})",
+                        metadata.wallet_address
+                    );
 
                     // Seeder list comes exclusively from Kademlia providers +
                     // per-seeder records now. The blob is immutable metadata
@@ -2096,6 +2457,7 @@ async fn search_file(
                         created_at: metadata.created_at,
                         price_wei,
                         wallet_address: metadata.wallet_address,
+                        warnings: provider_warnings,
                     }))
                 }
                 Ok(None) => {
@@ -2124,9 +2486,8 @@ async fn search_file(
                                 .as_ref()
                                 .map(|s| s.price_wei.clone())
                                 .unwrap_or_default(),
-                            wallet_address: first
-                                .map(|s| s.wallet_address)
-                                .unwrap_or_default(),
+                            wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                            warnings: provider_warnings,
                         }));
                     }
                     // DHT can lag behind local intent right after restart. Attempt
@@ -2138,7 +2499,10 @@ async fn search_file(
                             "Recovered local seed registration for {} after DHT miss",
                             file_hash
                         );
-                        Ok(Some(repaired))
+                        Ok(Some(search_result_with_warnings(
+                            repaired,
+                            provider_warnings,
+                        )))
                     } else {
                         Ok(None)
                     }
@@ -2153,7 +2517,7 @@ async fn search_file(
                             "Returning local fallback for {} despite DHT lookup error",
                             file_hash
                         );
-                        Ok(Some(local))
+                        Ok(Some(search_result_with_warnings(local, provider_warnings)))
                     } else if let Some(repaired) =
                         try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
                     {
@@ -2161,7 +2525,10 @@ async fn search_file(
                             "Returning repaired local fallback for {} despite DHT lookup error",
                             file_hash
                         );
-                        Ok(Some(repaired))
+                        Ok(Some(search_result_with_warnings(
+                            repaired,
+                            provider_warnings,
+                        )))
                     } else {
                         Err(e)
                     }
@@ -2180,6 +2547,30 @@ struct DownloadStartResult {
     status: String,
 }
 
+fn download_request_timestamp_millis_at(now: std::time::SystemTime) -> Result<u128, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .map_err(|err| {
+            format!(
+                "Cannot start download because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
+}
+
+fn download_request_id_at(
+    kind: &str,
+    file_hash: &str,
+    now: std::time::SystemTime,
+) -> Result<String, String> {
+    let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
+    let timestamp = download_request_timestamp_millis_at(now)?;
+    Ok(format!("{kind}-{file_hash_prefix}-{timestamp}"))
+}
+
+fn current_download_request_id(kind: &str, file_hash: &str) -> Result<String, String> {
+    download_request_id_at(kind, file_hash, std::time::SystemTime::now())
+}
 
 #[tauri::command]
 async fn start_download(
@@ -2193,6 +2584,8 @@ async fn start_download(
     private_key: Option<String>,
     seeder_price_wei: Option<String>,
     _seeder_wallet_address: Option<String>,
+    folder_hash: Option<String>,
+    folder_payment_tx: Option<String>,
 ) -> Result<DownloadStartResult, String> {
     // Phase 2 version gate: refuse paid downloads from out-of-date
     // clients (the frontend modal already prevents this for honest UIs;
@@ -2224,7 +2617,18 @@ async fn start_download(
     // authorised (to the seeder's wallet, at the seeder's price). Keeping a
     // separate flat burn fee alongside would double-charge users and muddy
     // the pay-the-chosen-seeder contract.
-    let _ = seeder_price_wei; // consumed by the event-loop payment path via DHT metadata.
+    // `seeder_price_wei` is consumed below when deciding whether to stash
+    // wallet credentials for the event-loop payment path.
+    let folder_hash_for_request = folder_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    let folder_payment_tx_for_request = folder_payment_tx
+        .as_deref()
+        .map(str::trim)
+        .filter(|tx| !tx.is_empty())
+        .map(str::to_string);
 
     // First, check if we have the file in local cache
     {
@@ -2236,15 +2640,7 @@ async fn start_download(
             let custom_dir = state.download_directory.lock().await.clone();
             let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
-            let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-            let request_id = format!(
-                "local-{}-{}",
-                file_hash_prefix,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
+            let request_id = current_download_request_id("local", &file_hash)?;
 
             let file_data_clone = file_data.clone();
             let app_clone = app.clone();
@@ -2346,15 +2742,7 @@ async fn start_download(
             let custom_dir = state.download_directory.lock().await.clone();
             let downloads_dir = get_effective_download_dir(&custom_dir)?;
             let file_path = downloads_dir.join(&file_name);
-            let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-            let request_id = format!(
-                "local-{}-{}",
-                file_hash_prefix,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-            );
+            let request_id = current_download_request_id("local", &file_hash)?;
 
             let app_clone = app.clone();
             let hash_clone = file_hash.clone();
@@ -2425,15 +2813,7 @@ async fn start_download(
 
     if let Some(dht) = dht.as_ref() {
         // Generate a unique request ID
-        let file_hash_prefix = &file_hash[..std::cmp::min(8, file_hash.len())];
-        let request_id = format!(
-            "download-{}-{}",
-            file_hash_prefix,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis()
-        );
+        let request_id = current_download_request_id("download", &file_hash)?;
 
         // Store download credentials if wallet is available (needed for file payment in event loop)
         let seeder_price: u128 = seeder_price_wei
@@ -2441,7 +2821,7 @@ async fn start_download(
             .unwrap_or("0")
             .parse()
             .unwrap_or(0);
-        if seeder_price > 0 || wallet_address.is_some() {
+        if seeder_price > 0 || wallet_address.is_some() || folder_payment_tx_for_request.is_some() {
             if let (Some(ref addr), Some(ref key)) = (&wallet_address, &private_key) {
                 let mut creds = state.download_credentials.lock().await;
                 creds.insert(
@@ -2449,7 +2829,14 @@ async fn start_download(
                     dht::DownloadCredentials {
                         wallet_address: addr.clone(),
                         private_key: key.clone(),
+                        folder_hash: folder_hash_for_request.clone(),
+                        folder_payment_tx: folder_payment_tx_for_request.clone(),
                     },
+                );
+            } else if folder_payment_tx_for_request.is_some() {
+                return Err(
+                    "Wallet address is required when presenting a folder payment transaction"
+                        .to_string(),
                 );
             }
         }
@@ -2501,6 +2888,7 @@ async fn start_download(
                 file_hash.clone(),
                 request_id.clone(),
                 addrs,
+                folder_hash_for_request,
             )
             .await;
 
@@ -2561,6 +2949,24 @@ async fn calculate_download_cost(
     })
 }
 
+fn shared_file_credentials_for_price(
+    price_wei: u128,
+    wallet_address: Option<String>,
+    private_key: Option<String>,
+) -> Result<(String, String), String> {
+    let wallet_addr = wallet_address.unwrap_or_default().trim().to_string();
+    let private_key = private_key.unwrap_or_default().trim().to_string();
+    if price_wei > 0 {
+        if wallet_addr.is_empty() {
+            return Err("Wallet address is required when republishing a paid file".to_string());
+        }
+        if private_key.is_empty() {
+            return Err("Private key is required when republishing a paid file".to_string());
+        }
+    }
+    Ok((wallet_addr, private_key))
+}
+
 /// Re-register a previously shared file (called on app startup)
 #[tauri::command]
 async fn register_shared_file(
@@ -2593,7 +2999,8 @@ async fn register_shared_file(
     } else {
         0u128
     };
-    let wallet_addr = wallet_address.unwrap_or_default();
+    let (wallet_addr, private_key_value) =
+        shared_file_credentials_for_price(price_wei, wallet_address, private_key)?;
 
     // Get DHT service
     let dht_guard = state.dht.lock().await;
@@ -2605,7 +3012,7 @@ async fn register_shared_file(
             file_size,
             price_wei,
             wallet_addr,
-            private_key.unwrap_or_default(),
+            private_key_value,
         )
         .await;
         Ok(())
@@ -2647,7 +3054,8 @@ async fn republish_shared_file(
     } else {
         0u128
     };
-    let wallet_addr = wallet_address.unwrap_or_default();
+    let (wallet_addr, private_key_value) =
+        shared_file_credentials_for_price(price_wei, wallet_address, private_key)?;
 
     let dht_guard = state.dht.lock().await;
     if let Some(dht) = dht_guard.as_ref() {
@@ -2659,7 +3067,7 @@ async fn republish_shared_file(
             file_size,
             price_wei,
             wallet_addr.clone(),
-            private_key.clone().unwrap_or_default(),
+            private_key_value.clone(),
         )
         .await;
 
@@ -2671,13 +3079,18 @@ async fn republish_shared_file(
         if !peer_id.is_empty() {
             let dht_key = format!("chiral_file_{}", file_hash);
             let our_multiaddrs = dht.get_listening_addresses().await;
+            let signing_key = if private_key_value.is_empty() {
+                None
+            } else {
+                Some(private_key_value.as_str())
+            };
             let Some(our_seeder) = try_make_signed_seeder(
                 &peer_id,
                 &file_hash,
                 &price_wei.to_string(),
                 &wallet_addr,
                 our_multiaddrs,
-                private_key.as_deref(),
+                signing_key,
             ) else {
                 println!(
                     "Re-publish for {} skipped — wallet must be unlocked to sign records",
@@ -2693,7 +3106,7 @@ async fn republish_shared_file(
                 file_size,
                 "WebRTC",
                 &wallet_addr,
-                private_key.as_deref(),
+                signing_key,
             ) {
                 if let Ok(metadata_json) = serde_json::to_string(&metadata) {
                     let _ = dht.put_dht_value(dht_key, metadata_json).await;
@@ -3057,6 +3470,26 @@ struct ExportTorrentResult {
     path: String,
 }
 
+fn torrent_creation_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            format!(
+                "Cannot export torrent because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
+}
+
+fn torrent_creation_date_entry_at(now: std::time::SystemTime) -> Result<String, String> {
+    let creation_date = torrent_creation_timestamp_secs_at(now)?;
+    Ok(format!("13:creation datei{}e", creation_date))
+}
+
+fn current_torrent_creation_date_entry() -> Result<String, String> {
+    torrent_creation_date_entry_at(std::time::SystemTime::now())
+}
+
 // Re-export wallet types used by AppState and Tauri commands
 use wallet::TransactionMeta;
 
@@ -3076,8 +3509,11 @@ async fn get_wallet_balance(
         serde_json::json!([address, "latest"]),
     )
     .await?;
-    let hex = result.as_str().unwrap_or("0x0");
-    let wei = rpc_client::hex_to_u128(hex);
+    let hex = result
+        .as_str()
+        .ok_or_else(|| format!("eth_getBalance returned a non-string hex value: {result}"))?;
+    let wei = rpc_client::hex_to_u128(hex)
+        .map_err(|e| format!("eth_getBalance: {e}"))?;
     Ok(wallet::WalletBalanceResult {
         balance: rpc_client::wei_to_chi_string(wei),
         balance_wei: wei.to_string(),
@@ -3190,11 +3626,7 @@ async fn export_torrent_file(
     torrent_content.extend_from_slice(created_by_entry.as_bytes());
 
     // Creation date (Unix timestamp)
-    let creation_date = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let creation_date_entry = format!("13:creation datei{}e", creation_date);
+    let creation_date_entry = current_torrent_creation_date_entry()?;
     torrent_content.extend_from_slice(creation_date_entry.as_bytes());
 
     // Info dictionary
@@ -3479,7 +3911,10 @@ async fn get_mining_balance_diagnostic(address: String) -> Result<MiningBalanceD
             serde_json::json!([addr, "latest"]),
         )
         .await?;
-        Ok(rpc_client::hex_to_u128(v.as_str().unwrap_or("0x0")))
+        let hex = v
+            .as_str()
+            .ok_or_else(|| format!("eth_getBalance returned a non-string hex value: {v}"))?;
+        rpc_client::hex_to_u128(hex).map_err(|e| format!("eth_getBalance: {e}"))
     }
     async fn fetch_wei_fallback(endpoints: &[String], addr: &str) -> Result<u128, String> {
         let v = rpc_client::call_with_fallbacks(
@@ -3488,7 +3923,10 @@ async fn get_mining_balance_diagnostic(address: String) -> Result<MiningBalanceD
             serde_json::json!([addr, "latest"]),
         )
         .await?;
-        Ok(rpc_client::hex_to_u128(v.as_str().unwrap_or("0x0")))
+        let hex = v
+            .as_str()
+            .ok_or_else(|| format!("eth_getBalance returned a non-string hex value: {v}"))?;
+        rpc_client::hex_to_u128(hex).map_err(|e| format!("eth_getBalance: {e}"))
     }
     let local_endpoint = "http://127.0.0.1:8545";
     let canonical_endpoints = geth::wallet_rpc_endpoints();
@@ -3597,10 +4035,23 @@ fn get_chain_id() -> u64 {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct FrontendCdnEndpointInfo {
+    url: String,
+    name: String,
+    region: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct NetworkInfo {
     name: String,
     display_name: String,
     chain_id: u64,
+    relay_base_url: String,
+    rating_base_url: String,
+    drive_relay_base_url: String,
+    cdn_search_base_urls: Vec<String>,
+    cdn_servers: Vec<FrontendCdnEndpointInfo>,
 }
 
 fn network_info(cfg: &network::NetworkConfig) -> NetworkInfo {
@@ -3608,6 +4059,23 @@ fn network_info(cfg: &network::NetworkConfig) -> NetworkInfo {
         name: cfg.name.to_string(),
         display_name: cfg.display_name.to_string(),
         chain_id: cfg.chain_id,
+        relay_base_url: cfg.relay_base_url.to_string(),
+        rating_base_url: cfg.rating_base_url.to_string(),
+        drive_relay_base_url: cfg.drive_relay_base_url.to_string(),
+        cdn_search_base_urls: cfg
+            .cdn_search_base_urls
+            .iter()
+            .map(|url| (*url).to_string())
+            .collect(),
+        cdn_servers: cfg
+            .cdn_servers
+            .iter()
+            .map(|server| FrontendCdnEndpointInfo {
+                url: server.url.to_string(),
+                name: server.name.to_string(),
+                region: server.region.to_string(),
+            })
+            .collect(),
     }
 }
 
@@ -3635,22 +4103,48 @@ fn set_active_network(name: String) -> Result<(), String> {
 // Wallet Backup Email Command
 // ============================================================================
 
+const DEFAULT_WALLET_BACKUP_RELAY_URL: &str = "https://130.245.173.73:8080/api/wallet/backup-email";
+
+fn is_allowed_wallet_backup_relay_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+
+    match parsed.scheme() {
+        "https" => true,
+        "http" => matches!(parsed.host_str(), Some("127.0.0.1" | "localhost")),
+        _ => false,
+    }
+}
+
+fn wallet_backup_relay_url() -> Result<String, String> {
+    let url = std::env::var("CHIRAL_WALLET_BACKUP_RELAY_URL")
+        .unwrap_or_else(|_| DEFAULT_WALLET_BACKUP_RELAY_URL.to_string());
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("Wallet backup relay URL is not configured".to_string());
+    }
+    if !is_allowed_wallet_backup_relay_url(trimmed) {
+        return Err("Wallet backup relay URL must use HTTPS".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Send wallet backup email via the relay server.
-/// The relay has SMTP configured server-side — no user configuration needed.
+/// The relay has SMTP configured server-side; wallet secrets are encrypted
+/// before this command is invoked, so the relay only receives ciphertext.
 #[tauri::command]
 async fn send_wallet_backup_email(
     email: String,
-    recovery_phrase: String,
     wallet_address: String,
-    private_key: String,
+    encrypted_backup: serde_json::Value,
 ) -> Result<(), String> {
-    const RELAY_URL: &str = "http://130.245.173.73:8080/api/wallet/backup-email";
+    let relay_url = wallet_backup_relay_url()?;
 
     let payload = serde_json::json!({
         "email": email.trim(),
-        "recoveryPhrase": recovery_phrase,
         "walletAddress": wallet_address,
-        "privateKey": private_key,
+        "encryptedBackup": encrypted_backup,
     });
 
     let client = reqwest::Client::builder()
@@ -3659,7 +4153,7 @@ async fn send_wallet_backup_email(
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let response = client
-        .post(RELAY_URL)
+        .post(relay_url)
         .json(&payload)
         .send()
         .await
@@ -3897,6 +4391,28 @@ fn common_prefix(a: &Path, b: &Path) -> PathBuf {
     out
 }
 
+fn hosted_site_relative_path(src: &Path, common_root: &Path) -> Result<PathBuf, String> {
+    let file_name = src.file_name().ok_or_else(|| {
+        format!(
+            "Uploaded hosted-site path has no file name: {}",
+            src.display()
+        )
+    })?;
+
+    let rel_path = src
+        .strip_prefix(common_root)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(file_name));
+
+    if rel_path.as_os_str().is_empty() {
+        return Err("Invalid relative path computed for uploaded file".to_string());
+    }
+
+    Ok(rel_path)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HostingServerStatus {
@@ -3937,10 +4453,13 @@ async fn create_hosted_site(
             return Err(format!("File not found: {}", src.display()));
         }
         // Path inside the hosted site
-        let rel_path = src
-            .strip_prefix(&common_root)
-            .unwrap_or_else(|_| Path::new(src.file_name().unwrap()))
-            .to_path_buf();
+        let rel_path = match hosted_site_relative_path(src, &common_root) {
+            Ok(path) => path,
+            Err(err) => {
+                let _ = std::fs::remove_dir_all(&site_dir);
+                return Err(err);
+            }
+        };
 
         if rel_path.as_os_str().is_empty() {
             let _ = std::fs::remove_dir_all(&site_dir);
@@ -4103,9 +4622,108 @@ async fn get_hosting_server_status(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RelayTunnelResponse {
+    status: u16,
+    headers: HashMap<String, String>,
+    body_bytes: Vec<u8>,
+}
+
+fn relay_tunnel_response_from_local_body(
+    status: u16,
+    headers: HashMap<String, String>,
+    body_result: Result<Vec<u8>, String>,
+) -> RelayTunnelResponse {
+    match body_result {
+        Ok(body_bytes) => RelayTunnelResponse {
+            status,
+            headers,
+            body_bytes,
+        },
+        Err(err) => {
+            let mut headers = HashMap::new();
+            headers.insert(
+                "content-type".to_string(),
+                "text/plain; charset=utf-8".to_string(),
+            );
+            RelayTunnelResponse {
+                status: 502,
+                headers,
+                body_bytes: format!("Local response body read failed: {}", err).into_bytes(),
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket tunnel to relay (NAT traversal for hosting/drive proxy)
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+struct DesktopTunnelRequest {
+    id: String,
+    path: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DesktopTunnelRequestFrameError {
+    id: Option<String>,
+    message: String,
+}
+
+fn recover_desktop_tunnel_request_id(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn parse_desktop_tunnel_request_frame(
+    text: &str,
+) -> Result<DesktopTunnelRequest, DesktopTunnelRequestFrameError> {
+    let req = serde_json::from_str::<DesktopTunnelRequest>(text).map_err(|err| {
+        DesktopTunnelRequestFrameError {
+            id: recover_desktop_tunnel_request_id(text),
+            message: format!("failed to parse tunnel request frame: {}", err),
+        }
+    })?;
+
+    if req.id.trim().is_empty() {
+        return Err(DesktopTunnelRequestFrameError {
+            id: None,
+            message: "tunnel request frame missing id".to_string(),
+        });
+    }
+    if req.path.trim().is_empty() {
+        return Err(DesktopTunnelRequestFrameError {
+            id: Some(req.id.clone()),
+            message: "tunnel request frame missing path".to_string(),
+        });
+    }
+
+    Ok(req)
+}
+
+fn desktop_tunnel_error_response_text(id: &str, error: &str) -> String {
+    use base64::Engine;
+    serde_json::json!({
+        "id": id,
+        "status": 502,
+        "headers": {
+            "content-type": "text/plain; charset=utf-8",
+        },
+        "body": base64::engine::general_purpose::STANDARD.encode(
+            format!("Malformed tunnel request frame from relay: {}", error).as_bytes()
+        ),
+    })
+    .to_string()
+}
 
 /// Spawn a background task that maintains a WebSocket tunnel to the relay.
 /// The relay forwards incoming visitor HTTP requests through this tunnel.
@@ -4150,15 +4768,38 @@ fn spawn_relay_tunnel(
                     while let Some(Ok(msg)) = ws_rx.next().await {
                         match msg {
                             tokio_tungstenite::tungstenite::Message::Text(text) => {
-                                // Parse the tunnel request from the relay
-                                #[derive(serde::Deserialize)]
-                                struct TunnelReq {
-                                    id: String,
-                                    path: String,
-                                }
-                                let req: TunnelReq = match serde_json::from_str(&text) {
+                                let req = match parse_desktop_tunnel_request_frame(&text) {
                                     Ok(r) => r,
-                                    Err(_) => continue,
+                                    Err(err) => {
+                                        match err.id {
+                                            Some(id) => {
+                                                println!(
+                                                    "[TUNNEL] Malformed request frame for {}:{} id={}: {}",
+                                                    resource_type, resource_id, id, err.message
+                                                );
+                                                let msg =
+                                                    tokio_tungstenite::tungstenite::Message::Text(
+                                                        desktop_tunnel_error_response_text(
+                                                            &id,
+                                                            &err.message,
+                                                        ),
+                                                    );
+                                                if futures_util::SinkExt::send(&mut ws_tx, msg)
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                            None => {
+                                                println!(
+                                                    "[TUNNEL] Malformed request frame for {}:{} without recoverable id: {}",
+                                                    resource_type, resource_id, err.message
+                                                );
+                                            }
+                                        }
+                                        continue;
+                                    }
                                 };
 
                                 // Fetch from local server
@@ -4176,16 +4817,36 @@ fn spawn_relay_tunnel(
                                                 hdr.insert(k.to_string(), vs.to_string());
                                             }
                                         }
-                                        let bytes = resp.bytes().await.unwrap_or_default().to_vec();
-                                        (st, hdr, bytes)
+                                        let body_result = resp
+                                            .bytes()
+                                            .await
+                                            .map(|bytes| bytes.to_vec())
+                                            .map_err(|err| err.to_string());
+                                        if let Err(err) = body_result.as_ref() {
+                                            println!(
+                                                "[TUNNEL] Failed to read local response body for {}:{} id={}: {}",
+                                                resource_type, resource_id, req.id, err
+                                            );
+                                        }
+                                        let tunnel_response = relay_tunnel_response_from_local_body(
+                                            st,
+                                            hdr,
+                                            body_result,
+                                        );
+                                        (
+                                            tunnel_response.status,
+                                            tunnel_response.headers,
+                                            tunnel_response.body_bytes,
+                                        )
                                     }
                                     Err(_) => (502, HashMap::new(), b"Local server error".to_vec()),
                                 };
 
                                 // Send response back through the tunnel
                                 use base64::Engine;
+                                let request_id = req.id.clone();
                                 let resp_json = serde_json::json!({
-                                    "id": req.id,
+                                    "id": &request_id,
                                     "status": status,
                                     "headers": headers,
                                     "body": base64::engine::general_purpose::STANDARD.encode(&body_bytes),
@@ -4193,7 +4854,17 @@ fn spawn_relay_tunnel(
                                 let msg = tokio_tungstenite::tungstenite::Message::Text(
                                     resp_json.to_string(),
                                 );
-                                if futures_util::SinkExt::send(&mut ws_tx, msg).await.is_err() {
+                                let send_result =
+                                    futures_util::SinkExt::send(&mut ws_tx, msg)
+                                        .await
+                                        .map_err(|err| err.to_string());
+                                if let Err(message) = relay_tunnel_response_send_result(
+                                    &resource_type,
+                                    &resource_id,
+                                    &request_id,
+                                    send_result,
+                                ) {
+                                    println!("{}", message);
                                     break;
                                 }
                             }
@@ -4226,6 +4897,20 @@ fn spawn_relay_tunnel(
         }
     });
     handle.abort_handle()
+}
+
+fn relay_tunnel_response_send_result(
+    resource_type: &str,
+    resource_id: &str,
+    request_id: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    send_result.map_err(|err| {
+        format!(
+            "[TUNNEL] Failed to send local response for {}:{} id={}: {}",
+            resource_type, resource_id, request_id, err
+        )
+    })
 }
 
 #[tauri::command]
@@ -4267,7 +4952,7 @@ async fn publish_site_to_relay(
     // The shared client's 5s default is tuned for JSON-RPC; relay
     // register can take longer on a congested or distant relay. Bring
     // this in line with the share-register path's 30s budget.
-    let resp = rpc_client::client()
+    let resp = rpc_client::client()?
         .post(&url)
         .json(&serde_json::json!({
             "site_id": site_id,
@@ -4363,7 +5048,7 @@ async fn unpublish_site_from_relay(
     let signature = wallet::sign_message(&private_key, &proof_payload)
         .map_err(|e| format!("Failed to sign unregister proof: {}", e))?;
 
-    let resp = rpc_client::client()
+    let resp = rpc_client::client()?
         .delete(&url)
         .header("X-Owner", &owner_lower)
         .header("X-Owner-Sig", format!("{}:{}", ts, signature))
@@ -4418,6 +5103,52 @@ struct CdnSitePublishResult {
     total_size_bytes: u64,
     expires_at: u64,
     payment_tx: String,
+}
+
+#[derive(Debug)]
+struct ValidatedCdnSitePublishResponse {
+    file_count: u32,
+    expires_at: u64,
+}
+
+fn required_cdn_response_u64(
+    resp_body: &serde_json::Value,
+    field: &'static str,
+) -> Result<u64, String> {
+    let value = resp_body
+        .get(field)
+        .ok_or_else(|| format!("CDN response missing required field: {}", field))?;
+    value
+        .as_u64()
+        .ok_or_else(|| format!("CDN response field {} must be an unsigned integer", field))
+}
+
+fn validate_cdn_site_publish_response(
+    resp_body: &serde_json::Value,
+    expected_file_count: usize,
+) -> Result<ValidatedCdnSitePublishResponse, String> {
+    let expires_at = required_cdn_response_u64(resp_body, "expiresAt")?;
+    if expires_at == 0 {
+        return Err("CDN response field expiresAt must be greater than zero".to_string());
+    }
+
+    let raw_file_count = required_cdn_response_u64(resp_body, "fileCount")?;
+    if raw_file_count == 0 {
+        return Err("CDN response field fileCount must be greater than zero".to_string());
+    }
+    let file_count = u32::try_from(raw_file_count)
+        .map_err(|_| "CDN response field fileCount exceeds supported range".to_string())?;
+    if file_count as usize != expected_file_count {
+        return Err(format!(
+            "CDN response fileCount mismatch: expected {}, got {}",
+            expected_file_count, file_count
+        ));
+    }
+
+    Ok(ValidatedCdnSitePublishResponse {
+        file_count,
+        expires_at,
+    })
 }
 
 /// Stage progress event for CDN site upload. Emitted on the
@@ -4559,7 +5290,8 @@ async fn publish_site_to_cdn(
         "{}/api/cdn/pricing?bytes={}&durationDays={}",
         cdn_base, total_size, duration_days
     );
-    let pricing: serde_json::Value = match rpc_client::client().get(&pricing_url).send().await {
+    let http_client = rpc_client::client()?;
+    let pricing: serde_json::Value = match http_client.get(&pricing_url).send().await {
         Ok(r) => match r.json().await {
             Ok(j) => j,
             Err(e) => {
@@ -4583,7 +5315,7 @@ async fn publish_site_to_cdn(
         }
     };
 
-    let status: serde_json::Value = match rpc_client::client()
+    let status: serde_json::Value = match http_client
         .get(&format!("{}/api/cdn/status", cdn_base))
         .send()
         .await
@@ -4720,7 +5452,7 @@ async fn publish_site_to_cdn(
     // bound kills with `error sending request: operation timed out`.
     // Override with a per-request 180s timeout — long enough for big
     // sites + slow chain confirms, short enough to surface real hangs.
-    let resp = match rpc_client::client()
+    let resp = match http_client
         .post(&upload_url)
         .timeout(std::time::Duration::from_secs(180))
         .header("X-Site-Id", &site_id)
@@ -4754,14 +5486,15 @@ async fn publish_site_to_cdn(
             return Err(m);
         }
     };
-    let expires_at = resp_body
-        .get("expiresAt")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let file_count = resp_body
-        .get("fileCount")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(local_file_count as u64) as u32;
+    let upload_metadata = match validate_cdn_site_publish_response(&resp_body, local_file_count) {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            emit_error("uploading", &e);
+            return Err(e);
+        }
+    };
+    let expires_at = upload_metadata.expires_at;
+    let file_count = upload_metadata.file_count;
 
     let public_url = format!("{}/cdn/sites/{}/", cdn_base, site_id);
 
@@ -4835,7 +5568,7 @@ async fn unpublish_site_from_cdn(
         .map_err(|e| format!("Failed to sign unpublish proof: {}", e))?;
 
     let url = format!("{}{}", cdn_base, path);
-    let resp = rpc_client::client()
+    let resp = rpc_client::client()?
         .delete(&url)
         .header("X-Owner", &owner_lower)
         .header("X-Owner-Sig", format!("{}:{}", ts, signature))
@@ -4925,6 +5658,7 @@ async fn drive_create_folder(
     if name.is_empty() || name.len() > 255 {
         return Err("Invalid folder name".into());
     }
+    let now = ds::now_secs()?;
     let item = DsItem {
         id: ds::generate_id(),
         name,
@@ -4932,8 +5666,8 @@ async fn drive_create_folder(
         parent_id,
         size: None,
         mime_type: None,
-        created_at: ds::now_secs(),
-        modified_at: ds::now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: None,
         owner,
@@ -4941,6 +5675,7 @@ async fn drive_create_folder(
         merkle_root: None,
         protocol: None,
         price_chi: None,
+        payment_wallet: None,
         seed_enabled: false,
         seeding: false,
     };
@@ -5002,6 +5737,7 @@ async fn drive_upload_file(
         return Err("File exceeds 500 MB limit".into());
     }
 
+    let now = ds::now_secs()?;
     let item_id = ds::generate_id();
     let storage_name = format!("{}_{}", item_id, file_name);
     let mime = ds::mime_from_name(&file_name);
@@ -5061,8 +5797,8 @@ async fn drive_upload_file(
         parent_id,
         size: Some(copied_bytes),
         mime_type: Some(mime),
-        created_at: ds::now_secs(),
-        modified_at: ds::now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: Some(storage_name),
         owner,
@@ -5070,6 +5806,7 @@ async fn drive_upload_file(
         merkle_root: Some(computed_merkle_root),
         protocol: None,
         price_chi: None,
+        payment_wallet: None,
         seed_enabled: false,
         seeding: false,
     };
@@ -5084,6 +5821,15 @@ async fn drive_upload_file(
         copied_bytes
     );
     Ok(item)
+}
+
+fn validate_drive_item_price_update(price_chi: String) -> Result<Option<String>, String> {
+    if price_chi.is_empty() {
+        return Ok(None);
+    }
+    wallet::parse_chi_to_wei(&price_chi)
+        .map_err(|err| format!("Invalid Drive item price: {}", err))?;
+    Ok(Some(price_chi))
 }
 
 #[tauri::command]
@@ -5105,6 +5851,7 @@ async fn drive_update_item(
         .iter_mut()
         .find(|i| i.id == item_id && i.owner == owner)
         .ok_or("Item not found")?;
+    let now = ds::now_secs()?;
     if let Some(n) = name {
         if n.is_empty() || n.len() > 255 {
             return Err("Invalid name".into());
@@ -5118,9 +5865,9 @@ async fn drive_update_item(
         item.starred = s;
     }
     if let Some(p) = price_chi {
-        item.price_chi = if p.is_empty() { None } else { Some(p) };
+        item.price_chi = validate_drive_item_price_update(p)?;
     }
-    item.modified_at = ds::now_secs();
+    item.modified_at = now;
     let updated = item.clone();
     drop(m);
     state.drive_state.persist().await;
@@ -5260,11 +6007,12 @@ async fn drive_create_share(
         return Err("Share price must be greater than 0 CHI".into());
     }
 
+    let now = ds::now_secs()?;
     let token = ds::generate_share_token();
     let share = DsShareLink {
         id: token.clone(),
         item_id: item_id.clone(),
-        created_at: ds::now_secs(),
+        created_at: now,
         expires_at: None,
         price_chi: normalized_price,
         recipient_wallet: item.owner,
@@ -5342,8 +6090,9 @@ async fn drive_toggle_visibility(
         .iter_mut()
         .find(|i| i.id == item_id && i.owner == owner)
         .ok_or("Item not found")?;
+    let now = ds::now_secs()?;
     item.is_public = is_public;
-    item.modified_at = ds::now_secs();
+    item.modified_at = now;
     let updated = item.clone();
     drop(m);
     state.drive_state.persist().await;
@@ -5391,7 +6140,7 @@ async fn publish_drive_file_inner(
     }
 
     // Look up the Drive item from the manifest.
-    let (file_name, storage_path, file_size_hint, existing_merkle_root) = {
+    let (file_name, storage_path, file_size_hint, existing_merkle_root, folder_access) = {
         let m = state.drive_state.manifest.read().await;
         let item = m
             .items
@@ -5407,6 +6156,7 @@ async fn publish_drive_file_inner(
             sp.clone(),
             item.size,
             item.merkle_root.clone(),
+            paid_folder_policies_for_drive_item(&m, item),
         )
     };
 
@@ -5501,7 +6251,7 @@ async fn publish_drive_file_inner(
         return Err("DHT peer ID unavailable. Try reconnecting to the network.".to_string());
     }
 
-    dht.register_shared_file(
+    dht.register_shared_file_with_folder_access(
         file_hash.clone(),
         full_path_str,
         file_name.clone(),
@@ -5509,6 +6259,7 @@ async fn publish_drive_file_inner(
         price_wei_val,
         wallet_addr.clone(),
         private_key.clone().unwrap_or_default(),
+        folder_access,
     )
     .await;
 
@@ -5546,6 +6297,7 @@ async fn publish_drive_file_inner(
 
     // Update the Drive manifest with seeding metadata
     let updated_item = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -5557,7 +6309,7 @@ async fn publish_drive_file_inner(
         item.price_chi = price_chi;
         item.seed_enabled = true;
         item.seeding = true;
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         let cloned = item.clone();
         cloned
     };
@@ -5581,7 +6333,7 @@ async fn seed_hosted_file(
     }
 
     // Find Drive item by merkle_root matching file_hash
-    let (item_id, file_name, storage_path, file_size) = {
+    let (item_id, file_name, storage_path, file_size, folder_access) = {
         let m = state.drive_state.manifest.read().await;
         let item = m
             .items
@@ -5599,6 +6351,7 @@ async fn seed_hosted_file(
             item.name.clone(),
             item.storage_path.clone().ok_or("No storage path")?,
             item.size.unwrap_or(0),
+            paid_folder_policies_for_drive_item(&m, item),
         )
     };
 
@@ -5626,10 +6379,11 @@ async fn seed_hosted_file(
     }
 
     // Register locally so we can serve chunks
-    dht.register_shared_file(
+    dht.register_shared_file_with_folder_access(
         file_hash.clone(), full_path_str, file_name.clone(),
         file_size, price_wei_val, wallet_address.clone(),
         private_key.clone().unwrap_or_default(),
+        folder_access,
     ).await;
 
     // Update DHT record to add ourselves as a seeder
@@ -5672,12 +6426,13 @@ async fn seed_hosted_file(
 
     // Enable seeding in Drive manifest
     {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         if let Some(item) = m.items.iter_mut().find(|i| i.id == item_id) {
             item.seed_enabled = true;
             item.seeding = true;
             item.price_chi = price_chi;
-            item.modified_at = ds::now_secs();
+            item.modified_at = now;
         }
     }
     state.drive_state.persist().await;
@@ -5733,6 +6488,7 @@ async fn drive_stop_seeding_inner(
 
     // Update manifest
     let updated_item = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -5741,7 +6497,7 @@ async fn drive_stop_seeding_inner(
             .ok_or("Drive item not found in manifest")?;
         item.seed_enabled = false;
         item.seeding = false;
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         let cloned = item.clone();
         cloned
     };
@@ -5884,9 +6640,16 @@ impl FolderManifest {
         out
     }
 
-    pub fn sign(&mut self, private_key: &str) {
+    pub fn sign(&mut self, private_key: &str) -> Result<(), String> {
+        self.publisher_signature.clear();
         let payload = self.sign_payload();
-        self.publisher_signature = wallet::sign_message(private_key, &payload).unwrap_or_default();
+        let signature = wallet::sign_message(private_key, &payload)
+            .map_err(|e| format!("failed to sign folder manifest: {}", e))?;
+        if signature.is_empty() {
+            return Err("failed to sign folder manifest: empty signature".to_string());
+        }
+        self.publisher_signature = signature;
+        Ok(())
     }
 
     pub fn verify(&self) -> bool {
@@ -5964,6 +6727,90 @@ fn collect_descendant_files(
     out
 }
 
+fn signing_key_matches_wallet(private_key: &str, wallet_address: &str) -> bool {
+    let key = private_key.trim();
+    let wallet_address = wallet_address.trim();
+    if key.is_empty() || wallet_address.is_empty() {
+        return false;
+    }
+    let payload = b"folder-manifest-owner-preflight-v1";
+    wallet::sign_message(key, payload)
+        .map(|sig| wallet::verify_signature(payload, &sig, wallet_address))
+        .unwrap_or(false)
+}
+
+fn positive_price_wei(price_chi: Option<&str>) -> Option<u128> {
+    let price = price_chi?.trim();
+    if price.is_empty() || price == "0" {
+        return None;
+    }
+    wallet::parse_chi_to_wei(price).ok().filter(|wei| *wei > 0)
+}
+
+fn paid_folder_policies_for_drive_item(
+    manifest: &ds::DriveManifest,
+    item: &ds::DriveItem,
+) -> Vec<dht::FolderAccessPolicy> {
+    let by_id: HashMap<&str, &ds::DriveItem> = manifest
+        .items
+        .iter()
+        .map(|candidate| (candidate.id.as_str(), candidate))
+        .collect();
+    let mut policies = Vec::new();
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut current_parent = item.parent_id.as_deref();
+
+    while let Some(parent_id) = current_parent {
+        if !visited.insert(parent_id) {
+            break;
+        }
+        let Some(folder) = by_id.get(parent_id).copied() else {
+            break;
+        };
+        if folder.item_type == "folder"
+            && folder.owner == item.owner
+            && (folder.seed_enabled || folder.seeding)
+        {
+            if let (Some(folder_hash), Some(price_wei)) = (
+                folder
+                    .merkle_root
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|h| !h.is_empty()),
+                positive_price_wei(folder.price_chi.as_deref()),
+            ) {
+                let wallet_address = folder
+                    .payment_wallet
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|wallet| !wallet.is_empty())
+                    .unwrap_or(folder.owner.trim());
+                if !wallet_address.is_empty() {
+                    policies.push(dht::FolderAccessPolicy {
+                        folder_hash: folder_hash.to_string(),
+                        price_wei,
+                        wallet_address: wallet_address.to_string(),
+                    });
+                }
+            }
+        }
+        current_parent = folder.parent_id.as_deref();
+    }
+
+    policies
+}
+
+async fn rollback_drive_folder_child_seeds(state: &AppState, owner: &str, file_ids: &[String]) {
+    for file_id in file_ids {
+        if let Err(e) = drive_stop_seeding_inner(state, owner, file_id).await {
+            println!(
+                "[DRIVE] Folder publish rollback failed for child {}: {}",
+                file_id, e
+            );
+        }
+    }
+}
+
 /// Publish a folder bundle for sale at a single folder-level price. Each
 /// child file is registered as a free seed (price 0) — payment is
 /// collected once at the folder level when the buyer presents a
@@ -6036,6 +6883,17 @@ async fn publish_drive_folder(
         .to_string();
     if folder_price_wei > 0 && folder_payment_wallet.is_empty() {
         return Err("Wallet address is required when setting a folder price".to_string());
+    }
+    if folder_price_wei > 0
+        && !private_key
+            .as_deref()
+            .map(|key| signing_key_matches_wallet(key, &owner))
+            .unwrap_or(false)
+    {
+        return Err(
+            "Wallet must be unlocked with the folder owner key to publish a paid folder"
+                .to_string(),
+        );
     }
 
     // First pass: per-file publishes happen in parallel so the per-file
@@ -6176,6 +7034,10 @@ async fn publish_drive_folder(
             })
             .collect()
     };
+    let manifest_file_ids: Vec<String> = manifest_entries
+        .iter()
+        .map(|(file_id, _)| file_id.clone())
+        .collect();
     let manifest_files: Vec<FolderManifestFile> =
         manifest_entries.iter().map(|(_, f)| f.clone()).collect();
 
@@ -6183,21 +7045,28 @@ async fn publish_drive_folder(
         None
     } else {
         let hash = compute_folder_hash(&owner, &manifest_files);
+        let folder_created_at = ds::now_secs()?;
         let mut manifest = FolderManifest {
             hash: hash.clone(),
             name: folder_name,
             owner_wallet: owner.clone(),
-            created_at: ds::now_secs(),
+            created_at: folder_created_at,
             files: manifest_files,
             price_wei: folder_price_wei.to_string(),
             wallet_address: folder_payment_wallet.clone(),
             publisher_signature: String::new(),
         };
         let signed = match private_key.as_deref() {
-            Some(key) if !key.is_empty() => {
-                manifest.sign(key);
-                manifest.verify()
-            }
+            Some(key) if !key.is_empty() => match manifest.sign(key) {
+                Ok(()) => manifest.verify(),
+                Err(e) => {
+                    println!(
+                        "[DRIVE] Folder manifest publish for {} signing failed: {}",
+                        hash, e
+                    );
+                    false
+                }
+            },
             _ => false,
         };
         if !signed {
@@ -6205,6 +7074,13 @@ async fn publish_drive_folder(
                 "[DRIVE] Folder manifest publish for {} skipped — wallet must be unlocked to sign the bundle",
                 hash
             );
+            if folder_price_wei > 0 {
+                rollback_drive_folder_child_seeds(state.inner(), &owner, &manifest_file_ids).await;
+                return Err(
+                    "Paid folder publish failed because the folder manifest could not be signed"
+                        .to_string(),
+                );
+            }
             None
         } else {
             let dht = {
@@ -6212,23 +7088,72 @@ async fn publish_drive_folder(
                 dht_guard.as_ref().cloned()
             };
             if let Some(dht) = dht {
-                if let Ok(json) = serde_json::to_string(&manifest) {
-                    if let Err(e) = dht.put_dht_value(folder_manifest_key(&hash), json).await {
-                        println!("[DRIVE] Folder manifest publish failed for {}: {}", hash, e);
+                match serde_json::to_string(&manifest) {
+                    Ok(json) => {
+                        if let Err(e) = dht.put_dht_value(folder_manifest_key(&hash), json).await {
+                            println!("[DRIVE] Folder manifest publish failed for {}: {}", hash, e);
+                            if folder_price_wei > 0 {
+                                rollback_drive_folder_child_seeds(
+                                    state.inner(),
+                                    &owner,
+                                    &manifest_file_ids,
+                                )
+                                .await;
+                                return Err(format!("Paid folder manifest publish failed: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if folder_price_wei > 0 {
+                            rollback_drive_folder_child_seeds(
+                                state.inner(),
+                                &owner,
+                                &manifest_file_ids,
+                            )
+                            .await;
+                            return Err(format!("Failed to serialize folder manifest: {}", e));
+                        }
                     }
                 }
                 // Register as a Kademlia provider for the folder hash so other
                 // peers' get_providers calls find this seller.
-                let _ = dht.start_providing_file(hash.clone()).await;
+                if let Err(e) = dht.start_providing_file(hash.clone()).await {
+                    println!("[DRIVE] Folder provider publish failed for {}: {}", hash, e);
+                    if folder_price_wei > 0 {
+                        rollback_drive_folder_child_seeds(
+                            state.inner(),
+                            &owner,
+                            &manifest_file_ids,
+                        )
+                        .await;
+                        return Err(format!("Paid folder provider publish failed: {}", e));
+                    }
+                }
+                let member_hashes: Vec<String> = manifest_entries
+                    .iter()
+                    .map(|(_, f)| f.file_hash.clone())
+                    .collect();
+                let registered = dht
+                    .register_folder_bundle_access(
+                        hash.clone(),
+                        member_hashes.clone(),
+                        folder_price_wei,
+                        folder_payment_wallet.clone(),
+                    )
+                    .await;
+                if folder_price_wei > 0 && registered != member_hashes.len() {
+                    rollback_drive_folder_child_seeds(state.inner(), &owner, &manifest_file_ids)
+                        .await;
+                    return Err(format!(
+                        "Paid folder policy registration failed for {}/{} child files",
+                        member_hashes.len().saturating_sub(registered),
+                        member_hashes.len()
+                    ));
+                }
+            } else if folder_price_wei > 0 {
+                rollback_drive_folder_child_seeds(state.inner(), &owner, &manifest_file_ids).await;
+                return Err("DHT not running while publishing paid folder manifest".to_string());
             }
-            // Note: V1 limitation — child files are published at price=0
-            // and the seeder doesn't enforce folder-level payment. A
-            // buyer who has the FILE hash (not the folder hash) can
-            // download individual files for free without paying the
-            // folder owner. Closing this gap requires extending the
-            // chunked-transfer protocol with folder-level PaymentProof
-            // verification (tracked separately).
-            let _ = manifest_entries;
             Some(hash)
         }
     };
@@ -6240,6 +7165,7 @@ async fn publish_drive_folder(
     // the folder hash on `merkle_root` so the existing "Copy Merkle Hash"
     // context-menu item works for sold folders too.
     let folder = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6247,13 +7173,18 @@ async fn publish_drive_folder(
             .find(|i| i.id == folder_id && i.owner == owner && i.item_type == "folder")
             .ok_or("Drive folder not found in manifest")?;
         item.price_chi = price_chi;
+        item.payment_wallet = if folder_payment_wallet.is_empty() {
+            None
+        } else {
+            Some(folder_payment_wallet.clone())
+        };
         item.protocol = protocol;
         item.seed_enabled = true;
         item.seeding = succeeded > 0;
         if folder_hash_opt.is_some() {
             item.merkle_root = folder_hash_opt.clone();
         }
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         item.clone()
     };
     state.drive_state.persist().await;
@@ -6391,6 +7322,7 @@ async fn unpublish_drive_folder(
     }
 
     let folder = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6399,10 +7331,11 @@ async fn unpublish_drive_folder(
             .ok_or("Drive folder not found in manifest")?;
         item.seed_enabled = false;
         item.seeding = false;
+        item.payment_wallet = None;
         if folder_hash.is_some() {
             item.merkle_root = None;
         }
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         item.clone()
     };
     state.drive_state.persist().await;
@@ -6796,6 +7729,16 @@ struct OwnerProof {
     header: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReputationVerdictProof {
+    issuer_wallet: String,
+    verifying_key: String,
+    owner_signature: String,
+    updated_at: u64,
+    verdict_signature: String,
+}
+
 #[tauri::command]
 fn compute_owner_proof(
     method: String,
@@ -6821,6 +7764,111 @@ fn compute_owner_proof(
     })
 }
 
+fn verify_private_key_matches_wallet(
+    private_key: &str,
+    wallet_address: &str,
+) -> Result<(), String> {
+    let probe = b"chiral-reputation-wallet-check-v1";
+    let signature = wallet::sign_message(private_key, probe)
+        .map_err(|e| format!("sign_message failed: {}", e))?;
+    let recovered = wallet::recover_signer(probe, &signature)
+        .map_err(|e| format!("recover_signer failed: {}", e))?;
+    if !recovered.eq_ignore_ascii_case(wallet_address) {
+        return Err("private_key does not match wallet_address".to_string());
+    }
+    Ok(())
+}
+
+fn derive_reputation_issuer_key(private_key: &str) -> Result<ed25519_dalek::SigningKey, String> {
+    use sha2::{Digest, Sha256};
+
+    let key_hex = private_key.trim().trim_start_matches("0x");
+    let key_bytes =
+        hex::decode(key_hex).map_err(|e| format!("private_key is not valid hex: {}", e))?;
+    if key_bytes.len() != 32 {
+        return Err("private_key must be 32 bytes".to_string());
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"chiral-reputation-issuer-key-v1");
+    hasher.update(&key_bytes);
+    let digest = hasher.finalize();
+    let mut secret = [0u8; 32];
+    secret.copy_from_slice(&digest);
+    Ok(ed25519_dalek::SigningKey::from_bytes(&secret))
+}
+
+#[tauri::command]
+fn compute_reputation_verdict_proof(
+    transfer_id: String,
+    seeder_wallet: String,
+    downloader_wallet: String,
+    file_hash: String,
+    amount_wei: String,
+    outcome: String,
+    tx_hash: Option<String>,
+    wallet_address: String,
+    private_key: String,
+) -> Result<ReputationVerdictProof, String> {
+    use ed25519_dalek::Signer;
+
+    if private_key.trim().is_empty() {
+        return Err("private_key required".to_string());
+    }
+
+    let issuer_wallet = reputation::normalize_wallet(&wallet_address)?;
+    let normalized_downloader = reputation::normalize_wallet(&downloader_wallet)?;
+    if issuer_wallet != normalized_downloader {
+        return Err("wallet_address must match downloader_wallet".to_string());
+    }
+    verify_private_key_matches_wallet(&private_key, &issuer_wallet)?;
+
+    let amount_wei = if amount_wei.trim().is_empty() {
+        "0".to_string()
+    } else {
+        amount_wei.trim().to_string()
+    };
+    amount_wei
+        .parse::<u128>()
+        .map_err(|_| "amountWei must be an integer wei string".to_string())?;
+
+    let outcome = match outcome.trim().to_lowercase().as_str() {
+        "completed" => "completed".to_string(),
+        "failed" => "failed".to_string(),
+        _ => return Err("outcome must be completed or failed".to_string()),
+    };
+
+    let tx_hash = tx_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    let signing_key = derive_reputation_issuer_key(&private_key)?;
+    let verifying_key = hex::encode(signing_key.verifying_key().to_bytes());
+    let owner_payload = reputation::issuer_key_binding_payload(&issuer_wallet, &verifying_key);
+    let owner_signature = wallet::sign_message(&private_key, &owner_payload)
+        .map_err(|e| format!("sign_message failed: {}", e))?;
+    let verdict = reputation::ReputationVerdictPayload {
+        transfer_id: transfer_id.trim().to_string(),
+        seeder_wallet: seeder_wallet.trim().to_string(),
+        downloader_wallet: issuer_wallet.clone(),
+        file_hash: file_hash.trim().to_string(),
+        amount_wei,
+        outcome,
+        tx_hash,
+    };
+    let verdict_signature = signing_key.sign(&reputation::verdict_signing_payload(&verdict));
+
+    Ok(ReputationVerdictProof {
+        issuer_wallet,
+        verifying_key,
+        owner_signature,
+        updated_at: rating_storage::now_secs()?,
+        verdict_signature: hex::encode(verdict_signature.to_bytes()),
+    })
+}
+
 /// Returns the active version policy (network-fetched if available, else
 /// the bundled snapshot).
 #[tauri::command]
@@ -6834,7 +7882,16 @@ fn get_version_policy() -> version::VersionPolicy {
 #[tauri::command]
 fn get_version_status() -> VersionStatus {
     let policy = version::effective_policy();
-    let status = version::compare_to_policy(version::CURRENT_VERSION, &policy);
+    let status = match version::compare_to_policy(version::CURRENT_VERSION, &policy) {
+        Ok(status) => status,
+        Err(e) => {
+            eprintln!(
+                "[VERSION] Failed to compare local build to effective policy: {}; treating update as required",
+                e
+            );
+            "required"
+        }
+    };
     VersionStatus {
         current_version: version::CURRENT_VERSION.to_string(),
         status: status.to_string(),
@@ -6849,14 +7906,23 @@ fn get_version_status() -> VersionStatus {
 /// it via direct Tauri invokes.
 async fn ensure_version_supported(_state: &AppState) -> Result<(), String> {
     let policy = version::effective_policy();
-    if version::compare_to_policy(version::CURRENT_VERSION, &policy) == "required" {
-        return Err(format!(
-            "This client (v{}) is below the network's required version (v{}). \
-             Update from {} to continue.",
-            version::CURRENT_VERSION,
-            policy.min_required,
-            policy.download_url
-        ));
+    match version::compare_to_policy(version::CURRENT_VERSION, &policy) {
+        Ok("required") => {
+            return Err(format!(
+                "This client (v{}) is below the network's required version (v{}). \
+                 Update from {} to continue.",
+                version::CURRENT_VERSION,
+                policy.min_required,
+                policy.download_url
+            ));
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return Err(format!(
+                "Version policy check failed closed: {}. Update from {} or verify the relay policy.",
+                e, policy.download_url
+            ));
+        }
     }
     Ok(())
 }
@@ -6869,7 +7935,18 @@ async fn ensure_version_supported(_state: &AppState) -> Result<(), String> {
 /// non-zero issuance always wins.
 async fn fetch_and_log_remote_version_policy() {
     let url = "http://130.245.173.73:8080/api/version-policy";
-    let resp = match rpc_client::client()
+    let client = match rpc_client::client() {
+        Ok(client) => client,
+        Err(e) => {
+            println!(
+                "[VERSION] Local build {} — shared HTTP client unavailable: {}",
+                version::CURRENT_VERSION,
+                e
+            );
+            return;
+        }
+    };
+    let resp = match client
         .get(url)
         .timeout(std::time::Duration::from_secs(8))
         .send()
@@ -6908,7 +7985,10 @@ async fn fetch_and_log_remote_version_policy() {
     // Hand the candidate to the global slot; it applies the
     // signed-or-permissive + rollback rules and tells us whether it
     // accepted.
-    let outcome = version::compare_to_policy(version::CURRENT_VERSION, &remote);
+    let outcome = match version::compare_to_policy(version::CURRENT_VERSION, &remote) {
+        Ok(status) => status.to_string(),
+        Err(e) => format!("invalid policy ({e})"),
+    };
     let accepted = version::update_effective_policy(remote.clone());
     if accepted {
         println!(
@@ -6927,6 +8007,14 @@ async fn fetch_and_log_remote_version_policy() {
             remote.min_required,
         );
     }
+}
+
+fn tauri_builder_startup_error(error: impl std::fmt::Display) -> String {
+    format!(
+        "Failed to build the Tauri application during startup: {}. \
+         Check tauri.conf.json, plugin initialization, and bundled resources.",
+        error
+    )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -6948,16 +8036,23 @@ pub fn run() {
     // Spawn a background task to stop Geth + cleanup DHT on SIGINT (Ctrl+C) or SIGTERM
     // This prevents orphaned Geth processes and stale DHT entries when the app is killed
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = match build_shutdown_cleanup_runtime() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("⚠️  Shutdown cleanup watcher disabled: {}", e);
+                return;
+            }
+        };
         rt.block_on(async {
             #[cfg(unix)]
             {
-                use tokio::signal::unix::{signal, SignalKind};
-                let mut sigint = signal(SignalKind::interrupt()).unwrap();
-                let mut sigterm = signal(SignalKind::terminate()).unwrap();
+                let (mut sigint, mut sigterm) = match install_shutdown_signal_handlers() {
+                    Ok(signals) => signals,
+                    Err(e) => {
+                        eprintln!("⚠️  Shutdown signal cleanup disabled: {}", e);
+                        return;
+                    }
+                };
                 tokio::select! {
                     _ = sigint.recv() => {
                         println!("🛑 SIGINT received — cleaning up before exit");
@@ -6998,7 +8093,7 @@ pub fn run() {
         });
     });
 
-    tauri::Builder::default()
+    let app = match tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
             dht: dht_arc,
@@ -7165,6 +8260,7 @@ pub fn run() {
             get_version_policy,
             get_version_status,
             compute_owner_proof,
+            compute_reputation_verdict_proof,
             compute_relay_register_signature,
             get_mining_balance_diagnostic,
             // Bootstrap health commands
@@ -7230,56 +8326,62 @@ pub fn run() {
             // App lifecycle
             exit_app,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(move |_app, event| {
-            if let tauri::RunEvent::Exit = event {
-                println!("🛑 App exiting — stopping gateway server and relay tunnels");
-                if let Ok(mut shutdown_store) = hosting_shutdown_for_exit.try_lock() {
-                    if let Some(tx) = shutdown_store.take() {
-                        let _ = tx.send(());
-                    }
-                } else {
-                    println!("⚠️  Could not acquire hosting shutdown lock on exit");
-                }
+        .build(tauri::generate_context!()) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("{}", tauri_builder_startup_error(error));
+            return;
+        }
+    };
 
-                if let Ok(mut tunnel_store) = tunnel_handles_for_exit.try_lock() {
-                    for (_, handle) in tunnel_store.drain() {
-                        handle.abort();
-                    }
-                } else {
-                    println!("⚠️  Could not acquire tunnel handle lock on exit");
+    app.run(move |_app, event| {
+        if let tauri::RunEvent::Exit = event {
+            println!("🛑 App exiting — stopping gateway server and relay tunnels");
+            if let Ok(mut shutdown_store) = hosting_shutdown_for_exit.try_lock() {
+                if let Some(tx) = shutdown_store.take() {
+                    let _ = tx.send(());
                 }
+            } else {
+                println!("⚠️  Could not acquire hosting shutdown lock on exit");
+            }
 
-                // Stop Geth cleanly when the app exits (window close, quit, etc.)
-                // Use try_lock to avoid deadlock — if the mutex is held by another
-                // task (e.g. mining status poll), force-kill via PID file instead.
-                println!("🛑 App exiting — stopping Geth and mining");
-                match geth_for_exit.try_lock() {
-                    Ok(mut geth) => {
-                        let _ = geth.stop_fast();
-                    }
-                    Err(_) => {
-                        // Mutex is held — use synchronous force-kill as fallback
-                        println!("⚠️  Could not acquire Geth lock on exit, force-killing via PID");
-                        let data_dir = network::data_dir().join("geth");
-                        let pid_path = data_dir.join("geth.pid");
-                        if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
-                            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                                println!("🛑 Force-killing Geth PID {} on exit", pid);
-                                let _ = std::process::Command::new("kill")
-                                    .arg(pid.to_string())
-                                    .output();
-                                let _ = std::process::Command::new("kill")
-                                    .args(["-9", &pid.to_string()])
-                                    .output();
-                            }
+            if let Ok(mut tunnel_store) = tunnel_handles_for_exit.try_lock() {
+                for (_, handle) in tunnel_store.drain() {
+                    handle.abort();
+                }
+            } else {
+                println!("⚠️  Could not acquire tunnel handle lock on exit");
+            }
+
+            // Stop Geth cleanly when the app exits (window close, quit, etc.)
+            // Use try_lock to avoid deadlock — if the mutex is held by another
+            // task (e.g. mining status poll), force-kill via PID file instead.
+            println!("🛑 App exiting — stopping Geth and mining");
+            match geth_for_exit.try_lock() {
+                Ok(mut geth) => {
+                    let _ = geth.stop_fast();
+                }
+                Err(_) => {
+                    // Mutex is held — use synchronous force-kill as fallback
+                    println!("⚠️  Could not acquire Geth lock on exit, force-killing via PID");
+                    let data_dir = network::data_dir().join("geth");
+                    let pid_path = data_dir.join("geth.pid");
+                    if let Ok(pid_str) = std::fs::read_to_string(&pid_path) {
+                        if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                            println!("🛑 Force-killing Geth PID {} on exit", pid);
+                            let _ = std::process::Command::new("kill")
+                                .arg(pid.to_string())
+                                .output();
+                            let _ = std::process::Command::new("kill")
+                                .args(["-9", &pid.to_string()])
+                                .output();
                         }
-                        let _ = std::fs::remove_file(&pid_path);
                     }
+                    let _ = std::fs::remove_file(&pid_path);
                 }
             }
-        });
+        }
+    });
 }
 
 #[cfg(test)]
@@ -7290,6 +8392,638 @@ mod multi_seeder_tests {
     use tokio::sync::Mutex;
 
     // --- Serialization / Deserialization ---
+
+    #[test]
+    fn wallet_backup_relay_url_requires_secure_transport() {
+        assert!(is_allowed_wallet_backup_relay_url(
+            "https://relay.example.com/api/wallet/backup-email"
+        ));
+        assert!(is_allowed_wallet_backup_relay_url(
+            "http://127.0.0.1:9419/api/wallet/backup-email"
+        ));
+        assert!(is_allowed_wallet_backup_relay_url(
+            "http://localhost:9419/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://relay.example.com/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://localhost.example.com/api/wallet/backup-email"
+        ));
+        assert!(!is_allowed_wallet_backup_relay_url(
+            "http://127.0.0.1.example.com/api/wallet/backup-email"
+        ));
+    }
+
+    #[test]
+    fn download_request_id_at_preserves_existing_id_shape() {
+        let request_id = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(1234),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(request_id, "download-abcdef12-1234");
+    }
+
+    #[test]
+    fn download_request_id_at_handles_short_hashes() {
+        let request_id = download_request_id_at(
+            "local",
+            "abc",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(7),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(request_id, "local-abc-7");
+    }
+
+    #[test]
+    fn download_request_id_at_changes_with_timestamp() {
+        let first = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(1),
+        )
+        .expect("post-epoch timestamp should be valid");
+        let second = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(2),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn download_request_id_at_rejects_pre_epoch_clock() {
+        let err = download_request_id_at(
+            "download",
+            "abcdef1234567890",
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn torrent_creation_date_entry_at_preserves_bencode_output() {
+        let entry = torrent_creation_date_entry_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        )
+        .expect("post-epoch timestamp should be valid");
+
+        assert_eq!(entry, "13:creation datei1700000000e");
+    }
+
+    #[test]
+    fn torrent_creation_timestamp_rejects_pre_epoch_clock() {
+        let err = torrent_creation_date_entry_at(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn enforce_agreement_expiration_preserves_unexpired_active_agreement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement.json");
+        let json = r#"{"agreementId":"a1","status":"active","expiresAt":20}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let updated = enforce_agreement_expiration_at(
+            json,
+            &path,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(10),
+        )
+        .expect("post-epoch clock should be accepted");
+        let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
+
+        assert_eq!(parsed["status"], "active");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
+    }
+
+    #[test]
+    fn enforce_agreement_expiration_marks_expired_active_agreement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement.json");
+        let json = r#"{"agreementId":"a1","status":"active","expiresAt":10}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let updated = enforce_agreement_expiration_at(
+            json,
+            &path,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(11),
+        )
+        .expect("post-epoch clock should be accepted");
+        let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        assert_eq!(parsed["status"], "expired");
+        assert_eq!(stored["status"], "expired");
+    }
+
+    #[test]
+    fn enforce_agreement_expiration_rejects_pre_epoch_clock_for_active_agreement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agreement.json");
+        let json = r#"{"agreementId":"a1","status":"active","expiresAt":10}"#;
+        std::fs::write(&path, json).unwrap();
+
+        let err = enforce_agreement_expiration_at(
+            json,
+            &path,
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), json);
+    }
+
+    #[test]
+    fn tauri_builder_startup_error_is_actionable() {
+        let error = tauri_builder_startup_error("missing resource");
+
+        assert!(error.contains("Tauri application"));
+        assert!(error.contains("startup"));
+        assert!(error.contains("missing resource"));
+        assert!(error.contains("tauri.conf.json"));
+        assert!(error.contains("plugin initialization"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_signal_pair_accepts_registered_handlers() {
+        let pair = shutdown_signal_pair_from_results(Ok("sigint"), Ok("sigterm"))
+            .expect("both signal handlers should be accepted");
+
+        assert_eq!(pair, ("sigint", "sigterm"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_signal_pair_reports_sigint_failure() {
+        let err = shutdown_signal_pair_from_results::<&str>(
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "interrupt unavailable",
+            )),
+            Ok("sigterm"),
+        )
+        .expect_err("SIGINT setup failure should be reported");
+
+        assert!(err.contains("SIGINT"));
+        assert!(err.contains("interrupt unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_signal_pair_reports_sigterm_failure() {
+        let err = shutdown_signal_pair_from_results::<&str>(
+            Ok("sigint"),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "terminate unavailable",
+            )),
+        )
+        .expect_err("SIGTERM setup failure should be reported");
+
+        assert!(err.contains("SIGTERM"));
+        assert!(err.contains("terminate unavailable"));
+    }
+
+    #[test]
+    fn build_shutdown_cleanup_runtime_runs_time_driver() {
+        let rt = build_shutdown_cleanup_runtime().expect("shutdown runtime should build");
+
+        rt.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(0)).await;
+        });
+    }
+
+    #[test]
+    fn shutdown_cleanup_runtime_error_is_actionable() {
+        let err = shutdown_cleanup_runtime_error(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "runtime unavailable",
+        ));
+
+        assert!(err.contains("shutdown cleanup runtime"));
+        assert!(err.contains("runtime unavailable"));
+    }
+
+    #[test]
+    fn hosted_site_relative_path_preserves_nested_paths() {
+        let rel = hosted_site_relative_path(
+            Path::new("/tmp/chiral-site/assets/app.js"),
+            Path::new("/tmp/chiral-site"),
+        )
+        .expect("nested file should have a relative path");
+
+        assert_eq!(rel, PathBuf::from("assets/app.js"));
+    }
+
+    #[test]
+    fn hosted_site_relative_path_falls_back_to_file_name() {
+        let rel = hosted_site_relative_path(
+            Path::new("/tmp/chiral-site/index.html"),
+            Path::new("/other/root"),
+        )
+        .expect("file-name fallback should be valid");
+
+        assert_eq!(rel, PathBuf::from("index.html"));
+    }
+
+    #[test]
+    fn hosted_site_relative_path_rejects_path_without_file_name() {
+        let err = hosted_site_relative_path(Path::new("/"), Path::new("/tmp/chiral-site"))
+            .expect_err("root path has no file name");
+
+        assert!(err.contains("has no file name"));
+    }
+
+    #[test]
+    fn cdn_site_publish_response_accepts_valid_metadata() {
+        let response = serde_json::json!({
+            "status": "uploaded",
+            "fileCount": 2,
+            "expiresAt": 1_700_000_000u64,
+        });
+
+        let metadata = validate_cdn_site_publish_response(&response, 2)
+            .expect("valid CDN response metadata should parse");
+
+        assert_eq!(metadata.file_count, 2);
+        assert_eq!(metadata.expires_at, 1_700_000_000);
+    }
+
+    #[test]
+    fn cdn_site_publish_response_rejects_missing_required_fields() {
+        let missing_expires_at = serde_json::json!({
+            "status": "uploaded",
+            "fileCount": 1,
+        });
+        let err = validate_cdn_site_publish_response(&missing_expires_at, 1)
+            .expect_err("missing expiresAt should be rejected");
+        assert!(err.contains("expiresAt"));
+
+        let missing_file_count = serde_json::json!({
+            "status": "uploaded",
+            "expiresAt": 1_700_000_000u64,
+        });
+        let err = validate_cdn_site_publish_response(&missing_file_count, 1)
+            .expect_err("missing fileCount should be rejected");
+        assert!(err.contains("fileCount"));
+    }
+
+    #[test]
+    fn cdn_site_publish_response_rejects_malformed_required_fields() {
+        let cases = vec![
+            (
+                serde_json::json!({"expiresAt": "soon", "fileCount": 1}),
+                "expiresAt",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": "1"}),
+                "fileCount",
+            ),
+            (
+                serde_json::json!({"expiresAt": 0, "fileCount": 1}),
+                "greater than zero",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": 0}),
+                "greater than zero",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": u64::MAX}),
+                "supported range",
+            ),
+            (
+                serde_json::json!({"expiresAt": 1_700_000_000u64, "fileCount": 2}),
+                "mismatch",
+            ),
+        ];
+
+        for (response, expected) in cases {
+            let err = validate_cdn_site_publish_response(&response, 1)
+                .expect_err("malformed CDN response metadata should be rejected");
+            assert!(
+                err.contains(expected),
+                "expected {err:?} to contain {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_reseed_credentials_require_wallet_address() {
+        assert_eq!(signed_reseed_credentials(None, Some("private-key")), None);
+        assert_eq!(signed_reseed_credentials(Some("  "), Some("private-key")), None);
+    }
+
+    #[test]
+    fn signed_reseed_credentials_require_private_key() {
+        assert_eq!(signed_reseed_credentials(Some("0xwallet"), None), None);
+        assert_eq!(signed_reseed_credentials(Some("0xwallet"), Some("  ")), None);
+    }
+
+    #[test]
+    fn signed_reseed_credentials_accept_complete_pair() {
+        assert_eq!(
+            signed_reseed_credentials(Some("0xwallet"), Some("private-key")),
+            Some(("0xwallet", "private-key"))
+        );
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_accepts_valid_request() {
+        let req = parse_desktop_tunnel_request_frame(r#"{"id":"req-1","path":"/index.html"}"#)
+            .expect("valid tunnel request frame should parse");
+
+        assert_eq!(
+            req,
+            DesktopTunnelRequest {
+                id: "req-1".to_string(),
+                path: "/index.html".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_reports_malformed_json_without_recoverable_id() {
+        let err = parse_desktop_tunnel_request_frame(r#"{"id":"req-1","path":"#)
+            .expect_err("malformed JSON should be rejected");
+
+        assert_eq!(err.id, None);
+        assert!(err.message.contains("failed to parse tunnel request frame"));
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_reports_missing_required_fields() {
+        let missing_path = parse_desktop_tunnel_request_frame(r#"{"id":"req-2"}"#)
+            .expect_err("missing path should be rejected");
+        assert_eq!(missing_path.id.as_deref(), Some("req-2"));
+        assert!(missing_path.message.contains("path"));
+
+        let missing_id = parse_desktop_tunnel_request_frame(r#"{"path":"/index.html"}"#)
+            .expect_err("missing id should be rejected");
+        assert_eq!(missing_id.id, None);
+        assert!(missing_id.message.contains("id"));
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_rejects_irrecoverable_request_ids() {
+        let blank_id = parse_desktop_tunnel_request_frame(r#"{"id":"  ","path":"/"}"#)
+            .expect_err("blank id should be rejected");
+
+        assert_eq!(blank_id.id, None);
+        assert!(blank_id.message.contains("id"));
+    }
+
+    #[test]
+    fn desktop_tunnel_error_response_encodes_recovered_request_id() {
+        use base64::Engine;
+
+        let frame = desktop_tunnel_error_response_text("req-3", "missing path");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).unwrap();
+
+        assert_eq!(parsed["id"], "req-3");
+        assert_eq!(parsed["status"], 502);
+        assert_eq!(
+            parsed["headers"]["content-type"],
+            "text/plain; charset=utf-8"
+        );
+
+        let body = parsed["body"].as_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .unwrap();
+        let text = String::from_utf8(decoded).unwrap();
+        assert!(text.contains("Malformed tunnel request frame from relay"));
+        assert!(text.contains("missing path"));
+    }
+
+    #[test]
+    fn host_advertisement_payload_rejects_missing_wallet() {
+        let ad = serde_json::json!({
+            "maxStorageBytes": 1024,
+            "pricePerMbPerDayWei": "1",
+            "minDepositWei": "1",
+        })
+        .to_string();
+        let err = host_advertisement_payload(&ad, "peer-a")
+            .expect_err("missing wallet should be rejected before DHT writes");
+
+        assert!(err.contains("walletAddress is required"));
+    }
+
+    #[test]
+    fn host_advertisement_payload_rejects_empty_wallet() {
+        let ad = serde_json::json!({
+            "walletAddress": "  ",
+            "maxStorageBytes": 1024,
+            "pricePerMbPerDayWei": "1",
+            "minDepositWei": "1",
+        })
+        .to_string();
+        let err = host_advertisement_payload(&ad, "peer-a")
+            .expect_err("empty wallet should be rejected before DHT writes");
+
+        assert!(err.contains("walletAddress is required"));
+    }
+
+    #[test]
+    fn host_advertisement_payload_accepts_valid_wallet() {
+        let ad = serde_json::json!({
+            "walletAddress": " 0xwallet ",
+            "maxStorageBytes": 1024,
+            "pricePerMbPerDayWei": "1",
+            "minDepositWei": "1",
+        })
+        .to_string();
+        let (ad_json, wallet_address) = host_advertisement_payload(&ad, "peer-a")
+            .expect("valid wallet should build advertisement payload");
+        let ad: serde_json::Value = serde_json::from_str(&ad_json).unwrap();
+
+        assert_eq!(wallet_address, "0xwallet");
+        assert_eq!(ad.get("peerId").and_then(|v| v.as_str()), Some("peer-a"));
+        assert_eq!(
+            ad.get("walletAddress").and_then(|v| v.as_str()),
+            Some("0xwallet")
+        );
+    }
+
+    #[test]
+    fn relay_tunnel_response_preserves_valid_local_body() {
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "text/html".to_string());
+
+        let response =
+            relay_tunnel_response_from_local_body(200, headers.clone(), Ok(b"hello".to_vec()));
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.headers, headers);
+        assert_eq!(response.body_bytes, b"hello".to_vec());
+    }
+
+    #[test]
+    fn relay_tunnel_response_preserves_empty_local_body() {
+        let mut headers = HashMap::new();
+        headers.insert("x-empty".to_string(), "true".to_string());
+
+        let response = relay_tunnel_response_from_local_body(204, headers.clone(), Ok(Vec::new()));
+
+        assert_eq!(response.status, 204);
+        assert_eq!(response.headers, headers);
+        assert!(response.body_bytes.is_empty());
+    }
+
+    #[test]
+    fn relay_tunnel_response_body_read_error_returns_controlled_502() {
+        let mut headers = HashMap::new();
+        headers.insert("x-upstream".to_string(), "preserved only on success".to_string());
+
+        let response = relay_tunnel_response_from_local_body(
+            200,
+            headers,
+            Err("connection reset".to_string()),
+        );
+
+        assert_eq!(response.status, 502);
+        assert_eq!(
+            response.headers.get("content-type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
+        assert!(!response.headers.contains_key("x-upstream"));
+
+        let body = String::from_utf8(response.body_bytes).unwrap();
+        assert!(body.contains("Local response body read failed"));
+        assert!(body.contains("connection reset"));
+    }
+
+    fn host_registry_entry(
+        peer_id: &str,
+        wallet_address: &str,
+        updated_at: u64,
+    ) -> HostRegistryEntry {
+        HostRegistryEntry {
+            peer_id: peer_id.to_string(),
+            wallet_address: wallet_address.to_string(),
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn host_registry_missing_value_starts_empty() {
+        let registry = host_registry_from_dht_value(None)
+            .expect("missing registry should be treated as empty");
+
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn host_registry_reads_valid_json() {
+        let json = serde_json::to_string(&vec![
+            host_registry_entry("peer-a", "0xwallet-a", 10),
+            host_registry_entry("peer-b", "0xwallet-b", 20),
+        ])
+        .unwrap();
+
+        let registry = host_registry_from_dht_value(Some(json))
+            .expect("valid registry should parse");
+
+        assert_eq!(registry.len(), 2);
+        assert_eq!(registry[0].peer_id, "peer-a");
+        assert_eq!(registry[1].wallet_address, "0xwallet-b");
+    }
+
+    #[test]
+    fn host_registry_rejects_malformed_json() {
+        let err = host_registry_from_dht_value(Some("{not valid json".to_string()))
+            .expect_err("malformed registry must not be replaced with empty");
+
+        assert!(err.contains("Malformed chiral_host_registry JSON"));
+    }
+
+    #[test]
+    fn host_registry_lookup_errors_fail_closed() {
+        let err = host_registry_from_dht_lookup(Err("dht unavailable".to_string()))
+            .expect_err("registry read errors must not be replaced with empty");
+
+        assert!(err.contains("Failed to read chiral_host_registry"));
+        assert!(err.contains("dht unavailable"));
+    }
+
+    #[test]
+    fn relay_tunnel_response_send_result_accepts_success() {
+        let result =
+            relay_tunnel_response_send_result("site", "site-1", "req-1", Ok(()));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn relay_tunnel_response_send_result_reports_failure_with_request_id() {
+        let err = relay_tunnel_response_send_result(
+            "drive",
+            "share-1",
+            "req-2",
+            Err("websocket closed".to_string()),
+        )
+        .expect_err("failed sends should produce a controlled log message");
+
+        assert!(err.contains("Failed to send local response"));
+        assert!(err.contains("drive:share-1"));
+        assert!(err.contains("id=req-2"));
+        assert!(err.contains("websocket closed"));
+    }
+
+    #[test]
+    fn host_registry_publish_update_replaces_existing_peer() {
+        let registry = vec![
+            host_registry_entry("peer-a", "0xold", 10),
+            host_registry_entry("peer-b", "0xwallet-b", 20),
+        ];
+
+        let registry = host_registry_after_publish(
+            registry,
+            "peer-a".to_string(),
+            "0xnew".to_string(),
+            30,
+        );
+
+        assert_eq!(registry.len(), 2);
+        assert!(registry
+            .iter()
+            .any(|entry| entry.peer_id == "peer-b" && entry.wallet_address == "0xwallet-b"));
+        let updated = registry
+            .iter()
+            .find(|entry| entry.peer_id == "peer-a")
+            .expect("peer-a should be present after publish");
+        assert_eq!(updated.wallet_address, "0xnew");
+        assert_eq!(updated.updated_at, 30);
+    }
+
+    #[test]
+    fn host_registry_unpublish_update_preserves_other_peers() {
+        let registry = vec![
+            host_registry_entry("peer-a", "0xwallet-a", 10),
+            host_registry_entry("peer-b", "0xwallet-b", 20),
+        ];
+
+        let registry = host_registry_after_unpublish(registry, "peer-a");
+
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry[0].peer_id, "peer-b");
+        assert_eq!(registry[0].wallet_address, "0xwallet-b");
+    }
 
     #[test]
     fn seeder_info_roundtrip() {
@@ -7309,6 +9043,153 @@ mod multi_seeder_tests {
         assert_eq!(deserialized.peer_id, "12D3KooWTest1");
         assert_eq!(deserialized.price_wei, "1000000000000000");
         assert_eq!(deserialized.wallet_address, "0xabc123");
+    }
+
+    #[test]
+    fn desktop_seeder_record_parser_accepts_valid_json() {
+        let json = r#"{
+            "peerId": "peer-a",
+            "priceWei": "7",
+            "walletAddress": "0xwallet",
+            "multiaddrs": ["/ip4/127.0.0.1/tcp/9419"],
+            "signature": "sig"
+        }"#;
+
+        let seeder = parse_desktop_seeder_record(
+            "file-a",
+            "peer-a",
+            "chiral_seeder_file-a_peer-a",
+            json,
+        )
+        .expect("valid seeder JSON should parse");
+
+        assert_eq!(seeder.peer_id, "peer-a");
+        assert_eq!(seeder.price_wei, "7");
+        assert_eq!(seeder.multiaddrs[0], "/ip4/127.0.0.1/tcp/9419");
+    }
+
+    #[test]
+    fn desktop_seeder_record_parser_warns_on_malformed_json() {
+        let warning = parse_desktop_seeder_record(
+            "file-a",
+            "peer-a",
+            "chiral_seeder_file-a_peer-a",
+            "{not json",
+        )
+        .expect_err("malformed seeder JSON should return a warning");
+
+        assert_eq!(warning.warning_type, "malformedSeederRecord");
+        assert_eq!(warning.peer_id.as_deref(), Some("peer-a"));
+        assert_eq!(warning.key.as_deref(), Some("chiral_seeder_file-a_peer-a"));
+        assert!(warning.message.contains("Malformed seeder record"));
+    }
+
+    #[test]
+    fn desktop_seeder_record_classifier_distinguishes_mixed_records() {
+        let valid_json = r#"{
+            "peerId": "peer-a",
+            "priceWei": "7",
+            "walletAddress": "0xwallet",
+            "multiaddrs": [],
+            "signature": "sig"
+        }"#;
+        let records = [
+            ("peer-a", Some(valid_json)),
+            ("peer-b", Some("{not json")),
+            ("peer-c", None),
+        ];
+        let mut entries = 0;
+        let mut malformed = 0;
+        let mut missing = 0;
+
+        for (peer_id, json) in records {
+            let key = seeder_entry_key("file-a", peer_id);
+            match classify_fetched_desktop_seeder_record("file-a", peer_id, &key, json) {
+                FetchedSeederRecord::Entry(_) => entries += 1,
+                FetchedSeederRecord::Malformed(warning) => {
+                    malformed += 1;
+                    assert_eq!(warning.peer_id.as_deref(), Some("peer-b"));
+                }
+                FetchedSeederRecord::Missing => missing += 1,
+            }
+        }
+
+        assert_eq!(entries, 1);
+        assert_eq!(malformed, 1);
+        assert_eq!(missing, 1);
+    }
+
+    #[test]
+    fn search_result_serializes_warnings_when_present() {
+        let result = search_result_with_warnings(
+            SearchResult {
+                hash: "abc123".to_string(),
+                file_name: "test.txt".to_string(),
+                file_size: 1024,
+                seeders: Vec::new(),
+                created_at: 1700000000,
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+                warnings: Vec::new(),
+            },
+            vec![SearchWarning {
+                warning_type: "malformedSeederRecord".to_string(),
+                peer_id: Some("peer-a".to_string()),
+                key: Some("chiral_seeder_abc123_peer-a".to_string()),
+                message: "Malformed seeder record".to_string(),
+            }],
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+
+        assert_eq!(parsed["warnings"][0]["type"], "malformedSeederRecord");
+        assert_eq!(parsed["warnings"][0]["peerId"], "peer-a");
+    }
+
+    fn wallet_address_from_private_key(private_key: &str) -> String {
+        let probe = b"seeder-test-wallet";
+        let signature = wallet::sign_message(private_key, probe).unwrap();
+        wallet::recover_signer(probe, &signature).unwrap()
+    }
+
+    #[test]
+    fn try_make_signed_seeder_signs_valid_entry() {
+        let private_key =
+            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+
+        let seeder = try_make_signed_seeder(
+            "12D3KooWTest1",
+            "abcdef0123456789",
+            "1000000000000000",
+            &wallet_address,
+            vec!["/ip4/127.0.0.1/tcp/9419".to_string()],
+            Some(private_key),
+        )
+        .expect("valid key and wallet should produce a signed seeder");
+
+        assert!(!seeder.signature.is_empty());
+        assert!(seeder.verify("abcdef0123456789"));
+        assert_eq!(seeder.wallet_address, wallet_address);
+    }
+
+    #[test]
+    fn try_make_signed_seeder_rejects_invalid_private_key() {
+        let private_key =
+            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let wallet_address = wallet_address_from_private_key(private_key);
+
+        let seeder = try_make_signed_seeder(
+            "12D3KooWTest1",
+            "abcdef0123456789",
+            "1000000000000000",
+            &wallet_address,
+            Vec::new(),
+            Some("not-a-private-key"),
+        );
+
+        assert!(seeder.is_none());
     }
 
     #[tokio::test]
@@ -7359,6 +9240,9 @@ mod multi_seeder_tests {
     // provider records + `chiral_seeder_{hash}_{peerId}` entries, so these
     // tests cover only the header round-trip and the seeder-key schema.
 
+    const METADATA_TEST_PRIVATE_KEY: &str =
+        "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+
     #[test]
     fn file_metadata_immutable_header_roundtrip() {
         let metadata = FileMetadata {
@@ -7401,6 +9285,49 @@ mod multi_seeder_tests {
     }
 
     #[test]
+    fn file_metadata_signs_valid_entry() {
+        let wallet = wallet_address_from_private_key(METADATA_TEST_PRIVATE_KEY);
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            wallet_address: wallet,
+            publisher_signature: String::new(),
+        };
+
+        metadata
+            .sign(METADATA_TEST_PRIVATE_KEY)
+            .expect("valid private key should sign file metadata");
+
+        assert!(!metadata.publisher_signature.is_empty());
+        assert!(metadata.verify_publisher());
+    }
+
+    #[test]
+    fn file_metadata_sign_rejects_invalid_private_key() {
+        let wallet = wallet_address_from_private_key(METADATA_TEST_PRIVATE_KEY);
+        let mut metadata = FileMetadata {
+            hash: "abc123".to_string(),
+            file_name: "test.txt".to_string(),
+            file_size: 1024,
+            protocol: "WebRTC".to_string(),
+            created_at: 1700000000,
+            wallet_address: wallet,
+            publisher_signature: "stale-signature".to_string(),
+        };
+
+        let err = metadata
+            .sign("not-a-private-key")
+            .expect_err("invalid private key should fail closed");
+
+        assert!(err.contains("failed to sign file metadata"));
+        assert!(metadata.publisher_signature.is_empty());
+        assert!(!metadata.verify_publisher());
+    }
+
+    #[test]
     fn seeder_entry_key_namespace_is_unique_per_peer() {
         let key_a = seeder_entry_key("file1", "peerA");
         let key_b = seeder_entry_key("file1", "peerB");
@@ -7408,6 +9335,32 @@ mod multi_seeder_tests {
         assert_ne!(key_a, key_b);
         assert_ne!(key_a, key_c);
         assert!(key_a.starts_with("chiral_seeder_"));
+    }
+
+    #[test]
+    fn desktop_publish_peer_id_accepts_present_peer_id() {
+        assert_eq!(
+            desktop_publish_peer_id(Some("12D3KooWDesktopPeer".to_string())).unwrap(),
+            "12D3KooWDesktopPeer"
+        );
+    }
+
+    #[test]
+    fn desktop_publish_peer_id_rejects_blank_peer_id() {
+        let err = desktop_publish_peer_id(Some("  ".to_string()))
+            .expect_err("blank peer ID should fail closed");
+
+        assert!(err.contains("DHT peer ID unavailable"));
+        assert!(err.contains("Reconnect"));
+    }
+
+    #[test]
+    fn desktop_publish_peer_id_rejects_missing_peer_id() {
+        let err =
+            desktop_publish_peer_id(None).expect_err("missing peer ID should fail closed");
+
+        assert!(err.contains("DHT peer ID unavailable"));
+        assert!(err.contains("Reconnect"));
     }
 
     #[test]
@@ -7426,12 +9379,163 @@ mod multi_seeder_tests {
             created_at: 1700000000,
             price_wei: "0".to_string(),
             wallet_address: String::new(),
+            warnings: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["seeders"].as_array().unwrap().len(), 1);
         assert_eq!(parsed["seeders"][0]["peerId"], "PeerA");
         assert_eq!(parsed["fileName"], "test.txt");
+    }
+
+    #[test]
+    fn drive_reseed_price_wei_preserves_valid_paid_price() {
+        assert_eq!(
+            drive_reseed_price_wei(Some("0.25")).expect("valid Drive price should parse"),
+            wallet::parse_chi_to_wei("0.25").unwrap()
+        );
+    }
+
+    #[test]
+    fn drive_reseed_price_wei_keeps_free_values_free() {
+        assert_eq!(drive_reseed_price_wei(None).unwrap(), 0);
+        assert_eq!(drive_reseed_price_wei(Some("")).unwrap(), 0);
+        assert_eq!(drive_reseed_price_wei(Some(" 0 ")).unwrap(), 0);
+    }
+
+    #[test]
+    fn drive_reseed_price_wei_rejects_malformed_price() {
+        let err = drive_reseed_price_wei(Some("not-a-price"))
+            .expect_err("malformed Drive price should fail closed");
+
+        assert!(err.contains("invalid Drive item price"));
+        assert!(err.contains("refusing to auto-reseed as free"));
+    }
+
+    #[test]
+    fn drive_item_price_update_accepts_valid_price() {
+        assert_eq!(
+            validate_drive_item_price_update("0.25".to_string())
+                .expect("valid Drive item price should be accepted"),
+            Some("0.25".to_string())
+        );
+    }
+
+    #[test]
+    fn drive_item_price_update_clears_empty_price() {
+        assert_eq!(validate_drive_item_price_update(String::new()).unwrap(), None);
+    }
+
+    #[test]
+    fn drive_item_price_update_rejects_malformed_price() {
+        let err = validate_drive_item_price_update("not-a-price".to_string())
+            .expect_err("malformed Drive item price should be rejected");
+
+        assert!(err.contains("Invalid Drive item price"));
+        assert!(err.contains("Invalid amount"));
+    }
+
+    #[test]
+    fn shared_file_credentials_allow_free_republish_without_wallet() {
+        assert_eq!(
+            shared_file_credentials_for_price(0, None, None).unwrap(),
+            (String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn shared_file_credentials_allow_paid_republish_with_wallet_and_key() {
+        assert_eq!(
+            shared_file_credentials_for_price(
+                1,
+                Some(" 0xwallet ".to_string()),
+                Some(" private-key ".to_string()),
+            )
+            .unwrap(),
+            ("0xwallet".to_string(), "private-key".to_string())
+        );
+    }
+
+    #[test]
+    fn shared_file_credentials_reject_paid_republish_without_wallet() {
+        let err = shared_file_credentials_for_price(1, None, Some("private-key".to_string()))
+            .expect_err("paid republish should require a wallet address");
+
+        assert!(err.contains("Wallet address is required"));
+    }
+
+    #[test]
+    fn shared_file_credentials_reject_paid_republish_without_private_key() {
+        let err = shared_file_credentials_for_price(1, Some("0xwallet".to_string()), None)
+            .expect_err("paid republish should require a private key");
+
+        assert!(err.contains("Private key is required"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_allows_free_send_without_paid_fields() {
+        assert_eq!(
+            chiraldrop_send_metadata(None, None, None).unwrap(),
+            ("0".to_string(), String::new(), String::new())
+        );
+        assert_eq!(
+            chiraldrop_send_metadata(Some(String::new()), None, None).unwrap(),
+            ("0".to_string(), String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_accepts_complete_paid_fields() {
+        assert_eq!(
+            chiraldrop_send_metadata(
+                Some(" 1000000000000000000 ".to_string()),
+                Some(" 0xwallet ".to_string()),
+                Some(" file-hash ".to_string()),
+            )
+            .unwrap(),
+            (
+                "1000000000000000000".to_string(),
+                "0xwallet".to_string(),
+                "file-hash".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_malformed_price() {
+        let err = chiraldrop_send_metadata(
+            Some("1.5".to_string()),
+            Some("0xwallet".to_string()),
+            Some("file-hash".to_string()),
+        )
+        .expect_err("Tauri boundary must receive wei, not CHI decimals");
+
+        assert!(err.contains("priceWei"));
+        assert!(err.contains("valid u128 wei amount"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_paid_send_without_wallet() {
+        let err = chiraldrop_send_metadata(
+            Some("1".to_string()),
+            None,
+            Some("file-hash".to_string()),
+        )
+        .expect_err("paid ChiralDrop sends require sender wallet metadata");
+
+        assert!(err.contains("senderWallet"));
+    }
+
+    #[test]
+    fn chiraldrop_send_metadata_rejects_paid_send_without_hash() {
+        let err = chiraldrop_send_metadata(
+            Some("1".to_string()),
+            Some("0xwallet".to_string()),
+            None,
+        )
+        .expect_err("paid ChiralDrop sends require file hash metadata");
+
+        assert!(err.contains("fileHash"));
     }
 
     /// Manifests signed before folder-level pricing existed must still
@@ -7497,6 +9601,79 @@ mod multi_seeder_tests {
             file_hash: file_hash.to_string(),
             file_size,
         }
+    }
+
+    fn test_drive_item(
+        id: &str,
+        item_type: &str,
+        parent_id: Option<&str>,
+        owner: &str,
+    ) -> ds::DriveItem {
+        ds::DriveItem {
+            id: id.to_string(),
+            name: id.to_string(),
+            item_type: item_type.to_string(),
+            parent_id: parent_id.map(str::to_string),
+            size: Some(1),
+            mime_type: None,
+            created_at: 1,
+            modified_at: 1,
+            starred: false,
+            storage_path: Some(format!("{}.bin", id)),
+            owner: owner.to_string(),
+            is_public: true,
+            merkle_root: None,
+            protocol: None,
+            price_chi: None,
+            payment_wallet: None,
+            seed_enabled: false,
+            seeding: false,
+        }
+    }
+
+    #[test]
+    fn paid_folder_policy_rehydrates_from_manifest_for_reseed() {
+        let owner = "0xowner";
+        let payment_wallet = "0xpayment";
+        let mut folder = test_drive_item("folder", "folder", None, owner);
+        folder.storage_path = None;
+        folder.size = None;
+        folder.merkle_root = Some("folder-hash".to_string());
+        folder.price_chi = Some("0.25".to_string());
+        folder.payment_wallet = Some(payment_wallet.to_string());
+        folder.seed_enabled = true;
+
+        let mut child = test_drive_item("child", "file", Some("folder"), owner);
+        child.merkle_root = Some("child-hash".to_string());
+        child.seed_enabled = true;
+
+        let manifest = ds::DriveManifest {
+            items: vec![folder, child.clone()],
+            shares: Vec::new(),
+        };
+        let policies = paid_folder_policies_for_drive_item(&manifest, &child);
+
+        assert_eq!(policies.len(), 1);
+        assert_eq!(policies[0].folder_hash, "folder-hash");
+        assert_eq!(
+            policies[0].price_wei,
+            wallet::parse_chi_to_wei("0.25").unwrap()
+        );
+        assert_eq!(policies[0].wallet_address, payment_wallet);
+    }
+
+    #[test]
+    fn folder_manifest_signing_preflight_requires_owner_key() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let probe_sig = wallet::sign_message(private_key, b"probe").unwrap();
+        let owner_wallet = wallet::recover_signer(b"probe", &probe_sig).unwrap();
+
+        assert!(signing_key_matches_wallet(private_key, &owner_wallet));
+        assert!(!signing_key_matches_wallet("", &owner_wallet));
+        assert!(!signing_key_matches_wallet(
+            private_key,
+            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        ));
     }
 
     /// Folder hash is stable: same owner + same file set produces the
@@ -7580,7 +9757,7 @@ mod multi_seeder_tests {
     /// exercising the new payload's tamper detection.
     #[test]
     fn folder_manifest_v2_pricing_is_signed() {
-        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let private_key = METADATA_TEST_PRIVATE_KEY;
         let probe_sig = wallet::sign_message(private_key, b"probe").unwrap();
         let wallet = wallet::recover_signer(b"probe", &probe_sig).unwrap();
 
@@ -7594,7 +9771,7 @@ mod multi_seeder_tests {
             wallet_address: wallet.clone(),
             publisher_signature: String::new(),
         };
-        m.sign(private_key);
+        m.sign(private_key).expect("valid private key should sign manifest");
         assert!(m.verify(), "freshly v2-signed manifest must verify");
 
         // Tamper price → reject.
@@ -7607,5 +9784,28 @@ mod multi_seeder_tests {
         // Tamper recipient → reject.
         m.wallet_address = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string();
         assert!(!m.verify(), "modified wallet_address must invalidate signature");
+    }
+
+    #[test]
+    fn folder_manifest_sign_rejects_invalid_private_key() {
+        let wallet = wallet_address_from_private_key(METADATA_TEST_PRIVATE_KEY);
+        let mut manifest = FolderManifest {
+            hash: "feedface".to_string(),
+            name: "priced folder".to_string(),
+            owner_wallet: wallet.clone(),
+            created_at: 1_700_000_000,
+            files: vec![mff("a.bin", "ff".repeat(32).as_str(), 4096)],
+            price_wei: "1000000000000000000".to_string(),
+            wallet_address: wallet,
+            publisher_signature: "stale-signature".to_string(),
+        };
+
+        let err = manifest
+            .sign("not-a-private-key")
+            .expect_err("invalid private key should fail closed");
+
+        assert!(err.contains("failed to sign folder manifest"));
+        assert!(manifest.publisher_signature.is_empty());
+        assert!(!manifest.verify());
     }
 }

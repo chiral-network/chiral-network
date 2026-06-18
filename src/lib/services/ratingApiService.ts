@@ -1,4 +1,4 @@
-const RELAY_BASE = 'http://130.245.173.73:8080';
+import { getRatingBaseUrlAsync } from '$lib/services/networkEndpointConfig';
 
 /** Current owner wallet address */
 let currentOwner = '';
@@ -63,6 +63,14 @@ export interface BatchReputationEntry {
   totalEarnedWei: string;
 }
 
+interface ReputationVerdictProof {
+  issuerWallet: string;
+  verifyingKey: string;
+  ownerSignature: string;
+  updatedAt: number;
+  verdictSignature: string;
+}
+
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -111,7 +119,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       }
     }
   }
-  const res = await fetch(`${RELAY_BASE}${path}`, {
+  const baseUrl = await getRatingBaseUrlAsync();
+  const res = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       ...(init?.headers || {}),
@@ -129,6 +138,47 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.text()) as unknown as T;
 }
 
+async function computeReputationVerdictProof(
+  transferId: string,
+  seederWallet: string,
+  fileHash: string,
+  outcome: TransferOutcome,
+  amountWei: string,
+  txHash?: string,
+): Promise<ReputationVerdictProof> {
+  if (!currentOwner || !currentOwnerPrivateKey) {
+    throw new Error('rating owner wallet and private key are required to sign reputation verdicts');
+  }
+  if (!isTauri()) {
+    throw new Error('Tauri runtime is required to sign reputation verdicts');
+  }
+
+  const invoke = await getInvoke();
+  return invoke('compute_reputation_verdict_proof', {
+    transferId,
+    seederWallet,
+    downloaderWallet: currentOwner,
+    fileHash,
+    amountWei,
+    outcome,
+    txHash: txHash || null,
+    walletAddress: currentOwner,
+    privateKey: currentOwnerPrivateKey,
+  });
+}
+
+async function publishIssuerKey(proof: ReputationVerdictProof): Promise<void> {
+  await request('/api/ratings/issuer-key', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      verifyingKey: proof.verifyingKey,
+      ownerSignature: proof.ownerSignature,
+      updatedAt: proof.updatedAt,
+    }),
+  });
+}
+
 export const ratingApi = {
   /** Record transfer outcome (completed/failed) for reputation scoring. */
   async recordTransferOutcome(
@@ -139,6 +189,15 @@ export const ratingApi = {
     amountWei: string = '0',
     txHash?: string,
   ): Promise<ReputationEvent> {
+    const proof = await computeReputationVerdictProof(
+      transferId,
+      seederWallet,
+      fileHash,
+      outcome,
+      amountWei,
+      txHash,
+    );
+    await publishIssuerKey(proof);
     return request<ReputationEvent>('/api/ratings/transfer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -149,6 +208,8 @@ export const ratingApi = {
         outcome,
         amountWei,
         txHash: txHash || null,
+        issuerWallet: proof.issuerWallet,
+        verdictSignature: proof.verdictSignature,
       }),
     });
   },

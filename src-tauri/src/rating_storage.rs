@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+
+use crate::dht::DhtService;
+use crate::reputation::{self, ReputationIssuerKeyRecord};
 
 pub const BASE_ELO: f64 = 50.0;
 pub const MIN_ELO: f64 = 0.0;
@@ -36,6 +39,10 @@ pub struct ReputationEvent {
     pub rating_score: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuer_wallet: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_signature: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -60,20 +67,61 @@ pub struct ReputationSnapshot {
 pub struct RatingState {
     pub manifest: Arc<RwLock<RatingManifest>>,
     data_dir: PathBuf,
+    issuer_dht: Option<Arc<Mutex<Option<Arc<DhtService>>>>>,
 }
 
 impl RatingState {
     pub fn new(data_dir: PathBuf) -> Self {
+        Self::new_with_issuer_dht(data_dir, None)
+    }
+
+    pub fn new_with_issuer_dht(
+        data_dir: PathBuf,
+        issuer_dht: Option<Arc<Mutex<Option<Arc<DhtService>>>>>,
+    ) -> Self {
         let manifest = load_manifest(&data_dir);
         Self {
             manifest: Arc::new(RwLock::new(manifest)),
             data_dir,
+            issuer_dht,
         }
     }
 
     pub async fn persist(&self) {
         let m = self.manifest.read().await;
         save_manifest(&self.data_dir, &m);
+    }
+
+    pub fn issuer_key_store_configured(&self) -> bool {
+        self.issuer_dht.is_some()
+    }
+
+    async fn issuer_dht_service(&self) -> Result<Arc<DhtService>, String> {
+        let Some(dht_ref) = &self.issuer_dht else {
+            return Err("DHT issuer key store is not configured".to_string());
+        };
+        dht_ref
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "DHT is not running".to_string())
+    }
+
+    pub async fn publish_issuer_key(
+        &self,
+        record: ReputationIssuerKeyRecord,
+    ) -> Result<(), String> {
+        let dht = self.issuer_dht_service().await?;
+        reputation::publish_issuer_key(&dht, record).await
+    }
+
+    pub async fn fetch_issuer_key(
+        &self,
+        issuer_wallet: &str,
+    ) -> Result<Option<ReputationIssuerKeyRecord>, String> {
+        let dht = self.issuer_dht_service().await?;
+        reputation::fetch_issuer_key(&dht, issuer_wallet).await
     }
 }
 
@@ -88,27 +136,138 @@ fn manifest_path(data_dir: &PathBuf) -> PathBuf {
 
 fn load_manifest(data_dir: &PathBuf) -> RatingManifest {
     let path = manifest_path(data_dir);
-    let Ok(data) = std::fs::read_to_string(&path) else {
-        return RatingManifest::default();
+    load_manifest_from_path(&path)
+}
+
+fn load_manifest_from_path(path: &Path) -> RatingManifest {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return RatingManifest::default(),
+        Err(e) => {
+            eprintln!(
+                "[Reputation] Failed to read reputation manifest {}: {}; starting with an empty manifest",
+                path.display(),
+                e
+            );
+            return RatingManifest::default();
+        }
     };
-    serde_json::from_str(&data).unwrap_or_default()
+
+    match serde_json::from_slice(&data) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            match quarantine_malformed_manifest(path) {
+                Ok(quarantine) => eprintln!(
+                    "[Reputation] Malformed reputation manifest {} quarantined at {}: {}",
+                    path.display(),
+                    quarantine.display(),
+                    e
+                ),
+                Err(quarantine_err) => eprintln!(
+                    "[Reputation] Malformed reputation manifest {} could not be quarantined: {}; starting with an empty manifest",
+                    path.display(),
+                    quarantine_err
+                ),
+            }
+            RatingManifest::default()
+        }
+    }
+}
+
+fn quarantine_malformed_manifest(path: &Path) -> Result<PathBuf, String> {
+    let quarantine = malformed_manifest_quarantine_path(path);
+    std::fs::rename(path, &quarantine).map_err(|e| {
+        format!(
+            "rename {} to {}: {}",
+            path.display(),
+            quarantine.display(),
+            e
+        )
+    })?;
+    Ok(quarantine)
+}
+
+fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("reputation.json");
+    for attempt in 0..1000 {
+        let suffix = if attempt == 0 {
+            format!("malformed-{timestamp}")
+        } else {
+            format!("malformed-{timestamp}-{attempt}")
+        };
+        let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow"))
 }
 
 fn save_manifest(data_dir: &PathBuf, manifest: &RatingManifest) {
     let path = manifest_path(data_dir);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(manifest) {
-        let _ = std::fs::write(&path, json);
+    if let Err(e) = save_manifest_to_path(manifest, &path) {
+        eprintln!(
+            "[Reputation] Failed to save reputation manifest {}: {}",
+            path.display(),
+            e
+        );
     }
 }
 
-pub fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn save_manifest_to_path(manifest: &RatingManifest, path: &Path) -> Result<(), String> {
+    match std::fs::read(path) {
+        Ok(data) => {
+            if serde_json::from_slice::<RatingManifest>(&data).is_err() {
+                return Err(format!(
+                    "refusing to overwrite malformed reputation manifest at {}; fix or remove it manually",
+                    path.display()
+                ));
+            }
+        }
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
+        Err(_) if path.is_dir() => {}
+        Err(e) => {
+            return Err(format!(
+                "refusing to overwrite unreadable reputation manifest at {}: {}; fix or remove it manually",
+                path.display(),
+                e
+            ));
+        }
+    }
+    let json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("serialize reputation manifest: {}", e))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create reputation manifest directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
+    }
+    std::fs::write(path, json)
+        .map_err(|e| format!("write reputation manifest {}: {}", path.display(), e))
+}
+
+pub fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
+}
+
+pub fn now_secs_at(time: std::time::SystemTime) -> Result<u64, String> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| format!("system clock is before UNIX_EPOCH: {}", e))
 }
 
 pub fn generate_event_id(
@@ -219,9 +378,199 @@ mod tests {
             tx_hash: None,
             rating_score,
             rating_comment: None,
+            issuer_wallet: None,
+            verdict_signature: None,
             created_at,
             updated_at: created_at,
         }
+    }
+
+    fn test_manifest_path(root: &std::path::Path) -> std::path::PathBuf {
+        root.join("chiral-reputation-v2").join("reputation.json")
+    }
+
+    fn manifest_with_event() -> RatingManifest {
+        RatingManifest {
+            events: vec![mk_event(
+                "t-valid",
+                "0xA",
+                "0xB",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                1_700_000_000,
+            )],
+        }
+    }
+
+    #[test]
+    fn load_manifest_missing_file_starts_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+
+        let manifest = load_manifest_from_path(&path);
+
+        assert!(manifest.events.is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn load_manifest_reads_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+        let manifest = manifest_with_event();
+
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
+        let loaded = load_manifest_from_path(&path);
+
+        assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.events[0].transfer_id, "t-valid");
+        assert_eq!(loaded.events[0].seeder_wallet, "0xA");
+    }
+
+    #[test]
+    fn load_manifest_quarantines_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let malformed = "{not valid json";
+        std::fs::write(&path, malformed).unwrap();
+
+        let loaded = load_manifest_from_path(&path);
+
+        assert!(loaded.events.is_empty());
+        assert!(!path.exists());
+        let quarantines: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("reputation.json.malformed-")
+            })
+            .collect();
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(quarantines[0].path()).unwrap(),
+            malformed
+        );
+    }
+
+    #[test]
+    fn load_manifest_quarantines_invalid_utf8_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let corrupted = vec![0xff, 0xfe, 0xfd];
+        std::fs::write(&path, &corrupted).unwrap();
+
+        let loaded = load_manifest_from_path(&path);
+
+        assert!(loaded.events.is_empty());
+        assert!(!path.exists());
+        let quarantines: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("reputation.json.malformed-")
+            })
+            .collect();
+        assert_eq!(quarantines.len(), 1);
+        assert_eq!(std::fs::read(quarantines[0].path()).unwrap(), corrupted);
+    }
+
+    #[test]
+    fn save_manifest_refuses_to_overwrite_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let malformed = "{still not valid json";
+        std::fs::write(&path, malformed).unwrap();
+        let manifest = manifest_with_event();
+
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("malformed manifest should not be overwritten");
+
+        assert!(err.contains("refusing to overwrite malformed reputation manifest"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
+    }
+
+    #[test]
+    fn save_manifest_refuses_to_overwrite_invalid_utf8_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let corrupted = vec![0xff, 0xfe, 0xfd];
+        std::fs::write(&path, &corrupted).unwrap();
+        let manifest = manifest_with_event();
+
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("invalid UTF-8 manifest should not be overwritten");
+
+        assert!(err.contains("refusing to overwrite malformed reputation manifest"));
+        assert_eq!(std::fs::read(&path).unwrap(), corrupted);
+    }
+
+    #[test]
+    fn save_manifest_to_path_persists_valid_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(&dir.path().join("nested"));
+        let manifest = manifest_with_event();
+
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
+
+        let loaded = load_manifest_from_path(&path);
+        assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.events[0].transfer_id, "t-valid");
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("reputation.json");
+        let manifest = manifest_with_event();
+
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create reputation manifest directory"));
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let manifest = manifest_with_event();
+
+        let err =
+            save_manifest_to_path(&manifest, &path).expect_err("write failure should surface");
+
+        assert!(err.contains("write reputation manifest"));
+    }
+
+    #[test]
+    fn now_secs_at_accepts_post_epoch_clock() {
+        let now =
+            now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+                .expect("post-epoch clock should be valid");
+
+        assert_eq!(now, 1_700_000_000);
+    }
+
+    #[test]
+    fn now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch clock should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
     }
 
     #[test]
@@ -384,15 +733,42 @@ mod tests {
     fn test_multiple_completed_transfers_higher_elo_than_single() {
         let now = 1_700_000_000;
         let single = vec![mk_event(
-            "t-1", "0xA", "0xB",
+            "t-1",
+            "0xA",
+            "0xB",
             TransferOutcome::Completed,
-            "1000000000000000000", Some(5),
+            "1000000000000000000",
+            Some(5),
             now - 86_400,
         )];
         let multiple = vec![
-            mk_event("t-1", "0xA", "0xB", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 3 * 86_400),
-            mk_event("t-2", "0xA", "0xC", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 2 * 86_400),
-            mk_event("t-3", "0xA", "0xD", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 86_400),
+            mk_event(
+                "t-1",
+                "0xA",
+                "0xB",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 3 * 86_400,
+            ),
+            mk_event(
+                "t-2",
+                "0xA",
+                "0xC",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 2 * 86_400,
+            ),
+            mk_event(
+                "t-3",
+                "0xA",
+                "0xD",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 86_400,
+            ),
         ];
         let snap_single = compute_reputation_for_wallet(&single, "0xA", now);
         let snap_multi = compute_reputation_for_wallet(&multiple, "0xA", now);
@@ -406,9 +782,33 @@ mod tests {
     fn test_mixed_completed_and_failed_moderate_elo() {
         let now = 1_700_000_000;
         let events = vec![
-            mk_event("t-1", "0xA", "0xB", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 3 * 86_400),
-            mk_event("t-2", "0xA", "0xC", TransferOutcome::Failed, "0", None, now - 2 * 86_400),
-            mk_event("t-3", "0xA", "0xD", TransferOutcome::Completed, "1000000000000000000", Some(4), now - 86_400),
+            mk_event(
+                "t-1",
+                "0xA",
+                "0xB",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 3 * 86_400,
+            ),
+            mk_event(
+                "t-2",
+                "0xA",
+                "0xC",
+                TransferOutcome::Failed,
+                "0",
+                None,
+                now - 2 * 86_400,
+            ),
+            mk_event(
+                "t-3",
+                "0xA",
+                "0xD",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(4),
+                now - 86_400,
+            ),
         ];
         let snap = compute_reputation_for_wallet(&events, "0xA", now);
         // Should be near base (50) — not extremely high or low

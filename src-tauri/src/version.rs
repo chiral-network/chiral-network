@@ -13,6 +13,10 @@
 
 use serde::{Deserialize, Serialize};
 
+#[path = "policy_key_validation.rs"]
+mod policy_key_validation;
+use policy_key_validation::{is_placeholder_policy_key, parse_policy_public_key_hex};
+
 /// The compile-time semantic version of this build, sourced from the
 /// `version = "..."` field in `src-tauri/Cargo.toml`. Used everywhere the
 /// client/daemon needs to identify itself (HTTP header in Phase 3,
@@ -80,43 +84,81 @@ pub fn bundled_policy() -> VersionPolicy {
 /// Lightweight semver-ish comparator: parses each side as
 /// `[0-9]+ ('.' [0-9]+)*` (ignoring any pre-release / build suffix after
 /// the first non-digit/dot) and lexicographically compares the integer
-/// component tuples. Phase 5 will swap this for a real semver crate
-/// once the policy comes signed and we care about pre-release ordering.
-pub fn version_is_below(a: &str, b: &str) -> bool {
-    fn parts(s: &str) -> Vec<u64> {
-        s.trim_start_matches('v')
-            .split(|c: char| !(c.is_ascii_digit() || c == '.'))
-            .next()
-            .unwrap_or(s)
-            .split('.')
-            .map(|p| p.parse::<u64>().unwrap_or(0))
-            .collect()
-    }
-    let ap = parts(a);
-    let bp = parts(b);
+/// component tuples. Malformed numeric prefixes now return an error
+/// instead of silently becoming zero.
+pub fn version_is_below(a: &str, b: &str) -> Result<bool, String> {
+    version_is_below_named(a, "left", b, "right")
+}
+
+pub fn version_is_below_named(
+    a: &str,
+    a_label: &str,
+    b: &str,
+    b_label: &str,
+) -> Result<bool, String> {
+    let ap = parse_version_parts(a, a_label)?;
+    let bp = parse_version_parts(b, b_label)?;
     let n = ap.len().max(bp.len());
     for i in 0..n {
         let av = ap.get(i).copied().unwrap_or(0);
         let bv = bp.get(i).copied().unwrap_or(0);
         if av < bv {
-            return true;
+            return Ok(true);
         }
         if av > bv {
-            return false;
+            return Ok(false);
         }
     }
-    false
+    Ok(false)
+}
+
+fn parse_version_parts(raw: &str, label: &str) -> Result<Vec<u64>, String> {
+    let trimmed = raw.trim();
+    let without_prefix = trimmed.trim_start_matches('v');
+    let core = without_prefix
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .next()
+        .unwrap_or(without_prefix);
+    if core.is_empty() {
+        return Err(format!(
+            "{label} version {raw:?} does not start with a numeric version"
+        ));
+    }
+
+    let mut parts = Vec::new();
+    for part in core.split('.') {
+        if part.is_empty() {
+            return Err(format!(
+                "{label} version {raw:?} contains an empty numeric component"
+            ));
+        }
+        let parsed = part.parse::<u64>().map_err(|e| {
+            format!("{label} version {raw:?} contains an invalid numeric component {part:?}: {e}")
+        })?;
+        parts.push(parsed);
+    }
+    Ok(parts)
 }
 
 /// Three-way comparison of `current` against the policy thresholds.
 /// Returns "ok" / "recommended" / "required".
-pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str {
-    if version_is_below(current, &policy.min_required) {
-        "required"
-    } else if version_is_below(current, &policy.recommended) {
-        "recommended"
+pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> Result<&'static str, String> {
+    if version_is_below_named(
+        current,
+        "current",
+        &policy.min_required,
+        "policy min_required",
+    )? {
+        Ok("required")
+    } else if version_is_below_named(
+        current,
+        "current",
+        &policy.recommended,
+        "policy recommended",
+    )? {
+        Ok("recommended")
     } else {
-        "ok"
+        Ok("ok")
     }
 }
 
@@ -131,19 +173,20 @@ pub fn compare_to_policy(current: &str, policy: &VersionPolicy) -> &'static str 
 // unsigned policies that don't tighten beyond what's bundled — see
 // [`is_acceptable_remote_policy`]).
 //
-// The placeholder below is 32 zero bytes — *not* a real key. Replace it
-// with the project's real Ed25519 public key (32 bytes, hex-encoded
-// inline) when the operator generates one. The matching private key
-// stays offline / in a CI secret and only feeds the
-// `chiral-policy-sign` operator CLI.
+// Debug/test builds without a configured key use 32 zero bytes as a
+// placeholder. Release builds are blocked by build.rs unless
+// CHIRAL_POLICY_PUBLIC_KEY is set to a nonzero 32-byte hex key at build
+// time, which becomes the compiled fallback. The matching private key
+// stays offline / in a CI secret and only feeds the `chiral-policy-sign`
+// operator CLI.
 
 /// Compile-time fallback for the project policy-signing public key.
-/// **Placeholder zeros until the real key is generated.** Operators
-/// override this at runtime via the `CHIRAL_POLICY_PUBLIC_KEY` env var
-/// (32-byte hex, with or without leading `0x`) so a deployment can
-/// activate signed policies without recompiling. Generate a key with
+/// Release builds require `CHIRAL_POLICY_PUBLIC_KEY` at build time so
+/// production binaries cannot ship the all-zero placeholder. Operators
+/// may still override this at runtime with the same env var (32-byte
+/// hex, with or without leading `0x`). Generate a key with
 /// `chiral-policy-sign keygen`.
-pub const POLICY_PUBLIC_KEY: [u8; 32] = [0u8; 32];
+include!(concat!(env!("OUT_DIR"), "/policy_public_key.rs"));
 
 /// Resolve the active policy public key. Reads the
 /// `CHIRAL_POLICY_PUBLIC_KEY` env var on first call and caches it; if
@@ -157,26 +200,23 @@ pub fn policy_public_key() -> [u8; 32] {
             Ok(v) => v,
             Err(_) => return POLICY_PUBLIC_KEY,
         };
-        let cleaned = raw.trim().trim_start_matches("0x");
-        match hex::decode(cleaned) {
-            Ok(bytes) if bytes.len() == 32 => {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&bytes);
+        match parse_policy_public_key_hex(&raw) {
+            Ok(key) if !is_placeholder_policy_key(&key) => {
                 println!(
                     "[VERSION] CHIRAL_POLICY_PUBLIC_KEY override active: {}",
-                    cleaned
+                    raw.trim()
                 );
-                out
+                key
             }
             Ok(_) => {
                 eprintln!(
-                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY must decode to 32 bytes — falling back to compile-time placeholder"
+                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY is the all-zero placeholder — falling back to compile-time policy key"
                 );
                 POLICY_PUBLIC_KEY
             }
             Err(e) => {
                 eprintln!(
-                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY not valid hex ({}) — falling back to compile-time placeholder",
+                    "[VERSION] CHIRAL_POLICY_PUBLIC_KEY invalid ({}) — falling back to compile-time policy key",
                     e
                 );
                 POLICY_PUBLIC_KEY
@@ -195,18 +235,16 @@ pub fn log_policy_key_status() {
     static LOGGED: OnceCell<()> = OnceCell::new();
     LOGGED.get_or_init(|| {
         let key = policy_public_key();
-        if key == [0u8; 32] {
+        if is_placeholder_policy_key(&key) {
             eprintln!(
                 "[VERSION] WARNING: policy-signing public key is the placeholder zeros. \
                  Signed policies cannot verify until a real key is generated \
                  (chiral-policy-sign keygen) and wired in via the CHIRAL_POLICY_PUBLIC_KEY \
-                 env var or the POLICY_PUBLIC_KEY constant. Only the unsigned-but-permissive \
+                 env var. Only the unsigned-but-permissive \
                  transition path is active."
             );
         } else {
-            println!(
-                "[VERSION] policy-signing public key configured (signed policies enabled)"
-            );
+            println!("[VERSION] policy-signing public key configured (signed policies enabled)");
         }
     });
 }
@@ -259,7 +297,8 @@ pub fn verify_policy(p: &VersionPolicy) -> bool {
         Ok(k) => k,
         Err(_) => return false,
     };
-    key.verify(&canonical_signing_payload(p), &signature).is_ok()
+    key.verify(&canonical_signing_payload(p), &signature)
+        .is_ok()
 }
 
 /// Decide whether a policy fetched from the network should replace the
@@ -292,7 +331,18 @@ pub fn is_acceptable_remote_policy(remote: &VersionPolicy, current: &VersionPoli
     // floor. The binary's bundled `min_required` is the hard floor —
     // unsigned policies can relax / nudge but never raise it.
     let bundled = bundled_policy();
-    !version_is_below(&bundled.min_required, &remote.min_required)
+    match version_is_below_named(
+        &bundled.min_required,
+        "bundled min_required",
+        &remote.min_required,
+        "remote min_required",
+    ) {
+        Ok(is_tighter) => !is_tighter,
+        Err(e) => {
+            eprintln!("[VERSION] Rejecting malformed remote policy: {e}");
+            false
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -347,45 +397,48 @@ mod tests {
 
     #[test]
     fn version_is_below_basic_ordering() {
-        assert!(version_is_below("1.0.0", "1.0.1"));
-        assert!(version_is_below("1.0.0", "1.1.0"));
-        assert!(version_is_below("1.0.0", "2.0.0"));
-        assert!(!version_is_below("1.0.0", "1.0.0"));
-        assert!(!version_is_below("2.0.0", "1.9.9"));
+        assert_eq!(version_is_below("1.0.0", "1.0.1"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "1.1.0"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "2.0.0"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "1.0.0"), Ok(false));
+        assert_eq!(version_is_below("2.0.0", "1.9.9"), Ok(false));
     }
 
     #[test]
     fn version_is_below_padding_and_v_prefix() {
         // "1.0" should equal "1.0.0", not be below it.
-        assert!(!version_is_below("1.0", "1.0.0"));
-        assert!(!version_is_below("1.0.0", "1.0"));
+        assert_eq!(version_is_below("1.0", "1.0.0"), Ok(false));
+        assert_eq!(version_is_below("1.0.0", "1.0"), Ok(false));
         // Leading 'v' tolerated on either side.
-        assert!(version_is_below("v1.0.0", "v1.0.1"));
-        assert!(version_is_below("1.0.0", "v1.0.1"));
+        assert_eq!(version_is_below("v1.0.0", "v1.0.1"), Ok(true));
+        assert_eq!(version_is_below("1.0.0", "v1.0.1"), Ok(true));
     }
 
     #[test]
     fn version_is_below_strips_pre_release_suffix() {
         // "1.0.0-rc1" parses as 1.0.0, equal to "1.0.0".
-        assert!(!version_is_below("1.0.0-rc1", "1.0.0"));
-        assert!(version_is_below("1.0.0+build", "1.0.1"));
+        assert_eq!(version_is_below("1.0.0-rc1", "1.0.0"), Ok(false));
+        assert_eq!(version_is_below("1.0.0+build", "1.0.1"), Ok(true));
     }
 
     #[test]
-    fn version_is_below_handles_empty_and_garbage() {
-        // Garbage should not panic and should parse as zero.
-        assert!(!version_is_below("", "0.0.0"));
-        assert!(version_is_below("garbage", "0.0.1"));
+    fn version_is_below_rejects_empty_and_garbage() {
+        let empty = version_is_below("", "0.0.0").expect_err("empty versions should be rejected");
+        assert!(empty.contains("numeric version"));
+
+        let garbage =
+            version_is_below("garbage", "0.0.1").expect_err("garbage versions should be rejected");
+        assert!(garbage.contains("numeric version"));
     }
 
     #[test]
     fn compare_to_policy_three_states() {
         let p = policy("1.0.0", "2.0.0", 0);
-        assert_eq!(compare_to_policy("0.9.0", &p), "required");
-        assert_eq!(compare_to_policy("1.0.0", &p), "recommended");
-        assert_eq!(compare_to_policy("1.5.0", &p), "recommended");
-        assert_eq!(compare_to_policy("2.0.0", &p), "ok");
-        assert_eq!(compare_to_policy("3.0.0", &p), "ok");
+        assert_eq!(compare_to_policy("0.9.0", &p), Ok("required"));
+        assert_eq!(compare_to_policy("1.0.0", &p), Ok("recommended"));
+        assert_eq!(compare_to_policy("1.5.0", &p), Ok("recommended"));
+        assert_eq!(compare_to_policy("2.0.0", &p), Ok("ok"));
+        assert_eq!(compare_to_policy("3.0.0", &p), Ok("ok"));
     }
 
     #[test]
@@ -393,7 +446,35 @@ mod tests {
         // Misconfigured policy where min_required > recommended must
         // still treat versions below min as "required" (fail-safe).
         let p = policy("2.0.0", "1.0.0", 0);
-        assert_eq!(compare_to_policy("1.5.0", &p), "required");
+        assert_eq!(compare_to_policy("1.5.0", &p), Ok("required"));
+    }
+
+    #[test]
+    fn compare_to_policy_rejects_malformed_current_version() {
+        let p = policy("1.0.0", "2.0.0", 0);
+        let err = compare_to_policy("not-a-version", &p)
+            .expect_err("malformed current version should be rejected");
+
+        assert!(err.contains("current version"));
+    }
+
+    #[test]
+    fn compare_to_policy_rejects_malformed_policy_version() {
+        let p = policy("1.x.0", "2.0.0", 0);
+        let err = compare_to_policy("1.0.0", &p)
+            .expect_err("malformed policy version should be rejected");
+
+        assert!(err.contains("policy min_required"));
+    }
+
+    #[test]
+    fn is_acceptable_unsigned_rejects_malformed_remote_minimum() {
+        let bundled = bundled_policy();
+        let mut remote = bundled.clone();
+        remote.min_required = "not-a-version".into();
+        remote.issued_at = bundled.issued_at + 1;
+
+        assert!(!is_acceptable_remote_policy(&remote, &bundled));
     }
 
     #[test]
@@ -457,6 +538,19 @@ mod tests {
         let mut p = policy("1.0.0", "2.0.0", 100);
         p.signature = hex::encode([1u8; 64]);
         assert!(!verify_policy(&p));
+    }
+
+    #[test]
+    fn placeholder_policy_key_detection() {
+        assert!(is_placeholder_policy_key(&[0u8; 32]));
+        assert!(!is_placeholder_policy_key(&[1u8; 32]));
+    }
+
+    #[test]
+    fn release_builds_do_not_embed_placeholder_policy_key() {
+        if !cfg!(debug_assertions) {
+            assert!(!is_placeholder_policy_key(&POLICY_PUBLIC_KEY));
+        }
     }
 
     #[test]

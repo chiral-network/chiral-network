@@ -1,16 +1,16 @@
 /**
  * Load / stress tests for the local gateway Drive API (localhost:9419).
  *
- * These tests are skipped by default (describe.skip) so they never run in CI.
+ * Live suites are skipped unless CHIRAL_RUN_LIVE_LOAD_TESTS=1 is set.
  * To run locally:
  *   1. Start the gateway server (e.g. via `npm run tauri:dev` or the daemon).
- *   2. Change `describe.skip` to `describe` below.
- *   3. Run: npx vitest run tests/load/gateway-drive.test.ts
+ *   2. Run: CHIRAL_RUN_LIVE_LOAD_TESTS=1 npx vitest run tests/load/gateway-drive.test.ts
  *
  * Requirements: vitest, native fetch (Node 18+).
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describeLiveLoad } from "./liveGate";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -186,7 +186,7 @@ function logStats(label: string, stats: Stats) {
 // Test suites
 // ---------------------------------------------------------------------------
 
-describe.skip("Gateway Drive — Load Tests", () => {
+describeLiveLoad("Gateway Drive — Load Tests", () => {
   // --------------------------------------------------
   // Setup: ensure the server is reachable and seed data
   // --------------------------------------------------

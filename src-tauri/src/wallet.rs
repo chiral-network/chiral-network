@@ -9,7 +9,7 @@ use rlp::RlpStream;
 use secp256k1::{Message, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tiny_keccak::{Hasher, Keccak};
 
@@ -103,13 +103,48 @@ pub struct PaymentResult {
 // Core wallet operations
 // ============================================================================
 
+fn rpc_hex_str<'a>(value: &'a serde_json::Value, context: &str) -> Result<&'a str, String> {
+    value
+        .as_str()
+        .ok_or_else(|| format!("{context} returned a non-string hex value: {value}"))
+}
+
+fn rpc_hex_field_str<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, String> {
+    value
+        .get(field)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("{context} missing string `{field}` field"))
+}
+
+fn rpc_hex_u64(value: &serde_json::Value, context: &str) -> Result<u64, String> {
+    rpc_client::hex_to_u64(rpc_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn rpc_hex_u128(value: &serde_json::Value, context: &str) -> Result<u128, String> {
+    rpc_client::hex_to_u128(rpc_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn batch_hex_u64(result: &Result<serde_json::Value, String>, context: &str) -> Result<u64, String> {
+    let value = result.as_ref().map_err(|e| format!("{context} RPC failed: {e}"))?;
+    rpc_hex_u64(value, context)
+}
+
+fn batch_hex_u128(result: &Result<serde_json::Value, String>, context: &str) -> Result<u128, String> {
+    let value = result.as_ref().map_err(|e| format!("{context} RPC failed: {e}"))?;
+    rpc_hex_u128(value, context)
+}
+
 /// Get wallet balance (uses 5s cache).
 pub async fn get_balance(endpoint: &str, address: &str) -> Result<WalletBalanceResult, String> {
     let cache_key = address.to_lowercase();
 
     // Check cache first
     if let Some(cached) = BALANCE_CACHE.get(&cache_key).await {
-        let wei = rpc_client::hex_to_u128(cached.as_str().unwrap_or("0x0"));
+        let wei = rpc_hex_u128(&cached, "cached eth_getBalance")?;
         return Ok(WalletBalanceResult {
             balance: rpc_client::wei_to_chi_string(wei),
             balance_wei: wei.to_string(),
@@ -117,8 +152,7 @@ pub async fn get_balance(endpoint: &str, address: &str) -> Result<WalletBalanceR
     }
 
     let result = rpc_client::call(endpoint, "eth_getBalance", serde_json::json!([address, "latest"])).await?;
-    let balance_hex = result.as_str().unwrap_or("0x0");
-    let balance_wei = rpc_client::hex_to_u128(balance_hex);
+    let balance_wei = rpc_hex_u128(&result, "eth_getBalance")?;
 
     // Cache the raw hex result
     BALANCE_CACHE.set(cache_key, result).await;
@@ -184,10 +218,10 @@ pub async fn send_transaction(
     let bal_idx = 1;
     let gas_idx = 2;
 
-    let nonce = rpc_client::hex_to_u64(results[nonce_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
-    let balance_wei = rpc_client::hex_to_u128(results[bal_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
+    let nonce = batch_hex_u64(&results[nonce_idx], "eth_getTransactionCount")?;
+    let balance_wei = batch_hex_u128(&results[bal_idx], "eth_getBalance")?;
     let gas_price = {
-        let raw = rpc_client::hex_to_u64(results[gas_idx].as_ref().map_err(|e| e.clone())?.as_str().unwrap_or("0x0"));
+        let raw = batch_hex_u64(&results[gas_idx], "eth_gasPrice")?;
         if raw == 0 { 1_000_000_000u64 } else { raw }
     };
 
@@ -358,7 +392,7 @@ pub async fn get_transaction_history(
     metadata: &HashMap<String, TransactionMeta>,
 ) -> Result<TransactionHistoryResult, String> {
     let result = rpc_client::call(endpoint, "eth_blockNumber", serde_json::json!([])).await?;
-    let latest_block = rpc_client::hex_to_u64(result.as_str().unwrap_or("0x0"));
+    let latest_block = rpc_hex_u64(&result, "eth_blockNumber")?;
 
     let mut transactions = Vec::new();
     let address_lower = address.to_lowercase();
@@ -372,6 +406,7 @@ pub async fn get_transaction_history(
     let mut cursor = latest_block;
     let started = std::time::Instant::now();
     let mut batches = 0u64;
+    let http_client = rpc_client::client()?;
 
     'outer: loop {
         if batches >= MAX_BATCHES || started.elapsed() >= MAX_DURATION { break; }
@@ -386,7 +421,7 @@ pub async fn get_transaction_history(
             }))
             .collect();
 
-        let resp = rpc_client::client().post(endpoint).json(&payloads).send().await;
+        let resp = http_client.post(endpoint).json(&payloads).send().await;
         batches += 1;
 
         if let Ok(response) = resp {
@@ -395,20 +430,36 @@ pub async fn get_transaction_history(
                     if let Some(block) = item.get("result") {
                         if let Some(txs) = block.get("transactions").and_then(|t| t.as_array()) {
                             if txs.is_empty() { continue; }
-                            let block_ts = block.get("timestamp").and_then(|t| t.as_str())
-                                .map(rpc_client::hex_to_u64).unwrap_or(0);
-                            let block_num = block.get("number").and_then(|n| n.as_str())
-                                .map(rpc_client::hex_to_u64).unwrap_or(0);
+                            let block_ts = rpc_client::hex_to_u64(rpc_hex_field_str(
+                                block,
+                                "timestamp",
+                                "eth_getBlockByNumber block",
+                            )?)
+                            .map_err(|e| format!("eth_getBlockByNumber block timestamp: {e}"))?;
+                            let block_num = rpc_client::hex_to_u64(rpc_hex_field_str(
+                                block,
+                                "number",
+                                "eth_getBlockByNumber block",
+                            )?)
+                            .map_err(|e| format!("eth_getBlockByNumber block number: {e}"))?;
 
                             for tx in txs {
                                 let from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
                                 let to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
 
                                 if from == address_lower || to == address_lower {
-                                    let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
-                                    let value_wei = rpc_client::hex_to_u128(value_hex);
-                                    let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
-                                    let gas_used = rpc_client::hex_to_u64(gas_hex);
+                                    let value_wei = rpc_client::hex_to_u128(rpc_hex_field_str(
+                                        tx,
+                                        "value",
+                                        "eth_getBlockByNumber transaction",
+                                    )?)
+                                    .map_err(|e| format!("eth_getBlockByNumber transaction value: {e}"))?;
+                                    let gas_used = rpc_client::hex_to_u64(rpc_hex_field_str(
+                                        tx,
+                                        "gas",
+                                        "eth_getBlockByNumber transaction",
+                                    )?)
+                                    .map_err(|e| format!("eth_getBlockByNumber transaction gas: {e}"))?;
                                     let tx_hash = tx.get("hash").and_then(|h| h.as_str()).unwrap_or("");
                                     let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("");
                                     let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("");
@@ -451,21 +502,131 @@ fn tx_metadata_path() -> PathBuf {
 
 pub fn load_tx_metadata() -> HashMap<String, TransactionMeta> {
     let path = tx_metadata_path();
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        HashMap::new()
+    load_tx_metadata_from_path(&path)
+}
+
+fn load_tx_metadata_from_path(path: &Path) -> HashMap<String, TransactionMeta> {
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(e) => {
+            eprintln!(
+                "[Wallet] Failed to read transaction metadata {}: {}; starting with no transaction metadata",
+                path.display(),
+                e
+            );
+            return HashMap::new();
+        }
+    };
+
+    match serde_json::from_slice(&data) {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            match quarantine_malformed_tx_metadata(path) {
+                Ok(quarantine) => eprintln!(
+                    "[Wallet] Malformed transaction metadata {} quarantined at {}: {}",
+                    path.display(),
+                    quarantine.display(),
+                    e
+                ),
+                Err(quarantine_err) => eprintln!(
+                    "[Wallet] Malformed transaction metadata {} could not be quarantined: {}; starting with no transaction metadata",
+                    path.display(),
+                    quarantine_err
+                ),
+            }
+            HashMap::new()
+        }
     }
+}
+
+fn quarantine_malformed_tx_metadata(path: &Path) -> Result<PathBuf, String> {
+    let quarantine = malformed_tx_metadata_quarantine_path(path)?;
+    std::fs::rename(path, &quarantine).map_err(|e| {
+        format!(
+            "rename {} to {}: {}",
+            path.display(),
+            quarantine.display(),
+            e
+        )
+    })?;
+    Ok(quarantine)
+}
+
+fn malformed_tx_metadata_quarantine_path(path: &Path) -> Result<PathBuf, String> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("clock before UNIX_EPOCH: {e}"))?
+        .as_secs();
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("tx_metadata.json");
+    for attempt in 0..1000 {
+        let suffix = if attempt == 0 {
+            format!("malformed-{timestamp}")
+        } else {
+            format!("malformed-{timestamp}-{attempt}")
+        };
+        let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Ok(path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow")))
 }
 
 pub fn save_tx_metadata(metadata: &HashMap<String, TransactionMeta>) {
     let path = tx_metadata_path();
+    if let Err(e) = save_tx_metadata_to_path(metadata, &path) {
+        eprintln!(
+            "[Wallet] Failed to save transaction metadata {}: {}",
+            path.display(),
+            e
+        );
+    }
+}
+
+fn save_tx_metadata_to_path(
+    metadata: &HashMap<String, TransactionMeta>,
+    path: &Path,
+) -> Result<(), String> {
+    match std::fs::read(path) {
+        Ok(data) => {
+            if serde_json::from_slice::<HashMap<String, TransactionMeta>>(&data).is_err() {
+                return Err(format!(
+                    "refusing to overwrite malformed transaction metadata at {}; fix or remove it manually",
+                    path.display()
+                ));
+            }
+        }
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
+        Err(_) if path.is_dir() => {}
+        Err(e) => {
+            return Err(format!(
+                "refusing to overwrite unreadable transaction metadata at {}: {}; fix or remove it manually",
+                path.display(),
+                e
+            ));
+        }
+    }
+    let json = serde_json::to_string(metadata)
+        .map_err(|e| format!("serialize transaction metadata: {}", e))?;
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create transaction metadata directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    if let Ok(json) = serde_json::to_string(metadata) {
-        let _ = std::fs::write(&path, json);
-    }
+    std::fs::write(path, json)
+        .map_err(|e| format!("write transaction metadata {}: {}", path.display(), e))
 }
 
 pub fn record_meta(metadata: &mut HashMap<String, TransactionMeta>, meta: TransactionMeta) {
@@ -722,15 +883,24 @@ pub async fn verify_tx_details(
     }
     let tx_from = tx.get("from").and_then(|f| f.as_str()).unwrap_or("").to_lowercase();
     let tx_to = tx.get("to").and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
-    let tx_value = tx.get("value").and_then(|v| v.as_str()).map(rpc_client::hex_to_u128).unwrap_or(0);
+    let tx_value = rpc_client::hex_to_u128(rpc_hex_field_str(
+        &tx,
+        "value",
+        "eth_getTransactionByHash",
+    )?)
+    .map_err(|e| format!("eth_getTransactionByHash value: {e}"))?;
     // EIP-155 / chain-id check: a tx mined on the chiral chain must
     // carry the chiral chainId. Without this, a signed tx replayed from
     // any other EVM chain with the same address pair would pass.
     let expected_chain_id = crate::geth::chain_id() as u128;
     let tx_chain_id = tx
         .get("chainId")
-        .and_then(|v| v.as_str())
-        .map(rpc_client::hex_to_u128);
+        .map(|value| {
+            let hex = rpc_hex_str(value, "eth_getTransactionByHash chainId")?;
+            rpc_client::hex_to_u128(hex)
+                .map_err(|e| format!("eth_getTransactionByHash chainId: {e}"))
+        })
+        .transpose()?;
     if let Some(observed) = tx_chain_id {
         if observed != expected_chain_id {
             return Ok(false);
@@ -763,6 +933,171 @@ pub async fn verify_payment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn test_tx_metadata_path(root: &Path) -> PathBuf {
+        root.join("tx_metadata.json")
+    }
+
+    fn transaction_meta_fixture(tx_hash: &str) -> TransactionMeta {
+        TransactionMeta {
+            tx_hash: tx_hash.to_string(),
+            tx_type: "send".to_string(),
+            description: "Sent to 0xabc".to_string(),
+            file_name: Some("report.pdf".to_string()),
+            file_hash: Some("file-hash".to_string()),
+            speed_tier: Some("fast".to_string()),
+            recipient_label: Some("Alice".to_string()),
+            balance_before: Some("10.0".to_string()),
+            balance_after: Some("9.5".to_string()),
+        }
+    }
+
+    fn metadata_fixture() -> HashMap<String, TransactionMeta> {
+        let meta = transaction_meta_fixture("0xabc123");
+        HashMap::from([(meta.tx_hash.clone(), meta)])
+    }
+
+    fn quarantined_tx_metadata_paths(root: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = fs::read_dir(root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("tx_metadata.json.malformed-"))
+            })
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn load_tx_metadata_missing_file_starts_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+
+        assert!(load_tx_metadata_from_path(&path).is_empty());
+        assert!(!path.exists());
+        assert!(quarantined_tx_metadata_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn load_tx_metadata_reads_valid_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+        let metadata = metadata_fixture();
+        fs::write(&path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+        let loaded = load_tx_metadata_from_path(&path);
+
+        assert_eq!(loaded.len(), 1);
+        let meta = loaded.get("0xabc123").unwrap();
+        assert_eq!(meta.tx_hash, "0xabc123");
+        assert_eq!(meta.description, "Sent to 0xabc");
+        assert_eq!(meta.file_name.as_deref(), Some("report.pdf"));
+        assert!(path.exists());
+        assert!(quarantined_tx_metadata_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn load_tx_metadata_quarantines_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+        let original = b"{not valid json";
+        fs::write(&path, original).unwrap();
+
+        assert!(load_tx_metadata_from_path(&path).is_empty());
+
+        let quarantines = quarantined_tx_metadata_paths(dir.path());
+        assert_eq!(quarantines.len(), 1);
+        assert!(!path.exists());
+        assert_eq!(fs::read(&quarantines[0]).unwrap(), &original[..]);
+    }
+
+    #[test]
+    fn load_tx_metadata_quarantines_invalid_utf8_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+        let original = vec![0xff, 0xfe, b'{', b'}'];
+        fs::write(&path, &original).unwrap();
+
+        assert!(load_tx_metadata_from_path(&path).is_empty());
+
+        let quarantines = quarantined_tx_metadata_paths(dir.path());
+        assert_eq!(quarantines.len(), 1);
+        assert!(!path.exists());
+        assert_eq!(fs::read(&quarantines[0]).unwrap(), original);
+    }
+
+    #[test]
+    fn save_tx_metadata_refuses_to_overwrite_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+        let original = b"{not valid json";
+        fs::write(&path, original).unwrap();
+
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("malformed transaction metadata should not be overwritten");
+
+        assert!(err.contains("refusing to overwrite malformed transaction metadata"));
+        assert_eq!(fs::read(&path).unwrap(), &original[..]);
+        assert!(quarantined_tx_metadata_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn save_tx_metadata_refuses_to_overwrite_invalid_utf8_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+        let original = vec![0xff, 0xfe, b'{', b'}'];
+        fs::write(&path, &original).unwrap();
+
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("invalid UTF-8 transaction metadata should not be overwritten");
+
+        assert!(err.contains("refusing to overwrite malformed transaction metadata"));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(quarantined_tx_metadata_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn save_tx_metadata_to_path_persists_valid_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("tx_metadata.json");
+
+        save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect("transaction metadata should save");
+
+        let loaded = load_tx_metadata_from_path(&path);
+        let meta = loaded.get("0xabc123").unwrap();
+        assert_eq!(meta.description, "Sent to 0xabc");
+    }
+
+    #[test]
+    fn save_tx_metadata_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("tx_metadata.json");
+
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create transaction metadata directory"));
+    }
+
+    #[test]
+    fn save_tx_metadata_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_tx_metadata_path(dir.path());
+        fs::create_dir(&path).unwrap();
+
+        let err = save_tx_metadata_to_path(&metadata_fixture(), &path)
+            .expect_err("write failure should surface");
+
+        assert!(err.contains("write transaction metadata"));
+    }
 
     #[test] fn test_whole() { assert_eq!(parse_chi_to_wei("1").unwrap(), 1_000_000_000_000_000_000); }
     #[test] fn test_zero() { assert_eq!(parse_chi_to_wei("0").unwrap(), 0); }

@@ -13,6 +13,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Cursor;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,6 +25,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// True iff our local geth child is currently running. Read by RPC callers
 /// so they route to the local node when it's up.
 static LOCAL_GETH_RUNNING: AtomicBool = AtomicBool::new(false);
+
+const GETH_HTTP_DEFAULT_ADDR: &str = "127.0.0.1";
+const GETH_HTTP_PORT: &str = "8545";
+// Keep miner for local CPU/GPU mining controls. Exclude admin, personal,
+// debug, and txpool from the embedded HTTP surface.
+const GETH_HTTP_API_MODULES: &str = "eth,net,web3,miner";
 
 pub fn chain_id() -> u64 {
     network::active().chain_id
@@ -98,6 +105,97 @@ fn derive_proxy_url(primary: &str) -> Option<String> {
     let scheme = &stripped[..scheme_end];
     let host = &stripped[scheme_end..host_end];
     Some(format!("{}{}:8080/api/chain/rpc", scheme, host))
+}
+
+fn geth_http_addr_from_env() -> Result<String, String> {
+    let raw = std::env::var("CHIRAL_GETH_HTTP_ADDR")
+        .unwrap_or_else(|_| GETH_HTTP_DEFAULT_ADDR.to_string());
+    validate_geth_http_addr(&raw)
+}
+
+fn validate_geth_http_addr(raw: &str) -> Result<String, String> {
+    let addr = raw.trim();
+    if addr.is_empty() {
+        return Err("CHIRAL_GETH_HTTP_ADDR cannot be empty".to_string());
+    }
+    if is_loopback_http_addr(addr) {
+        return Ok(addr.to_string());
+    }
+    Err(format!(
+        "CHIRAL_GETH_HTTP_ADDR must be loopback-only (for example {} or ::1); expose read-only public RPC through /api/chain/rpc instead",
+        GETH_HTTP_DEFAULT_ADDR
+    ))
+}
+
+fn is_loopback_http_addr(addr: &str) -> bool {
+    if addr.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let addr = addr
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(addr);
+    addr.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+fn geth_start_args(
+    data_dir: &Path,
+    network_id: u64,
+    http_addr: &str,
+    bootstrap_enode: &str,
+    miner_address: Option<&str>,
+) -> Vec<String> {
+    // Full sync + archive GC is the key to not regressing block height
+    // on restart. Snap/fast sync can roll back unfinalized state; that
+    // was the root cause of the bug we're rebuilding to fix.
+    let mut args = vec![
+        "--datadir".to_string(),
+        data_dir.display().to_string(),
+        "--networkid".to_string(),
+        network_id.to_string(),
+        "--http".to_string(),
+        "--http.addr".to_string(),
+        http_addr.to_string(),
+        "--http.port".to_string(),
+        GETH_HTTP_PORT.to_string(),
+        "--http.api".to_string(),
+        GETH_HTTP_API_MODULES.to_string(),
+        "--syncmode".to_string(),
+        "full".to_string(),
+        "--gcmode".to_string(),
+        "archive".to_string(),
+        "--cache".to_string(),
+        "256".to_string(),
+        "--port".to_string(),
+        "30303".to_string(),
+        "--maxpeers".to_string(),
+        "25".to_string(),
+        "--miner.gasprice".to_string(),
+        "0".to_string(),
+        "--txpool.pricelimit".to_string(),
+        "0".to_string(),
+    ];
+
+    if bootstrap_enode.is_empty() {
+        args.push("--nodiscover".to_string());
+    } else {
+        args.push("--bootnodes".to_string());
+        args.push(bootstrap_enode.to_string());
+    }
+
+    if let Some(addr) = miner_address {
+        args.extend([
+            "--miner.etherbase".to_string(),
+            addr.to_string(),
+            "--mine".to_string(),
+            "--miner.threads".to_string(),
+            "1".to_string(),
+        ]);
+    }
+
+    args
 }
 
 #[cfg(test)]
@@ -299,6 +397,29 @@ impl Default for GethDownloader {
     fn default() -> Self { Self::new() }
 }
 
+fn open_geth_log_files(log_path: &Path) -> Result<(fs::File, fs::File), String> {
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("create Geth log directory {}: {e}", parent.display()))?;
+    }
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(log_path)
+        .map_err(|e| format!("open Geth log file {}: {e}", log_path.display()))?;
+    let log_clone = log_file
+        .try_clone()
+        .map_err(|e| format!("clone Geth log file {}: {e}", log_path.display()))?;
+    Ok((log_file, log_clone))
+}
+
+fn write_geth_pid_file(data_dir: &Path, pid: u32) -> Result<(), String> {
+    let pid_path = data_dir.join("geth.pid");
+    fs::write(&pid_path, pid.to_string())
+        .map_err(|e| format!("write Geth PID file {}: {e}", pid_path.display()))
+}
+
 // ============================================================================
 // Process
 // ============================================================================
@@ -404,53 +525,30 @@ impl GethProcess {
 
         let cfg = network::active();
         let log_path = self.data_dir.join("geth.log");
-        if let Some(parent) = log_path.parent() { let _ = fs::create_dir_all(parent); }
-        let log_file = OpenOptions::new().create(true).write(true).truncate(true)
-            .open(&log_path).map_err(|e| format!("open log file: {e}"))?;
-        let log_clone = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
+        let (log_file, log_clone) = open_geth_log_files(&log_path)?;
 
-        // Bind address for the HTTP RPC. Default 127.0.0.1 (safe for desktop
-        // users), overridable to 0.0.0.0 for server operators running the
-        // chain's public RPC endpoint.
-        let http_addr = std::env::var("CHIRAL_GETH_HTTP_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        // Bind address for the HTTP RPC. Keep this loopback-only: the
+        // embedded node still needs miner_* for local mining controls, so
+        // public read-only access belongs behind /api/chain/rpc.
+        let http_addr = geth_http_addr_from_env()?;
         let mut cmd = Command::new(self.geth_path());
-        cmd.args(["--datadir"]).arg(&self.data_dir)
-            .args(["--networkid", &network_id().to_string()])
-            .args(["--http", "--http.addr", &http_addr, "--http.port", "8545"])
-            // `admin` is intentionally absent here. It exposes
-            // `admin_stopRPC` (deprecated alias of `admin_stopHTTP`)
-            // which any unauthenticated HTTP caller could use to
-            // shut down the RPC server itself — observed in the wild
-            // on the canonical relay 2026-04-28: a remote IP issued
-            // admin_stopRPC and the HTTP server stayed down for two
-            // days, breaking every client's wallet balance. Admin
-            // calls remain available over the IPC socket for
-            // operators who need them.
-            .args(["--http.api", "eth,net,web3,personal,debug,miner,txpool"])
-            .args(["--http.corsdomain", "*"])
-            // Full sync + archive GC is the key to not regressing block height
-            // on restart. Snap/fast sync can roll back unfinalized state; that
-            // was the root cause of the bug we're rebuilding to fix.
-            .args(["--syncmode", "full", "--gcmode", "archive"])
-            .args(["--cache", "256"])
-            .args(["--port", "30303", "--maxpeers", "25"])
-            .args(["--miner.gasprice", "0", "--txpool.pricelimit", "0"])
+        cmd.args(geth_start_args(
+            &self.data_dir,
+            network_id(),
+            &http_addr,
+            cfg.geth_bootstrap_enode,
+            miner_address,
+        ))
             .stdout(Stdio::from(log_clone))
             .stderr(Stdio::from(log_file));
 
-        if cfg.geth_bootstrap_enode.is_empty() {
-            cmd.arg("--nodiscover"); // solo mining, no peer discovery
-        } else {
-            cmd.args(["--bootnodes", cfg.geth_bootstrap_enode]);
-        }
-
-        if let Some(addr) = miner_address {
-            cmd.args(["--miner.etherbase", addr, "--mine", "--miner.threads", "1"]);
-        }
-
         let child = cmd.spawn().map_err(|e| format!("spawn geth: {e}"))?;
-        let _ = fs::write(self.data_dir.join("geth.pid"), child.id().to_string());
+        let mut child = child;
+        if let Err(err) = write_geth_pid_file(&self.data_dir, child.id()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(err);
+        }
         self.child = Some(child);
         LOCAL_GETH_RUNNING.store(true, Ordering::Relaxed);
 
@@ -553,9 +651,9 @@ impl GethProcess {
         batch.add("eth_syncing",     serde_json::json!([]));
         let results = batch.execute(&endpoint).await?;
 
-        let current_block = as_hex_u64(results.first());
-        let peer_count = as_hex_u64(results.get(1)) as u32;
-        let (syncing, highest_block) = parse_syncing(results.get(2), current_block);
+        let current_block = batch_hex_u64(results.first(), "eth_blockNumber")?;
+        let peer_count = batch_hex_u64(results.get(1), "net_peerCount")? as u32;
+        let (syncing, highest_block) = parse_syncing(results.get(2), current_block)?;
 
         Ok(GethStatus {
             installed, running: true, local_running: true,
@@ -594,7 +692,7 @@ impl GethProcess {
 
         let mining = results.first()
             .and_then(|r| r.as_ref().ok()).and_then(|v| v.as_bool()).unwrap_or(false);
-        let hash_rate = as_hex_u64(results.get(1));
+        let hash_rate = batch_hex_u64(results.get(1), "eth_hashrate")?;
         let coinbase = results.get(2)
             .and_then(|r| r.as_ref().ok())
             .and_then(|v| v.as_str().map(str::to_owned))
@@ -607,7 +705,7 @@ impl GethProcess {
                 serde_json::json!([addr, "latest"])).await
             {
                 Ok(v) => {
-                    let wei = v.as_str().map(rpc_client::hex_to_u128).unwrap_or(0);
+                    let wei = value_hex_u128(&v, "eth_getBalance")?;
                     (wei.to_string(), wei as f64 / 1e18)
                 }
                 Err(_) => ("0".into(), 0.0),
@@ -632,11 +730,10 @@ impl GethProcess {
         let coinbase = self.miner_address.as_deref().unwrap_or("").to_lowercase();
         if coinbase.is_empty() { return Ok(Vec::new()); }
         let endpoint = self.effective_rpc_endpoint();
-        let head = rpc_client::call(&endpoint, "eth_blockNumber", serde_json::json!([]))
-            .await
-            .ok()
-            .and_then(|v| v.as_str().map(rpc_client::hex_to_u64))
-            .unwrap_or(0);
+        let head = match rpc_client::call(&endpoint, "eth_blockNumber", serde_json::json!([])).await {
+            Ok(v) => value_hex_u64(&v, "eth_blockNumber")?,
+            Err(_) => 0,
+        };
         if head == 0 { return Ok(Vec::new()); }
 
         let scan = max_blocks.min(500);
@@ -651,10 +748,10 @@ impl GethProcess {
             }
             out.push(MinedBlock {
                 block_number: n,
-                timestamp: block.get("timestamp").and_then(|v| v.as_str()).map(rpc_client::hex_to_u64).unwrap_or(0),
+                timestamp: field_hex_u64(&block, "timestamp", "eth_getBlockByNumber")?,
                 reward_wei: "5000000000000000000".into(),
                 reward_chi: 5.0,
-                difficulty: block.get("difficulty").and_then(|v| v.as_str()).map(rpc_client::hex_to_u64).unwrap_or(0),
+                difficulty: field_hex_u64(&block, "difficulty", "eth_getBlockByNumber")?,
             });
             if out.len() as u64 >= max_blocks { break; }
         }
@@ -673,23 +770,54 @@ impl Default for GethProcess {
 // Helpers
 // ============================================================================
 
-/// Extract a hex-encoded u64 from the Nth result of a batch call (or 0).
-fn as_hex_u64(r: Option<&Result<serde_json::Value, String>>) -> u64 {
-    r.and_then(|v| v.as_ref().ok())
+fn value_hex_str<'a>(value: &'a serde_json::Value, context: &str) -> Result<&'a str, String> {
+    value
+        .as_str()
+        .ok_or_else(|| format!("{context} returned a non-string hex value: {value}"))
+}
+
+fn value_hex_u64(value: &serde_json::Value, context: &str) -> Result<u64, String> {
+    rpc_client::hex_to_u64(value_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn value_hex_u128(value: &serde_json::Value, context: &str) -> Result<u128, String> {
+    rpc_client::hex_to_u128(value_hex_str(value, context)?).map_err(|e| format!("{context}: {e}"))
+}
+
+fn field_hex_u64(value: &serde_json::Value, field: &str, context: &str) -> Result<u64, String> {
+    let hex = value
+        .get(field)
         .and_then(|v| v.as_str())
-        .map(rpc_client::hex_to_u64)
-        .unwrap_or(0)
+        .ok_or_else(|| format!("{context} missing string `{field}` field"))?;
+    rpc_client::hex_to_u64(hex).map_err(|e| format!("{context} {field}: {e}"))
+}
+
+/// Extract a hex-encoded u64 from the Nth result of a batch call.
+fn batch_hex_u64(r: Option<&Result<serde_json::Value, String>>, context: &str) -> Result<u64, String> {
+    let value = r
+        .ok_or_else(|| format!("{context} missing batch result"))?
+        .as_ref()
+        .map_err(|e| format!("{context} RPC failed: {e}"))?;
+    value_hex_u64(value, context)
 }
 
 /// Parse the polymorphic `eth_syncing` response. Returns (is_syncing, highest_block).
-fn parse_syncing(r: Option<&Result<serde_json::Value, String>>, current_block: u64) -> (bool, u64) {
-    let Some(Ok(v)) = r else { return (false, current_block) };
-    if let Some(b) = v.as_bool() { return (b, current_block); }
-    let Some(obj) = v.as_object() else { return (false, current_block); };
-    let hex = |k: &str| obj.get(k).and_then(|x| x.as_str()).map(rpc_client::hex_to_u64);
-    let current = hex("currentBlock").unwrap_or(current_block);
-    let highest = hex("highestBlock").unwrap_or(current_block);
-    (highest > current, highest.max(current))
+fn parse_syncing(
+    r: Option<&Result<serde_json::Value, String>>,
+    current_block: u64,
+) -> Result<(bool, u64), String> {
+    let Some(Ok(v)) = r else { return Ok((false, current_block)); };
+    if let Some(b) = v.as_bool() { return Ok((b, current_block)); }
+    let Some(obj) = v.as_object() else { return Ok((false, current_block)); };
+    let current = match obj.get("currentBlock") {
+        Some(value) => value_hex_u64(value, "eth_syncing currentBlock")?,
+        None => current_block,
+    };
+    let highest = match obj.get("highestBlock") {
+        Some(value) => value_hex_u64(value, "eth_syncing highestBlock")?,
+        None => current_block,
+    };
+    Ok((highest > current, highest.max(current)))
 }
 
 // ============================================================================
@@ -699,6 +827,12 @@ fn parse_syncing(r: Option<&Result<serde_json::Value, String>>, current_block: u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+        args.windows(2)
+            .find(|pair| pair[0] == flag)
+            .map(|pair| pair[1].as_str())
+    }
 
     #[test]
     fn freshnet_is_first_preset_and_has_unique_chain_id() {
@@ -726,10 +860,74 @@ mod tests {
         let obj_behind = Ok(serde_json::json!({"currentBlock": "0x5", "highestBlock": "0xa"}));
         let obj_caught_up = Ok(serde_json::json!({"currentBlock": "0xa", "highestBlock": "0xa"}));
 
-        assert_eq!(parse_syncing(Some(&false_), 100), (false, 100));
-        assert_eq!(parse_syncing(Some(&true_), 100),  (true,  100));
-        assert_eq!(parse_syncing(Some(&obj_behind), 5),     (true,  10));
-        assert_eq!(parse_syncing(Some(&obj_caught_up), 10), (false, 10));
+        assert_eq!(parse_syncing(Some(&false_), 100).unwrap(), (false, 100));
+        assert_eq!(parse_syncing(Some(&true_), 100).unwrap(), (true, 100));
+        assert_eq!(parse_syncing(Some(&obj_behind), 5).unwrap(), (true, 10));
+        assert_eq!(parse_syncing(Some(&obj_caught_up), 10).unwrap(), (false, 10));
+    }
+
+    #[test]
+    fn parse_syncing_rejects_malformed_hex() {
+        let malformed =
+            Ok(serde_json::json!({"currentBlock": "0xnot-hex", "highestBlock": "0xa"}));
+
+        assert!(parse_syncing(Some(&malformed), 5).is_err());
+    }
+
+    #[test]
+    fn geth_http_addr_validation_is_loopback_only() {
+        for addr in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+            assert_eq!(validate_geth_http_addr(addr).unwrap(), addr);
+        }
+
+        for addr in ["", "0.0.0.0", "192.168.1.5", "example.com"] {
+            let err = validate_geth_http_addr(addr).unwrap_err();
+            assert!(err.contains("CHIRAL_GETH_HTTP_ADDR"));
+        }
+    }
+
+    #[test]
+    fn geth_start_args_constrain_http_surface_and_preserve_mining() {
+        let args = geth_start_args(
+            Path::new("/tmp/chiral-geth"),
+            98763,
+            GETH_HTTP_DEFAULT_ADDR,
+            "",
+            Some("0xabc"),
+        );
+
+        assert_eq!(arg_value(&args, "--http.addr"), Some(GETH_HTTP_DEFAULT_ADDR));
+        assert_eq!(arg_value(&args, "--http.port"), Some(GETH_HTTP_PORT));
+        assert_eq!(arg_value(&args, "--http.api"), Some(GETH_HTTP_API_MODULES));
+        assert!(args.iter().any(|arg| arg == "--nodiscover"));
+        assert_eq!(arg_value(&args, "--miner.etherbase"), Some("0xabc"));
+        assert_eq!(arg_value(&args, "--miner.threads"), Some("1"));
+
+        let modules: Vec<_> = GETH_HTTP_API_MODULES.split(',').collect();
+        assert!(modules.contains(&"miner"));
+        for forbidden in ["admin", "personal", "debug", "txpool"] {
+            assert!(!modules.contains(&forbidden));
+        }
+        assert!(!args.iter().any(|arg| arg == "--http.corsdomain"));
+    }
+
+    #[test]
+    fn geth_start_args_use_bootnodes_when_present() {
+        let args = geth_start_args(
+            Path::new("/tmp/chiral-geth"),
+            98763,
+            GETH_HTTP_DEFAULT_ADDR,
+            "enode://peer@127.0.0.1:30303",
+            None,
+        );
+
+        assert_eq!(
+            arg_value(&args, "--bootnodes"),
+            Some("enode://peer@127.0.0.1:30303")
+        );
+        assert!(!args.iter().any(|arg| arg == "--nodiscover"));
+        assert!(arg_value(&args, "--miner.etherbase").is_none());
+        assert!(!args.iter().any(|arg| arg == "--mine"));
     }
 
     #[test]
@@ -741,5 +939,53 @@ mod tests {
         assert!(s.contains("\"hashRate\":42"));
         assert!(s.contains("\"minerAddress\""));
         assert!(s.contains("\"totalMinedWei\""));
+    }
+
+    #[test]
+    fn open_geth_log_files_creates_parent_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("nested").join("logs").join("geth.log");
+
+        let (_log_file, _log_clone) = open_geth_log_files(&log_path).unwrap();
+
+        assert!(log_path.exists());
+        assert!(log_path.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn open_geth_log_files_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked_parent = dir.path().join("blocked");
+        std::fs::write(&blocked_parent, "not a directory").unwrap();
+        let log_path = blocked_parent.join("geth.log");
+
+        let err = open_geth_log_files(&log_path).expect_err("log setup should fail");
+
+        assert!(err.contains("create Geth log directory"));
+        assert!(err.contains("blocked"));
+    }
+
+    #[test]
+    fn write_geth_pid_file_persists_child_pid() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_geth_pid_file(dir.path(), 42).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("geth.pid")).unwrap(),
+            "42"
+        );
+    }
+
+    #[test]
+    fn write_geth_pid_file_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("blocked-data-dir");
+        std::fs::write(&data_dir, "not a directory").unwrap();
+
+        let err = write_geth_pid_file(&data_dir, 42).expect_err("pid write should fail");
+
+        assert!(err.contains("write Geth PID file"));
+        assert!(err.contains("geth.pid"));
     }
 }
