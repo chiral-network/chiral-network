@@ -157,7 +157,7 @@ fn load_manifest_from_path(path: &Path) -> DriveManifest {
 }
 
 fn quarantine_malformed_manifest(path: &Path) -> Result<PathBuf, String> {
-    let quarantine = malformed_manifest_quarantine_path(path);
+    let quarantine = malformed_manifest_quarantine_path(path)?;
     std::fs::rename(path, &quarantine).map_err(|e| {
         format!(
             "rename {} to {}: {}",
@@ -169,11 +169,15 @@ fn quarantine_malformed_manifest(path: &Path) -> Result<PathBuf, String> {
     Ok(quarantine)
 }
 
-fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+fn malformed_manifest_quarantine_path(path: &Path) -> Result<PathBuf, String> {
+    malformed_manifest_quarantine_path_at(path, std::time::SystemTime::now())
+}
+
+fn malformed_manifest_quarantine_path_at(
+    path: &Path,
+    now: std::time::SystemTime,
+) -> Result<PathBuf, String> {
+    let timestamp = now_secs_at(now)?;
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -186,33 +190,60 @@ fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
         };
         let candidate = path.with_file_name(format!("{file_name}.{suffix}"));
         if !candidate.exists() {
-            return candidate;
+            return Ok(candidate);
         }
     }
-    path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow"))
+    Ok(path.with_file_name(format!("{file_name}.malformed-{timestamp}-overflow")))
 }
 
 pub fn save_manifest(manifest: &DriveManifest) {
     let Some(path) = manifest_path() else { return };
-    save_manifest_to_path(manifest, &path);
+    if let Err(e) = save_manifest_to_path(manifest, &path) {
+        eprintln!(
+            "[Drive] Failed to save Drive manifest {}: {}",
+            path.display(),
+            e
+        );
+    }
 }
 
-fn save_manifest_to_path(manifest: &DriveManifest, path: &Path) {
-    if let Ok(data) = std::fs::read_to_string(path) {
-        if serde_json::from_str::<DriveManifest>(&data).is_err() {
-            eprintln!(
-                "[Drive] Refusing to overwrite malformed Drive manifest at {}; fix or remove it manually",
-                path.display()
-            );
-            return;
+fn save_manifest_to_path(manifest: &DriveManifest, path: &Path) -> Result<(), String> {
+    match std::fs::read_to_string(path) {
+        Ok(data) => {
+            if serde_json::from_str::<DriveManifest>(&data).is_err() {
+                return Err(format!(
+                    "refusing to overwrite malformed Drive manifest at {}; fix or remove it manually",
+                    path.display()
+                ));
+            }
+        }
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
+        Err(_) if path.is_dir() => {}
+        Err(e) => {
+            return Err(format!(
+                "failed to inspect existing Drive manifest {}: {}",
+                path.display(),
+                e
+            ));
         }
     }
+    let json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("serialize Drive manifest: {}", e))?;
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create Drive manifest directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(manifest) {
-        let _ = std::fs::write(path, json);
-    }
+    std::fs::write(path, json)
+        .map_err(|e| format!("write Drive manifest {}: {}", path.display(), e))
 }
 
 // ---------------------------------------------------------------------------
@@ -237,11 +268,19 @@ pub fn generate_share_token() -> String {
 }
 
 /// Current Unix timestamp in seconds.
-pub fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+pub fn now_secs() -> Result<u64, String> {
+    now_secs_at(std::time::SystemTime::now())
+}
+
+pub fn now_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            format!(
+                "Cannot generate Drive timestamp because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
 }
 
 /// Guess MIME type from file extension.
@@ -335,7 +374,7 @@ mod tests {
             items: vec![test_drive_item("item-1")],
             shares: Vec::new(),
         };
-        save_manifest_to_path(&manifest, &path);
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
 
         let loaded = load_manifest_from_path(&path);
 
@@ -375,6 +414,53 @@ mod tests {
     }
 
     #[test]
+    fn now_secs_at_preserves_seconds() {
+        let ts = now_secs_at(std::time::UNIX_EPOCH + std::time::Duration::from_secs(42))
+            .expect("post-epoch Drive timestamp should be valid");
+
+        assert_eq!(ts, 42);
+    }
+
+    #[test]
+    fn now_secs_at_rejects_pre_epoch_clock() {
+        let err = now_secs_at(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect_err("pre-epoch Drive timestamp should be rejected");
+
+        assert!(err.contains("Drive timestamp"));
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn malformed_manifest_quarantine_path_at_uses_timestamp_suffix() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+
+        let quarantine = malformed_manifest_quarantine_path_at(
+            &path,
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(42),
+        )
+        .expect("post-epoch quarantine timestamp should be valid");
+
+        assert_eq!(
+            quarantine.file_name().and_then(|s| s.to_str()),
+            Some("manifest.json.malformed-42")
+        );
+    }
+
+    #[test]
+    fn malformed_manifest_quarantine_path_at_rejects_pre_epoch_clock() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        let err = malformed_manifest_quarantine_path_at(
+            &path,
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch quarantine timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
     fn save_manifest_refuses_to_overwrite_malformed_file() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("manifest.json");
@@ -385,9 +471,60 @@ mod tests {
             shares: Vec::new(),
         };
 
-        save_manifest_to_path(&manifest, &path);
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("malformed manifest should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed Drive manifest"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
+    }
+
+    #[test]
+    fn save_manifest_to_path_persists_valid_manifest() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("manifest.json");
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("saved")],
+            shares: Vec::new(),
+        };
+
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
+
+        let loaded = load_manifest_from_path(&path);
+        assert_eq!(loaded.items.len(), 1);
+        assert_eq!(loaded.items[0].id, "saved");
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_directory_creation_failure() {
+        let dir = tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("manifest.json");
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("item-1")],
+            shares: Vec::new(),
+        };
+
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create Drive manifest directory"));
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_write_failure() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        std::fs::create_dir(&path).unwrap();
+        let manifest = DriveManifest {
+            items: vec![test_drive_item("item-1")],
+            shares: Vec::new(),
+        };
+
+        let err =
+            save_manifest_to_path(&manifest, &path).expect_err("write failure should surface");
+
+        assert!(err.contains("write Drive manifest"));
     }
 
     #[test]

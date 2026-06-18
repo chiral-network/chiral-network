@@ -46,6 +46,17 @@ pub struct NetworkConfig {
     /// libp2p relay nodes (circuit relay reservation targets).
     pub libp2p_relay_addrs: &'static [&'static str],
 
+    /// Public relay base URL used by frontend/runtime services.
+    pub relay_base_url: &'static str,
+    /// Reputation API base URL. Usually the same deployment as the relay.
+    pub rating_base_url: &'static str,
+    /// Drive relay base URL used for public share registration and web CRUD fallback.
+    pub drive_relay_base_url: &'static str,
+    /// CDN search endpoints queried alongside DHT search results.
+    pub cdn_search_base_urls: &'static [&'static str],
+    /// CDN servers exposed in the Hosts page.
+    pub cdn_servers: &'static [CdnEndpointConfig],
+
     /// `None` → persist state directly under `<data_dir>/chiral-network/` (the
     /// legacy unprefixed layout, kept for existing testnet installs).
     /// `Some("mainnet")` → persist under `<data_dir>/chiral-network/networks/mainnet/`
@@ -53,6 +64,29 @@ pub struct NetworkConfig {
     /// identity, wallet tx history, or Drive files.
     pub data_subdir: Option<&'static str>,
 }
+
+#[derive(Debug, Clone)]
+pub struct CdnEndpointConfig {
+    pub url: &'static str,
+    pub name: &'static str,
+    pub region: &'static str,
+}
+
+pub const LAUNCH_RELAY_BASE_URL: &str = "http://130.245.173.73:8080";
+pub const LAUNCH_CDN_SERVERS: &[CdnEndpointConfig] = &[
+    CdnEndpointConfig {
+        url: "http://130.245.173.73:9420",
+        name: "CDN Primary (US East)",
+        region: "New York",
+    },
+    CdnEndpointConfig {
+        url: "http://130.245.173.231:9420",
+        name: "CDN Secondary (US East)",
+        region: "Stony Brook",
+    },
+];
+pub const LAUNCH_CDN_SEARCH_BASE_URLS: &[&str] =
+    &["http://130.245.173.73:9420", "http://130.245.173.231:9420"];
 
 pub const TESTNET: NetworkConfig = NetworkConfig {
     name: "testnet",
@@ -75,6 +109,11 @@ pub const TESTNET: NetworkConfig = NetworkConfig {
         "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
     ],
+    relay_base_url: LAUNCH_RELAY_BASE_URL,
+    rating_base_url: LAUNCH_RELAY_BASE_URL,
+    drive_relay_base_url: LAUNCH_RELAY_BASE_URL,
+    cdn_search_base_urls: LAUNCH_CDN_SEARCH_BASE_URLS,
+    cdn_servers: LAUNCH_CDN_SERVERS,
     // Legacy unprefixed layout — existing installs already live here.
     data_subdir: None,
 };
@@ -114,6 +153,11 @@ pub const FRESHNET: NetworkConfig = NetworkConfig {
         "/ip4/130.245.173.73/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
         "/ip6/2002:82f5:ad49::1/tcp/4001/p2p/12D3KooWEfUVEbmkeH5C7TUNDn26hQTqs5TBYvKZgrCGMJroHRF1",
     ],
+    relay_base_url: LAUNCH_RELAY_BASE_URL,
+    rating_base_url: LAUNCH_RELAY_BASE_URL,
+    drive_relay_base_url: LAUNCH_RELAY_BASE_URL,
+    cdn_search_base_urls: LAUNCH_CDN_SEARCH_BASE_URLS,
+    cdn_servers: LAUNCH_CDN_SERVERS,
     data_subdir: Some("freshnet"),
 };
 
@@ -129,18 +173,50 @@ pub fn active() -> &'static NetworkConfig {
 }
 
 fn resolve_from_env_or_disk() -> &'static NetworkConfig {
-    let name = std::env::var("CHIRAL_NETWORK")
+    let selector = std::env::var("CHIRAL_NETWORK")
         .ok()
-        .or_else(|| std::fs::read_to_string(active_network_file()).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+        .map(|value| ("CHIRAL_NETWORK", value))
+        .or_else(|| {
+            std::fs::read_to_string(active_network_file())
+                .ok()
+                .map(|value| ("active-network", value))
+        });
+    let (cfg, warning) = resolve_config_from_selector(
+        selector
+            .as_ref()
+            .map(|(source, value)| (*source, value.as_str())),
+    );
+    if let Some(warning) = warning {
+        eprintln!("[NETWORK] {}", warning);
+    }
+    cfg
+}
+
+fn resolve_config_from_selector(
+    selector: Option<(&str, &str)>,
+) -> (&'static NetworkConfig, Option<String>) {
+    let Some((source, raw_name)) = selector else {
+        return (ALL[0], None);
+    };
+
+    let name = raw_name.trim();
+    if name.is_empty() {
+        return (ALL[0], None);
+    }
+
     for cfg in ALL {
         if cfg.name == name {
-            return cfg;
+            return (cfg, None);
         }
     }
-    // First entry in ALL is the default for new installs (currently FRESHNET).
-    ALL[0]
+    let default = ALL[0];
+    (
+        default,
+        Some(format!(
+            "Unknown {} network selector '{}'; using default network '{}'",
+            source, name, default.name
+        )),
+    )
 }
 
 /// Write the active-network choice to disk. Takes effect on next launch.
@@ -150,7 +226,8 @@ pub fn set_active(name: &str) -> Result<(), String> {
     }
     let path = active_network_file();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
     std::fs::write(&path, name).map_err(|e| format!("write {}: {}", path.display(), e))?;
     Ok(())
@@ -212,4 +289,36 @@ pub fn genesis_json(cfg: &NetworkConfig) -> String {
         "timestamp": cfg.genesis_timestamp
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_network_selector_uses_default_without_warning() {
+        let (cfg, warning) = resolve_config_from_selector(None);
+
+        assert_eq!(cfg.name, FRESHNET.name);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn valid_network_selector_uses_matching_config_without_warning() {
+        let (cfg, warning) = resolve_config_from_selector(Some(("CHIRAL_NETWORK", "testnet")));
+
+        assert_eq!(cfg.name, TESTNET.name);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn invalid_network_selector_warns_and_uses_default() {
+        let (cfg, warning) = resolve_config_from_selector(Some(("active-network", "unknownnet")));
+
+        assert_eq!(cfg.name, FRESHNET.name);
+        let warning = warning.expect("invalid selector should be surfaced");
+        assert!(warning.contains("unknownnet"));
+        assert!(warning.contains("active-network"));
+        assert!(warning.contains(FRESHNET.name));
+    }
 }
