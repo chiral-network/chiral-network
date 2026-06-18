@@ -71,32 +71,48 @@ impl RelayShareRegistry {
         }
     }
 
-    pub async fn load_from_disk(&self) {
-        if let Ok(data) = std::fs::read_to_string(&self.persist_path) {
-            if let Ok(reg) = serde_json::from_str::<PersistedRegistry>(&data) {
-                let mut share_map = self.shares.write().await;
-                for s in reg.shares {
-                    share_map.insert(s.token.clone(), s);
-                }
-                let share_count = share_map.len();
-                drop(share_map);
-
-                let mut site_map = self.sites.write().await;
-                for s in reg.sites {
-                    site_map.insert(s.site_id.clone(), s);
-                }
-                let site_count = site_map.len();
-                drop(site_map);
-
-                println!(
-                    "[RELAY-SHARE] Loaded {} share + {} site registrations from disk",
-                    share_count, site_count
-                );
+    pub async fn load_from_disk(&self) -> Result<(), String> {
+        let data = match std::fs::read_to_string(&self.persist_path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                return Err(format!(
+                    "Failed to read relay share registry {}: {}",
+                    self.persist_path.display(),
+                    err
+                ));
             }
+        };
+        let reg = serde_json::from_str::<PersistedRegistry>(&data).map_err(|err| {
+            format!(
+                "Malformed relay share registry JSON at {}: {}",
+                self.persist_path.display(),
+                err
+            )
+        })?;
+
+        let mut share_map = self.shares.write().await;
+        for s in reg.shares {
+            share_map.insert(s.token.clone(), s);
         }
+        let share_count = share_map.len();
+        drop(share_map);
+
+        let mut site_map = self.sites.write().await;
+        for s in reg.sites {
+            site_map.insert(s.site_id.clone(), s);
+        }
+        let site_count = site_map.len();
+        drop(site_map);
+
+        println!(
+            "[RELAY-SHARE] Loaded {} share + {} site registrations from disk",
+            share_count, site_count
+        );
+        Ok(())
     }
 
-    async fn persist(&self) {
+    async fn persist(&self) -> Result<(), String> {
         let share_map = self.shares.read().await;
         let site_map = self.sites.read().await;
         let reg = PersistedRegistry {
@@ -106,10 +122,34 @@ impl RelayShareRegistry {
         drop(share_map);
         drop(site_map);
         if let Some(parent) = self.persist_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "Failed to create relay share registry directory {}: {}",
+                    parent.display(),
+                    err
+                )
+            })?;
         }
-        if let Ok(json) = serde_json::to_string_pretty(&reg) {
-            let _ = std::fs::write(&self.persist_path, json);
+        let json = serde_json::to_string_pretty(&reg).map_err(|err| {
+            format!(
+                "Failed to serialize relay share registry {}: {}",
+                self.persist_path.display(),
+                err
+            )
+        })?;
+        std::fs::write(&self.persist_path, json).map_err(|err| {
+            format!(
+                "Failed to write relay share registry {}: {}",
+                self.persist_path.display(),
+                err
+            )
+        })?;
+        Ok(())
+    }
+
+    async fn persist_or_log(&self) {
+        if let Err(err) = self.persist().await {
+            eprintln!("[RELAY-SHARE] {}", err);
         }
     }
 
@@ -119,7 +159,7 @@ impl RelayShareRegistry {
         let mut map = self.shares.write().await;
         map.insert(reg.token.clone(), reg);
         drop(map);
-        self.persist().await;
+        self.persist_or_log().await;
     }
 
     pub async fn unregister(&self, token: &str) -> bool {
@@ -127,7 +167,7 @@ impl RelayShareRegistry {
         let removed = map.remove(token).is_some();
         drop(map);
         if removed {
-            self.persist().await;
+            self.persist_or_log().await;
         }
         removed
     }
@@ -143,7 +183,7 @@ impl RelayShareRegistry {
         let mut map = self.sites.write().await;
         map.insert(reg.site_id.clone(), reg);
         drop(map);
-        self.persist().await;
+        self.persist_or_log().await;
     }
 
     pub async fn unregister_site(&self, site_id: &str) -> bool {
@@ -151,7 +191,7 @@ impl RelayShareRegistry {
         let removed = map.remove(site_id).is_some();
         drop(map);
         if removed {
-            self.persist().await;
+            self.persist_or_log().await;
         }
         removed
     }
@@ -2300,7 +2340,7 @@ mod tests {
 
         // Create a fresh registry and load from disk
         let registry = RelayShareRegistry::new(dir.path().to_path_buf());
-        registry.load_from_disk().await;
+        registry.load_from_disk().await.unwrap();
 
         let share = registry.lookup("persist-tok").await;
         assert!(share.is_some());
@@ -2309,5 +2349,46 @@ mod tests {
         let site = registry.lookup_site("persist-site").await;
         assert!(site.is_some());
         assert_eq!(site.unwrap().owner_wallet, "0xS");
+    }
+
+    #[tokio::test]
+    async fn test_registry_persist_reports_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("chiral-relay-shares"), b"not a directory").unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+
+        let err = registry.persist().await.unwrap_err();
+
+        assert!(err.contains("Failed to create relay share registry directory"));
+        assert!(err.contains("chiral-relay-shares"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_persist_reports_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry {
+            shares: Arc::new(RwLock::new(HashMap::new())),
+            sites: Arc::new(RwLock::new(HashMap::new())),
+            persist_path: dir.path().to_path_buf(),
+        };
+
+        let err = registry.persist().await.unwrap_err();
+
+        assert!(err.contains("Failed to write relay share registry"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_load_reports_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = RelayShareRegistry::new(dir.path().to_path_buf());
+        let parent = registry.persist_path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::write(&registry.persist_path, b"{not valid json").unwrap();
+
+        let err = registry.load_from_disk().await.unwrap_err();
+
+        assert!(err.contains("Malformed relay share registry JSON"));
+        assert!(registry.lookup("persist-tok").await.is_none());
+        assert!(registry.lookup_site("persist-site").await.is_none());
     }
 }
