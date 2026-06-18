@@ -212,36 +212,52 @@ fn malformed_manifest_quarantine_path(path: &Path) -> PathBuf {
 
 fn save_manifest(data_dir: &PathBuf, manifest: &RatingManifest) {
     let path = manifest_path(data_dir);
-    save_manifest_to_path(manifest, &path);
+    if let Err(e) = save_manifest_to_path(manifest, &path) {
+        eprintln!(
+            "[Reputation] Failed to save reputation manifest {}: {}",
+            path.display(),
+            e
+        );
+    }
 }
 
-fn save_manifest_to_path(manifest: &RatingManifest, path: &Path) {
+fn save_manifest_to_path(manifest: &RatingManifest, path: &Path) -> Result<(), String> {
     match std::fs::read(path) {
         Ok(data) => {
             if serde_json::from_slice::<RatingManifest>(&data).is_err() {
-                eprintln!(
-                    "[Reputation] Refusing to overwrite malformed reputation manifest at {}; fix or remove it manually",
+                return Err(format!(
+                    "refusing to overwrite malformed reputation manifest at {}; fix or remove it manually",
                     path.display()
-                );
-                return;
+                ));
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
+        Err(_) if path.is_dir() => {}
         Err(e) => {
-            eprintln!(
-                "[Reputation] Refusing to overwrite unreadable reputation manifest at {}: {}; fix or remove it manually",
+            return Err(format!(
+                "refusing to overwrite unreadable reputation manifest at {}: {}; fix or remove it manually",
                 path.display(),
                 e
-            );
-            return;
+            ));
         }
     }
+    let json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("serialize reputation manifest: {}", e))?;
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create reputation manifest directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(manifest) {
-        let _ = std::fs::write(path, json);
-    }
+    std::fs::write(path, json)
+        .map_err(|e| format!("write reputation manifest {}: {}", path.display(), e))
 }
 
 pub fn now_secs() -> Result<u64, String> {
@@ -404,7 +420,7 @@ mod tests {
         let path = test_manifest_path(dir.path());
         let manifest = manifest_with_event();
 
-        save_manifest_to_path(&manifest, &path);
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
         let loaded = load_manifest_from_path(&path);
 
         assert_eq!(loaded.events.len(), 1);
@@ -476,8 +492,10 @@ mod tests {
         std::fs::write(&path, malformed).unwrap();
         let manifest = manifest_with_event();
 
-        save_manifest_to_path(&manifest, &path);
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("malformed manifest should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed reputation manifest"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
     }
 
@@ -490,9 +508,52 @@ mod tests {
         std::fs::write(&path, &corrupted).unwrap();
         let manifest = manifest_with_event();
 
-        save_manifest_to_path(&manifest, &path);
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("invalid UTF-8 manifest should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed reputation manifest"));
         assert_eq!(std::fs::read(&path).unwrap(), corrupted);
+    }
+
+    #[test]
+    fn save_manifest_to_path_persists_valid_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(&dir.path().join("nested"));
+        let manifest = manifest_with_event();
+
+        save_manifest_to_path(&manifest, &path).expect("valid manifest should save");
+
+        let loaded = load_manifest_from_path(&path);
+        assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.events[0].transfer_id, "t-valid");
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        std::fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("reputation.json");
+        let manifest = manifest_with_event();
+
+        let err = save_manifest_to_path(&manifest, &path)
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create reputation manifest directory"));
+    }
+
+    #[test]
+    fn save_manifest_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_manifest_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let manifest = manifest_with_event();
+
+        let err =
+            save_manifest_to_path(&manifest, &path).expect_err("write failure should surface");
+
+        assert!(err.contains("write reputation manifest"));
     }
 
     #[test]
@@ -672,15 +733,42 @@ mod tests {
     fn test_multiple_completed_transfers_higher_elo_than_single() {
         let now = 1_700_000_000;
         let single = vec![mk_event(
-            "t-1", "0xA", "0xB",
+            "t-1",
+            "0xA",
+            "0xB",
             TransferOutcome::Completed,
-            "1000000000000000000", Some(5),
+            "1000000000000000000",
+            Some(5),
             now - 86_400,
         )];
         let multiple = vec![
-            mk_event("t-1", "0xA", "0xB", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 3 * 86_400),
-            mk_event("t-2", "0xA", "0xC", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 2 * 86_400),
-            mk_event("t-3", "0xA", "0xD", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 86_400),
+            mk_event(
+                "t-1",
+                "0xA",
+                "0xB",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 3 * 86_400,
+            ),
+            mk_event(
+                "t-2",
+                "0xA",
+                "0xC",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 2 * 86_400,
+            ),
+            mk_event(
+                "t-3",
+                "0xA",
+                "0xD",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 86_400,
+            ),
         ];
         let snap_single = compute_reputation_for_wallet(&single, "0xA", now);
         let snap_multi = compute_reputation_for_wallet(&multiple, "0xA", now);
@@ -694,9 +782,33 @@ mod tests {
     fn test_mixed_completed_and_failed_moderate_elo() {
         let now = 1_700_000_000;
         let events = vec![
-            mk_event("t-1", "0xA", "0xB", TransferOutcome::Completed, "1000000000000000000", Some(5), now - 3 * 86_400),
-            mk_event("t-2", "0xA", "0xC", TransferOutcome::Failed, "0", None, now - 2 * 86_400),
-            mk_event("t-3", "0xA", "0xD", TransferOutcome::Completed, "1000000000000000000", Some(4), now - 86_400),
+            mk_event(
+                "t-1",
+                "0xA",
+                "0xB",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(5),
+                now - 3 * 86_400,
+            ),
+            mk_event(
+                "t-2",
+                "0xA",
+                "0xC",
+                TransferOutcome::Failed,
+                "0",
+                None,
+                now - 2 * 86_400,
+            ),
+            mk_event(
+                "t-3",
+                "0xA",
+                "0xD",
+                TransferOutcome::Completed,
+                "1000000000000000000",
+                Some(4),
+                now - 86_400,
+            ),
         ];
         let snap = compute_reputation_for_wallet(&events, "0xA", now);
         // Should be near base (50) — not extremely high or low

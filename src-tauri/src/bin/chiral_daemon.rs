@@ -177,6 +177,30 @@ fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+const DEFAULT_GETH_LOG_LINES: usize = 100;
+const MAX_GETH_LOG_LINES: usize = 1000;
+
+fn validate_geth_log_lines(lines: Option<usize>) -> Result<usize, String> {
+    let lines = lines.unwrap_or(DEFAULT_GETH_LOG_LINES);
+    if lines == 0 {
+        return Err("lines must be at least 1".to_string());
+    }
+    if lines > MAX_GETH_LOG_LINES {
+        return Err(format!("lines must be at most {}", MAX_GETH_LOG_LINES));
+    }
+    Ok(lines)
+}
+
+fn tail_log_lines(contents: &str, max_lines: usize) -> String {
+    let all_lines: Vec<&str> = contents.lines().collect();
+    let start = if all_lines.len() > max_lines {
+        all_lines.len() - max_lines
+    } else {
+        0
+    };
+    all_lines[start..].join("\n")
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -246,6 +270,7 @@ async fn auto_publish_wallet_advertisement(
 }
 
 fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
+    let max_lines = validate_geth_log_lines(lines)?;
     let data_dir = chiral_network::network::data_dir().join("geth");
     let log_path = data_dir.join("geth.log");
     if !log_path.exists() {
@@ -254,14 +279,7 @@ fn read_geth_log(lines: Option<usize>) -> Result<String, String> {
 
     let contents = std::fs::read_to_string(&log_path)
         .map_err(|e| format!("Failed to read geth.log: {}", e))?;
-    let max_lines = lines.unwrap_or(100);
-    let all_lines: Vec<&str> = contents.lines().collect();
-    let start = if all_lines.len() > max_lines {
-        all_lines.len() - max_lines
-    } else {
-        0
-    };
-    Ok(all_lines[start..].join("\n"))
+    Ok(tail_log_lines(&contents, max_lines))
 }
 
 #[derive(Deserialize)]
@@ -327,6 +345,8 @@ struct RegisterSharedFileRequest {
     file_name: String,
     file_size: u64,
     #[serde(default)]
+    protocol: Option<String>,
+    #[serde(default)]
     price_wei: String,
     #[serde(default)]
     wallet_address: String,
@@ -336,9 +356,44 @@ struct RegisterSharedFileRequest {
     private_key: String,
 }
 
+fn register_shared_file_protocol(protocol: Option<&str>) -> String {
+    let protocol = protocol.unwrap_or("WebRTC").trim();
+    if protocol.is_empty() {
+        "WebRTC".to_string()
+    } else {
+        protocol.to_string()
+    }
+}
+
+fn signed_file_metadata_json_for_register(
+    req: &RegisterSharedFileRequest,
+    protocol: &str,
+) -> Result<String, String> {
+    let metadata = chiral_network::try_make_signed_file_metadata(
+        &req.file_hash,
+        &req.file_name,
+        req.file_size,
+        protocol,
+        &req.wallet_address,
+        Some(&req.private_key),
+    )
+    .ok_or_else(|| "Failed to sign file metadata".to_string())?;
+    serde_json::to_string(&metadata)
+        .map_err(|e| format!("Failed to serialize file metadata: {}", e))
+}
+
+fn register_shared_file_unpublished_payload(warning: impl Into<String>) -> serde_json::Value {
+    json!({
+        "status": "ok",
+        "dhtPublished": false,
+        "warning": warning.into(),
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UnregisterSharedFileRequest {
+    #[serde(default)]
     file_hash: String,
 }
 
@@ -734,7 +789,7 @@ async fn dht_register_shared_file(
     // Local seed registration first (fast, no I/O on the network).
     svc.register_shared_file(
         file_hash.clone(),
-        req.file_path,
+        req.file_path.clone(),
         req.file_name.clone(),
         req.file_size,
         price_wei,
@@ -747,21 +802,17 @@ async fn dht_register_shared_file(
     // step the file is only locally seeded and `file/search` from any
     // remote node returns "not found".
     if req.private_key.is_empty() || req.wallet_address.is_empty() {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": "No wallet/private key provided — file registered locally only; remote peers cannot discover it",
-        }))
+        return Json(register_shared_file_unpublished_payload(
+            "No wallet/private key provided — file registered locally only; remote peers cannot discover it",
+        ))
         .into_response();
     }
 
     let peer_id = svc.get_peer_id().await.unwrap_or_default();
     if peer_id.is_empty() {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": "DHT peer ID unavailable",
-        }))
+        return Json(register_shared_file_unpublished_payload(
+            "DHT peer ID unavailable",
+        ))
         .into_response();
     }
 
@@ -774,11 +825,9 @@ async fn dht_register_shared_file(
         multiaddrs,
         Some(&req.private_key),
     ) else {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": "Failed to sign seeder entry",
-        }))
+        return Json(register_shared_file_unpublished_payload(
+            "Failed to sign seeder entry",
+        ))
         .into_response();
     };
 
@@ -788,37 +837,72 @@ async fn dht_register_shared_file(
     // signed blobs at the same chiral_file_<hash> key are harmless —
     // verify_publisher accepts whichever the reader sees.
     let blob_key = format!("chiral_file_{}", file_hash);
-    if let Some(metadata) = chiral_network::try_make_signed_file_metadata(
+    let protocol = register_shared_file_protocol(req.protocol.as_deref());
+    let metadata = match chiral_network::try_make_signed_file_metadata(
         &file_hash,
         &req.file_name,
         req.file_size,
-        "WebRTC",
+        &protocol,
         &req.wallet_address,
         Some(&req.private_key),
     ) {
-        if let Ok(blob) = serde_json::to_string(&metadata) {
-            if let Err(e) = svc.put_dht_value(blob_key, blob).await {
-                eprintln!("[DAEMON] file metadata blob put failed: {}", e);
-            }
+        Some(metadata) => metadata,
+        None => {
+            return Json(register_shared_file_unpublished_payload(
+                "Failed to sign file metadata",
+            ))
+            .into_response();
         }
+    };
+    let blob = match serde_json::to_string(&metadata) {
+        Ok(blob) => blob,
+        Err(e) => {
+            return Json(register_shared_file_unpublished_payload(format!(
+                "Failed to serialize file metadata: {}",
+                e
+            )))
+            .into_response();
+        }
+    };
+    if let Err(e) = svc.put_dht_value(blob_key, blob).await {
+        return Json(register_shared_file_unpublished_payload(format!(
+            "File metadata publish failed: {}",
+            e
+        )))
+        .into_response();
     }
 
     if let Err(e) = chiral_network::publish_seeder_entry(&svc, &file_hash, &seeder).await {
-        return Json(json!({
-            "status": "ok",
-            "dhtPublished": false,
-            "warning": format!("Seeder entry publish failed: {}", e),
-        }))
+        return Json(register_shared_file_unpublished_payload(format!(
+            "Seeder entry publish failed: {}",
+            e
+        )))
         .into_response();
     }
 
     Json(json!({ "status": "ok", "dhtPublished": true })).into_response()
 }
 
+fn validate_headless_file_hash(file_hash: &str) -> Result<String, String> {
+    let trimmed = file_hash.trim();
+    if trimmed.is_empty() {
+        return Err("fileHash required".to_string());
+    }
+    if trimmed.len() != 64 || !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("fileHash must be a 64-character hex content hash".to_string());
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
 async fn dht_unregister_shared_file(
     State(state): State<Arc<HeadlessRuntimeState>>,
     Json(req): Json<UnregisterSharedFileRequest>,
 ) -> Response {
+    let file_hash = match validate_headless_file_hash(&req.file_hash) {
+        Ok(file_hash) => file_hash,
+        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
+    };
+
     let Some(svc) = state.dht_service().await else {
         return json_error(StatusCode::BAD_REQUEST, "DHT not running");
     };
@@ -830,14 +914,52 @@ async fn dht_unregister_shared_file(
     // stays in everyone else's seeder lists until the records age out
     // naturally (~3 min republish + remote TTL), and provider lookups
     // keep returning a peer that no longer serves the file.
-    svc.unregister_shared_file(&req.file_hash).await;
-    if let Err(e) = chiral_network::remove_seeder_entry(&svc, &req.file_hash).await {
+    svc.unregister_shared_file(&file_hash).await;
+    if let Err(e) = chiral_network::remove_seeder_entry(&svc, &file_hash).await {
         eprintln!(
             "[DAEMON] remove_seeder_entry failed for {}: {} (local seeding stopped, but DHT cleanup incomplete)",
-            req.file_hash, e
+            file_hash, e
         );
     }
     Json(json!({ "status": "ok" })).into_response()
+}
+
+#[cfg(test)]
+mod unregister_hash_tests {
+    use super::*;
+
+    #[test]
+    fn validate_headless_file_hash_rejects_missing_hash() {
+        let err =
+            validate_headless_file_hash("  ").expect_err("missing file hash should be rejected");
+
+        assert!(err.contains("fileHash"));
+        assert!(err.contains("required"));
+    }
+
+    #[test]
+    fn validate_headless_file_hash_rejects_malformed_hash() {
+        let err = validate_headless_file_hash("not-a-hash")
+            .expect_err("malformed file hash should be rejected");
+
+        assert!(err.contains("64-character hex"));
+    }
+
+    #[test]
+    fn validate_headless_file_hash_rejects_non_hex_hash() {
+        let err = validate_headless_file_hash(&"g".repeat(64))
+            .expect_err("non-hex file hash should be rejected");
+
+        assert!(err.contains("64-character hex"));
+    }
+
+    #[test]
+    fn validate_headless_file_hash_accepts_and_normalizes_hash() {
+        let hash = validate_headless_file_hash(&"A".repeat(64))
+            .expect("valid file hash should be accepted");
+
+        assert_eq!(hash, "a".repeat(64));
+    }
 }
 
 async fn drop_inbox(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
@@ -998,11 +1120,10 @@ fn address_from_private_key(priv_bytes: &[u8; 32]) -> Result<String, String> {
 /// require 32-byte hex. Returns `WalletInfo` populated with both
 /// address (derived) and the canonical `0x`-prefixed private key.
 fn load_wallet_from_file(path: &PathBuf) -> Result<WalletInfo, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {}", path.display(), e))?;
+    let raw =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
     let cleaned = raw.trim().trim_start_matches("0x");
-    let bytes = hex::decode(cleaned)
-        .map_err(|e| format!("wallet-key file is not hex: {}", e))?;
+    let bytes = hex::decode(cleaned).map_err(|e| format!("wallet-key file is not hex: {}", e))?;
     if bytes.len() != 32 {
         return Err(format!(
             "wallet-key file decoded to {} bytes, expected 32",
@@ -1219,7 +1340,10 @@ async fn wallet_send(
     let private_key = body["privateKey"].as_str().unwrap_or("").to_string();
 
     if from.is_empty() || to.is_empty() || amount.is_empty() || private_key.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "from, to, amount, privateKey required");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "from, to, amount, privateKey required",
+        );
     }
 
     // Headless daemon uses its own local geth when available
@@ -1228,7 +1352,9 @@ async fn wallet_send(
     // list — no second endpoint to fall back to from the daemon's
     // perspective.
     let endpoints = [chiral_network::geth::effective_rpc_endpoint()];
-    match chiral_network::wallet::send_transaction(&endpoints, &from, &to, &amount, &private_key).await {
+    match chiral_network::wallet::send_transaction(&endpoints, &from, &to, &amount, &private_key)
+        .await
+    {
         Ok(result) => Json(json!(result)).into_response(),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
@@ -1266,9 +1392,7 @@ async fn wallet_history(
     }
 }
 
-async fn wallet_faucet(
-    Json(body): Json<serde_json::Value>,
-) -> Response {
+async fn wallet_faucet(Json(body): Json<serde_json::Value>) -> Response {
     let address = body["address"].as_str().unwrap_or("").to_string();
     if address.is_empty() {
         return json_error(StatusCode::BAD_REQUEST, "address required");
@@ -1284,6 +1408,97 @@ async fn wallet_chain_id() -> Response {
 }
 
 // ---- File search endpoint ----
+
+fn parse_headless_seeder_record(
+    peer_id: &str,
+    key: &str,
+    json_str: &str,
+) -> Result<serde_json::Value, serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(json_str).map_err(|e| {
+        json!({
+            "type": "malformedSeederRecord",
+            "peerId": peer_id,
+            "key": key,
+            "error": format!("Malformed seeder record JSON: {}", e),
+        })
+    })
+}
+
+fn append_file_search_warnings(response: &mut serde_json::Value, warnings: Vec<serde_json::Value>) {
+    if !warnings.is_empty() {
+        response["warnings"] = serde_json::Value::Array(warnings);
+    }
+}
+
+#[cfg(test)]
+mod file_search_seeder_tests {
+    use super::*;
+
+    #[test]
+    fn parse_headless_seeder_record_accepts_valid_json() {
+        let entry = parse_headless_seeder_record(
+            "peer-a",
+            "chiral_seeder_hash_peer-a",
+            r#"{"peerId":"peer-a","multiaddrs":["/ip4/127.0.0.1/tcp/1"]}"#,
+        )
+        .expect("valid seeder JSON should parse");
+
+        assert_eq!(entry["peerId"], "peer-a");
+        assert_eq!(entry["multiaddrs"][0], "/ip4/127.0.0.1/tcp/1");
+    }
+
+    #[test]
+    fn parse_headless_seeder_record_returns_warning_for_malformed_json() {
+        let warning =
+            parse_headless_seeder_record("peer-a", "chiral_seeder_hash_peer-a", "{not json")
+                .expect_err("malformed seeder JSON should return a warning");
+
+        assert_eq!(warning["type"], "malformedSeederRecord");
+        assert_eq!(warning["peerId"], "peer-a");
+        assert_eq!(warning["key"], "chiral_seeder_hash_peer-a");
+        assert!(warning["error"]
+            .as_str()
+            .expect("warning should include an error")
+            .contains("Malformed seeder record JSON"));
+    }
+
+    #[test]
+    fn mixed_headless_seeder_records_preserve_valid_entries_and_warn() {
+        let records = [
+            (
+                "peer-a",
+                "chiral_seeder_hash_peer-a",
+                r#"{"peerId":"peer-a"}"#,
+            ),
+            ("peer-b", "chiral_seeder_hash_peer-b", "{not json"),
+        ];
+        let mut seeders = Vec::new();
+        let mut warnings = Vec::new();
+
+        for (peer_id, key, json_str) in records {
+            match parse_headless_seeder_record(peer_id, key, json_str) {
+                Ok(entry) => seeders.push(entry),
+                Err(warning) => warnings.push(warning),
+            }
+        }
+
+        assert_eq!(seeders.len(), 1);
+        assert_eq!(seeders[0]["peerId"], "peer-a");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["peerId"], "peer-b");
+
+        let mut response = json!({
+            "found": true,
+            "metadata": null,
+            "providers": ["peer-a", "peer-b"],
+            "seeders": seeders,
+        });
+        append_file_search_warnings(&mut response, warnings);
+
+        assert_eq!(response["warnings"][0]["type"], "malformedSeederRecord");
+        assert_eq!(response["warnings"][0]["peerId"], "peer-b");
+    }
+}
 
 async fn file_search(
     State(state): State<Arc<HeadlessRuntimeState>>,
@@ -1322,23 +1537,36 @@ async fn file_search(
     };
     // Per-seeder records: parallel fetch with a short shared deadline so
     // one slow provider doesn't extend the search budget.
-    let fetches = providers.iter().map(|peer_id| {
+    let fetches = providers.iter().cloned().map(|peer_id| {
         let key = format!("chiral_seeder_{}_{}", file_hash, peer_id);
         let dht = dht.clone();
         async move {
-            tokio::time::timeout(
+            let result = tokio::time::timeout(
                 std::time::Duration::from_millis(3000),
-                dht.get_dht_value(key),
+                dht.get_dht_value(key.clone()),
             )
-            .await
+            .await;
+            (peer_id, key, result)
         }
     });
     let fetched = futures::future::join_all(fetches).await;
     let mut seeders: Vec<serde_json::Value> = Vec::new();
-    for r in fetched {
+    let mut seeder_warnings: Vec<serde_json::Value> = Vec::new();
+    for (peer_id, key, r) in fetched {
         if let Ok(Ok(Some(json_str))) = r {
-            if let Ok(entry) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                seeders.push(entry);
+            match parse_headless_seeder_record(&peer_id, &key, &json_str) {
+                Ok(entry) => seeders.push(entry),
+                Err(warning) => {
+                    let error = warning
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Malformed seeder record JSON");
+                    eprintln!(
+                        "[DAEMON] malformed seeder record for file {} peer {} key {}: {}",
+                        file_hash, peer_id, key, error
+                    );
+                    seeder_warnings.push(warning);
+                }
             }
         }
     }
@@ -1346,22 +1574,30 @@ async fn file_search(
         Ok(Some(json_str)) => {
             let metadata = serde_json::from_str::<serde_json::Value>(&json_str)
                 .unwrap_or_else(|_| json!({"raw": json_str}));
-            Json(json!({
+            let mut response = json!({
                 "found": true,
                 "metadata": metadata,
                 "providers": providers,
                 "seeders": seeders,
-            }))
-            .into_response()
+            });
+            append_file_search_warnings(&mut response, seeder_warnings);
+            Json(response).into_response()
         }
-        Ok(None) if !seeders.is_empty() => Json(json!({
-            "found": true,
-            "metadata": null,
-            "providers": providers,
-            "seeders": seeders,
-        }))
-        .into_response(),
-        Ok(None) => Json(json!({"found": false, "providers": providers})).into_response(),
+        Ok(None) if !seeders.is_empty() => {
+            let mut response = json!({
+                "found": true,
+                "metadata": null,
+                "providers": providers,
+                "seeders": seeders,
+            });
+            append_file_search_warnings(&mut response, seeder_warnings);
+            Json(response).into_response()
+        }
+        Ok(None) => {
+            let mut response = json!({"found": false, "providers": providers});
+            append_file_search_warnings(&mut response, seeder_warnings);
+            Json(response).into_response()
+        }
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &e),
     }
 }
@@ -1397,16 +1633,15 @@ async fn folder_search(
     // with a forged priceWei / walletAddress and divert payment. Drop
     // unsigned / signature-invalid manifests instead of returning them
     // — buyers MUST be able to trust the headless response shape.
-    let manifest_typed: chiral_network::FolderManifest =
-        match serde_json::from_str(&blob) {
-            Ok(m) => m,
-            Err(e) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Invalid folder manifest: {}", e),
-                )
-            }
-        };
+    let manifest_typed: chiral_network::FolderManifest = match serde_json::from_str(&blob) {
+        Ok(m) => m,
+        Err(e) => {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Invalid folder manifest: {}", e),
+            )
+        }
+    };
     if !manifest_typed.verify() {
         let reason = if manifest_typed.publisher_signature.is_empty() {
             "unsigned"
@@ -1493,9 +1728,7 @@ async fn hosting_publish_ad(
     }
 }
 
-async fn hosting_get_registry(
-    State(state): State<Arc<HeadlessRuntimeState>>,
-) -> Response {
+async fn hosting_get_registry(State(state): State<Arc<HeadlessRuntimeState>>) -> Response {
     let dht = match state.dht_service().await {
         Some(d) => d,
         None => return json_error(StatusCode::SERVICE_UNAVAILABLE, "DHT not running"),
@@ -1510,9 +1743,7 @@ async fn hosting_get_registry(
     }
 }
 
-async fn bootstrap_health(
-    State(_state): State<Arc<HeadlessRuntimeState>>,
-) -> Response {
+async fn bootstrap_health(State(_state): State<Arc<HeadlessRuntimeState>>) -> Response {
     // Bootstrap discovery was removed with the geth rewrite. Report the
     // active network's configured enode (if any) as a single static entry.
     let cfg = chiral_network::network::active();
@@ -1527,9 +1758,9 @@ async fn bootstrap_health(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0),
-    })).into_response()
+    }))
+    .into_response()
 }
-
 
 fn headless_routes(state: Arc<HeadlessRuntimeState>) -> Router {
     Router::new()
@@ -1806,7 +2037,6 @@ async fn main() {
                         Err(e) => eprintln!("[AUTO] Wallet advertisement publish failed: {}", e),
                     }
                 }
-
             }
 
             // Start Geth
@@ -1934,6 +2164,28 @@ mod tests {
         }
     }
 
+    fn wallet_address_from_private_key(private_key: &str) -> String {
+        let probe = b"daemon-register-shared-file";
+        let signature = chiral_network::wallet::sign_message(private_key, probe).unwrap();
+        chiral_network::wallet::recover_signer(probe, &signature).unwrap()
+    }
+
+    fn register_shared_file_request(
+        protocol: Option<String>,
+        private_key: &str,
+    ) -> RegisterSharedFileRequest {
+        RegisterSharedFileRequest {
+            file_hash: "abcdef0123456789".to_string(),
+            file_path: "/tmp/example.txt".to_string(),
+            file_name: "example.txt".to_string(),
+            file_size: 123,
+            protocol,
+            price_wei: "1000".to_string(),
+            wallet_address: wallet_address_from_private_key(private_key),
+            private_key: private_key.to_string(),
+        }
+    }
+
     #[test]
     fn headless_host_registry_missing_value_starts_empty() {
         let registry =
@@ -1987,6 +2239,52 @@ mod tests {
         assert_eq!(updated.updated_at, 30);
     }
 
+    #[test]
+    fn register_shared_file_protocol_defaults_to_webrtc() {
+        assert_eq!(register_shared_file_protocol(None), "WebRTC");
+        assert_eq!(register_shared_file_protocol(Some("   ")), "WebRTC");
+        assert_eq!(register_shared_file_protocol(Some("iroh")), "iroh");
+    }
+
+    #[test]
+    fn register_shared_file_unpublished_payload_reports_false() {
+        let payload = register_shared_file_unpublished_payload("metadata publish failed");
+
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["dhtPublished"], false);
+        assert_eq!(payload["warning"], "metadata publish failed");
+    }
+
+    #[test]
+    fn register_shared_file_metadata_preserves_protocol() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let req = register_shared_file_request(Some("iroh".to_string()), private_key);
+        let protocol = register_shared_file_protocol(req.protocol.as_deref());
+
+        let metadata_json = signed_file_metadata_json_for_register(&req, &protocol)
+            .expect("valid signed metadata should serialize");
+        let metadata: serde_json::Value = serde_json::from_str(&metadata_json).unwrap();
+
+        assert_eq!(metadata["protocol"], "iroh");
+        assert_eq!(metadata["walletAddress"], req.wallet_address);
+        assert!(metadata["publisherSignature"]
+            .as_str()
+            .map(|signature| !signature.is_empty())
+            .unwrap_or(false));
+    }
+
+    #[test]
+    fn register_shared_file_metadata_rejects_signing_failure() {
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let mut req = register_shared_file_request(Some("WebRTC".to_string()), private_key);
+        req.private_key = "not-a-private-key".to_string();
+
+        let err = signed_file_metadata_json_for_register(&req, "WebRTC")
+            .expect_err("invalid private key should not produce metadata");
+
+        assert_eq!(err, "Failed to sign file metadata");
+    }
+
     #[cfg(unix)]
     #[test]
     fn daemon_sigterm_handler_accepts_registered_handler() {
@@ -2007,5 +2305,60 @@ mod tests {
 
         assert!(err.contains("SIGTERM"));
         assert!(err.contains("sigterm unavailable"));
+    }
+
+    #[test]
+    fn geth_log_lines_validation_defaults_absent_to_100() {
+        assert_eq!(
+            validate_geth_log_lines(None).unwrap(),
+            DEFAULT_GETH_LOG_LINES
+        );
+    }
+
+    #[test]
+    fn geth_log_lines_validation_accepts_valid_count() {
+        assert_eq!(validate_geth_log_lines(Some(25)).unwrap(), 25);
+    }
+
+    #[test]
+    fn geth_log_lines_validation_rejects_zero() {
+        let err = validate_geth_log_lines(Some(0)).expect_err("zero lines should be rejected");
+
+        assert!(err.contains("at least 1"));
+    }
+
+    #[test]
+    fn geth_log_lines_validation_rejects_over_limit_count() {
+        let err = validate_geth_log_lines(Some(MAX_GETH_LOG_LINES + 1))
+            .expect_err("over-limit lines should be rejected");
+
+        assert!(err.contains(&MAX_GETH_LOG_LINES.to_string()));
+    }
+
+    #[test]
+    fn tail_log_lines_returns_requested_tail() {
+        assert_eq!(tail_log_lines("one\ntwo\nthree\nfour", 2), "three\nfour");
+    }
+
+    #[test]
+    fn tail_log_lines_returns_all_lines_when_under_limit() {
+        assert_eq!(tail_log_lines("one\ntwo", 100), "one\ntwo");
+    }
+
+    #[tokio::test]
+    async fn geth_logs_rejects_zero_lines_before_file_read() {
+        let response = geth_logs(Query(LogsQuery { lines: Some(0) })).await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn geth_logs_rejects_over_limit_lines_before_file_read() {
+        let response = geth_logs(Query(LogsQuery {
+            lines: Some(MAX_GETH_LOG_LINES + 1),
+        }))
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
