@@ -61,6 +61,31 @@
     }
   }
 
+  function downloadBackupKey(backupKey: string, walletAddress: string) {
+    const contents = [
+      'Chiral encrypted wallet backup key',
+      '',
+      `Wallet: ${walletAddress}`,
+      `Backup key: ${backupKey}`,
+      '',
+      'Keep this key separate from the encrypted backup email.',
+    ].join('\n');
+    const blob = new Blob([contents], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'chiral-wallet-backup-key.txt';
+    try {
+      document.body.appendChild(a);
+      a.click();
+    } finally {
+      if (a.parentNode === document.body) {
+        document.body.removeChild(a);
+      }
+      URL.revokeObjectURL(url);
+    }
+  }
+
   function proceedToVerification() {
     const indices = new Set<number>();
     while (indices.size < 2) {
@@ -126,16 +151,17 @@
 
     sendingEmail = true;
     try {
-      await walletBackupService.sendBackupEmail({
+      const { backupKey } = await walletBackupService.sendBackupEmail({
         email,
         recoveryPhrase: mnemonic,
         walletAddress: pendingWallet.address,
         privateKey: pendingWallet.privateKey,
       });
 
+      downloadBackupKey(backupKey, pendingWallet.address);
       finalizeWallet();
       emailInput = '';
-      toasts.show('Backup email sent. Wallet created successfully.', 'success');
+      toasts.show('Encrypted backup email sent. Wallet created successfully.', 'success');
     } catch (error) {
       emailError = walletBackupService.formatError(error);
     } finally {
@@ -275,12 +301,12 @@
       </div>
 
       <p class="text-gray-600 dark:text-gray-400 mb-3">
-        Enter your email to receive a one-time copy of your recovery phrase and wallet credentials.
+        Enter your email to receive an encrypted one-time wallet backup.
       </p>
 
       <div class="bg-blue-50 dark:bg-blue-900/30 border-l-4 border-blue-400 dark:border-blue-600 p-4 mb-6">
         <p class="text-sm text-blue-900 dark:text-blue-200">
-          This email address is only used to send this backup now. Chiral does not store it.
+          This email address is only used to send this backup now. Your backup key is saved locally.
         </p>
       </div>
 
@@ -334,4 +360,3 @@
     </div>
   {/if}
 </div>
-
