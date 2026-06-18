@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { driveApi, setDriveOwner, type DriveItem as ApiDriveItem, type ShareLink } from '$lib/services/driveApiService';
+import { getDriveRelayBaseUrlAsync } from '$lib/services/networkEndpointConfig';
 import { walletAccount } from '$lib/stores';
 
 export interface DriveItem {
@@ -374,9 +375,10 @@ function createDriveStore() {
             throw new Error('wallet locked');
           }
           const { invoke } = await import('@tauri-apps/api/core');
+          const relayUrl = await getDriveRelayBaseUrlAsync();
           await invoke('publish_drive_share', {
             shareToken: share.id,
-            relayUrl: 'http://130.245.173.73:8080',
+            relayUrl,
             ownerWallet: owner,
             privateKey,
           });
@@ -418,9 +420,10 @@ function createDriveStore() {
             throw new Error('wallet locked');
           }
           const { invoke } = await import('@tauri-apps/api/core');
+          const relayUrl = await getDriveRelayBaseUrlAsync();
           await invoke('unpublish_drive_share', {
             shareToken: token,
-            relayUrl: 'http://130.245.173.73:8080',
+            relayUrl,
             ownerWallet: owner,
             privateKey,
           });
