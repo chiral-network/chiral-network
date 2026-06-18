@@ -43,24 +43,58 @@ fn is_allowed_method(method: &str) -> bool {
         .any(|p| method.starts_with(p))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MethodCheckError {
+    MalformedMethod,
+    Disallowed(String),
+}
+
+impl MethodCheckError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::MalformedMethod => StatusCode::BAD_REQUEST,
+            Self::Disallowed(_) => StatusCode::FORBIDDEN,
+        }
+    }
+
+    fn message(&self) -> String {
+        match self {
+            Self::MalformedMethod => {
+                "JSON-RPC request method must be a non-empty string".to_string()
+            }
+            Self::Disallowed(method) => format!(
+                "JSON-RPC method `{}` not exposed via this proxy. Allowed namespaces: {}",
+                method,
+                ALLOWED_METHOD_PREFIXES.join(", ")
+            ),
+        }
+    }
+
+    fn into_response(self) -> Response {
+        (self.status(), self.message()).into_response()
+    }
+}
+
 /// Inspect the JSON-RPC request body and return Err with the offending
-/// method name on the first method outside the allowlist. Handles both
-/// single requests and batch arrays. Empty / unparseable bodies are
+/// malformed method envelope or method outside the allowlist. Handles
+/// both single requests and batch arrays. Unparseable bodies are
 /// permitted to fall through (geth itself will return a parse error).
-fn check_methods(body: &[u8]) -> Result<(), String> {
+fn check_methods(body: &[u8]) -> Result<(), MethodCheckError> {
     let value: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => return Ok(()), // let geth surface the parse error to the client
     };
-    let check_one = |req: &serde_json::Value| -> Result<(), String> {
+    let check_one = |req: &serde_json::Value| -> Result<(), MethodCheckError> {
         let m = req
             .get("method")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if m.is_empty() || is_allowed_method(m) {
+            .ok_or(MethodCheckError::MalformedMethod)?;
+        if m.is_empty() {
+            Err(MethodCheckError::MalformedMethod)
+        } else if is_allowed_method(m) {
             Ok(())
         } else {
-            Err(m.to_string())
+            Err(MethodCheckError::Disallowed(m.to_string()))
         }
     };
     if let Some(arr) = value.as_array() {
@@ -80,16 +114,8 @@ fn check_methods(body: &[u8]) -> Result<(), String> {
 /// reachable path to the chain — the allowlist is the only thing
 /// keeping `miner_setEtherbase` from being a public RPC.
 async fn proxy_chain_rpc(body: Bytes) -> Response {
-    if let Err(method) = check_methods(&body) {
-        return (
-            StatusCode::FORBIDDEN,
-            format!(
-                "JSON-RPC method `{}` not exposed via this proxy. Allowed namespaces: {}",
-                method,
-                ALLOWED_METHOD_PREFIXES.join(", ")
-            ),
-        )
-            .into_response();
+    if let Err(error) = check_methods(&body) {
+        return error.into_response();
     }
 
     let rpc = crate::geth::rpc_endpoint();
@@ -173,13 +199,43 @@ mod tests {
     #[test]
     fn check_methods_rejects_dangerous_single() {
         let body = br#"{"jsonrpc":"2.0","method":"miner_setEtherbase","params":["0x00"],"id":1}"#;
-        assert_eq!(check_methods(body).unwrap_err(), "miner_setEtherbase");
+        assert_eq!(
+            check_methods(body).unwrap_err(),
+            MethodCheckError::Disallowed("miner_setEtherbase".to_string())
+        );
     }
 
     #[test]
     fn check_methods_accepts_safe_single() {
         let body = br#"{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}"#;
         assert!(check_methods(body).is_ok());
+    }
+
+    #[test]
+    fn check_methods_rejects_missing_single_method() {
+        let body = br#"{"jsonrpc":"2.0","params":[],"id":1}"#;
+        assert_eq!(
+            check_methods(body).unwrap_err(),
+            MethodCheckError::MalformedMethod
+        );
+    }
+
+    #[test]
+    fn check_methods_rejects_non_string_single_method() {
+        let body = br#"{"jsonrpc":"2.0","method":123,"params":[],"id":1}"#;
+        assert_eq!(
+            check_methods(body).unwrap_err(),
+            MethodCheckError::MalformedMethod
+        );
+    }
+
+    #[test]
+    fn check_methods_rejects_empty_single_method() {
+        let body = br#"{"jsonrpc":"2.0","method":"","params":[],"id":1}"#;
+        assert_eq!(
+            check_methods(body).unwrap_err(),
+            MethodCheckError::MalformedMethod
+        );
     }
 
     #[test]
@@ -191,7 +247,10 @@ mod tests {
             {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1},
             {"jsonrpc":"2.0","method":"miner_setEtherbase","params":["0x00"],"id":2}
         ]"#;
-        assert_eq!(check_methods(body).unwrap_err(), "miner_setEtherbase");
+        assert_eq!(
+            check_methods(body).unwrap_err(),
+            MethodCheckError::Disallowed("miner_setEtherbase".to_string())
+        );
     }
 
     #[test]
@@ -201,6 +260,30 @@ mod tests {
             {"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":2}
         ]"#;
         assert!(check_methods(body).is_ok());
+    }
+
+    #[test]
+    fn check_methods_rejects_malformed_method_in_batch() {
+        let body = br#"[
+            {"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1},
+            {"jsonrpc":"2.0","params":[],"id":2}
+        ]"#;
+        assert_eq!(
+            check_methods(body).unwrap_err(),
+            MethodCheckError::MalformedMethod
+        );
+    }
+
+    #[test]
+    fn method_check_errors_map_to_controlled_status_codes() {
+        assert_eq!(
+            MethodCheckError::MalformedMethod.status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            MethodCheckError::Disallowed("miner_start".to_string()).status(),
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[test]
