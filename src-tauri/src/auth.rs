@@ -49,6 +49,30 @@ fn is_valid_wallet(s: &str) -> bool {
     s.len() == 42 && s.starts_with("0x") && s[2..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
+fn unix_timestamp_secs_at(now: std::time::SystemTime) -> Result<i64, String> {
+    let secs = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| {
+            "Server clock is before UNIX_EPOCH; refusing owner-proof freshness check".to_string()
+        })?
+        .as_secs();
+    i64::try_from(secs).map_err(|_| "Server clock timestamp exceeds i64 range".to_string())
+}
+
+fn unix_timestamp_secs() -> Result<i64, String> {
+    unix_timestamp_secs_at(std::time::SystemTime::now())
+}
+
+fn verify_owner_proof_freshness(now: i64, ts: i64) -> Result<(), String> {
+    if now.abs_diff(ts) > PROOF_VALIDITY_SECS as u64 {
+        return Err(format!(
+            "X-Owner-Sig timestamp outside ±{}s validity window (server={}, sig={})",
+            PROOF_VALIDITY_SECS, now, ts
+        ));
+    }
+    Ok(())
+}
+
 /// Verify the `X-Owner` + `X-Owner-Sig` headers against the given
 /// method and `path_and_query`. On success returns the verified
 /// lowercase wallet address; on failure returns a human-readable
@@ -83,16 +107,7 @@ pub fn verify_owner_proof(
     let ts: i64 = ts_str
         .parse()
         .map_err(|_| "X-Owner-Sig timestamp is not an integer".to_string())?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    if (now - ts).abs() > PROOF_VALIDITY_SECS {
-        return Err(format!(
-            "X-Owner-Sig timestamp outside ±{}s validity window (server={}, sig={})",
-            PROOF_VALIDITY_SECS, now, ts
-        ));
-    }
+    verify_owner_proof_freshness(unix_timestamp_secs()?, ts)?;
     let payload = owner_proof_payload(&owner, ts, method.as_str(), path_and_query);
     if !crate::wallet::verify_signature(&payload, sig, &owner) {
         return Err("X-Owner-Sig did not verify against X-Owner wallet".to_string());
@@ -208,5 +223,39 @@ mod tests {
         // Real-shape wallet accepted regardless of case.
         assert!(is_valid_wallet(&format!("0x{}", "abcdef0123".repeat(4))));
         assert!(is_valid_wallet(&format!("0x{}", "ABCDEF0123".repeat(4))));
+    }
+
+    #[test]
+    fn owner_proof_clock_accepts_post_epoch_time() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(42);
+
+        assert_eq!(unix_timestamp_secs_at(now).unwrap(), 42);
+    }
+
+    #[test]
+    fn owner_proof_clock_rejects_pre_epoch_time() {
+        let now = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let err =
+            unix_timestamp_secs_at(now).expect_err("pre-epoch server clock should be rejected");
+
+        assert!(err.contains("Server clock is before UNIX_EPOCH"));
+        assert!(err.contains("owner-proof freshness"));
+    }
+
+    #[test]
+    fn owner_proof_freshness_accepts_valid_window() {
+        assert!(verify_owner_proof_freshness(1_000, 1_000).is_ok());
+        assert!(verify_owner_proof_freshness(1_000, 700).is_ok());
+        assert!(verify_owner_proof_freshness(1_000, 1_300).is_ok());
+    }
+
+    #[test]
+    fn owner_proof_freshness_rejects_expired_timestamp() {
+        let err = verify_owner_proof_freshness(1_000, 699)
+            .expect_err("timestamp older than validity window should fail");
+
+        assert!(err.contains("outside ±300s validity window"));
+        assert!(err.contains("server=1000"));
+        assert!(err.contains("sig=699"));
     }
 }
