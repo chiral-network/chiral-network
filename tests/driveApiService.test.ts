@@ -7,10 +7,15 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+
 describe('driveApiService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    mockFetch.mockReset();
+    delete (window as any).__TAURI_INTERNALS__;
   });
 
   describe('convertItem (snake_case → camelCase)', () => {
@@ -261,6 +266,30 @@ describe('driveApiService', () => {
       const url = driveApi.getShareUrl('token-xyz');
       expect(url).toContain('token-xyz');
       expect(url).toContain('/drive/');
+    });
+
+    it('getShareUrl should use configured Drive relay base', async () => {
+      const { setNetworkEndpointConfig } = await import('$lib/services/networkEndpointConfig');
+      setNetworkEndpointConfig({ driveRelayBaseUrl: 'https://drive-relay.example/' });
+      const { driveApi } = await import('$lib/services/driveApiService');
+
+      expect(driveApi.getShareUrl('token-xyz')).toBe('https://drive-relay.example/drive/token-xyz');
+    });
+
+    it('web requests should use configured Drive relay base', async () => {
+      const { setNetworkEndpointConfig } = await import('$lib/services/networkEndpointConfig');
+      setNetworkEndpointConfig({ driveRelayBaseUrl: 'https://drive-api.example/' });
+      const { driveApi } = await import('$lib/services/driveApiService');
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => [],
+      });
+
+      await driveApi.listItems(null);
+
+      expect(mockFetch.mock.calls[0][0]).toBe('https://drive-api.example/api/drive/items');
     });
 
     it('getDownloadUrl should URL-encode special characters', async () => {
