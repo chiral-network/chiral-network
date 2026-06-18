@@ -891,7 +891,18 @@ async fn handle_tunnel_ws(socket: WebSocket, key: String, tunnel_reg: Arc<Tunnel
     // Task: read responses from the WebSocket client
     let read_key = key.clone();
     let read_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_rx.next().await {
+        while let Some(msg) = ws_rx.next().await {
+            let msg = match msg {
+                Ok(msg) => msg,
+                Err(err) => {
+                    let message = {
+                        let mut map = pending_for_read.write().await;
+                        relay_tunnel_read_error_result(&mut map, &read_key, err.to_string())
+                    };
+                    eprintln!("{}", message);
+                    break;
+                }
+            };
             match msg {
                 Message::Text(text) => {
                     let parsed = parse_tunnel_response_frame(&text);
@@ -1105,6 +1116,41 @@ fn tunnel_response_to_axum(resp: TunnelResponse) -> Response {
     }
 
     (status, headers, body_bytes).into_response()
+}
+
+fn tunnel_read_error_response(id: String, error: &str) -> TunnelResponse {
+    use base64::Engine;
+
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        "text/plain; charset=utf-8".to_string(),
+    );
+    TunnelResponse {
+        id,
+        status: StatusCode::BAD_GATEWAY.as_u16(),
+        headers,
+        body: base64::engine::general_purpose::STANDARD
+            .encode(format!("Tunnel owner WebSocket read failed: {error}")),
+    }
+}
+
+fn relay_tunnel_read_error_result(
+    pending: &mut HashMap<String, TunnelResponder>,
+    key: &str,
+    read_error: String,
+) -> String {
+    let message = format!(
+        "[TUNNEL] Owner WebSocket read error for key={}: {}",
+        key, read_error
+    );
+    let pending_ids: Vec<String> = pending.keys().cloned().collect();
+    for id in pending_ids {
+        if let Some(tx) = pending.remove(&id) {
+            let _ = tx.send(tunnel_read_error_response(id, &message));
+        }
+    }
+    message
 }
 
 /// Forward a GET request to the target URL directly and stream the response back.
@@ -2093,6 +2139,66 @@ mod tests {
         assert_eq!(found.token, "abc123");
         assert_eq!(found.origin_url, "http://10.0.0.1:9419");
         assert_eq!(found.owner_wallet, "0xWALLET");
+    }
+
+    #[test]
+    fn relay_tunnel_read_valid_response_routes_pending_request() {
+        let (mut pending, mut rx) = pending_tunnel_response("req-read-ok");
+        let frame = serde_json::to_string(&TunnelResponse {
+            id: "req-read-ok".to_string(),
+            status: 200,
+            headers: HashMap::new(),
+            body: "".to_string(),
+        })
+        .unwrap();
+
+        let outcome = route_tunnel_response_frame(&mut pending, &frame);
+
+        assert_eq!(
+            outcome,
+            TunnelResponseFrameOutcome::Delivered {
+                id: "req-read-ok".to_string()
+            }
+        );
+        assert!(pending.is_empty());
+        let resp = rx.try_recv().unwrap();
+        assert_eq!(resp.id, "req-read-ok");
+        assert_eq!(resp.status, 200);
+    }
+
+    #[test]
+    fn relay_tunnel_read_error_result_fails_pending_requests() {
+        use base64::Engine;
+
+        let (mut pending, mut rx_one) = pending_tunnel_response("req-read-1");
+        let (tx_two, mut rx_two) = tokio::sync::oneshot::channel();
+        pending.insert("req-read-2".to_string(), tx_two);
+
+        let message = relay_tunnel_read_error_result(
+            &mut pending,
+            "share:token",
+            "protocol error".to_string(),
+        );
+
+        assert!(message.contains("key=share:token"));
+        assert!(message.contains("protocol error"));
+        assert!(pending.is_empty());
+
+        for (mut rx, id) in [(rx_one, "req-read-1"), (rx_two, "req-read-2")] {
+            let resp = rx.try_recv().unwrap();
+            assert_eq!(resp.id, id);
+            assert_eq!(resp.status, StatusCode::BAD_GATEWAY.as_u16());
+            assert_eq!(
+                resp.headers.get("content-type").map(String::as_str),
+                Some("text/plain; charset=utf-8")
+            );
+            let body = base64::engine::general_purpose::STANDARD
+                .decode(resp.body)
+                .unwrap();
+            let body = String::from_utf8(body).unwrap();
+            assert!(body.contains("Tunnel owner WebSocket read failed"));
+            assert!(body.contains("protocol error"));
+        }
     }
 
     #[tokio::test]
