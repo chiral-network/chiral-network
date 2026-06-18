@@ -1218,9 +1218,54 @@ fn keccak256(data: &[u8]) -> [u8; 32] {
     output
 }
 
-fn parse_hex_u64(hex: &str) -> u64 {
-    let hex = hex.trim_start_matches("0x");
-    u64::from_str_radix(hex, 16).unwrap_or(0)
+fn rpc_hex_digits<'a>(hex: &'a str, field: &str) -> Result<&'a str, String> {
+    let value = hex.trim();
+    let digits = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("Invalid {} hex value: {}", field, hex));
+    }
+    Ok(digits)
+}
+
+fn parse_hex_u64(hex: &str, field: &str) -> Result<u64, String> {
+    let digits = rpc_hex_digits(hex, field)?;
+    u64::from_str_radix(digits, 16)
+        .map_err(|e| format!("Invalid {} hex value '{}': {}", field, hex, e))
+}
+
+fn parse_hex_u128(hex: &str, field: &str) -> Result<u128, String> {
+    let digits = rpc_hex_digits(hex, field)?;
+    u128::from_str_radix(digits, 16)
+        .map_err(|e| format!("Invalid {} hex value '{}': {}", field, hex, e))
+}
+
+fn parse_history_block_fields(result: &Value) -> Result<(u64, u64), String> {
+    let block_timestamp_hex = result
+        .get("timestamp")
+        .and_then(|t| t.as_str())
+        .unwrap_or("0x0");
+    let block_number_hex = result
+        .get("number")
+        .and_then(|n| n.as_str())
+        .unwrap_or("0x0");
+
+    Ok((
+        parse_hex_u64(block_number_hex, "block number")?,
+        parse_hex_u64(block_timestamp_hex, "block timestamp")?,
+    ))
+}
+
+fn parse_history_tx_value_and_gas(tx: &Value) -> Result<(u128, u64), String> {
+    let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
+    let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
+
+    Ok((
+        parse_hex_u128(value_hex, "transaction value")?,
+        parse_hex_u64(gas_hex, "transaction gas")?,
+    ))
 }
 
 fn parse_chi_to_wei(amount: &str) -> Result<u128, String> {
@@ -1404,7 +1449,10 @@ async fn send_transaction(
     if let Some(error) = nonce_json.get("error") {
         return Err(format!("RPC error getting nonce: {}", error));
     }
-    let nonce = parse_hex_u64(nonce_json["result"].as_str().unwrap_or("0x0"));
+    let nonce = parse_hex_u64(
+        nonce_json["result"].as_str().unwrap_or("0x0"),
+        "transaction nonce",
+    )?;
 
     let balance = get_wallet_balance(from_address).await?;
     let balance_wei = balance
@@ -1429,7 +1477,10 @@ async fn send_transaction(
         .await
         .map_err(|e| format!("Failed to parse gas price response: {}", e))?;
 
-    let gas_price = parse_hex_u64(gas_price_json["result"].as_str().unwrap_or("0x0"));
+    let gas_price = parse_hex_u64(
+        gas_price_json["result"].as_str().unwrap_or("0x0"),
+        "gas price",
+    )?;
     let gas_price = if gas_price == 0 {
         1_000_000_000
     } else {
@@ -1569,8 +1620,7 @@ async fn get_transaction_history(
         .map_err(|e| format!("Failed to parse block response: {}", e))?;
 
     let latest_block_hex = block_json["result"].as_str().unwrap_or("0x0");
-    let latest_block =
-        u64::from_str_radix(latest_block_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+    let latest_block = parse_hex_u64(latest_block_hex, "eth_blockNumber result")?;
 
     const BATCH_SIZE: u64 = 100;
     let first_block_to_scan = latest_block.saturating_sub(max_blocks.saturating_sub(1));
@@ -1612,17 +1662,7 @@ async fn get_transaction_history(
             let Some(txs) = result.get("transactions").and_then(|t| t.as_array()) else {
                 continue;
             };
-            let block_timestamp = result
-                .get("timestamp")
-                .and_then(|t| t.as_str())
-                .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0))
-                .unwrap_or(0);
-            let block_number_hex = result
-                .get("number")
-                .and_then(|n| n.as_str())
-                .unwrap_or("0x0");
-            let block_num =
-                u64::from_str_radix(block_number_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+            let (block_num, block_timestamp) = parse_history_block_fields(result)?;
 
             for tx in txs {
                 let from = tx
@@ -1640,14 +1680,8 @@ async fn get_transaction_history(
                     continue;
                 }
 
-                let value_hex = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0x0");
-                let value_wei =
-                    u128::from_str_radix(value_hex.trim_start_matches("0x"), 16).unwrap_or(0);
+                let (value_wei, gas_used) = parse_history_tx_value_and_gas(tx)?;
                 let value_chi = value_wei as f64 / 1e18;
-
-                let gas_hex = tx.get("gas").and_then(|g| g.as_str()).unwrap_or("0x0");
-                let gas_used =
-                    u64::from_str_radix(gas_hex.trim_start_matches("0x"), 16).unwrap_or(0);
 
                 let hash = tx
                     .get("hash")
@@ -2074,6 +2108,70 @@ mod tests {
             chiral_network::validate_host_ad_wallet_address(Some(" 0xwallet ")).unwrap(),
             "0xwallet"
         );
+    }
+
+    #[test]
+    fn cli_rpc_hex_parsing_accepts_valid_zero_values() {
+        assert_eq!(parse_hex_u64("0x0", "eth_blockNumber result").unwrap(), 0);
+        assert_eq!(parse_hex_u64("0", "block number").unwrap(), 0);
+        assert_eq!(parse_hex_u128("0x0", "transaction value").unwrap(), 0);
+
+        let tx = serde_json::json!({
+            "value": "0x0",
+            "gas": "0x0",
+        });
+        assert_eq!(parse_history_tx_value_and_gas(&tx).unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn cli_rpc_hex_parsing_rejects_malformed_eth_block_number() {
+        let err = parse_hex_u64("0xnothex", "eth_blockNumber result")
+            .expect_err("malformed latest block hex should be rejected");
+
+        assert!(err.contains("eth_blockNumber result"));
+        assert!(err.contains("0xnothex"));
+    }
+
+    #[test]
+    fn cli_history_block_fields_reject_malformed_timestamp_and_number() {
+        let malformed_timestamp = serde_json::json!({
+            "timestamp": "0xzz",
+            "number": "0x1",
+        });
+        let err = parse_history_block_fields(&malformed_timestamp)
+            .expect_err("malformed block timestamp should be rejected");
+        assert!(err.contains("block timestamp"));
+        assert!(err.contains("0xzz"));
+
+        let malformed_number = serde_json::json!({
+            "timestamp": "0x0",
+            "number": "0xnope",
+        });
+        let err = parse_history_block_fields(&malformed_number)
+            .expect_err("malformed block number should be rejected");
+        assert!(err.contains("block number"));
+        assert!(err.contains("0xnope"));
+    }
+
+    #[test]
+    fn cli_history_tx_fields_reject_malformed_value_and_gas() {
+        let malformed_value = serde_json::json!({
+            "value": "0xwat",
+            "gas": "0x5208",
+        });
+        let err = parse_history_tx_value_and_gas(&malformed_value)
+            .expect_err("malformed value hex should be rejected");
+        assert!(err.contains("transaction value"));
+        assert!(err.contains("0xwat"));
+
+        let malformed_gas = serde_json::json!({
+            "value": "0x0",
+            "gas": "0xzz",
+        });
+        let err = parse_history_tx_value_and_gas(&malformed_gas)
+            .expect_err("malformed gas hex should be rejected");
+        assert!(err.contains("transaction gas"));
+        assert!(err.contains("0xzz"));
     }
 
     fn host_registry_entry(
