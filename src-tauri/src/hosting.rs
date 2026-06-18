@@ -130,36 +130,52 @@ fn malformed_sites_quarantine_path(path: &Path) -> Result<PathBuf, String> {
 /// Save all hosted sites to disk.
 pub fn save_sites(sites: &[HostedSite]) {
     let Some(path) = metadata_path() else { return };
-    save_sites_to_path(sites, &path);
+    if let Err(e) = save_sites_to_path(sites, &path) {
+        eprintln!(
+            "[Hosting] Failed to save hosted-site metadata {}: {}",
+            path.display(),
+            e
+        );
+    }
 }
 
-fn save_sites_to_path(sites: &[HostedSite], path: &Path) {
+fn save_sites_to_path(sites: &[HostedSite], path: &Path) -> Result<(), String> {
     match std::fs::read(path) {
         Ok(data) => {
             if serde_json::from_slice::<Vec<HostedSite>>(&data).is_err() {
-                eprintln!(
-                    "[Hosting] Refusing to overwrite malformed hosted-site metadata at {}; fix or remove it manually",
+                return Err(format!(
+                    "refusing to overwrite malformed hosted-site metadata at {}; fix or remove it manually",
                     path.display()
-                );
-                return;
+                ));
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) => {}
+        Err(_) if path.is_dir() => {}
         Err(e) => {
-            eprintln!(
-                "[Hosting] Refusing to overwrite unreadable hosted-site metadata at {}: {}; fix or remove it manually",
+            return Err(format!(
+                "refusing to overwrite unreadable hosted-site metadata at {}: {}; fix or remove it manually",
                 path.display(),
                 e
-            );
-            return;
+            ));
         }
     }
+    let json = serde_json::to_string_pretty(sites)
+        .map_err(|e| format!("serialize hosted-site metadata: {}", e))?;
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "create hosted-site metadata directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(sites) {
-        let _ = std::fs::write(path, json);
-    }
+    std::fs::write(path, json)
+        .map_err(|e| format!("write hosted-site metadata {}: {}", path.display(), e))
 }
 
 // ---------------------------------------------------------------------------
@@ -380,8 +396,10 @@ mod tests {
         let original = b"{not valid json";
         fs::write(&path, original).unwrap();
 
-        save_sites_to_path(&[hosted_site_fixture()], &path);
+        let err = save_sites_to_path(&[hosted_site_fixture()], &path)
+            .expect_err("malformed metadata should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed hosted-site metadata"));
         assert_eq!(fs::read(&path).unwrap(), &original[..]);
         assert!(quarantined_metadata_paths(dir.path()).is_empty());
     }
@@ -393,10 +411,50 @@ mod tests {
         let original = vec![0xff, 0xfe, b'[', b']'];
         fs::write(&path, &original).unwrap();
 
-        save_sites_to_path(&[hosted_site_fixture()], &path);
+        let err = save_sites_to_path(&[hosted_site_fixture()], &path)
+            .expect_err("invalid UTF-8 metadata should not be overwritten");
 
+        assert!(err.contains("refusing to overwrite malformed hosted-site metadata"));
         assert_eq!(fs::read(&path).unwrap(), original);
         assert!(quarantined_metadata_paths(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn save_sites_to_path_persists_valid_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("hosted_sites.json");
+        let site = hosted_site_fixture();
+
+        save_sites_to_path(&[site.clone()], &path).expect("valid metadata should save");
+
+        let loaded = load_sites_from_path(&path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, site.id);
+    }
+
+    #[test]
+    fn save_sites_to_path_surfaces_directory_creation_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("not-a-directory");
+        fs::write(&parent, "blocking file").unwrap();
+        let path = parent.join("hosted_sites.json");
+
+        let err = save_sites_to_path(&[hosted_site_fixture()], &path)
+            .expect_err("directory creation failure should surface");
+
+        assert!(err.contains("create hosted-site metadata directory"));
+    }
+
+    #[test]
+    fn save_sites_to_path_surfaces_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = test_metadata_path(dir.path());
+        fs::create_dir(&path).unwrap();
+
+        let err = save_sites_to_path(&[hosted_site_fixture()], &path)
+            .expect_err("write failure should surface");
+
+        assert!(err.contains("write hosted-site metadata"));
     }
 
     #[test]
