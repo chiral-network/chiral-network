@@ -546,7 +546,13 @@ async fn auto_reseed_drive_files(
     let mut manifest_changed = false;
     if !hash_updates.is_empty() || !attempted_ids.is_empty() {
         let mut manifest = state.drive_state.manifest.write().await;
-        let now = ds::now_secs();
+        let now = match ds::now_secs() {
+            Ok(now) => now,
+            Err(err) => {
+                eprintln!("[DRIVE] Auto-reseed manifest update skipped: {}", err);
+                return;
+            }
+        };
         for item in manifest
             .items
             .iter_mut()
@@ -679,7 +685,7 @@ async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
     // DHT is offline: clear active-seeding runtime state in Drive manifest.
     if was_running {
         let mut changed = false;
-        let now = ds::now_secs();
+        let now = ds::now_secs()?;
         {
             let mut manifest = state.drive_state.manifest.write().await;
             for item in manifest
@@ -1385,7 +1391,7 @@ struct PublishResult {
 
 /// Per-seeder info stored in DHT file metadata.
 /// Each seeder signs their entry so downloaders can verify the wallet address is legitimate.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SeederInfo {
     pub(crate) peer_id: String,
@@ -1543,50 +1549,129 @@ pub async fn remove_seeder_entry(
     dht.stop_providing_file(file_hash.to_string()).await
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SearchWarning {
+    #[serde(rename = "type")]
+    warning_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    message: String,
+}
+
+#[derive(Default)]
+struct SeederFetchResult {
+    seeders: Vec<SeederInfo>,
+    warnings: Vec<SearchWarning>,
+}
+
+enum FetchedSeederRecord {
+    Entry(SeederInfo),
+    Missing,
+    Malformed(SearchWarning),
+}
+
+fn malformed_seeder_record_warning(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    err: serde_json::Error,
+) -> SearchWarning {
+    SearchWarning {
+        warning_type: "malformedSeederRecord".to_string(),
+        peer_id: Some(peer_id.to_string()),
+        key: Some(key.to_string()),
+        message: format!(
+            "Malformed seeder record for file {} from provider {} at {}: {}",
+            file_hash, peer_id, key, err
+        ),
+    }
+}
+
+fn parse_desktop_seeder_record(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    json: &str,
+) -> Result<SeederInfo, SearchWarning> {
+    serde_json::from_str::<SeederInfo>(json)
+        .map_err(|err| malformed_seeder_record_warning(file_hash, peer_id, key, err))
+}
+
+fn classify_fetched_desktop_seeder_record(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    json: Option<&str>,
+) -> FetchedSeederRecord {
+    match json {
+        Some(json) => match parse_desktop_seeder_record(file_hash, peer_id, key, json) {
+            Ok(entry) => FetchedSeederRecord::Entry(entry),
+            Err(warning) => FetchedSeederRecord::Malformed(warning),
+        },
+        None => FetchedSeederRecord::Missing,
+    }
+}
+
 /// Discover all currently-online seeders for a file. Queries Kademlia for
 /// the provider set, then fetches each provider's per-seeder record in
 /// parallel. Signature-verified entries are returned; unsigned or
-/// signature-invalid entries are logged and dropped.
-async fn fetch_seeders(
+/// signature-invalid entries are logged and dropped. Missing records still
+/// produce replication-lag stubs, while malformed records are surfaced as
+/// warnings and never become stubs.
+async fn fetch_seeders_with_warnings(
     dht: &dht::DhtService,
     file_hash: &str,
-) -> Result<Vec<SeederInfo>, String> {
+) -> Result<SeederFetchResult, String> {
     let providers = dht.get_file_providers(file_hash.to_string()).await?;
     if providers.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SeederFetchResult::default());
     }
     let fetches = providers.into_iter().map(|peer_id| {
         let key = seeder_entry_key(file_hash, &peer_id);
         async move {
-            let fetched = match dht.get_dht_value(key).await {
-                Ok(Some(json)) => serde_json::from_str::<SeederInfo>(&json).ok(),
-                _ => None,
+            let fetched = match dht.get_dht_value(key.clone()).await {
+                Ok(Some(json)) => {
+                    classify_fetched_desktop_seeder_record(file_hash, &peer_id, &key, Some(&json))
+                }
+                _ => classify_fetched_desktop_seeder_record(file_hash, &peer_id, &key, None),
             };
             (peer_id, fetched)
         }
     });
     let results = futures::future::join_all(fetches).await;
     let mut seeders = Vec::new();
+    let mut warnings = Vec::new();
     for (peer_id, entry) in results {
         match entry {
-            Some(entry) if entry.verify(file_hash) => {
+            FetchedSeederRecord::Entry(entry) if entry.verify(file_hash) => {
                 // Signed + valid.
                 seeders.push(entry);
             }
-            Some(entry) => {
+            FetchedSeederRecord::Entry(entry) => {
                 // Unsigned or invalid signature. CLAUDE.md's trust contract
                 // ("ECDSA-signed seeder entries prevent payment redirection")
                 // requires us to drop these — accepting them would let any
                 // peer redirect downloads to an attacker wallet. Empty-sig
                 // entries fall in here too.
-                let reason = if entry.signature.is_empty() { "unsigned" } else { "INVALID signature" };
+                let reason = if entry.signature.is_empty() {
+                    "unsigned"
+                } else {
+                    "INVALID signature"
+                };
                 println!(
                     "  ⚠️ Seeder entry for {} {} — dropping",
                     &peer_id[..20.min(peer_id.len())],
                     reason
                 );
             }
-            None => {
+            FetchedSeederRecord::Malformed(warning) => {
+                println!("  ⚠️ {}", warning.message);
+                warnings.push(warning);
+            }
+            FetchedSeederRecord::Missing => {
                 // Provider advertises the hash but their per-seeder record
                 // isn't retrievable yet (put replication lagging, or peer
                 // never got a chance to persist it). Emit a stub with empty
@@ -1605,7 +1690,13 @@ async fn fetch_seeders(
             }
         }
     }
-    Ok(seeders)
+    Ok(SeederFetchResult { seeders, warnings })
+}
+
+async fn fetch_seeders(dht: &dht::DhtService, file_hash: &str) -> Result<Vec<SeederInfo>, String> {
+    fetch_seeders_with_warnings(dht, file_hash)
+        .await
+        .map(|result| result.seeders)
 }
 
 fn desktop_publish_peer_id(peer_id: Option<String>) -> Result<String, String> {
@@ -1944,6 +2035,16 @@ struct SearchResult {
     created_at: u64,
     price_wei: String,
     wallet_address: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<SearchWarning>,
+}
+
+fn search_result_with_warnings(
+    mut result: SearchResult,
+    warnings: Vec<SearchWarning>,
+) -> SearchResult {
+    result.warnings.extend(warnings);
+    result
 }
 
 async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Option<SearchResult> {
@@ -1980,6 +2081,7 @@ async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Op
             .as_secs(),
         price_wei: local_info.price_wei.to_string(),
         wallet_address: local_info.wallet_address,
+        warnings: Vec::new(),
     })
 }
 
@@ -2133,6 +2235,13 @@ async fn try_repair_local_drive_seed(
 
     // Keep runtime Drive state consistent with repaired registration.
     {
+        let now = match ds::now_secs() {
+            Ok(now) => now,
+            Err(err) => {
+                eprintln!("[DRIVE] Skipping repaired seed manifest timestamp: {}", err);
+                return None;
+            }
+        };
         let mut manifest = state.drive_state.manifest.write().await;
         if let Some(item) = manifest
             .items
@@ -2141,11 +2250,11 @@ async fn try_repair_local_drive_seed(
         {
             if !item.seeding {
                 item.seeding = true;
-                item.modified_at = ds::now_secs();
+                item.modified_at = now;
             }
             if !item.seed_enabled {
                 item.seed_enabled = true;
-                item.modified_at = ds::now_secs();
+                item.modified_at = now;
             }
         }
     }
@@ -2198,13 +2307,15 @@ async fn search_file(
         );
         let providers_fut = tokio::time::timeout(
             tokio::time::Duration::from_millis(5000),
-            fetch_seeders(dht, &file_hash),
+            fetch_seeders_with_warnings(dht, &file_hash),
         );
         let (dht_lookup, provider_seeders_res) = tokio::join!(blob_fut, providers_fut);
-        let provider_seeders: Vec<SeederInfo> = match provider_seeders_res {
-            Ok(Ok(list)) => list,
-            _ => Vec::new(),
+        let provider_fetch = match provider_seeders_res {
+            Ok(Ok(result)) => result,
+            _ => SeederFetchResult::default(),
         };
+        let provider_seeders = provider_fetch.seeders;
+        let provider_warnings = provider_fetch.warnings;
 
         match dht_lookup {
             Err(_) => {
@@ -2231,19 +2342,24 @@ async fn search_file(
                             .as_ref()
                             .map(|s| s.price_wei.clone())
                             .unwrap_or_default(),
-                        wallet_address: first
-                            .map(|s| s.wallet_address)
-                            .unwrap_or_default(),
+                        wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                        warnings: provider_warnings,
                     }));
                 }
                 // Return local result if we're seeding, otherwise not found
                 if let Some(local) = local_result {
-                    println!("Returning local seeding result after DHT timeout for {}", file_hash);
-                    Ok(Some(local))
+                    println!(
+                        "Returning local seeding result after DHT timeout for {}",
+                        file_hash
+                    );
+                    Ok(Some(search_result_with_warnings(local, provider_warnings)))
                 } else if let Some(repaired) =
                     try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
                 {
-                    Ok(Some(repaired))
+                    Ok(Some(search_result_with_warnings(
+                        repaired,
+                        provider_warnings,
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -2299,18 +2415,20 @@ async fn search_file(
                                     .as_ref()
                                     .map(|s| s.price_wei.clone())
                                     .unwrap_or_default(),
-                                wallet_address: first
-                                    .map(|s| s.wallet_address)
-                                    .unwrap_or_default(),
+                                wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                                warnings: provider_warnings,
                             }));
                         }
                         return if let Some(local) = local_result {
-                            Ok(Some(local))
+                            Ok(Some(search_result_with_warnings(local, provider_warnings)))
                         } else {
                             Ok(None)
                         };
                     }
-                    println!("✅ File metadata signature valid (publisher: {})", metadata.wallet_address);
+                    println!(
+                        "✅ File metadata signature valid (publisher: {})",
+                        metadata.wallet_address
+                    );
 
                     // Seeder list comes exclusively from Kademlia providers +
                     // per-seeder records now. The blob is immutable metadata
@@ -2339,6 +2457,7 @@ async fn search_file(
                         created_at: metadata.created_at,
                         price_wei,
                         wallet_address: metadata.wallet_address,
+                        warnings: provider_warnings,
                     }))
                 }
                 Ok(None) => {
@@ -2367,9 +2486,8 @@ async fn search_file(
                                 .as_ref()
                                 .map(|s| s.price_wei.clone())
                                 .unwrap_or_default(),
-                            wallet_address: first
-                                .map(|s| s.wallet_address)
-                                .unwrap_or_default(),
+                            wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                            warnings: provider_warnings,
                         }));
                     }
                     // DHT can lag behind local intent right after restart. Attempt
@@ -2381,7 +2499,10 @@ async fn search_file(
                             "Recovered local seed registration for {} after DHT miss",
                             file_hash
                         );
-                        Ok(Some(repaired))
+                        Ok(Some(search_result_with_warnings(
+                            repaired,
+                            provider_warnings,
+                        )))
                     } else {
                         Ok(None)
                     }
@@ -2396,7 +2517,7 @@ async fn search_file(
                             "Returning local fallback for {} despite DHT lookup error",
                             file_hash
                         );
-                        Ok(Some(local))
+                        Ok(Some(search_result_with_warnings(local, provider_warnings)))
                     } else if let Some(repaired) =
                         try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
                     {
@@ -2404,7 +2525,10 @@ async fn search_file(
                             "Returning repaired local fallback for {} despite DHT lookup error",
                             file_hash
                         );
-                        Ok(Some(repaired))
+                        Ok(Some(search_result_with_warnings(
+                            repaired,
+                            provider_warnings,
+                        )))
                     } else {
                         Err(e)
                     }
@@ -4498,9 +4622,108 @@ async fn get_hosting_server_status(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct RelayTunnelResponse {
+    status: u16,
+    headers: HashMap<String, String>,
+    body_bytes: Vec<u8>,
+}
+
+fn relay_tunnel_response_from_local_body(
+    status: u16,
+    headers: HashMap<String, String>,
+    body_result: Result<Vec<u8>, String>,
+) -> RelayTunnelResponse {
+    match body_result {
+        Ok(body_bytes) => RelayTunnelResponse {
+            status,
+            headers,
+            body_bytes,
+        },
+        Err(err) => {
+            let mut headers = HashMap::new();
+            headers.insert(
+                "content-type".to_string(),
+                "text/plain; charset=utf-8".to_string(),
+            );
+            RelayTunnelResponse {
+                status: 502,
+                headers,
+                body_bytes: format!("Local response body read failed: {}", err).into_bytes(),
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket tunnel to relay (NAT traversal for hosting/drive proxy)
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, serde::Deserialize, PartialEq, Eq)]
+struct DesktopTunnelRequest {
+    id: String,
+    path: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DesktopTunnelRequestFrameError {
+    id: Option<String>,
+    message: String,
+}
+
+fn recover_desktop_tunnel_request_id(text: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("id")
+                .and_then(|id| id.as_str())
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn parse_desktop_tunnel_request_frame(
+    text: &str,
+) -> Result<DesktopTunnelRequest, DesktopTunnelRequestFrameError> {
+    let req = serde_json::from_str::<DesktopTunnelRequest>(text).map_err(|err| {
+        DesktopTunnelRequestFrameError {
+            id: recover_desktop_tunnel_request_id(text),
+            message: format!("failed to parse tunnel request frame: {}", err),
+        }
+    })?;
+
+    if req.id.trim().is_empty() {
+        return Err(DesktopTunnelRequestFrameError {
+            id: None,
+            message: "tunnel request frame missing id".to_string(),
+        });
+    }
+    if req.path.trim().is_empty() {
+        return Err(DesktopTunnelRequestFrameError {
+            id: Some(req.id.clone()),
+            message: "tunnel request frame missing path".to_string(),
+        });
+    }
+
+    Ok(req)
+}
+
+fn desktop_tunnel_error_response_text(id: &str, error: &str) -> String {
+    use base64::Engine;
+    serde_json::json!({
+        "id": id,
+        "status": 502,
+        "headers": {
+            "content-type": "text/plain; charset=utf-8",
+        },
+        "body": base64::engine::general_purpose::STANDARD.encode(
+            format!("Malformed tunnel request frame from relay: {}", error).as_bytes()
+        ),
+    })
+    .to_string()
+}
 
 /// Spawn a background task that maintains a WebSocket tunnel to the relay.
 /// The relay forwards incoming visitor HTTP requests through this tunnel.
@@ -4545,15 +4768,38 @@ fn spawn_relay_tunnel(
                     while let Some(Ok(msg)) = ws_rx.next().await {
                         match msg {
                             tokio_tungstenite::tungstenite::Message::Text(text) => {
-                                // Parse the tunnel request from the relay
-                                #[derive(serde::Deserialize)]
-                                struct TunnelReq {
-                                    id: String,
-                                    path: String,
-                                }
-                                let req: TunnelReq = match serde_json::from_str(&text) {
+                                let req = match parse_desktop_tunnel_request_frame(&text) {
                                     Ok(r) => r,
-                                    Err(_) => continue,
+                                    Err(err) => {
+                                        match err.id {
+                                            Some(id) => {
+                                                println!(
+                                                    "[TUNNEL] Malformed request frame for {}:{} id={}: {}",
+                                                    resource_type, resource_id, id, err.message
+                                                );
+                                                let msg =
+                                                    tokio_tungstenite::tungstenite::Message::Text(
+                                                        desktop_tunnel_error_response_text(
+                                                            &id,
+                                                            &err.message,
+                                                        ),
+                                                    );
+                                                if futures_util::SinkExt::send(&mut ws_tx, msg)
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                            None => {
+                                                println!(
+                                                    "[TUNNEL] Malformed request frame for {}:{} without recoverable id: {}",
+                                                    resource_type, resource_id, err.message
+                                                );
+                                            }
+                                        }
+                                        continue;
+                                    }
                                 };
 
                                 // Fetch from local server
@@ -4571,16 +4817,36 @@ fn spawn_relay_tunnel(
                                                 hdr.insert(k.to_string(), vs.to_string());
                                             }
                                         }
-                                        let bytes = resp.bytes().await.unwrap_or_default().to_vec();
-                                        (st, hdr, bytes)
+                                        let body_result = resp
+                                            .bytes()
+                                            .await
+                                            .map(|bytes| bytes.to_vec())
+                                            .map_err(|err| err.to_string());
+                                        if let Err(err) = body_result.as_ref() {
+                                            println!(
+                                                "[TUNNEL] Failed to read local response body for {}:{} id={}: {}",
+                                                resource_type, resource_id, req.id, err
+                                            );
+                                        }
+                                        let tunnel_response = relay_tunnel_response_from_local_body(
+                                            st,
+                                            hdr,
+                                            body_result,
+                                        );
+                                        (
+                                            tunnel_response.status,
+                                            tunnel_response.headers,
+                                            tunnel_response.body_bytes,
+                                        )
                                     }
                                     Err(_) => (502, HashMap::new(), b"Local server error".to_vec()),
                                 };
 
                                 // Send response back through the tunnel
                                 use base64::Engine;
+                                let request_id = req.id.clone();
                                 let resp_json = serde_json::json!({
-                                    "id": req.id,
+                                    "id": &request_id,
                                     "status": status,
                                     "headers": headers,
                                     "body": base64::engine::general_purpose::STANDARD.encode(&body_bytes),
@@ -4588,7 +4854,17 @@ fn spawn_relay_tunnel(
                                 let msg = tokio_tungstenite::tungstenite::Message::Text(
                                     resp_json.to_string(),
                                 );
-                                if futures_util::SinkExt::send(&mut ws_tx, msg).await.is_err() {
+                                let send_result =
+                                    futures_util::SinkExt::send(&mut ws_tx, msg)
+                                        .await
+                                        .map_err(|err| err.to_string());
+                                if let Err(message) = relay_tunnel_response_send_result(
+                                    &resource_type,
+                                    &resource_id,
+                                    &request_id,
+                                    send_result,
+                                ) {
+                                    println!("{}", message);
                                     break;
                                 }
                             }
@@ -4621,6 +4897,20 @@ fn spawn_relay_tunnel(
         }
     });
     handle.abort_handle()
+}
+
+fn relay_tunnel_response_send_result(
+    resource_type: &str,
+    resource_id: &str,
+    request_id: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    send_result.map_err(|err| {
+        format!(
+            "[TUNNEL] Failed to send local response for {}:{} id={}: {}",
+            resource_type, resource_id, request_id, err
+        )
+    })
 }
 
 #[tauri::command]
@@ -5368,6 +5658,7 @@ async fn drive_create_folder(
     if name.is_empty() || name.len() > 255 {
         return Err("Invalid folder name".into());
     }
+    let now = ds::now_secs()?;
     let item = DsItem {
         id: ds::generate_id(),
         name,
@@ -5375,8 +5666,8 @@ async fn drive_create_folder(
         parent_id,
         size: None,
         mime_type: None,
-        created_at: ds::now_secs(),
-        modified_at: ds::now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: None,
         owner,
@@ -5446,6 +5737,7 @@ async fn drive_upload_file(
         return Err("File exceeds 500 MB limit".into());
     }
 
+    let now = ds::now_secs()?;
     let item_id = ds::generate_id();
     let storage_name = format!("{}_{}", item_id, file_name);
     let mime = ds::mime_from_name(&file_name);
@@ -5505,8 +5797,8 @@ async fn drive_upload_file(
         parent_id,
         size: Some(copied_bytes),
         mime_type: Some(mime),
-        created_at: ds::now_secs(),
-        modified_at: ds::now_secs(),
+        created_at: now,
+        modified_at: now,
         starred: false,
         storage_path: Some(storage_name),
         owner,
@@ -5559,6 +5851,7 @@ async fn drive_update_item(
         .iter_mut()
         .find(|i| i.id == item_id && i.owner == owner)
         .ok_or("Item not found")?;
+    let now = ds::now_secs()?;
     if let Some(n) = name {
         if n.is_empty() || n.len() > 255 {
             return Err("Invalid name".into());
@@ -5574,7 +5867,7 @@ async fn drive_update_item(
     if let Some(p) = price_chi {
         item.price_chi = validate_drive_item_price_update(p)?;
     }
-    item.modified_at = ds::now_secs();
+    item.modified_at = now;
     let updated = item.clone();
     drop(m);
     state.drive_state.persist().await;
@@ -5714,11 +6007,12 @@ async fn drive_create_share(
         return Err("Share price must be greater than 0 CHI".into());
     }
 
+    let now = ds::now_secs()?;
     let token = ds::generate_share_token();
     let share = DsShareLink {
         id: token.clone(),
         item_id: item_id.clone(),
-        created_at: ds::now_secs(),
+        created_at: now,
         expires_at: None,
         price_chi: normalized_price,
         recipient_wallet: item.owner,
@@ -5796,8 +6090,9 @@ async fn drive_toggle_visibility(
         .iter_mut()
         .find(|i| i.id == item_id && i.owner == owner)
         .ok_or("Item not found")?;
+    let now = ds::now_secs()?;
     item.is_public = is_public;
-    item.modified_at = ds::now_secs();
+    item.modified_at = now;
     let updated = item.clone();
     drop(m);
     state.drive_state.persist().await;
@@ -6002,6 +6297,7 @@ async fn publish_drive_file_inner(
 
     // Update the Drive manifest with seeding metadata
     let updated_item = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6013,7 +6309,7 @@ async fn publish_drive_file_inner(
         item.price_chi = price_chi;
         item.seed_enabled = true;
         item.seeding = true;
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         let cloned = item.clone();
         cloned
     };
@@ -6130,12 +6426,13 @@ async fn seed_hosted_file(
 
     // Enable seeding in Drive manifest
     {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         if let Some(item) = m.items.iter_mut().find(|i| i.id == item_id) {
             item.seed_enabled = true;
             item.seeding = true;
             item.price_chi = price_chi;
-            item.modified_at = ds::now_secs();
+            item.modified_at = now;
         }
     }
     state.drive_state.persist().await;
@@ -6191,6 +6488,7 @@ async fn drive_stop_seeding_inner(
 
     // Update manifest
     let updated_item = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6199,7 +6497,7 @@ async fn drive_stop_seeding_inner(
             .ok_or("Drive item not found in manifest")?;
         item.seed_enabled = false;
         item.seeding = false;
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         let cloned = item.clone();
         cloned
     };
@@ -6747,11 +7045,12 @@ async fn publish_drive_folder(
         None
     } else {
         let hash = compute_folder_hash(&owner, &manifest_files);
+        let folder_created_at = ds::now_secs()?;
         let mut manifest = FolderManifest {
             hash: hash.clone(),
             name: folder_name,
             owner_wallet: owner.clone(),
-            created_at: ds::now_secs(),
+            created_at: folder_created_at,
             files: manifest_files,
             price_wei: folder_price_wei.to_string(),
             wallet_address: folder_payment_wallet.clone(),
@@ -6866,6 +7165,7 @@ async fn publish_drive_folder(
     // the folder hash on `merkle_root` so the existing "Copy Merkle Hash"
     // context-menu item works for sold folders too.
     let folder = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -6884,7 +7184,7 @@ async fn publish_drive_folder(
         if folder_hash_opt.is_some() {
             item.merkle_root = folder_hash_opt.clone();
         }
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         item.clone()
     };
     state.drive_state.persist().await;
@@ -7022,6 +7322,7 @@ async fn unpublish_drive_folder(
     }
 
     let folder = {
+        let now = ds::now_secs()?;
         let mut m = state.drive_state.manifest.write().await;
         let item = m
             .items
@@ -7034,7 +7335,7 @@ async fn unpublish_drive_folder(
         if folder_hash.is_some() {
             item.merkle_root = None;
         }
-        item.modified_at = ds::now_secs();
+        item.modified_at = now;
         item.clone()
     };
     state.drive_state.persist().await;
@@ -8442,6 +8743,74 @@ mod multi_seeder_tests {
     }
 
     #[test]
+    fn desktop_tunnel_request_frame_accepts_valid_request() {
+        let req = parse_desktop_tunnel_request_frame(r#"{"id":"req-1","path":"/index.html"}"#)
+            .expect("valid tunnel request frame should parse");
+
+        assert_eq!(
+            req,
+            DesktopTunnelRequest {
+                id: "req-1".to_string(),
+                path: "/index.html".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_reports_malformed_json_without_recoverable_id() {
+        let err = parse_desktop_tunnel_request_frame(r#"{"id":"req-1","path":"#)
+            .expect_err("malformed JSON should be rejected");
+
+        assert_eq!(err.id, None);
+        assert!(err.message.contains("failed to parse tunnel request frame"));
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_reports_missing_required_fields() {
+        let missing_path = parse_desktop_tunnel_request_frame(r#"{"id":"req-2"}"#)
+            .expect_err("missing path should be rejected");
+        assert_eq!(missing_path.id.as_deref(), Some("req-2"));
+        assert!(missing_path.message.contains("path"));
+
+        let missing_id = parse_desktop_tunnel_request_frame(r#"{"path":"/index.html"}"#)
+            .expect_err("missing id should be rejected");
+        assert_eq!(missing_id.id, None);
+        assert!(missing_id.message.contains("id"));
+    }
+
+    #[test]
+    fn desktop_tunnel_request_frame_rejects_irrecoverable_request_ids() {
+        let blank_id = parse_desktop_tunnel_request_frame(r#"{"id":"  ","path":"/"}"#)
+            .expect_err("blank id should be rejected");
+
+        assert_eq!(blank_id.id, None);
+        assert!(blank_id.message.contains("id"));
+    }
+
+    #[test]
+    fn desktop_tunnel_error_response_encodes_recovered_request_id() {
+        use base64::Engine;
+
+        let frame = desktop_tunnel_error_response_text("req-3", "missing path");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).unwrap();
+
+        assert_eq!(parsed["id"], "req-3");
+        assert_eq!(parsed["status"], 502);
+        assert_eq!(
+            parsed["headers"]["content-type"],
+            "text/plain; charset=utf-8"
+        );
+
+        let body = parsed["body"].as_str().unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(body)
+            .unwrap();
+        let text = String::from_utf8(decoded).unwrap();
+        assert!(text.contains("Malformed tunnel request frame from relay"));
+        assert!(text.contains("missing path"));
+    }
+
+    #[test]
     fn host_advertisement_payload_rejects_missing_wallet() {
         let ad = serde_json::json!({
             "maxStorageBytes": 1024,
@@ -8489,6 +8858,54 @@ mod multi_seeder_tests {
             ad.get("walletAddress").and_then(|v| v.as_str()),
             Some("0xwallet")
         );
+    }
+
+    #[test]
+    fn relay_tunnel_response_preserves_valid_local_body() {
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "text/html".to_string());
+
+        let response =
+            relay_tunnel_response_from_local_body(200, headers.clone(), Ok(b"hello".to_vec()));
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.headers, headers);
+        assert_eq!(response.body_bytes, b"hello".to_vec());
+    }
+
+    #[test]
+    fn relay_tunnel_response_preserves_empty_local_body() {
+        let mut headers = HashMap::new();
+        headers.insert("x-empty".to_string(), "true".to_string());
+
+        let response = relay_tunnel_response_from_local_body(204, headers.clone(), Ok(Vec::new()));
+
+        assert_eq!(response.status, 204);
+        assert_eq!(response.headers, headers);
+        assert!(response.body_bytes.is_empty());
+    }
+
+    #[test]
+    fn relay_tunnel_response_body_read_error_returns_controlled_502() {
+        let mut headers = HashMap::new();
+        headers.insert("x-upstream".to_string(), "preserved only on success".to_string());
+
+        let response = relay_tunnel_response_from_local_body(
+            200,
+            headers,
+            Err("connection reset".to_string()),
+        );
+
+        assert_eq!(response.status, 502);
+        assert_eq!(
+            response.headers.get("content-type").map(String::as_str),
+            Some("text/plain; charset=utf-8")
+        );
+        assert!(!response.headers.contains_key("x-upstream"));
+
+        let body = String::from_utf8(response.body_bytes).unwrap();
+        assert!(body.contains("Local response body read failed"));
+        assert!(body.contains("connection reset"));
     }
 
     fn host_registry_entry(
@@ -8542,6 +8959,30 @@ mod multi_seeder_tests {
 
         assert!(err.contains("Failed to read chiral_host_registry"));
         assert!(err.contains("dht unavailable"));
+    }
+
+    #[test]
+    fn relay_tunnel_response_send_result_accepts_success() {
+        let result =
+            relay_tunnel_response_send_result("site", "site-1", "req-1", Ok(()));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn relay_tunnel_response_send_result_reports_failure_with_request_id() {
+        let err = relay_tunnel_response_send_result(
+            "drive",
+            "share-1",
+            "req-2",
+            Err("websocket closed".to_string()),
+        )
+        .expect_err("failed sends should produce a controlled log message");
+
+        assert!(err.contains("Failed to send local response"));
+        assert!(err.contains("drive:share-1"));
+        assert!(err.contains("id=req-2"));
+        assert!(err.contains("websocket closed"));
     }
 
     #[test]
@@ -8602,6 +9043,108 @@ mod multi_seeder_tests {
         assert_eq!(deserialized.peer_id, "12D3KooWTest1");
         assert_eq!(deserialized.price_wei, "1000000000000000");
         assert_eq!(deserialized.wallet_address, "0xabc123");
+    }
+
+    #[test]
+    fn desktop_seeder_record_parser_accepts_valid_json() {
+        let json = r#"{
+            "peerId": "peer-a",
+            "priceWei": "7",
+            "walletAddress": "0xwallet",
+            "multiaddrs": ["/ip4/127.0.0.1/tcp/9419"],
+            "signature": "sig"
+        }"#;
+
+        let seeder = parse_desktop_seeder_record(
+            "file-a",
+            "peer-a",
+            "chiral_seeder_file-a_peer-a",
+            json,
+        )
+        .expect("valid seeder JSON should parse");
+
+        assert_eq!(seeder.peer_id, "peer-a");
+        assert_eq!(seeder.price_wei, "7");
+        assert_eq!(seeder.multiaddrs[0], "/ip4/127.0.0.1/tcp/9419");
+    }
+
+    #[test]
+    fn desktop_seeder_record_parser_warns_on_malformed_json() {
+        let warning = parse_desktop_seeder_record(
+            "file-a",
+            "peer-a",
+            "chiral_seeder_file-a_peer-a",
+            "{not json",
+        )
+        .expect_err("malformed seeder JSON should return a warning");
+
+        assert_eq!(warning.warning_type, "malformedSeederRecord");
+        assert_eq!(warning.peer_id.as_deref(), Some("peer-a"));
+        assert_eq!(warning.key.as_deref(), Some("chiral_seeder_file-a_peer-a"));
+        assert!(warning.message.contains("Malformed seeder record"));
+    }
+
+    #[test]
+    fn desktop_seeder_record_classifier_distinguishes_mixed_records() {
+        let valid_json = r#"{
+            "peerId": "peer-a",
+            "priceWei": "7",
+            "walletAddress": "0xwallet",
+            "multiaddrs": [],
+            "signature": "sig"
+        }"#;
+        let records = [
+            ("peer-a", Some(valid_json)),
+            ("peer-b", Some("{not json")),
+            ("peer-c", None),
+        ];
+        let mut entries = 0;
+        let mut malformed = 0;
+        let mut missing = 0;
+
+        for (peer_id, json) in records {
+            let key = seeder_entry_key("file-a", peer_id);
+            match classify_fetched_desktop_seeder_record("file-a", peer_id, &key, json) {
+                FetchedSeederRecord::Entry(_) => entries += 1,
+                FetchedSeederRecord::Malformed(warning) => {
+                    malformed += 1;
+                    assert_eq!(warning.peer_id.as_deref(), Some("peer-b"));
+                }
+                FetchedSeederRecord::Missing => missing += 1,
+            }
+        }
+
+        assert_eq!(entries, 1);
+        assert_eq!(malformed, 1);
+        assert_eq!(missing, 1);
+    }
+
+    #[test]
+    fn search_result_serializes_warnings_when_present() {
+        let result = search_result_with_warnings(
+            SearchResult {
+                hash: "abc123".to_string(),
+                file_name: "test.txt".to_string(),
+                file_size: 1024,
+                seeders: Vec::new(),
+                created_at: 1700000000,
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+                warnings: Vec::new(),
+            },
+            vec![SearchWarning {
+                warning_type: "malformedSeederRecord".to_string(),
+                peer_id: Some("peer-a".to_string()),
+                key: Some("chiral_seeder_abc123_peer-a".to_string()),
+                message: "Malformed seeder record".to_string(),
+            }],
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+
+        assert_eq!(parsed["warnings"][0]["type"], "malformedSeederRecord");
+        assert_eq!(parsed["warnings"][0]["peerId"], "peer-a");
     }
 
     fn wallet_address_from_private_key(private_key: &str) -> String {
@@ -8836,6 +9379,7 @@ mod multi_seeder_tests {
             created_at: 1700000000,
             price_wei: "0".to_string(),
             wallet_address: String::new(),
+            warnings: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
