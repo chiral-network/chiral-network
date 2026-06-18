@@ -4896,11 +4896,20 @@ fn spawn_relay_tunnel(
                                 }
                             }
                             tokio_tungstenite::tungstenite::Message::Ping(data) => {
-                                let _ = futures_util::SinkExt::send(
+                                let send_result = futures_util::SinkExt::send(
                                     &mut ws_tx,
                                     tokio_tungstenite::tungstenite::Message::Pong(data),
                                 )
-                                .await;
+                                .await
+                                .map_err(|err| err.to_string());
+                                if let Err(message) = relay_tunnel_pong_send_result(
+                                    &resource_type,
+                                    &resource_id,
+                                    send_result,
+                                ) {
+                                    println!("{}", message);
+                                    break;
+                                }
                             }
                             tokio_tungstenite::tungstenite::Message::Close(_) => break,
                             _ => {}
@@ -4936,6 +4945,19 @@ fn relay_tunnel_response_send_result(
         format!(
             "[TUNNEL] Failed to send local response for {}:{} id={}: {}",
             resource_type, resource_id, request_id, err
+        )
+    })
+}
+
+fn relay_tunnel_pong_send_result(
+    resource_type: &str,
+    resource_id: &str,
+    send_result: Result<(), String>,
+) -> Result<(), String> {
+    send_result.map_err(|err| {
+        format!(
+            "[TUNNEL] Failed to send pong for {}:{}: {}",
+            resource_type, resource_id, err
         )
     })
 }
@@ -9113,6 +9135,24 @@ mod multi_seeder_tests {
         assert_eq!(registry.len(), 1);
         assert_eq!(registry[0].peer_id, "peer-b");
         assert_eq!(registry[0].wallet_address, "0xwallet-b");
+    }
+
+    #[test]
+    fn relay_tunnel_pong_send_result_accepts_success() {
+        let result = relay_tunnel_pong_send_result("site", "site-1", Ok(()));
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn relay_tunnel_pong_send_result_reports_failure_with_resource() {
+        let err =
+            relay_tunnel_pong_send_result("drive", "share-1", Err("websocket closed".to_string()))
+                .expect_err("failed pongs should produce a controlled log message");
+
+        assert!(err.contains("Failed to send pong"));
+        assert!(err.contains("drive:share-1"));
+        assert!(err.contains("websocket closed"));
     }
 
     #[test]
