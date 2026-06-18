@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cdn_server;
 pub mod chain_rpc_api;
 pub mod dht;
 pub mod drive_api;
@@ -6,7 +7,6 @@ pub mod drive_storage;
 mod encryption;
 pub mod event_sink;
 pub mod file_transfer;
-pub mod cdn_server;
 pub mod geth;
 pub mod geth_gpu;
 pub mod hosting;
@@ -14,8 +14,8 @@ pub mod hosting_server;
 pub mod network;
 pub mod rating_api;
 pub mod rating_storage;
-pub mod reputation;
 pub mod relay_share_proxy;
+pub mod reputation;
 pub mod rpc_client;
 mod speed_tiers;
 pub mod version;
@@ -143,10 +143,8 @@ fn shutdown_signal_pair_from_results<T>(
 }
 
 #[cfg(unix)]
-fn install_shutdown_signal_handlers() -> Result<
-    (tokio::signal::unix::Signal, tokio::signal::unix::Signal),
-    String,
-> {
+fn install_shutdown_signal_handlers(
+) -> Result<(tokio::signal::unix::Signal, tokio::signal::unix::Signal), String> {
     use tokio::signal::unix::{signal, SignalKind};
     shutdown_signal_pair_from_results(
         signal(SignalKind::interrupt()),
@@ -413,7 +411,10 @@ async fn auto_reseed_drive_files(
                         continue;
                     }
                     Err(e) => {
-                        println!("[DRIVE] Auto-reseed hash task panicked for {}: {}", file_name, e);
+                        println!(
+                            "[DRIVE] Auto-reseed hash task panicked for {}: {}",
+                            file_name, e
+                        );
                         continue;
                     }
                 }
@@ -672,7 +673,8 @@ async fn stop_dht(state: tauri::State<'_, AppState>) -> Result<(), String> {
                 }
                 let _ = peer_id;
             }
-        }).await;
+        })
+        .await;
         if cleanup_result.is_err() {
             eprintln!("[DHT] Seeder cleanup timed out during stop — skipping");
         }
@@ -1015,7 +1017,8 @@ fn host_registry_from_dht_value(
 fn host_registry_from_dht_lookup(
     lookup: Result<Option<String>, String>,
 ) -> Result<Vec<HostRegistryEntry>, String> {
-    let registry_json = lookup.map_err(|e| format!("Failed to read chiral_host_registry: {}", e))?;
+    let registry_json =
+        lookup.map_err(|e| format!("Failed to read chiral_host_registry: {}", e))?;
     host_registry_from_dht_value(registry_json)
 }
 
@@ -1537,10 +1540,7 @@ pub async fn publish_seeder_entry(
 /// ~3 min, which would keep a stale per-seeder entry alive on the network
 /// long after we've deleted the file. Removing the local record kills the
 /// republish cycle; remote replicas age out naturally over the record TTL.
-pub async fn remove_seeder_entry(
-    dht: &dht::DhtService,
-    file_hash: &str,
-) -> Result<(), String> {
+pub async fn remove_seeder_entry(dht: &dht::DhtService, file_hash: &str) -> Result<(), String> {
     let peer_id = dht.get_peer_id().await.unwrap_or_default();
     if !peer_id.is_empty() {
         let key = seeder_entry_key(file_hash, &peer_id);
@@ -1896,8 +1896,7 @@ async fn publish_file(
             private_key.as_deref(),
         )
         .ok_or_else(|| {
-            "Wallet must be unlocked (private key + address required) to publish a file"
-                .to_string()
+            "Wallet must be unlocked (private key + address required) to publish a file".to_string()
         })?;
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
@@ -2003,8 +2002,7 @@ async fn publish_file_data(
             private_key.as_deref(),
         )
         .ok_or_else(|| {
-            "Wallet must be unlocked (private key + address required) to publish a file"
-                .to_string()
+            "Wallet must be unlocked (private key + address required) to publish a file".to_string()
         })?;
         let metadata_json = serde_json::to_string(&metadata)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
@@ -2014,10 +2012,7 @@ async fn publish_file_data(
             println!("Provider publish failed for {}: {}", merkle_root, e);
         }
 
-        println!(
-            "File data published: {}",
-            merkle_root
-        );
+        println!("File data published: {}", merkle_root);
     } else {
         println!("DHT not running, file hash computed but not published to network");
     }
@@ -2286,7 +2281,9 @@ async fn search_file(
         // Self-heal path: if manifest says this file should be seeded but runtime
         // shared-files map is missing it (restart race/crash), repair it.
         if local_result.is_none() {
-            if let Some(_repaired) = try_repair_local_drive_seed(state.inner(), dht, &file_hash).await {
+            if let Some(_repaired) =
+                try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
+            {
                 println!(
                     "Repaired missing local seed registration for {} from Drive manifest",
                     file_hash
@@ -2877,7 +2874,10 @@ async fn start_download(
         let chosen_seeder = candidate_seeders.first().cloned().ok_or_else(|| {
             "No chosen seeder provided — the Download UI must select one first.".to_string()
         })?;
-        let addrs = seeder_addrs.get(&chosen_seeder).cloned().unwrap_or_default();
+        let addrs = seeder_addrs
+            .get(&chosen_seeder)
+            .cloned()
+            .unwrap_or_default();
         println!(
             "Dispatching file request to chosen seeder: {} for file {}",
             chosen_seeder, file_hash
@@ -2902,10 +2902,7 @@ async fn start_download(
             })
         } else {
             let error_msg = if last_error.is_empty() {
-                format!(
-                    "Chosen seeder ({}) could not be contacted.",
-                    chosen_seeder
-                )
+                format!("Chosen seeder ({}) could not be contacted.", chosen_seeder)
             } else {
                 format!("No seeder could provide the file: {}", last_error)
             };
@@ -2935,9 +2932,7 @@ struct DownloadCostResult {
 
 /// Calculate the cost of downloading a file
 #[tauri::command]
-async fn calculate_download_cost(
-    file_size: u64,
-) -> Result<DownloadCostResult, String> {
+async fn calculate_download_cost(file_size: u64) -> Result<DownloadCostResult, String> {
     let cost_wei = speed_tiers::calculate_cost(file_size);
     let cost_chi = speed_tiers::format_wei_as_chi(cost_wei);
 
@@ -3117,10 +3112,7 @@ async fn republish_shared_file(
                 println!("Provider publish failed for {}: {}", file_hash, e);
             }
 
-            println!(
-                "✅ Re-published {} to DHT as seeder {}",
-                file_hash, peer_id
-            );
+            println!("✅ Re-published {} to DHT as seeder {}", file_hash, peer_id);
         }
 
         Ok(())
@@ -3301,7 +3293,10 @@ async fn cleanup_agreement_files(
                 let mut m = state.drive_state.manifest.write().await;
                 if let Some(item) = m.items.iter_mut().find(|i| {
                     i.item_type == "file"
-                        && i.merkle_root.as_ref().map(|h| h == file_hash).unwrap_or(false)
+                        && i.merkle_root
+                            .as_ref()
+                            .map(|h| h == file_hash)
+                            .unwrap_or(false)
                 }) {
                     item.seed_enabled = false;
                     item.seeding = false;
@@ -3494,9 +3489,7 @@ fn current_torrent_creation_date_entry() -> Result<String, String> {
 use wallet::TransactionMeta;
 
 #[tauri::command]
-async fn get_wallet_balance(
-    address: String,
-) -> Result<wallet::WalletBalanceResult, String> {
+async fn get_wallet_balance(address: String) -> Result<wallet::WalletBalanceResult, String> {
     // Try the canonical RPC first; if it's firewall-blocked or down,
     // fall back to the relay's `/api/chain/rpc` proxy on port 8080
     // (which is the same chain, just same-origin-proxied through the
@@ -3512,15 +3505,12 @@ async fn get_wallet_balance(
     let hex = result
         .as_str()
         .ok_or_else(|| format!("eth_getBalance returned a non-string hex value: {result}"))?;
-    let wei = rpc_client::hex_to_u128(hex)
-        .map_err(|e| format!("eth_getBalance: {e}"))?;
+    let wei = rpc_client::hex_to_u128(hex).map_err(|e| format!("eth_getBalance: {e}"))?;
     Ok(wallet::WalletBalanceResult {
         balance: rpc_client::wei_to_chi_string(wei),
         balance_wei: wei.to_string(),
     })
 }
-
-
 
 /// Send a transaction from one address to another (signs locally).
 /// Routes through the canonical RPC fallback list — a user running
@@ -3537,7 +3527,14 @@ async fn send_transaction(
     private_key: String,
 ) -> Result<wallet::SendTransactionResult, String> {
     let endpoints = geth::wallet_rpc_endpoints();
-    wallet::send_transaction(&endpoints, &from_address, &to_address, &amount, &private_key).await
+    wallet::send_transaction(
+        &endpoints,
+        &from_address,
+        &to_address,
+        &amount,
+        &private_key,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -3550,7 +3547,6 @@ async fn get_transaction_receipt(tx_hash: String) -> Result<Option<serde_json::V
 async fn request_faucet(address: String) -> Result<wallet::SendTransactionResult, String> {
     wallet::request_faucet(&address).await
 }
-
 
 #[tauri::command]
 async fn get_transaction_history(
@@ -3573,15 +3569,20 @@ async fn record_transaction_meta(
     balance_after: Option<String>,
 ) -> Result<(), String> {
     let meta = TransactionMeta {
-        tx_hash: tx_hash.clone(), tx_type, description,
-        file_name: None, file_hash: None, speed_tier: None,
-        recipient_label, balance_before, balance_after,
+        tx_hash: tx_hash.clone(),
+        tx_type,
+        description,
+        file_name: None,
+        file_hash: None,
+        speed_tier: None,
+        recipient_label,
+        balance_before,
+        balance_after,
     };
     let mut metadata = state.tx_metadata.lock().await;
     wallet::record_meta(&mut metadata, meta);
     Ok(())
 }
-
 
 #[tauri::command]
 async fn export_torrent_file(
@@ -4013,8 +4014,6 @@ async fn get_gpu_mining_status(
     Ok(miner.status())
 }
 
-
-
 #[tauri::command]
 async fn set_miner_address(
     state: tauri::State<'_, AppState>,
@@ -4212,30 +4211,44 @@ struct BootstrapHealthReport {
     healthy_enode_string: String,
 }
 
-fn current_bootstrap_health() -> BootstrapHealthReport {
+pub fn bootstrap_health_timestamp_secs_at(now: std::time::SystemTime) -> Result<u64, String> {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|err| {
+            format!(
+                "Cannot report bootstrap health because the system clock is before UNIX_EPOCH: {}",
+                err
+            )
+        })
+}
+
+fn current_bootstrap_health_at(
+    now: std::time::SystemTime,
+) -> Result<BootstrapHealthReport, String> {
     let cfg = network::active();
     let has_enode = !cfg.geth_bootstrap_enode.is_empty();
-    BootstrapHealthReport {
+    Ok(BootstrapHealthReport {
         total_nodes: if has_enode { 1 } else { 0 },
         healthy_nodes: if has_enode { 1 } else { 0 },
         nodes: Vec::new(),
-        timestamp: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        timestamp: bootstrap_health_timestamp_secs_at(now)?,
         is_healthy: true,
         healthy_enode_string: cfg.geth_bootstrap_enode.to_string(),
-    }
+    })
+}
+
+fn current_bootstrap_health() -> Result<BootstrapHealthReport, String> {
+    current_bootstrap_health_at(std::time::SystemTime::now())
 }
 
 #[tauri::command]
 async fn check_bootstrap_health() -> Result<BootstrapHealthReport, String> {
-    Ok(current_bootstrap_health())
+    current_bootstrap_health()
 }
 
 #[tauri::command]
 async fn get_bootstrap_health() -> Result<Option<BootstrapHealthReport>, String> {
-    Ok(Some(current_bootstrap_health()))
+    Ok(Some(current_bootstrap_health()?))
 }
 
 // ============================================================================
@@ -4434,7 +4447,8 @@ async fn create_hosted_site(
 
     // Preserve folder structure so relative asset paths keep working (e.g., "images/photo.jpg").
     // We compute the common parent across the selected files and store paths relative to it.
-    let src_paths: Vec<std::path::PathBuf> = file_paths.iter().map(std::path::PathBuf::from).collect();
+    let src_paths: Vec<std::path::PathBuf> =
+        file_paths.iter().map(std::path::PathBuf::from).collect();
     let common_root = src_paths
         .iter()
         .filter_map(|p| p.parent())
@@ -4488,14 +4502,27 @@ async fn create_hosted_site(
         .iter()
         .any(|f| f.path.eq_ignore_ascii_case("index.html"));
     if !has_index {
-        let first = site_files.get(0).map(|f| f.path.clone()).unwrap_or_default();
+        let first = site_files
+            .get(0)
+            .map(|f| f.path.clone())
+            .unwrap_or_default();
         let mut html = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Hosted Site</title></head><body style=\"margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#eee;font-family:sans-serif;\">\n");
         if !first.is_empty() {
             let lower = first.to_ascii_lowercase();
-            if lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".png") || lower.ends_with(".gif") || lower.ends_with(".webp") || lower.ends_with(".bmp") || lower.ends_with(".svg") {
+            if lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".png")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".webp")
+                || lower.ends_with(".bmp")
+                || lower.ends_with(".svg")
+            {
                 html.push_str(&format!("<img src=\"./{}\" alt=\"Hosted image\" style=\"max-width:100%;max-height:100%;object-fit:contain;\"/>", first));
             } else {
-                html.push_str(&format!("<a href=\"./{0}\" style=\"color:#4ade80;font-size:1.1rem;\">Open {0}</a>", first));
+                html.push_str(&format!(
+                    "<a href=\"./{0}\" style=\"color:#4ade80;font-size:1.1rem;\">Open {0}</a>",
+                    first
+                ));
             }
         } else {
             html.push_str("<p>No content uploaded.</p>");
@@ -4503,7 +4530,8 @@ async fn create_hosted_site(
         html.push_str("</body></html>");
 
         let index_path = site_dir.join("index.html");
-        std::fs::write(&index_path, html).map_err(|e| format!("Failed to write index.html: {}", e))?;
+        std::fs::write(&index_path, html)
+            .map_err(|e| format!("Failed to write index.html: {}", e))?;
         let size = std::fs::metadata(&index_path).map(|m| m.len()).unwrap_or(0);
         site_files.push(hosting::SiteFile {
             path: "index.html".into(),
@@ -4854,10 +4882,9 @@ fn spawn_relay_tunnel(
                                 let msg = tokio_tungstenite::tungstenite::Message::Text(
                                     resp_json.to_string(),
                                 );
-                                let send_result =
-                                    futures_util::SinkExt::send(&mut ws_tx, msg)
-                                        .await
-                                        .map_err(|err| err.to_string());
+                                let send_result = futures_util::SinkExt::send(&mut ws_tx, msg)
+                                    .await
+                                    .map_err(|err| err.to_string());
                                 if let Err(message) = relay_tunnel_response_send_result(
                                     &resource_type,
                                     &resource_id,
@@ -5240,8 +5267,8 @@ async fn publish_site_to_cdn(
         cur: &std::path::Path,
         out: &mut Vec<(String, std::path::PathBuf, u64)>,
     ) -> Result<(), String> {
-        let entries = std::fs::read_dir(cur)
-            .map_err(|e| format!("Read dir {}: {}", cur.display(), e))?;
+        let entries =
+            std::fs::read_dir(cur).map_err(|e| format!("Read dir {}: {}", cur.display(), e))?;
         for entry in entries {
             let entry = entry.map_err(|e| format!("Read dir entry: {}", e))?;
             let path = entry.path();
@@ -5390,12 +5417,14 @@ async fn publish_site_to_cdn(
         p.total_bytes = Some(total_size);
         emit_stage(p);
     }
-    let read_futures = file_index.into_iter().map(|(rel_path, abs_path, _sz)| async move {
-        let bytes = tokio::fs::read(&abs_path)
-            .await
-            .map_err(|e| format!("Read file {}: {}", abs_path.display(), e))?;
-        Ok::<(String, Vec<u8>), String>((rel_path, bytes))
-    });
+    let read_futures = file_index
+        .into_iter()
+        .map(|(rel_path, abs_path, _sz)| async move {
+            let bytes = tokio::fs::read(&abs_path)
+                .await
+                .map_err(|e| format!("Read file {}: {}", abs_path.display(), e))?;
+            Ok::<(String, Vec<u8>), String>((rel_path, bytes))
+        });
     let read_results = futures::future::join_all(read_futures).await;
     let mut files: Vec<(String, Vec<u8>)> = Vec::with_capacity(read_results.len());
     for r in read_results {
@@ -5699,7 +5728,9 @@ async fn drive_read_file_bytes(
 ) -> Result<tauri::ipc::Response, String> {
     let storage_path = {
         let m = state.drive_state.manifest.read().await;
-        let item = m.items.iter()
+        let item = m
+            .items
+            .iter()
             .find(|i| i.id == item_id && i.owner == owner && i.item_type == "file")
             .ok_or("Drive file not found")?;
         item.storage_path.clone().ok_or("No storage path")?
@@ -5817,8 +5848,7 @@ async fn drive_upload_file(
     state.drive_state.persist().await;
     println!(
         "[DRIVE] Uploaded file: {} ({} bytes)",
-        file_name,
-        copied_bytes
+        file_name, copied_bytes
     );
     Ok(item)
 }
@@ -6265,8 +6295,12 @@ async fn publish_drive_file_inner(
 
     let our_multiaddrs = dht.get_listening_addresses().await;
     let our_seeder = try_make_signed_seeder(
-        &peer_id, &file_hash, &price_wei_val.to_string(),
-        &wallet_addr, our_multiaddrs, private_key.as_deref(),
+        &peer_id,
+        &file_hash,
+        &price_wei_val.to_string(),
+        &wallet_addr,
+        our_multiaddrs,
+        private_key.as_deref(),
     )
     .ok_or_else(|| {
         "Cannot publish seeder entry: wallet must be unlocked (private key + address required)"
@@ -6278,7 +6312,12 @@ async fn publish_drive_file_inner(
     // publish_file). Per-seeder data lives in chiral_seeder_<hash>_<peer>.
     let dht_key = format!("chiral_file_{}", file_hash);
     let metadata = try_make_signed_file_metadata(
-        &file_hash, &file_name, actual_size, &proto, &wallet_addr, private_key.as_deref(),
+        &file_hash,
+        &file_name,
+        actual_size,
+        &proto,
+        &wallet_addr,
+        private_key.as_deref(),
     )
     .ok_or_else(|| {
         "Cannot publish file metadata: wallet must be unlocked (private key + address required)"
@@ -6363,7 +6402,11 @@ async fn seed_hosted_file(
     let full_path_str = full_path.to_string_lossy().to_string();
 
     let price_wei_val = if let Some(ref p) = price_chi {
-        if p.is_empty() || p == "0" { 0u128 } else { wallet::parse_chi_to_wei(p)? }
+        if p.is_empty() || p == "0" {
+            0u128
+        } else {
+            wallet::parse_chi_to_wei(p)?
+        }
     } else {
         0u128
     };
@@ -6380,11 +6423,16 @@ async fn seed_hosted_file(
 
     // Register locally so we can serve chunks
     dht.register_shared_file_with_folder_access(
-        file_hash.clone(), full_path_str, file_name.clone(),
-        file_size, price_wei_val, wallet_address.clone(),
+        file_hash.clone(),
+        full_path_str,
+        file_name.clone(),
+        file_size,
+        price_wei_val,
+        wallet_address.clone(),
         private_key.clone().unwrap_or_default(),
         folder_access,
-    ).await;
+    )
+    .await;
 
     // Update DHT record to add ourselves as a seeder
     let our_addrs = dht.get_listening_addresses().await;
@@ -6397,8 +6445,7 @@ async fn seed_hosted_file(
         private_key.as_deref(),
     )
     .ok_or_else(|| {
-        "Wallet must be unlocked (private key + address required) to seed a hosted file"
-            .to_string()
+        "Wallet must be unlocked (private key + address required) to seed a hosted file".to_string()
     })?;
 
     // Always publish; see publish_file for rationale.
@@ -6415,8 +6462,8 @@ async fn seed_hosted_file(
         "Wallet must be unlocked (private key + address required) to publish file metadata"
             .to_string()
     })?;
-    let metadata_json = serde_json::to_string(&metadata)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    let metadata_json =
+        serde_json::to_string(&metadata).map_err(|e| format!("Failed to serialize: {}", e))?;
     dht.put_dht_value(dht_key, metadata_json).await?;
     let _ = peer_id;
 
@@ -6437,7 +6484,10 @@ async fn seed_hosted_file(
     }
     state.drive_state.persist().await;
 
-    println!("[HOSTING] Now seeding hosted file: {} (hash: {})", file_name, file_hash);
+    println!(
+        "[HOSTING] Now seeding hosted file: {} (hash: {})",
+        file_name, file_hash
+    );
     Ok(())
 }
 
@@ -6595,10 +6645,7 @@ impl FolderManifest {
         // Folder-level price + wallet must be inside the signed payload —
         // otherwise a hostile peer could substitute a different price /
         // recipient for the same hash.
-        for part in [
-            self.price_wei.as_bytes(),
-            self.wallet_address.as_bytes(),
-        ] {
+        for part in [self.price_wei.as_bytes(), self.wallet_address.as_bytes()] {
             out.extend_from_slice(&(part.len() as u32).to_le_bytes());
             out.extend_from_slice(part);
         }
@@ -6668,7 +6715,11 @@ impl FolderManifest {
         // fields onto a legacy-signed manifest), so we reject it.
         if self.price_wei.is_empty() && self.wallet_address.is_empty() {
             let legacy = self.sign_payload_legacy_v1();
-            return wallet::verify_signature(&legacy, &self.publisher_signature, &self.owner_wallet);
+            return wallet::verify_signature(
+                &legacy,
+                &self.publisher_signature,
+                &self.owner_wallet,
+            );
         }
         false
     }
@@ -7709,10 +7760,13 @@ fn compute_relay_register_signature(
     if operation != "share" && operation != "site" {
         return Err("operation must be 'share' or 'site'".to_string());
     }
-    let payload =
-        relay_share_proxy::register_payload(&operation, &id, &owner_wallet.to_lowercase(), &origin_url);
-    wallet::sign_message(&private_key, &payload)
-        .map_err(|e| format!("sign_message failed: {}", e))
+    let payload = relay_share_proxy::register_payload(
+        &operation,
+        &id,
+        &owner_wallet.to_lowercase(),
+        &origin_url,
+    );
+    wallet::sign_message(&private_key, &payload).map_err(|e| format!("sign_message failed: {}", e))
 }
 
 /// Compute an owner-proof signature so the frontend can attach the
@@ -8326,7 +8380,8 @@ pub fn run() {
             // App lifecycle
             exit_app,
         ])
-        .build(tauri::generate_context!()) {
+        .build(tauri::generate_context!())
+    {
         Ok(app) => app,
         Err(error) => {
             eprintln!("{}", tauri_builder_startup_error(error));
@@ -8487,6 +8542,37 @@ mod multi_seeder_tests {
         .expect_err("pre-epoch timestamp should be rejected");
 
         assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn bootstrap_health_timestamp_secs_at_preserves_seconds() {
+        let timestamp = bootstrap_health_timestamp_secs_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(123),
+        )
+        .expect("post-epoch bootstrap health timestamp should be valid");
+
+        assert_eq!(timestamp, 123);
+    }
+
+    #[test]
+    fn bootstrap_health_timestamp_rejects_pre_epoch_clock() {
+        let err = bootstrap_health_timestamp_secs_at(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1),
+        )
+        .expect_err("pre-epoch bootstrap health timestamp should be rejected");
+
+        assert!(err.contains("system clock is before UNIX_EPOCH"));
+    }
+
+    #[test]
+    fn current_bootstrap_health_at_preserves_timestamp() {
+        let report = current_bootstrap_health_at(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(456),
+        )
+        .expect("post-epoch bootstrap health report should be valid");
+
+        assert_eq!(report.timestamp, 456);
+        assert!(report.is_healthy);
     }
 
     #[test]
@@ -8725,13 +8811,19 @@ mod multi_seeder_tests {
     #[test]
     fn signed_reseed_credentials_require_wallet_address() {
         assert_eq!(signed_reseed_credentials(None, Some("private-key")), None);
-        assert_eq!(signed_reseed_credentials(Some("  "), Some("private-key")), None);
+        assert_eq!(
+            signed_reseed_credentials(Some("  "), Some("private-key")),
+            None
+        );
     }
 
     #[test]
     fn signed_reseed_credentials_require_private_key() {
         assert_eq!(signed_reseed_credentials(Some("0xwallet"), None), None);
-        assert_eq!(signed_reseed_credentials(Some("0xwallet"), Some("  ")), None);
+        assert_eq!(
+            signed_reseed_credentials(Some("0xwallet"), Some("  ")),
+            None
+        );
     }
 
     #[test]
@@ -8888,7 +8980,10 @@ mod multi_seeder_tests {
     #[test]
     fn relay_tunnel_response_body_read_error_returns_controlled_502() {
         let mut headers = HashMap::new();
-        headers.insert("x-upstream".to_string(), "preserved only on success".to_string());
+        headers.insert(
+            "x-upstream".to_string(),
+            "preserved only on success".to_string(),
+        );
 
         let response = relay_tunnel_response_from_local_body(
             200,
@@ -8936,8 +9031,8 @@ mod multi_seeder_tests {
         ])
         .unwrap();
 
-        let registry = host_registry_from_dht_value(Some(json))
-            .expect("valid registry should parse");
+        let registry =
+            host_registry_from_dht_value(Some(json)).expect("valid registry should parse");
 
         assert_eq!(registry.len(), 2);
         assert_eq!(registry[0].peer_id, "peer-a");
@@ -8963,8 +9058,7 @@ mod multi_seeder_tests {
 
     #[test]
     fn relay_tunnel_response_send_result_accepts_success() {
-        let result =
-            relay_tunnel_response_send_result("site", "site-1", "req-1", Ok(()));
+        let result = relay_tunnel_response_send_result("site", "site-1", "req-1", Ok(()));
 
         assert!(result.is_ok());
     }
@@ -8992,12 +9086,8 @@ mod multi_seeder_tests {
             host_registry_entry("peer-b", "0xwallet-b", 20),
         ];
 
-        let registry = host_registry_after_publish(
-            registry,
-            "peer-a".to_string(),
-            "0xnew".to_string(),
-            30,
-        );
+        let registry =
+            host_registry_after_publish(registry, "peer-a".to_string(), "0xnew".to_string(), 30);
 
         assert_eq!(registry.len(), 2);
         assert!(registry
@@ -9055,13 +9145,9 @@ mod multi_seeder_tests {
             "signature": "sig"
         }"#;
 
-        let seeder = parse_desktop_seeder_record(
-            "file-a",
-            "peer-a",
-            "chiral_seeder_file-a_peer-a",
-            json,
-        )
-        .expect("valid seeder JSON should parse");
+        let seeder =
+            parse_desktop_seeder_record("file-a", "peer-a", "chiral_seeder_file-a_peer-a", json)
+                .expect("valid seeder JSON should parse");
 
         assert_eq!(seeder.peer_id, "peer-a");
         assert_eq!(seeder.price_wei, "7");
@@ -9155,8 +9241,7 @@ mod multi_seeder_tests {
 
     #[test]
     fn try_make_signed_seeder_signs_valid_entry() {
-        let private_key =
-            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
         let wallet_address = wallet_address_from_private_key(private_key);
 
         let seeder = try_make_signed_seeder(
@@ -9176,8 +9261,7 @@ mod multi_seeder_tests {
 
     #[test]
     fn try_make_signed_seeder_rejects_invalid_private_key() {
-        let private_key =
-            "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
+        let private_key = "0x4c0883a69102937d6231471b5dbb6204fe512961708279cea2c89f1f7a0f2c4f";
         let wallet_address = wallet_address_from_private_key(private_key);
 
         let seeder = try_make_signed_seeder(
@@ -9356,8 +9440,7 @@ mod multi_seeder_tests {
 
     #[test]
     fn desktop_publish_peer_id_rejects_missing_peer_id() {
-        let err =
-            desktop_publish_peer_id(None).expect_err("missing peer ID should fail closed");
+        let err = desktop_publish_peer_id(None).expect_err("missing peer ID should fail closed");
 
         assert!(err.contains("DHT peer ID unavailable"));
         assert!(err.contains("Reconnect"));
@@ -9423,7 +9506,10 @@ mod multi_seeder_tests {
 
     #[test]
     fn drive_item_price_update_clears_empty_price() {
-        assert_eq!(validate_drive_item_price_update(String::new()).unwrap(), None);
+        assert_eq!(
+            validate_drive_item_price_update(String::new()).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -9516,24 +9602,18 @@ mod multi_seeder_tests {
 
     #[test]
     fn chiraldrop_send_metadata_rejects_paid_send_without_wallet() {
-        let err = chiraldrop_send_metadata(
-            Some("1".to_string()),
-            None,
-            Some("file-hash".to_string()),
-        )
-        .expect_err("paid ChiralDrop sends require sender wallet metadata");
+        let err =
+            chiraldrop_send_metadata(Some("1".to_string()), None, Some("file-hash".to_string()))
+                .expect_err("paid ChiralDrop sends require sender wallet metadata");
 
         assert!(err.contains("senderWallet"));
     }
 
     #[test]
     fn chiraldrop_send_metadata_rejects_paid_send_without_hash() {
-        let err = chiraldrop_send_metadata(
-            Some("1".to_string()),
-            Some("0xwallet".to_string()),
-            None,
-        )
-        .expect_err("paid ChiralDrop sends require file hash metadata");
+        let err =
+            chiraldrop_send_metadata(Some("1".to_string()), Some("0xwallet".to_string()), None)
+                .expect_err("paid ChiralDrop sends require file hash metadata");
 
         assert!(err.contains("fileHash"));
     }
@@ -9584,7 +9664,10 @@ mod multi_seeder_tests {
         ));
 
         // verify() must accept the legacy signature.
-        assert!(m.verify(), "legacy v1 manifest must verify under v2 verifier");
+        assert!(
+            m.verify(),
+            "legacy v1 manifest must verify under v2 verifier"
+        );
 
         // And tampering with the price fields after the fact must be
         // rejected — the v1 fallback is gated on price_wei +
@@ -9592,7 +9675,10 @@ mod multi_seeder_tests {
         // hostile recipient.
         m.price_wei = "1000000000000000000".to_string();
         m.wallet_address = "0xdeadbeef".repeat(5).chars().take(42).collect();
-        assert!(!m.verify(), "legacy fallback must not accept tacked-on pricing");
+        assert!(
+            !m.verify(),
+            "legacy fallback must not accept tacked-on pricing"
+        );
     }
 
     fn mff(rel_path: &str, file_hash: &str, file_size: u64) -> FolderManifestFile {
@@ -9693,8 +9779,14 @@ mod multi_seeder_tests {
         b.reverse();
         let mut c = a.clone();
         c.swap(0, 1);
-        assert_eq!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &b));
-        assert_eq!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &c));
+        assert_eq!(
+            compute_folder_hash(owner, &a),
+            compute_folder_hash(owner, &b)
+        );
+        assert_eq!(
+            compute_folder_hash(owner, &a),
+            compute_folder_hash(owner, &c)
+        );
     }
 
     #[test]
@@ -9722,8 +9814,14 @@ mod multi_seeder_tests {
             mff("y.bin", "ee".repeat(32).as_str(), 1),
         ];
         let f3 = vec![mff("x.bin", "fe".repeat(32).as_str(), 1)]; // different content hash
-        assert_ne!(compute_folder_hash(owner, &f1), compute_folder_hash(owner, &f2));
-        assert_ne!(compute_folder_hash(owner, &f1), compute_folder_hash(owner, &f3));
+        assert_ne!(
+            compute_folder_hash(owner, &f1),
+            compute_folder_hash(owner, &f2)
+        );
+        assert_ne!(
+            compute_folder_hash(owner, &f1),
+            compute_folder_hash(owner, &f3)
+        );
     }
 
     /// rel_path is hashed verbatim (with owner-lowercasing only). Two
@@ -9735,7 +9833,10 @@ mod multi_seeder_tests {
         let owner = "0x0000000000000000000000000000000000000001";
         let a = vec![mff("Readme.md", "aa".repeat(32).as_str(), 1)];
         let b = vec![mff("readme.md", "aa".repeat(32).as_str(), 1)];
-        assert_ne!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &b));
+        assert_ne!(
+            compute_folder_hash(owner, &a),
+            compute_folder_hash(owner, &b)
+        );
     }
 
     /// file_size is NOT included in the folder hash (only rel_path +
@@ -9749,7 +9850,10 @@ mod multi_seeder_tests {
         let owner = "0x0000000000000000000000000000000000000001";
         let a = vec![mff("x.bin", "ff".repeat(32).as_str(), 100)];
         let b = vec![mff("x.bin", "ff".repeat(32).as_str(), 999_999)];
-        assert_eq!(compute_folder_hash(owner, &a), compute_folder_hash(owner, &b));
+        assert_eq!(
+            compute_folder_hash(owner, &a),
+            compute_folder_hash(owner, &b)
+        );
     }
 
     /// Folder pricing v2 round-trip: sign, verify, mutate price, expect
@@ -9771,7 +9875,8 @@ mod multi_seeder_tests {
             wallet_address: wallet.clone(),
             publisher_signature: String::new(),
         };
-        m.sign(private_key).expect("valid private key should sign manifest");
+        m.sign(private_key)
+            .expect("valid private key should sign manifest");
         assert!(m.verify(), "freshly v2-signed manifest must verify");
 
         // Tamper price → reject.
@@ -9783,7 +9888,10 @@ mod multi_seeder_tests {
 
         // Tamper recipient → reject.
         m.wallet_address = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string();
-        assert!(!m.verify(), "modified wallet_address must invalidate signature");
+        assert!(
+            !m.verify(),
+            "modified wallet_address must invalidate signature"
+        );
     }
 
     #[test]
