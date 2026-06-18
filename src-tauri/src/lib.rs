@@ -1391,7 +1391,7 @@ struct PublishResult {
 
 /// Per-seeder info stored in DHT file metadata.
 /// Each seeder signs their entry so downloaders can verify the wallet address is legitimate.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SeederInfo {
     pub(crate) peer_id: String,
@@ -1549,50 +1549,129 @@ pub async fn remove_seeder_entry(
     dht.stop_providing_file(file_hash.to_string()).await
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SearchWarning {
+    #[serde(rename = "type")]
+    warning_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    message: String,
+}
+
+#[derive(Default)]
+struct SeederFetchResult {
+    seeders: Vec<SeederInfo>,
+    warnings: Vec<SearchWarning>,
+}
+
+enum FetchedSeederRecord {
+    Entry(SeederInfo),
+    Missing,
+    Malformed(SearchWarning),
+}
+
+fn malformed_seeder_record_warning(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    err: serde_json::Error,
+) -> SearchWarning {
+    SearchWarning {
+        warning_type: "malformedSeederRecord".to_string(),
+        peer_id: Some(peer_id.to_string()),
+        key: Some(key.to_string()),
+        message: format!(
+            "Malformed seeder record for file {} from provider {} at {}: {}",
+            file_hash, peer_id, key, err
+        ),
+    }
+}
+
+fn parse_desktop_seeder_record(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    json: &str,
+) -> Result<SeederInfo, SearchWarning> {
+    serde_json::from_str::<SeederInfo>(json)
+        .map_err(|err| malformed_seeder_record_warning(file_hash, peer_id, key, err))
+}
+
+fn classify_fetched_desktop_seeder_record(
+    file_hash: &str,
+    peer_id: &str,
+    key: &str,
+    json: Option<&str>,
+) -> FetchedSeederRecord {
+    match json {
+        Some(json) => match parse_desktop_seeder_record(file_hash, peer_id, key, json) {
+            Ok(entry) => FetchedSeederRecord::Entry(entry),
+            Err(warning) => FetchedSeederRecord::Malformed(warning),
+        },
+        None => FetchedSeederRecord::Missing,
+    }
+}
+
 /// Discover all currently-online seeders for a file. Queries Kademlia for
 /// the provider set, then fetches each provider's per-seeder record in
 /// parallel. Signature-verified entries are returned; unsigned or
-/// signature-invalid entries are logged and dropped.
-async fn fetch_seeders(
+/// signature-invalid entries are logged and dropped. Missing records still
+/// produce replication-lag stubs, while malformed records are surfaced as
+/// warnings and never become stubs.
+async fn fetch_seeders_with_warnings(
     dht: &dht::DhtService,
     file_hash: &str,
-) -> Result<Vec<SeederInfo>, String> {
+) -> Result<SeederFetchResult, String> {
     let providers = dht.get_file_providers(file_hash.to_string()).await?;
     if providers.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SeederFetchResult::default());
     }
     let fetches = providers.into_iter().map(|peer_id| {
         let key = seeder_entry_key(file_hash, &peer_id);
         async move {
-            let fetched = match dht.get_dht_value(key).await {
-                Ok(Some(json)) => serde_json::from_str::<SeederInfo>(&json).ok(),
-                _ => None,
+            let fetched = match dht.get_dht_value(key.clone()).await {
+                Ok(Some(json)) => {
+                    classify_fetched_desktop_seeder_record(file_hash, &peer_id, &key, Some(&json))
+                }
+                _ => classify_fetched_desktop_seeder_record(file_hash, &peer_id, &key, None),
             };
             (peer_id, fetched)
         }
     });
     let results = futures::future::join_all(fetches).await;
     let mut seeders = Vec::new();
+    let mut warnings = Vec::new();
     for (peer_id, entry) in results {
         match entry {
-            Some(entry) if entry.verify(file_hash) => {
+            FetchedSeederRecord::Entry(entry) if entry.verify(file_hash) => {
                 // Signed + valid.
                 seeders.push(entry);
             }
-            Some(entry) => {
+            FetchedSeederRecord::Entry(entry) => {
                 // Unsigned or invalid signature. CLAUDE.md's trust contract
                 // ("ECDSA-signed seeder entries prevent payment redirection")
                 // requires us to drop these — accepting them would let any
                 // peer redirect downloads to an attacker wallet. Empty-sig
                 // entries fall in here too.
-                let reason = if entry.signature.is_empty() { "unsigned" } else { "INVALID signature" };
+                let reason = if entry.signature.is_empty() {
+                    "unsigned"
+                } else {
+                    "INVALID signature"
+                };
                 println!(
                     "  ⚠️ Seeder entry for {} {} — dropping",
                     &peer_id[..20.min(peer_id.len())],
                     reason
                 );
             }
-            None => {
+            FetchedSeederRecord::Malformed(warning) => {
+                println!("  ⚠️ {}", warning.message);
+                warnings.push(warning);
+            }
+            FetchedSeederRecord::Missing => {
                 // Provider advertises the hash but their per-seeder record
                 // isn't retrievable yet (put replication lagging, or peer
                 // never got a chance to persist it). Emit a stub with empty
@@ -1611,7 +1690,13 @@ async fn fetch_seeders(
             }
         }
     }
-    Ok(seeders)
+    Ok(SeederFetchResult { seeders, warnings })
+}
+
+async fn fetch_seeders(dht: &dht::DhtService, file_hash: &str) -> Result<Vec<SeederInfo>, String> {
+    fetch_seeders_with_warnings(dht, file_hash)
+        .await
+        .map(|result| result.seeders)
 }
 
 fn desktop_publish_peer_id(peer_id: Option<String>) -> Result<String, String> {
@@ -1950,6 +2035,16 @@ struct SearchResult {
     created_at: u64,
     price_wei: String,
     wallet_address: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<SearchWarning>,
+}
+
+fn search_result_with_warnings(
+    mut result: SearchResult,
+    warnings: Vec<SearchWarning>,
+) -> SearchResult {
+    result.warnings.extend(warnings);
+    result
 }
 
 async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Option<SearchResult> {
@@ -1986,6 +2081,7 @@ async fn build_local_search_result(dht: &Arc<DhtService>, file_hash: &str) -> Op
             .as_secs(),
         price_wei: local_info.price_wei.to_string(),
         wallet_address: local_info.wallet_address,
+        warnings: Vec::new(),
     })
 }
 
@@ -2211,13 +2307,15 @@ async fn search_file(
         );
         let providers_fut = tokio::time::timeout(
             tokio::time::Duration::from_millis(5000),
-            fetch_seeders(dht, &file_hash),
+            fetch_seeders_with_warnings(dht, &file_hash),
         );
         let (dht_lookup, provider_seeders_res) = tokio::join!(blob_fut, providers_fut);
-        let provider_seeders: Vec<SeederInfo> = match provider_seeders_res {
-            Ok(Ok(list)) => list,
-            _ => Vec::new(),
+        let provider_fetch = match provider_seeders_res {
+            Ok(Ok(result)) => result,
+            _ => SeederFetchResult::default(),
         };
+        let provider_seeders = provider_fetch.seeders;
+        let provider_warnings = provider_fetch.warnings;
 
         match dht_lookup {
             Err(_) => {
@@ -2244,19 +2342,24 @@ async fn search_file(
                             .as_ref()
                             .map(|s| s.price_wei.clone())
                             .unwrap_or_default(),
-                        wallet_address: first
-                            .map(|s| s.wallet_address)
-                            .unwrap_or_default(),
+                        wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                        warnings: provider_warnings,
                     }));
                 }
                 // Return local result if we're seeding, otherwise not found
                 if let Some(local) = local_result {
-                    println!("Returning local seeding result after DHT timeout for {}", file_hash);
-                    Ok(Some(local))
+                    println!(
+                        "Returning local seeding result after DHT timeout for {}",
+                        file_hash
+                    );
+                    Ok(Some(search_result_with_warnings(local, provider_warnings)))
                 } else if let Some(repaired) =
                     try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
                 {
-                    Ok(Some(repaired))
+                    Ok(Some(search_result_with_warnings(
+                        repaired,
+                        provider_warnings,
+                    )))
                 } else {
                     Ok(None)
                 }
@@ -2312,18 +2415,20 @@ async fn search_file(
                                     .as_ref()
                                     .map(|s| s.price_wei.clone())
                                     .unwrap_or_default(),
-                                wallet_address: first
-                                    .map(|s| s.wallet_address)
-                                    .unwrap_or_default(),
+                                wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                                warnings: provider_warnings,
                             }));
                         }
                         return if let Some(local) = local_result {
-                            Ok(Some(local))
+                            Ok(Some(search_result_with_warnings(local, provider_warnings)))
                         } else {
                             Ok(None)
                         };
                     }
-                    println!("✅ File metadata signature valid (publisher: {})", metadata.wallet_address);
+                    println!(
+                        "✅ File metadata signature valid (publisher: {})",
+                        metadata.wallet_address
+                    );
 
                     // Seeder list comes exclusively from Kademlia providers +
                     // per-seeder records now. The blob is immutable metadata
@@ -2352,6 +2457,7 @@ async fn search_file(
                         created_at: metadata.created_at,
                         price_wei,
                         wallet_address: metadata.wallet_address,
+                        warnings: provider_warnings,
                     }))
                 }
                 Ok(None) => {
@@ -2380,9 +2486,8 @@ async fn search_file(
                                 .as_ref()
                                 .map(|s| s.price_wei.clone())
                                 .unwrap_or_default(),
-                            wallet_address: first
-                                .map(|s| s.wallet_address)
-                                .unwrap_or_default(),
+                            wallet_address: first.map(|s| s.wallet_address).unwrap_or_default(),
+                            warnings: provider_warnings,
                         }));
                     }
                     // DHT can lag behind local intent right after restart. Attempt
@@ -2394,7 +2499,10 @@ async fn search_file(
                             "Recovered local seed registration for {} after DHT miss",
                             file_hash
                         );
-                        Ok(Some(repaired))
+                        Ok(Some(search_result_with_warnings(
+                            repaired,
+                            provider_warnings,
+                        )))
                     } else {
                         Ok(None)
                     }
@@ -2409,7 +2517,7 @@ async fn search_file(
                             "Returning local fallback for {} despite DHT lookup error",
                             file_hash
                         );
-                        Ok(Some(local))
+                        Ok(Some(search_result_with_warnings(local, provider_warnings)))
                     } else if let Some(repaired) =
                         try_repair_local_drive_seed(state.inner(), dht, &file_hash).await
                     {
@@ -2417,7 +2525,10 @@ async fn search_file(
                             "Returning repaired local fallback for {} despite DHT lookup error",
                             file_hash
                         );
-                        Ok(Some(repaired))
+                        Ok(Some(search_result_with_warnings(
+                            repaired,
+                            provider_warnings,
+                        )))
                     } else {
                         Err(e)
                     }
@@ -8628,6 +8739,108 @@ mod multi_seeder_tests {
         assert_eq!(deserialized.wallet_address, "0xabc123");
     }
 
+    #[test]
+    fn desktop_seeder_record_parser_accepts_valid_json() {
+        let json = r#"{
+            "peerId": "peer-a",
+            "priceWei": "7",
+            "walletAddress": "0xwallet",
+            "multiaddrs": ["/ip4/127.0.0.1/tcp/9419"],
+            "signature": "sig"
+        }"#;
+
+        let seeder = parse_desktop_seeder_record(
+            "file-a",
+            "peer-a",
+            "chiral_seeder_file-a_peer-a",
+            json,
+        )
+        .expect("valid seeder JSON should parse");
+
+        assert_eq!(seeder.peer_id, "peer-a");
+        assert_eq!(seeder.price_wei, "7");
+        assert_eq!(seeder.multiaddrs[0], "/ip4/127.0.0.1/tcp/9419");
+    }
+
+    #[test]
+    fn desktop_seeder_record_parser_warns_on_malformed_json() {
+        let warning = parse_desktop_seeder_record(
+            "file-a",
+            "peer-a",
+            "chiral_seeder_file-a_peer-a",
+            "{not json",
+        )
+        .expect_err("malformed seeder JSON should return a warning");
+
+        assert_eq!(warning.warning_type, "malformedSeederRecord");
+        assert_eq!(warning.peer_id.as_deref(), Some("peer-a"));
+        assert_eq!(warning.key.as_deref(), Some("chiral_seeder_file-a_peer-a"));
+        assert!(warning.message.contains("Malformed seeder record"));
+    }
+
+    #[test]
+    fn desktop_seeder_record_classifier_distinguishes_mixed_records() {
+        let valid_json = r#"{
+            "peerId": "peer-a",
+            "priceWei": "7",
+            "walletAddress": "0xwallet",
+            "multiaddrs": [],
+            "signature": "sig"
+        }"#;
+        let records = [
+            ("peer-a", Some(valid_json)),
+            ("peer-b", Some("{not json")),
+            ("peer-c", None),
+        ];
+        let mut entries = 0;
+        let mut malformed = 0;
+        let mut missing = 0;
+
+        for (peer_id, json) in records {
+            let key = seeder_entry_key("file-a", peer_id);
+            match classify_fetched_desktop_seeder_record("file-a", peer_id, &key, json) {
+                FetchedSeederRecord::Entry(_) => entries += 1,
+                FetchedSeederRecord::Malformed(warning) => {
+                    malformed += 1;
+                    assert_eq!(warning.peer_id.as_deref(), Some("peer-b"));
+                }
+                FetchedSeederRecord::Missing => missing += 1,
+            }
+        }
+
+        assert_eq!(entries, 1);
+        assert_eq!(malformed, 1);
+        assert_eq!(missing, 1);
+    }
+
+    #[test]
+    fn search_result_serializes_warnings_when_present() {
+        let result = search_result_with_warnings(
+            SearchResult {
+                hash: "abc123".to_string(),
+                file_name: "test.txt".to_string(),
+                file_size: 1024,
+                seeders: Vec::new(),
+                created_at: 1700000000,
+                price_wei: "0".to_string(),
+                wallet_address: String::new(),
+                warnings: Vec::new(),
+            },
+            vec![SearchWarning {
+                warning_type: "malformedSeederRecord".to_string(),
+                peer_id: Some("peer-a".to_string()),
+                key: Some("chiral_seeder_abc123_peer-a".to_string()),
+                message: "Malformed seeder record".to_string(),
+            }],
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+
+        assert_eq!(parsed["warnings"][0]["type"], "malformedSeederRecord");
+        assert_eq!(parsed["warnings"][0]["peerId"], "peer-a");
+    }
+
     fn wallet_address_from_private_key(private_key: &str) -> String {
         let probe = b"seeder-test-wallet";
         let signature = wallet::sign_message(private_key, probe).unwrap();
@@ -8860,6 +9073,7 @@ mod multi_seeder_tests {
             created_at: 1700000000,
             price_wei: "0".to_string(),
             wallet_address: String::new(),
+            warnings: Vec::new(),
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
