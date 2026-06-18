@@ -40,6 +40,7 @@
   import { toasts } from '$lib/toastStore';
   import { fetchWithVersion } from '$lib/versionFetch';
   import { logger } from '$lib/logger';
+  import { getCdnSearchBaseUrlsAsync, loadNetworkEndpointConfig } from '$lib/services/networkEndpointConfig';
   const log = logger('Download');
 
   // Known CDN peer IDs — tagged as "(CDN)" in seeder list.
@@ -647,17 +648,14 @@
     }
   }
 
-  // CDN servers — queried in parallel with the DHT so their seeder entries
-  // always land in the result, not only when the DHT returns nothing.
-  const CDN_SEARCH_URLS = ['http://130.245.173.73:9420', 'http://130.245.173.231:9420'];
-
   /// Query every configured CDN server concurrently for this file's seeder
   /// metadata. Each server gets its own short timeout so one slow CDN doesn't
   /// extend the overall search wait. Results that don't come back in time are
   /// simply skipped — the caller is expected to merge whatever it got with
   /// any DHT result rather than wait for CDN responses.
   async function fetchCdnSeeders(fileHash: string, timeoutMs = 12000): Promise<SearchResult[]> {
-    const queries = CDN_SEARCH_URLS.map(async (cdnUrl) => {
+    const cdnUrls = await getCdnSearchBaseUrlsAsync();
+    const queries = cdnUrls.map(async (cdnUrl) => {
       try {
         const resp = await withTimeout(
           fetchWithVersion(`${cdnUrl}/api/headless/file/search`, {
@@ -1687,6 +1685,7 @@
   // Initialize
   onMount(() => {
     isTauri = checkTauriAvailability();
+    void loadNetworkEndpointConfig();
     loadDownloadHistory();
     setupEventListeners();
     refreshWalletBalance();
